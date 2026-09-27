@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Harness">
   <!-- Full-bleed 1:1 square, 90 degree corners (no squircle mask).
        Neutral identity: an H monogram over the HARNESS wordmark.  Intentionally
-       carries no third-party mark -- the previous icon shipped the MiniMax "M"
+       carries no third-party mark — the previous icon shipped the MiniMax "M"
        chip, which made the Harness app look like a MiniMax app.  The MiniMax
        mark now lives only where MiniMax is actually selected (see
        assets/minimax-mark.svg and the picker injection in HarnessWindow.swift). -->
