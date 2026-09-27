@@ -69,6 +69,8 @@ Search the `fleet-agents` corpus before re-deriving a lesson (`recall "query"` o
 
 Verification gate before every PR: `pnpm typecheck && pnpm test`.  Pure-docs PRs may use `pnpm test:ci-scope && git diff --check` locally.
 
+UI changes must be covered by automated visual verification where feasible: Playwright screenshot assertions for web surfaces, `xcrun simctl io booted screenshot` for iOS simulator.  The owner never takes manual screenshots and does not run local UI preview sessions.  Native Mac app UI is verified through code review and CI.
+
 ## Mac Local Processes (binding)
 
 Harness runs always-on pieces on the Mac: `com.jay.harness-web` (web on `127.0.0.1:3080`, Tailscale receiver `https://macbook.boa-roygbiv.ts.net:3080`).  The Shellular bridges (`dsh-acp.sh` for id `deepseek`, `mmh-acp.sh` for id `minimax`) spawn fresh per session and are not always-on pm2 jobs.  If you create, change, load, bootout, or retire any LaunchAgent, cron row, pm2 job, or helper script other agents run, you **must** update `/Users/jay/apps/MAC-LOCAL-PROCESSES.md` and refresh the Apple Note (`apple-notes-coding.sh --update`) in the same change, and say whether it is always-on or on-demand.  Canonical: `AGENT-SYNC.md` § Mac local processes.

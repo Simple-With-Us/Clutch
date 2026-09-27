@@ -49,12 +49,14 @@
     "web": "tsx src/web/start-web.ts --no-open --host 127.0.0.1 --port 3080",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:ci-scope": "vitest run --typecheck"
+    "test:ci-scope": "vitest run --typecheck",
+    "test:e2e": "playwright test"
   },
   "optionalDependencies": {
     "@deepseek-ai/dsh": "0.1.5-rc.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
