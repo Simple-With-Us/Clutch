@@ -58,6 +58,13 @@ export interface AcpSupport {
   readonly models: ModelCatalog;
   readonly resolveModels?: (env: Record<string, string | undefined>) => ModelCatalog;
   readonly effortLevels?: readonly EffortLevel[];
+  /**
+   * Per-model effort-level overrides, keyed by model id.  When a model id
+   * appears here its entry wins over the driver-wide `effortLevels`; models
+   * absent from the map fall back to `effortLevels`.  Lets a driver advertise
+   * different reasoning budgets per model (e.g. MiniMax-M3 vs M2.7).
+   */
+  readonly perModelEffortLevels?: Readonly<Record<string, readonly EffortLevel[]>>;
   readonly mcpServers?: boolean;
   readonly defaultCli: string;
   readonly nativeSource: string;
