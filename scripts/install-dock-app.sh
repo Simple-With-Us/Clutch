@@ -91,6 +91,11 @@ if [[ -n "$live_real" && "$live_real" != "$root_real" ]]; then
   cp "${ROOT}/scripts/ensure-web.sh" "${LIVE}/scripts/ensure-web.sh"
   cp "${ROOT}/scripts/open-harness.sh" "${LIVE}/scripts/open-harness.sh"
   cp "$PNG" "${LIVE}/assets/harness-icon-1024.png"
+  # HarnessWindow.swift inlines the MiniMax mark for the sidebar chip and the
+  # model-picker provider group, so it has to land in the live assets dir too.
+  MARK="${ROOT}/assets/minimax-mark.svg"
+  [[ -f "$MARK" ]] || MARK="${LIVE}/assets/minimax-mark.svg"
+  [[ -f "$MARK" ]] && cp "$MARK" "${LIVE}/assets/minimax-mark.svg"
   chmod 755 "${LIVE}/scripts/ensure-web.sh" "${LIVE}/scripts/open-harness.sh"
 fi
 

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Harness">
+  <!-- Full-bleed 1:1 square, 90 degree corners (no squircle mask).
+       Neutral identity: an H monogram over the HARNESS wordmark.  Intentionally
+       carries no third-party mark -- the previous icon shipped the MiniMax "M"
+       chip, which made the Harness app look like a MiniMax app.  The MiniMax
+       mark now lives only where MiniMax is actually selected (see
+       assets/minimax-mark.svg and the picker injection in HarnessWindow.swift). -->
+  <rect width="1024" height="1024" fill="#151820"/>
+  <rect y="1012" width="1024" height="12" fill="#1E293B"/>
+
+  <!-- H monogram: two uprights (112 wide, 440 tall) joined by a 96 tall
+       crossbar, centred on x=512. -->
+  <path fill="#F8FAFC" d="M270 180h112v172h260V180h112v440H642V448H382v172H270z"/>
+
+  <text x="512" y="800" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="104" font-weight="600" letter-spacing="12"
+        fill="#94A3B8">HARNESS</text>
+</svg>
