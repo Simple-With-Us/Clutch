@@ -33,8 +33,26 @@ export {
 
 const MMH_EFFORT_LEVELS = ["none"] as const satisfies readonly EffortLevel[];
 
+/**
+ * Per-model effort levels for MiniMax models.  MiniMax-M3 advertises the
+ * full reasoning-effort range; the M2.7 family stays on the driver default
+ * ("none") via fallback.  Adjust the M3 list if the provider documents a
+ * different supported set.
+ */
+const MMH_PER_MODEL_EFFORT_LEVELS = {
+  "MiniMax-M3": ["none", "low", "medium", "high", "max"],
+} as const satisfies Readonly<Record<string, readonly EffortLevel[]>>;
+
 export function mmhSpawnArgs(): string[] {
   return [];
+}
+
+/**
+ * Effective effort levels for a MiniMax model id: the per-model override
+ * when present, otherwise the driver-wide default.
+ */
+export function mmhEffortLevelsForModel(modelId: string): readonly EffortLevel[] {
+  return MMH_PER_MODEL_EFFORT_LEVELS[modelId as keyof typeof MMH_PER_MODEL_EFFORT_LEVELS] ?? MMH_EFFORT_LEVELS;
 }
 
 export const STATIC_MMH_MODELS: ModelCatalog = {
@@ -75,6 +93,7 @@ export const mmhSupport: AcpSupport = {
   models: STATIC_MMH_MODELS,
   resolveModels: () => STATIC_MMH_MODELS,
   effortLevels: MMH_EFFORT_LEVELS,
+  perModelEffortLevels: MMH_PER_MODEL_EFFORT_LEVELS,
   mcpServers: false,
   defaultCli: "mmh-acp.sh",
   nativeSource: "mmh.http",

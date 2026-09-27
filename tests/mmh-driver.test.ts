@@ -43,3 +43,23 @@ describe("classifyMmhError", () => {
     expect(classifyMmhError(new Error("nope"))).toBeUndefined();
   });
 });
+
+describe("mmhEffortLevelsForModel", () => {
+  it("gives MiniMax-M3 the full effort range and falls back for M2.7", async () => {
+    const { mmhEffortLevelsForModel } = await import("../src/mmh/acp/driver.ts");
+    expect(mmhEffortLevelsForModel("MiniMax-M3")).toEqual(["none", "low", "medium", "high", "max"]);
+    expect(mmhEffortLevelsForModel("MiniMax-M2.7")).toEqual(["none"]);
+    expect(mmhEffortLevelsForModel("MiniMax-M2.7-highspeed")).toEqual(["none"]);
+    expect(mmhEffortLevelsForModel("unknown-model")).toEqual(["none"]);
+  });
+
+  it("declares the per-model map on mmhSupport", () => {
+    expect(mmhSupport.perModelEffortLevels?.["MiniMax-M3"]).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+  });
+});
