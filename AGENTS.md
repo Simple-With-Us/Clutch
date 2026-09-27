@@ -6,10 +6,10 @@ GitHub: `jaywedgeworth22/Harness`.  Integration tree on this Mac: `/Users/jay/Co
 
 ## What this repo is
 
-A friendly adaptation of the upstream DeepSeek Harness (`@deepseek-ai/dsh`) extended to support **DeepSeek Harness (DSH)** and **MiniMax Harness (MMH)** equally well.  Both harnesses run the same `dsh web` web UI shell; the difference is which upstream engine powers each turn.
+Harness provides a web interface, coding profiles, and ACP bridges around the upstream DeepSeek Harness (`@deepseek-ai/dsh`).  It includes DeepSeek and MiniMax configurations; capabilities depend on the profile, model, and provider.
 
 - `dsh/` — DSH harness: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
-- `mmh/` — MMH harness: a thin Python ACP bridge that wraps the MiniMax HTTP API (`api.minimax.io`) and synthesizes ACP frames; no upstream CLI / sandbox exists yet, so MMH today is a wire-level adapter, not a CLI replacement.
+- `mmh/` — MMH harness: the headless Python ACP bridge launches `dsh --profile mmh-headless` with MiniMax as its model provider.  The package also includes lower-level HTTP client exports; these are separate from the headless bridge.
 - `web/` — TypeScript web UI scripts (`start-web.ts`, `serve-tailscale.ts`, `open-harness.ts`, `ensure-web.ts`, `install-dock-app.ts`).
 - `profiles/` — Tracked cordis profile defaults (`dsh-headless`, `dsh-web`, `mmh-headless`, `mmh-web`).  Each profile is independent and customized for its use case; the matrix (per-profile feature depth: plugins enabled, tool allowlist, thinking effort, turn budgets, model selection) is open-ended.
 - `bridges/` — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay in Python intentionally — see "Bridges are Python" below.

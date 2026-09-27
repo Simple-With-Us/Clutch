@@ -1,3 +1,5 @@
+- **2026-09-27 — CODEX — Completed on merge — Public overview accuracy (issue #19, board `ad977261`, branch `codex/public-copy-20260927`).**  Scope: public README and coordination pointers; clarify supported behavior and access, remove private inventory references, and link the Simple With Us app catalog.  Validation: scoped copy/source review, linked-file checks, and `git diff --check`; `pnpm test:ci-scope` passes (22 tests, no type errors); hosted CI gates this merge.  Runtime and release workflows unchanged.
+
 # Harness Effort Log — cross-agent board
 
 The source of truth for active work is THE BOARD at
