@@ -177,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         [class*="_brandIdentity"] {
           gap: 0 !important;
         }
-        [data-harness-ds] {
+        [data-harness-h] {
           margin-right: 4px !important;
         }
         /* Make sure section headings in dropdowns use the brand case. */
@@ -201,6 +201,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // owner asked for, and the model-picker provider group, so choosing
         // MiniMax in the picker shows the MiniMax logo.
         let miniMaxMark = harnessAssetDataURL("minimax-mark.svg", mime: "image/svg+xml")
+        // The sidebar now wears the app's own identity, not a vendor's.
+        let harnessMark = harnessAssetDataURL("harness-icon.svg", mime: "image/svg+xml")
 
         let brandAndPickerScript = """
         (function () {
@@ -229,22 +231,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             // Hide any inline SVG (whale) — already done by CSS, but belt-and-braces.
             brandEl.querySelectorAll('svg').forEach((svg) => { svg.style.display = 'none'; });
 
-            // Add the DS chip if not already present.
-            if (!brandEl.querySelector('[data-harness-ds]')) {
-              const ds = document.createElement('span');
-              ds.dataset.harnessDs = '1';
-              ds.textContent = 'DS';
-              ds.style.cssText = 'margin-right:6px;font-size:11px;opacity:0.55;letter-spacing:0.06em;';
-              brandEl.insertBefore(ds, brandEl.firstChild);
-            }
-            // Add the MM logo if not already present.
-            if (!brandEl.querySelector('[data-harness-mm]')) {
-              const mm = document.createElement('img');
-              mm.dataset.harnessMm = '1';
-              mm.src = \(cssSwiftLiteral(miniMaxMark));
-              mm.alt = 'MM';
-              mm.style.cssText = 'width:22px;height:22px;margin-right:8px;border-radius:5px;vertical-align:middle;';
-              brandEl.insertBefore(mm, brandEl.firstChild);
+            // Owner 2026-09-27: the brand row carries no third-party mark.  The
+            // MM logo and the DS chip are removed, not just left un-added, so a
+            // stale one from an earlier build cannot survive a reload.
+            brandEl.querySelectorAll('[data-harness-mm], [data-harness-ds]').forEach((n) => n.remove());
+            if (!brandEl.querySelector('[data-harness-h]')) {
+              const h = document.createElement('img');
+              h.dataset.harnessH = '1';
+              h.src = \(cssSwiftLiteral(harnessMark));
+              h.alt = 'Harness';
+              h.style.cssText = 'width:22px;height:22px;margin-right:8px;border-radius:5px;vertical-align:middle;';
+              brandEl.insertBefore(h, brandEl.firstChild);
             }
           }
 
@@ -274,30 +271,100 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               el.insertBefore(img, el.firstChild);
             });
           };
-          markPickerHeadings();
+          // Model rows: the bundle ships raw model ids with no cost or
+          // capability signal.  Give each row its owner-facing label and, where
+          // the choice has a price or availability consequence, a chip.  This
+          // mirrors what BotFleet does natively via ModelCatalog.badge, which
+          // the DSH driver sets server-side (server/drivers/acp/dsh.ts) — the
+          // same facts, expressed in the overlay because the picker UI is
+          // vendored.
+          //
+          //   deepseek-v4-flash  Multimodal  DeepSeek's Flash IS the
+          //     image/video model; its image tokens bill at the same rate as
+          //     text, so there is one row, not two.
+          //   MiniMax-M3.1-Flash-Preview  Preview  Token Plan / MiniMax Code
+          //     only, so it needs a Token Plan key to be callable.
+          //   MiniMax-M2.7-highspeed  2x Cost  same 204,800 context as M2.7 at
+          //     exactly twice M3's $0.30 / $1.20.
+          const MODEL_ROWS = [
+            {
+              ids: ['deepseek-v4-flash', 'DeepSeek-V4.1-Flash', 'DeepSeek V4 Flash'],
+              label: 'DeepSeek V4 Flash',
+              badge: 'Multimodal',
+              badgeTitle: 'Accepts image and video input at the same token rate as text — each image is capped at 1,024 tokens.',
+            },
+            {
+              ids: ['deepseek-v4-pro', 'DeepSeek-V4-Pro', 'DeepSeek V4 Pro'],
+              label: 'DeepSeek V4 Pro',
+            },
+            {
+              ids: ['MiniMax-M3.1-Flash-Preview', 'MiniMax M3.1 Flash Preview'],
+              label: 'MiniMax M3.1 Flash Preview',
+              badge: 'Preview',
+              badgeTitle: 'Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.',
+            },
+            {
+              ids: ['MiniMax-M3', 'MiniMax M3'],
+              label: 'MiniMax M3',
+            },
+            {
+              ids: ['MiniMax-M2.7-highspeed', 'MiniMax M2.7 Highspeed', 'MiniMax M2.7 highspeed'],
+              label: 'MiniMax M2.7 Highspeed',
+              badge: '2x Cost',
+              badgeTitle: 'Same 204,800 context as M2.7 at $0.60 / M input and $2.40 / M output — exactly twice MiniMax M3.',
+            },
+          ];
+          const markPickerModelRows = () => {
+            document.querySelectorAll('div, span, li, p, button, label').forEach((el) => {
+              if (el.children.length > 0) return;
+              const t = text(el.textContent || '').trim();
+              if (!t) return;
+              const row = MODEL_ROWS.find((candidate) => candidate.ids.includes(t));
+              if (!row) return;
+              // Only write when the text actually changes.  Assigning
+              // textContent replaces the child text node even when the value is
+              // identical, and that is a DOM mutation -- so an unconditional
+              // write here would retrigger the observer forever and hang the
+              // page.  A row with no badge stays childless and is re-matched on
+              // every pass, so the guard is what makes it converge.
+              if (t !== row.label) el.textContent = row.label;
+              // Idempotent by the same mechanism as the provider mark: the
+              // badge makes this a parent, so later observer passes skip it, and
+              // a re-render produces a fresh childless node to re-decorate.
+              if (!row.badge) return;
+              if (el.dataset.harnessModelRow === '1') return;
+              el.dataset.harnessModelRow = '1';
+              const chip = document.createElement('span');
+              chip.dataset.harnessModelBadge = '1';
+              chip.textContent = row.badge;
+              chip.title = row.badgeTitle ?? row.badge;
+              chip.setAttribute('role', 'img');
+              chip.setAttribute('aria-label', row.badgeTitle ?? row.badge);
+              chip.style.cssText = 'display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;'
+                + 'background:rgba(148,163,184,0.18);color:inherit;font-size:10px;'
+                + 'line-height:16px;white-space:nowrap;vertical-align:1px;';
+              el.appendChild(chip);
+            });
+          };
+          markPickerModelRows();
           const mo = new MutationObserver(() => {
             // Re-run the brand rewrite + picker heading/logo pass on every DOM
             // mutation.  Both layers are idempotent (data-harness-* checks).
             const el = brandCandidates.find((b) => true);
             if (el) {
               // Re-apply icon insertion in case dsh-web replaced the brand anchor.
-              if (!el.querySelector('[data-harness-mm]')) {
-                const mm = document.createElement('img');
-                mm.dataset.harnessMm = '1';
-                mm.src = \(cssSwiftLiteral(miniMaxMark));
-                mm.alt = 'MM';
-                mm.style.cssText = 'width:22px;height:22px;margin-right:8px;border-radius:5px;vertical-align:middle;';
-                el.insertBefore(mm, el.firstChild);
-              }
-              if (!el.querySelector('[data-harness-ds]')) {
-                const ds = document.createElement('span');
-                ds.dataset.harnessDs = '1';
-                ds.textContent = 'DS';
-                ds.style.cssText = 'margin-right:6px;font-size:11px;opacity:0.55;letter-spacing:0.06em;';
-                el.insertBefore(ds, el.firstChild);
+              el.querySelectorAll('[data-harness-mm], [data-harness-ds]').forEach((n) => n.remove());
+              if (!el.querySelector('[data-harness-h]')) {
+                const h = document.createElement('img');
+                h.dataset.harnessH = '1';
+                h.src = \(cssSwiftLiteral(harnessMark));
+                h.alt = 'Harness';
+                h.style.cssText = 'width:22px;height:22px;margin-right:8px;border-radius:5px;vertical-align:middle;';
+                el.insertBefore(h, el.firstChild);
               }
             }
             markPickerHeadings();
+            markPickerModelRows();
           });
           mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
         })();
