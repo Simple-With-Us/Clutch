@@ -34,6 +34,7 @@
     "./mmh/http-client": "./src/mmh/http-client/index.ts",
     "./shared/contracts": "./src/shared/contracts.ts",
     "./shared/acp-core": "./src/shared/acp-core.ts",
+    "./shared/sanitize-context": "./src/shared/sanitize-context.ts",
     "./package.json": "./package.json"
   },
   "bin": {

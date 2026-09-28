@@ -19,3 +19,4 @@ export {
 export * from "./mmh/acp/index.ts";
 export type { AcpSupport, AcpConfig, AcpTurn, AcpInstallInstructions } from "./shared/acp-core.ts";
 export type { EffortLevel, ModelCatalog, ProviderErrorCode } from "./shared/contracts.ts";
+export * from "./shared/sanitize-context.ts";
