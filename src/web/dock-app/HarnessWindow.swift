@@ -273,7 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // MiniMax provider mark, base64.  Used in the model-picker provider group
         // so choosing MiniMax shows the MiniMax logo next to the section heading.
         let miniMaxMark = harnessAssetDataURL("minimax-mark.svg", mime: "image/svg+xml")
-        let deepSeekMark = harnessAssetDataURL("harness-icon-dsh-whale-1024.png", mime: "image/png")
+        // DeepSeek provider mark, base64.  Same role as miniMaxMark for the
+        // DeepSeek provider group heading in the model picker.
         let deepSeekMark = harnessAssetDataURL("harness-icon-dsh-whale-1024.png", mime: "image/png")
 
         let brandAndPickerScript = """
@@ -347,17 +348,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           const DEEPSEEK_MARK = \(cssSwiftLiteral(deepSeekMark));
           const markPickerHeadings = () => {
             document.querySelectorAll('div, span, li, p').forEach((el) => {
-              if (el.children.length > 0 && el.dataset.harnessMmPicker !== '1' && el.dataset.harnessDsPicker !== '1') return;
+              if (el.children.length > 0) return;
               const t = text(el.textContent || '').trim();
-              if (!t) return;
-              let isMM = t === 'minimax' || t === 'MiniMax' || t.startsWith('MiniMax-') || t.startsWith('MiniMax ');
-              let isDS = t === 'deepseek' || t === 'DeepSeek' || t.startsWith('DeepSeek-') || t.startsWith('DeepSeek ');
+              // Exact provider names only.  Model rows ('MiniMax-M3',
+              // 'DeepSeek-V4.1-Flash', ...) are markPickerModelRows' job:
+              // tagging one here would give it a child, and the badge pass
+              // skips elements that already have children.
+              const isMM = t === 'minimax' || t === 'MiniMax';
+              const isDS = t === 'deepseek' || t === 'DeepSeek';
               if (!isMM && !isDS) return;
-              
-              if (t === 'minimax') { el.textContent = 'MiniMax'; isMM = true; }
-              if (t === 'deepseek') { el.textContent = 'DeepSeek'; isDS = true; }
-              
-              if (isMM && MINIMAX_MARK && el.dataset.harnessMmPicker !== '1') {
+              if (t === 'minimax') el.textContent = 'MiniMax';
+              if (t === 'deepseek') el.textContent = 'DeepSeek';
+              if (isMM) {
+                if (el.dataset.harnessMmPicker === '1' || !MINIMAX_MARK) return;
                 el.dataset.harnessMmPicker = '1';
                 const img = document.createElement('img');
                 img.dataset.harnessMmPickerMark = '1';
@@ -365,7 +368,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 img.alt = 'MiniMax';
                 img.style.cssText = 'width:14px;height:14px;margin-right:6px;vertical-align:-2px;';
                 el.insertBefore(img, el.firstChild);
-              } else if (isDS && DEEPSEEK_MARK && el.dataset.harnessDsPicker !== '1') {
+              } else {
+                if (el.dataset.harnessDsPicker === '1' || !DEEPSEEK_MARK) return;
                 el.dataset.harnessDsPicker = '1';
                 const img = document.createElement('img');
                 img.dataset.harnessDsPickerMark = '1';
