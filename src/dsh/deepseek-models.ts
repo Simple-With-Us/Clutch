@@ -98,7 +98,18 @@ async function readBounded(response: Response, limit: number): Promise<string> {
       "discovery_failed",
     );
   }
-  if (response.body === null) return await response.text();
+  if (response.body === null) {
+    // No stream to meter: read fully, then enforce the same ceiling on
+    // the byte length of what arrived.
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > limit) {
+      throw new DeepSeekModelsError(
+        `model list is larger than the ${limit} byte ceiling`,
+        "discovery_failed",
+      );
+    }
+    return text;
+  }
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];

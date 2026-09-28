@@ -30,6 +30,18 @@ function stubFetch(
   }) as unknown as typeof fetch;
 }
 
+/** A `fetch` stand-in whose reply has no body stream (`body === null`),
+ *  exercising the readBounded fallback path. */
+function nullBodyFetch(text: string): typeof fetch {
+  return (async () => ({
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body: null,
+    text: async () => text,
+  })) as unknown as typeof fetch;
+}
+
 const LISTING = JSON.stringify({
   object: "list",
   data: [
@@ -144,6 +156,27 @@ describe("deepseek model discovery", () => {
     );
     expect(error.code).toBe("discovery_failed");
     expect(error.message).toContain("ceiling");
+  });
+
+  it("caps a null-body reply that outgrows the ceiling", async () => {
+    // Some runtimes surface no body stream at all; the fallback read
+    // must enforce the same ceiling as the streamed path.
+    const body = "x".repeat(DEEPSEEK_MODELS_MAX_BYTES + 1);
+    const error = await fetchDeepSeekModels({
+      apiKey: "sk-test",
+      fetchImpl: nullBodyFetch(body),
+    }).catch((caught: unknown) => caught as DeepSeekModelsError);
+
+    expect(error.code).toBe("discovery_failed");
+    expect(error.message).toContain("ceiling");
+  });
+
+  it("accepts a null-body reply within the ceiling", async () => {
+    const models = await fetchDeepSeekModels({
+      apiKey: "sk-test",
+      fetchImpl: nullBodyFetch(LISTING),
+    });
+    expect(models.map((model) => model.id)).toEqual(["deepseek-chat", "deepseek-reasoner"]);
   });
 
   it("still parses a large but permitted listing", async () => {
