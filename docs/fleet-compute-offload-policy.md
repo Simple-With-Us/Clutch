@@ -57,3 +57,50 @@ Every public repository in the fleet should maintain a comprehensive `.github/wo
 1. `verify`: Typecheck, unit test suite, Python compilation, formatting and syntax checks on `ubuntu-latest`.
 2. `ios`: Automated `xcodegen` and `xcodebuild` compilation for iOS Simulator on `macos-15`.
 3. `e2e`: Headless browser testing on `ubuntu-latest`.
+
+---
+
+## 6. Offloading to Free/Unmetered Cloud VM External Agents
+
+Beyond GitHub Actions, the operator has access to three dedicated external agent platforms that provide dedicated cloud virtual machines with CLI tooling (`infisical`, `gh`, `sentry`, etc.) already authenticated:
+
+### The Cloud Agent Inventory
+
+1. **Instinct (Dispatched via iMessage):**
+   - **Environment:** Dedicated cloud VM.
+   - **Concurrency:** Operates serially on focused single-agent tasks.
+   - **Best Fit:** Discrete off-machine commands, targeted scripts, or alert remediation.
+
+2. **Meta Muse (Dispatched via Mac / iOS Apps):**
+   - **Environment:** Dedicated cloud VM shared across bots.
+   - **Compute Pricing:** **Unmetered pure compute time** — Meta does not charge for background VM execution hours, only for direct model queries.
+   - **Best Fit:** Multi-day or multi-week heavy compute jobs where an agent configures the automation once and lets bash/system utilities execute headlessly in the background.
+     *(Real Fleet Example: Muse converting 505GB of video files from H.264 to H.265 with metadata preservation, syncing back into iCloud Photos, and cleaning up originals over several weeks without burning ongoing AI tokens).*
+
+3. **Grok Bot (Dispatched via X/Grok Interfaces):**
+   - **Environment:** Dedicated cloud VM shared across bots.
+   - **Best Fit:** Fast cloud-side script execution, batch repository scraping, and research workflows.
+
+### The Offloading Threshold Rule (Avoid Coordination Overhead)
+
+> **The 2x Coordination Rule:** Never spend more time formatting, briefing, and babysitting an external offloaded agent than it would take to execute the task locally or on GitHub Actions.&nbsp; Small, interactive, or tightly coupled 1-step edits must stay in the local workspace.
+>
+> **When to Offload:**
+> - Batch media transcoding or large-scale file processing (>10GB).
+> - Long-running database migrations or historical log parsing.
+> - Multi-day asynchronous scrapers, formatters, or archival syncs.
+> - Background maintenance tasks where script setup is amortized over days of CPU runtime.
+
+---
+
+## 7. Cloud Platform Economics — Unmetered VMs vs. Metered Cloud (Cursor Cloud Warning)
+
+Understanding provider billing structures is critical to avoid burning monthly resource budgets:
+
+- **Unmetered Cloud VMs (Meta Muse, Grok Bot, Instinct):**
+  These platforms decouple LLM token pricing from VM CPU runtime.&nbsp; Once a long-running process (e.g. ffmpeg, curl, python batch script) is spawned, the VM runs for hours or weeks at zero additional compute cost.
+
+- **Metered Cloud Runtimes (Cursor Cloud Anti-Pattern):**
+  Cursor Cloud bills heavily for background VM compute credits on top of standard token usage.&nbsp; Running compute-heavy or long-running tasks inside Cursor Cloud can exhaust an entire month's compute quota within 2–3 days.&nbsp;
+
+- **Fleet Directive:** Never schedule compute-heavy, background batch, or long-running tasks inside Cursor Cloud.&nbsp; Route them to Meta Muse, Instinct, Grok Bot, or free GitHub Actions runners.
