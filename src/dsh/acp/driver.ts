@@ -138,12 +138,13 @@ function currentConfigValue(result: unknown, configId: string): unknown {
  * absent: `images: false` disables image attachment for the whole engine, so
  * shipping a vision model here offered a capability the composer refused. */
 export const STATIC_DSH_MODELS: ModelCatalog = {
-  default: "deepseek-v4-flash",
+  default: "DeepSeek-V4.1-Flash",
   options: [
-    { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
-    { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
-    { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_000_000 },
-    { id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800 },
+    { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash" },
+    { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro" },
+    { id: "MiniMax-M3.1-Flash-Preview", label: "MiniMax-M3.1-Flash-Preview", contextWindow: 1_000_000 },
+    { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_000_000 },
+    { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800 },
   ],
 };
 
@@ -184,7 +185,7 @@ export function classifyDshError(error: unknown): ProviderErrorCode | undefined 
 /** The DSH support shape.  Pure engine data — no harness runtime coupling. */
 export const dshSupport: AcpSupport = {
   driverKind: "dshAgent",
-  displayName: "DeepSeek Harness",
+  displayName: "Harness",
   // the vision model below is the one option that CAN take an image, and the
   // flag gates the composer for the whole engine — so it stays off until the
   // catalog can answer per model rather than per engine
