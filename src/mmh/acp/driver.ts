@@ -58,9 +58,24 @@ export function mmhEffortLevelsForModel(modelId: string): readonly EffortLevel[]
 export const STATIC_MMH_MODELS: ModelCatalog = {
   default: MMH_DEFAULT_MODEL,
   options: [
-    { id: "MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed" },
-    { id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800 },
+    {
+      id: "MiniMax-M3.1-Flash-Preview",
+      label: "MiniMax M3.1 Flash Preview",
+      contextWindow: 1_000_000,
+      badge: "Preview",
+      badgeTitle:
+        "Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.",
+    },
     { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_000_000 },
+    {
+      id: "MiniMax-M2.7-highspeed",
+      label: "MiniMax M2.7 Highspeed",
+      contextWindow: 204_800,
+      badge: "2x the $",
+      badgeTitle:
+        "Same 204,800 context as M2.7 at $0.60 / M input and $2.40 / M output — exactly twice MiniMax M3's $0.30 / $1.20.",
+    },
+    { id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800 },
   ],
 };
 
@@ -94,7 +109,7 @@ export const mmhSupport: AcpSupport = {
   resolveModels: () => STATIC_MMH_MODELS,
   effortLevels: MMH_EFFORT_LEVELS,
   perModelEffortLevels: MMH_PER_MODEL_EFFORT_LEVELS,
-  mcpServers: false,
+  mcpServers: true,
   defaultCli: "mmh-acp.sh",
   nativeSource: "mmh.http",
   loginNote: "MiniMax API key missing — set MINIMAX_API_KEY or MMH_API_KEY_NAME",

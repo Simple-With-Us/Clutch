@@ -11,10 +11,11 @@ public struct ToolsView: View {
             VStack(spacing: 0) {
                 // Segmented control
                 Picker("Category", selection: $selectedSegment) {
-                    Text("Composio").tag(0)
-                    Text("Fleet RAG").tag(1)
-                    Text("MCP").tag(2)
-                    Text("Built-in").tag(3)
+                    Text("Computer").tag(0)
+                    Text("Composio").tag(1)
+                    Text("Fleet RAG").tag(2)
+                    Text("MCP").tag(3)
+                    Text("Built-in").tag(4)
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 14)
@@ -25,18 +26,61 @@ public struct ToolsView: View {
                 // Content
                 switch selectedSegment {
                 case 0:
-                    ComposioView()
+                    ComputerToolsListView(tools: tools.filter { $0.category == .computerUse })
                 case 1:
-                    FleetRAGView()
+                    ComposioView()
                 case 2:
-                    MCPListView(tools: tools.filter { $0.category == .mcp })
+                    FleetRAGView()
                 case 3:
+                    MCPListView(tools: tools.filter { $0.category == .mcp })
+                case 4:
                     BuiltInToolsListView(tools: tools.filter { $0.category == .builtIn })
                 default:
                     EmptyView()
                 }
             }
             .navigationTitle("Tools & Extensions")
+        }
+    }
+}
+
+struct ComputerToolsListView: View {
+    let tools: [ToolItem]
+
+    var body: some View {
+        List {
+            Section(
+                header: Text("BotFleet Computer Use Options"),
+                footer: Text("Supports This Mac (local), Cloud Box, Cloud VPS (Cua), and Local VM.&nbsp; DeepSeek and MiniMax interface with all computer mounts through Harness ACP.")
+            ) {
+                ForEach(tools) { tool in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: tool.category.iconName)
+                                .foregroundColor(.blue)
+                            Text(tool.name)
+                                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                            Spacer()
+                            Text("Ready")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.green)
+                        }
+
+                        Text(tool.description)
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+
+                        Text(tool.parametersSummary)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
         }
     }
 }

@@ -104,9 +104,196 @@ private func ensureServer() {
     }
 }
 
+// MARK: - Mac In-App Updater (Seamless & TestFlight Aware)
+
+final class HarnessAppUpdater: NSObject {
+    static let shared = HarnessAppUpdater()
+
+    private let repoOwner = "jaywedgeworth22"
+    private let repoName = "Harness"
+    private(set) var latestVersionFound: String?
+    private(set) var isChecking: Bool = false
+
+    var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1"
+    }
+
+    var currentBuild: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "2"
+    }
+
+    var isTestFlightOrAppStore: Bool {
+        if let receipt = Bundle.main.appStoreReceiptURL,
+           FileManager.default.fileExists(atPath: receipt.path) {
+            return receipt.lastPathComponent == "sandboxReceipt" || receipt.path.contains("masreceipt")
+        }
+        return false
+    }
+
+    func checkInBackground(updateMenuItem: NSMenuItem? = nil) {
+        guard !isChecking && !isTestFlightOrAppStore else { return }
+        isChecking = true
+
+        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest"
+        guard let url = URL(string: urlString) else {
+            isChecking = false
+            return
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+        request.setValue("Harness-Mac-Updater/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self = self else { return }
+            defer { self.isChecking = false }
+
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tagName = json["tag_name"] as? String else {
+                return
+            }
+
+            let remoteVersion = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+            DispatchQueue.main.async {
+                if self.isVersion(remoteVersion, newerThan: self.currentVersion) {
+                    self.latestVersionFound = remoteVersion
+                    updateMenuItem?.title = "Check for Updates... (v\(remoteVersion) Available)"
+                }
+            }
+        }.resume()
+    }
+
+    func promptUserForUpdateCheck(window: NSWindow?) {
+        if isTestFlightOrAppStore {
+            let alert = NSAlert()
+            alert.messageText = "Managed by TestFlight"
+            alert.informativeText = "Harness is distributed via TestFlight / App Store.  Updates are installed automatically by macOS TestFlight in the background."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let urlString = "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest"
+        guard let url = URL(string: urlString) else { return }
+
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+        request.setValue("Harness-Mac-Updater/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self = self else { return }
+
+            DispatchQueue.main.async {
+                if let data = data,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let tagName = json["tag_name"] as? String {
+                    let remoteVersion = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+                    let htmlURL = json["html_url"] as? String ?? "https://github.com/\(self.repoOwner)/\(self.repoName)/releases"
+
+                    if self.isVersion(remoteVersion, newerThan: self.currentVersion) {
+                        self.latestVersionFound = remoteVersion
+                        let updateAlert = NSAlert()
+                        updateAlert.messageText = "Update Available"
+                        updateAlert.informativeText = "Harness \(remoteVersion) is now available (you have \(self.currentVersion)).  Would you like to install it now?"
+                        updateAlert.alertStyle = .informational
+                        updateAlert.addButton(withTitle: "Update & Relaunch")
+                        updateAlert.addButton(withTitle: "View Release Notes")
+                        updateAlert.addButton(withTitle: "Later")
+
+                        let response = updateAlert.runModal()
+                        if response == .alertFirstButtonReturn {
+                            self.performLocalUpdateAndRelaunch()
+                        } else if response == .alertSecondButtonReturn {
+                            if let targetURL = URL(string: htmlURL) {
+                                NSWorkspace.shared.open(targetURL)
+                            }
+                        }
+                    } else {
+                        let upToDateAlert = NSAlert()
+                        upToDateAlert.messageText = "You're Up to Date!"
+                        upToDateAlert.informativeText = "Harness \(self.currentVersion) (build \(self.currentBuild)) is currently the newest version available."
+                        upToDateAlert.alertStyle = .informational
+                        upToDateAlert.addButton(withTitle: "OK")
+                        upToDateAlert.runModal()
+                    }
+                } else {
+                    self.checkLocalRepoUpdate(window: window)
+                }
+            }
+        }.resume()
+    }
+
+    private func checkLocalRepoUpdate(window: NSWindow?) {
+        let home = NSHomeDirectory()
+        let scriptCandidates = [
+            "\(home)/apps/harness-runtime/scripts/update-mac-app.sh",
+            "\(home)/Code/Harness/scripts/update-mac-app.sh"
+        ]
+        if scriptCandidates.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            let alert = NSAlert()
+            alert.messageText = "Harness Local Update"
+            alert.informativeText = "Harness is installed from local runtime.  Run update script to pull latest commits and recompile?"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Update & Relaunch")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                performLocalUpdateAndRelaunch()
+            }
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "You're Up to Date"
+            alert.informativeText = "Harness \(currentVersion) is running normally."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    func performLocalUpdateAndRelaunch() {
+        let home = NSHomeDirectory()
+        let scriptCandidates = [
+            "\(home)/apps/harness-runtime/scripts/update-mac-app.sh",
+            "\(home)/Code/Harness/scripts/update-mac-app.sh"
+        ]
+        guard let script = scriptCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            let alert = NSAlert()
+            alert.messageText = "Update Script Not Found"
+            alert.informativeText = "Could not locate update-mac-app.sh in harness-runtime or Code/Harness."
+            alert.alertStyle = .critical
+            alert.runModal()
+            return
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = [script]
+        try? proc.run()
+        NSApplication.shared.terminate(nil)
+    }
+
+    private func isVersion(_ v1: String, newerThan v2: String) -> Bool {
+        let parts1 = v1.split(separator: ".").compactMap { Int($0) }
+        let parts2 = v2.split(separator: ".").compactMap { Int($0) }
+        for i in 0..<max(parts1.count, parts2.count) {
+            let p1 = i < parts1.count ? parts1[i] : 0
+            let p2 = i < parts2.count ? parts2[i] : 0
+            if p1 > p2 { return true }
+            if p1 < p2 { return false }
+        }
+        return false
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate {
     var window: NSWindow!
     var webView: WKWebView!
+    var updateMenuItem: NSMenuItem?
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        HarnessAppUpdater.shared.promptUserForUpdateCheck(window: window)
+    }
 
     private func setupMainMenu() {
         let mainMenu = NSMenu()
@@ -115,6 +302,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "About Harness", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        let updateItem = appMenu.addItem(withTitle: "Check for Updates...", action: #selector(checkForUpdates(_:)), keyEquivalent: "u")
+        updateItem.target = self
+        self.updateMenuItem = updateItem
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Hide Harness", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthersItem = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -152,6 +342,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
+        // Non-intrusive background update check after 3 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            HarnessAppUpdater.shared.checkInBackground(updateMenuItem: self?.updateMenuItem)
+        }
         ensureServer()
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let width = min(1280, screen.width * 0.88)
