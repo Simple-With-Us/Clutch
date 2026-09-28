@@ -29,6 +29,9 @@ if [[ ! -f "$SWIFT" ]]; then
   exit 1
 fi
 
+# Terminate existing running instance so new build takes effect immediately
+pkill -f DeepSeekHarness 2>/dev/null || true
+
 mkdir -p "${HOME}/Applications"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -118,3 +121,4 @@ fi
 
 echo "installed $APP"
 echo "WKWebView shell; Dock running-dot; second click focuses the same window"
+open -a "$APP"
