@@ -35,6 +35,7 @@
     "./shared/contracts": "./src/shared/contracts.ts",
     "./shared/acp-core": "./src/shared/acp-core.ts",
     "./shared/sanitize-context": "./src/shared/sanitize-context.ts",
+    "./shared/subagent-tool-profiles": "./src/shared/subagent-tool-profiles.ts",
     "./package.json": "./package.json"
   },
   "bin": {
