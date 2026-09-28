@@ -1,4 +1,4 @@
-name: HarnessCompanion
+name: Harness
 options:
   bundleIdPrefix: com.simplewithus
   deploymentTarget:
@@ -13,32 +13,78 @@ settings:
     DEVELOPMENT_TEAM: CC8UTF7ATG
     ASSETCATALOG_FILTER_FOR_THINNING: false
     ENABLE_ASSET_THINNING: false
+packages:
+  ExyteChat:
+    url: https://github.com/exyte/Chat.git
+    from: 3.3.5
 targets:
-  HarnessCompanion:
+  Harness:
     type: application
     platform: iOS
     sources:
       - path: App
       - path: Resources
+      - path: Assets.xcassets
+    dependencies:
+      - package: ExyteChat
+        product: ExyteChat
     settings:
       base:
+        PRODUCT_NAME: Harness
         PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.harness.ios
         DEVELOPMENT_TEAM: CC8UTF7ATG
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "202609280600"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "202609281200"
         SWIFT_VERSION: '5.9'
         TARGETED_DEVICE_FAMILY: '1,2'
         SUPPORTS_MACCATALYST: false
         ENABLE_ON_DEMAND_RESOURCES: false
-        CODE_SIGN_ENTITLEMENTS: HarnessCompanion.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: false
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: false
+        CODE_SIGN_ENTITLEMENTS: Harness.entitlements
     info:
       path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Harness
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.simplewithus.harness.pairing
+            CFBundleURLSchemes:
+              - harness
+              - minimax
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSLocalNetworkUsageDescription: Harness connects to your Mac, Hetzner, or cloud servers on this network.
+        NSCameraUsageDescription: Harness uses the camera to scan host pairing QR codes.
+        NSMicrophoneUsageDescription: Harness records your voice while you hold to talk to dictate coding directives.
+        NSSpeechRecognitionUsageDescription: Harness transcribes speech into coding directives and prompts.
+        NSBonjourServices:
+          - _harness._tcp
+          - _minimax._tcp
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            local:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
 schemes:
-  HarnessCompanion:
+  Harness:
     build:
       targets:
-        HarnessCompanion: all
+        Harness: all
     run:
       config: Debug
     archive:

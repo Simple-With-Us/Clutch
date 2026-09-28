@@ -1,10 +1,10 @@
 import SwiftUI
 
 @main
-struct HarnessCompanionApp: App {
+struct HarnessApp: App {
     @State private var connectionManager = HostConnectionManager.shared
     @AppStorage("harness_theme_preference") private var themePreference: String = "light"
-    
+
     var body: some Scene {
         WindowGroup {
             MainTabView()
@@ -18,7 +18,7 @@ struct HarnessCompanionApp: App {
                 }
         }
     }
-    
+
     private var colorScheme: ColorScheme? {
         switch themePreference {
         case "dark": return .dark
@@ -26,7 +26,7 @@ struct HarnessCompanionApp: App {
         default: return nil
         }
     }
-    
+
     private func handleIncomingURL(_ url: URL) {
         if let host = connectionManager.parsePairingURL(url) {
             connectionManager.addHost(host)
