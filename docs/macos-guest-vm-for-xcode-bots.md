@@ -47,7 +47,28 @@ Running inside a headless macOS Guest VM (`mac_vm`) completely eliminates these 
 
 ---
 
-## 3. Provisioning & Headless Execution via Tart / Virtualization
+## 3. Build Runner Execution Hierarchy (Owner Preference)
+
+The fleet enforces a three-tier execution hierarchy for Xcode builds, Simulator tests, and TestFlight deployments:
+
+### Tier 1: GitHub-Hosted macOS Runners (`macos-15` / `macos-14`) — Primary Default for Public Repos
+- **Policy:** For all **public repositories**, build and test jobs run primarily on GitHub-hosted Apple Silicon macOS runners (`runs-on: macos-15` or `macos-14`).
+- **Rationale:** Free for public repositories, offloads CPU and memory usage from the developer's physical Mac, executes inside a guaranteed clean-room macOS image, and automatically reports verifiable commit and PR status checks directly on GitHub.
+- **Workflow:** Configured in `.github/workflows/ci.yml` under the `ios` job.
+
+### Tier 2: Headless Local macOS Guest VM (`mac_vm`) — Required Secondary Tier
+- **Policy:** Reserved for scenarios where GitHub hosted runners cannot or should not be used:
+  1. **Private Repositories:** Where GitHub Actions macOS runner minutes incur billable per-minute costs.
+  2. **Specialized Credential Enclaves:** Jobs requiring local hardware signing keys, local secrets, or sensitive provisioning certificates that must not reside on public cloud runners.
+  3. **Local/Offline Workflows:** Rapid iteration during offline development or when testing local daemon communication (e.g. testing Harness daemon on `127.0.0.1:3080` against an active iOS simulator).
+- **Execution:** Headless execution via Apple Virtualization / Tart (`scripts/mac-guest-vm-runner.sh`) ensures simulators and compilers run without stealing active window focus or mouse/keyboard events on the host Mac.
+
+### Tier 3: Direct Host Mac (`local`) — Fallback Only
+- **Policy:** Only used for interactive debugging, manual UI inspection, or on machines where hardware virtualization is unavailable.
+
+---
+
+## 4. Provisioning & Headless Execution via Tart / Virtualization
 
 ### Step A: Pull or Create the Base macOS Image
 ```bash
@@ -73,7 +94,7 @@ tart exec macos-builder -- bash -c "
 
 ---
 
-## 4. Subagent Role: `xcode_ship`
+## 5. Subagent Role: `xcode_ship`
 
 In `src/shared/subagent-tool-profiles.ts`, the specialized subagent role `xcode_ship` is configured with minimal tool surface area:
 - **Allowed Tools:** `view_file`, `run_command`, `send_message`.

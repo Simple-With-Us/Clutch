@@ -19,6 +19,16 @@ jobs:
       - run: python3 -m py_compile bridges/dsh/dsh-acp.py bridges/mmh/mmh-acp.py
       - run: git diff --check
 
+  ios:
+    name: iOS Build (Simulator)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build Harness iOS App
+        run: bash scripts/build-ios.sh --simulator
+
   e2e:
     runs-on: ubuntu-latest
     steps:
