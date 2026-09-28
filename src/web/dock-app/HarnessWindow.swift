@@ -892,24 +892,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             section.appendChild(report);
           };
 
-          // Auto-bind workspace if the app is stuck on "Choose a workspace to start"
-          // and allow clicking any workspace row to open a session in it.
-          let lastAutoClick = { current: 0 };
+          // Auto-bind workspace ONLY on cold initial launch if the landing screen is completely empty
+          // with "Choose a workspace to start" and NO active messages or sessions exist.
+          let didInitialAutoSelect = false;
           const ensureWorkspaceSelected = () => {
-            const bodyText = document.body ? (document.body.innerText || '') : '';
-            const isInert = bodyText.includes('Choose a workspace to start')
-              || !!document.querySelector('[data-composer-placeholder*="workspace" i]')
-              || !!document.querySelector('[data-phase="inert"]')
-              || !!document.querySelector('[class*="cardWorkspaceTrigger"]')
-              || !!document.querySelector('[aria-label*="Choose a workspace" i]');
+            if (didInitialAutoSelect) return;
 
-            const now = Date.now();
-            if (isInert && (now - lastAutoClick.current > 1000)) {
+            // Never auto-click if in Settings, or if chat messages/history exist
+            if (location.hash.includes('settings') || !!document.querySelector('[class*="settings" i], [data-slot*="settings" i]')) return;
+            if (document.querySelector('[class*="chatMessage"], [class*="messageRow"], [data-role="user"], [data-role="assistant"]')) {
+              didInitialAutoSelect = true;
+              return;
+            }
+
+            const bodyText = document.body ? (document.body.innerText || '') : '';
+            if (bodyText.includes('Choose a workspace to start')) {
               const firstNewBtn = document.querySelector('button[aria-label*="New session in "]')
                 || document.querySelector('button[aria-label*="session in" i]')
                 || document.querySelector('button[aria-label*="新建会话"]');
               if (firstNewBtn) {
-                lastAutoClick.current = now;
+                didInitialAutoSelect = true;
                 firstNewBtn.click();
               }
             }
@@ -920,9 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               topNewBtn.dataset.harnessBound = '1';
               topNewBtn.addEventListener('click', () => {
                 setTimeout(() => {
-                  const checkInert = (document.body ? document.body.innerText : '').includes('Choose a workspace to start')
-                    || !!document.querySelector('[data-phase="inert"]')
-                    || !!document.querySelector('[class*="cardWorkspaceTrigger"]');
+                  const checkInert = (document.body ? document.body.innerText : '').includes('Choose a workspace to start');
                   if (checkInert) {
                     const firstBtn = document.querySelector('button[aria-label*="New session in "]')
                       || document.querySelector('button[aria-label*="session in" i]');
@@ -993,6 +993,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         return true
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if let win = window, !win.isVisible {
+            win.makeKeyAndOrderFront(nil)
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -1025,30 +1031,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         loadFailed = true
     }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        hasLoadedPage = false
+        loadFailed = true
+        loadHarness()
+    }
+
     /// Bring the window forward, reloading only when there is nothing live to
     /// preserve.
     ///
-    /// Bringing the app to the foreground used to call `loadHarness()`
-    /// unconditionally, so every Dock click re-navigated the WKWebView.  The
-    /// dsh web UI keeps its open panel, scroll position, and in-progress
-    /// settings edits in page state, so a reload discarded all of it and the
-    /// owner lost whatever settings screen they had open.  A foreground switch
-    /// is not a navigation, so it must not navigate.
-    ///
-    /// A reload is still correct in exactly three cases, and each one means the
-    /// page on screen is already worthless: nothing has loaded yet, the last
-    /// load failed, or the server was down and `ensureServer()` just restarted
-    /// it (the old page's live connection died with the process).
+    /// If the web view has already successfully loaded and has not failed,
+    /// a foreground switch must never ping the server or reload the page.
+    /// Doing so causes beachballs, false-negative server restarts under CPU load,
+    /// and destroys active sessions and open settings.
     private func showWindow() {
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+
+        guard !hasLoadedPage || loadFailed else { return }
+
         let serverWasUp = pingHarness()
         if !serverWasUp {
             ensureServer()
         }
-        if !hasLoadedPage || loadFailed || !serverWasUp {
-            loadHarness()
-        }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        loadHarness()
     }
 
     private func loadHarness() {
