@@ -149,36 +149,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // DOM mutates (also fixes the model-picker section heading "minimax"
         // -> "MiniMax" when the dropdown is opened).
         let css = """
-        /* Hide the upstream whale SVG inside the brand block — keep the
-           HARNESS wordmark visible.  The brand anchor itself is rebuilt by
-           the JS below to add the MM logo and DS mark. */
-        a[class*="brand"] svg, header [class*="brand"] svg,
-        aside [class*="brand"] svg, nav [class*="brand"] svg,
-        [class*="brand"] svg, [class*="logo"] svg {
+        /* Hide the upstream whale SVG inside the brand block and rail */
+        [class*="_brandMark"] svg, [class*="_railMark"] svg,
+        [class*="_brand"] > svg {
           display: none !important;
         }
-        /* Strip the empty-state hero whale (HeroFish in
-           @deepseek-ai/dsh-client-ui-conversation/skeleton/EmptyHero).  The
-           hero headline ("Into the Unknown" + preview badge) is kept; only
-           the 34px SVG glyph and its hover-swim hitbox are removed. */
-        [class*="_fishHitbox"], [class*="_fish"]:not([class*="brandMark"]):not([class*="railMark"]) {
+        /* Strip the empty-state hero whale (HeroFish) */
+        [class*="_fishHitbox"], [class*="_fish"] {
           display: none !important;
         }
-        /* Tighten the sidebar top-left header now that the upstream whale is
-           gone: collapse the brandMark wrapper (its only content was the
-           hidden SVG), collapse the brandIdentity gap (single remaining
-           child), and zero out the DS chip's right margin so the [MM][DS]
-           HARNESS row sits flush.  Class hashes (`hHd-Xa_*`,
-           `pXSMma_*`) are CSS-module scoped; match by suffix so the rule
-           survives an upstream re-hash. */
-        [class*="_brandMark"] {
-          display: none !important;
+        /* Tighten the sidebar top-left header */
+        [class*="_logoRow"] {
+          height: 52px !important;
+          margin-bottom: 4px !important;
+          padding: 4px 8px 4px 4px !important;
+          box-sizing: border-box !important;
+          display: flex !important;
+          align-items: center !important;
+        }
+        [class*="_brand"] {
+          height: auto !important;
+          overflow: visible !important;
         }
         [class*="_brandIdentity"] {
+          height: auto !important;
+          overflow: visible !important;
+          display: inline-flex !important;
+          flex-direction: column !important;
+          align-items: flex-start !important;
+          justify-content: center !important;
           gap: 0 !important;
         }
-        [data-harness-h] {
-          margin-right: 4px !important;
+        /* Ensure our H monogram brand SVG and container are always visible */
+        [data-harness-brand] {
+          display: inline-flex !important;
+        }
+        [data-harness-brand] svg {
+          display: block !important;
         }
         /* Make sure section headings in dropdowns use the brand case. */
         [class*="group-label"], [class*="vendor"], [class*="section-label"] {
@@ -194,56 +201,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         """
         userContent.addUserScript(WKUserScript(source: cssBootstrap, injectionTime: WKUserScriptInjectionTime.atDocumentStart, forMainFrameOnly: true))
 
-        // MiniMax provider mark, base64.  Deliberately NOT the Dock icon:
-        // `assets/harness-icon-1024.png` is the neutral HARNESS mark, so the
-        // app itself is not MiniMax-branded.  The MiniMax logo is used only
-        // where MiniMax is actually named -- the sidebar co-brand chip the
-        // owner asked for, and the model-picker provider group, so choosing
-        // MiniMax in the picker shows the MiniMax logo.
+        // MiniMax provider mark, base64.  Used in the model-picker provider group
+        // so choosing MiniMax shows the MiniMax logo next to the section heading.
         let miniMaxMark = harnessAssetDataURL("minimax-mark.svg", mime: "image/svg+xml")
-        // The sidebar now wears the app's own identity, not a vendor's.
-        let harnessMark = harnessAssetDataURL("harness-icon.svg", mime: "image/svg+xml")
 
         let brandAndPickerScript = """
         (function () {
           const text = (s) => (s || '').toString();
 
-          // Find the top-left brand anchor.  dsh-web renders it as
-          //   <a class="...brand..."> <svg/> deepseek HARNESS </a>
-          // inside the sidebar header.
-          const brandCandidates = Array.from(document.querySelectorAll(
-            'a[class*="brand"], header [class*="brand"], aside [class*="brand"], nav [class*="brand"]'
-          ));
-          const brandEl = brandCandidates.find((el) => {
-            const t = text(el.textContent || '').trim().toLowerCase();
-            return t.includes('harness') || t.includes('deepseek');
-          });
+          // Find the brand container in the sidebar top-left.
+          const findBrandEl = () => {
+            return document.querySelector('[class*="_brandIdentity"]')
+              || document.querySelector('button[class*="_brand"]')
+              || document.querySelector('[class*="_brand"]')
+              || document.querySelector('button[class*="brand"]');
+          };
 
-          if (brandEl) {
-            // Drop the upstream "deepseek" prefix word so the brand reads
-            // [MM logo] [DS] HARNESS, not "deepseek HARNESS".
-            Array.from(brandEl.querySelectorAll('*')).forEach((el) => {
-              const t = text(el.textContent || '').trim().toLowerCase();
-              if (t === 'deepseek' && el.children.length === 0) {
-                el.textContent = '';
-              }
-            });
-            // Hide any inline SVG (whale) — already done by CSS, but belt-and-braces.
-            brandEl.querySelectorAll('svg').forEach((svg) => { svg.style.display = 'none'; });
+          // Update the top-left brand header to the H monogram with just HARNESS under that.
+          // No MM or DS logos; eliminates blank space in top left.
+          const updateBrandHeader = () => {
+            const brandEl = findBrandEl();
+            if (!brandEl) return;
 
-            // Owner 2026-09-27: the brand row carries no third-party mark.  The
-            // MM logo and the DS chip are removed, not just left un-added, so a
-            // stale one from an earlier build cannot survive a reload.
-            brandEl.querySelectorAll('[data-harness-mm], [data-harness-ds]').forEach((n) => n.remove());
-            if (!brandEl.querySelector('[data-harness-h]')) {
-              const h = document.createElement('img');
-              h.dataset.harnessH = '1';
-              h.src = \(cssSwiftLiteral(harnessMark));
-              h.alt = 'Harness';
-              h.style.cssText = 'width:22px;height:22px;margin-right:8px;border-radius:5px;vertical-align:middle;';
-              brandEl.insertBefore(h, brandEl.firstChild);
+            // Strip any legacy MM or DS marks
+            brandEl.querySelectorAll('[data-harness-mm], [data-harness-ds], [data-harness-h]').forEach((n) => n.remove());
+
+            if (!brandEl.querySelector('[data-harness-brand="1"]')) {
+              Array.from(brandEl.children).forEach((child) => {
+                if (!child.dataset.harnessBrand) {
+                  child.style.display = 'none';
+                }
+              });
+              const hBrand = document.createElement('div');
+              hBrand.dataset.harnessBrand = '1';
+              hBrand.style.cssText = 'display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;line-height:1;user-select:none;cursor:pointer;padding:2px 0;';
+              hBrand.innerHTML = `
+                <svg width="22" height="18" viewBox="0 0 484 440" fill="currentColor" style="display:block;">
+                  <path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/>
+                </svg>
+                <span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">HARNESS</span>
+              `;
+              brandEl.appendChild(hBrand);
             }
-          }
+          };
 
           // Model-picker provider group: the upstream heading is the raw
           // provider id from `listProviders()` display names, so MiniMax
@@ -257,10 +257,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               const t = text(el.textContent || '').trim();
               if (t !== 'minimax' && t !== 'MiniMax') return;
               if (t === 'minimax') el.textContent = 'MiniMax';
-              // Idempotent: once the mark is in, `children.length > 0` above
-              // short-circuits on later observer passes.  A re-render that
-              // replaces this node yields a fresh childless element, so the
-              // mark is re-applied.
               if (el.dataset.harnessMmPicker === '1' || !MINIMAX_MARK) return;
               el.dataset.harnessMmPicker = '1';
               const img = document.createElement('img');
@@ -271,66 +267,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               el.insertBefore(img, el.firstChild);
             });
           };
+
           // Model rows: the bundle ships raw model ids with no cost or
           // capability signal.  Give each row its owner-facing label and, where
-          // the choice has a price or availability consequence, a chip.  This
-          // mirrors what BotFleet does natively via ModelCatalog.badge, which
-          // the DSH driver sets server-side (server/drivers/acp/dsh.ts) — the
-          // same facts, expressed in the overlay because the picker UI is
-          // vendored.
+          // the choice has a price or availability consequence, a chip.
           //
-          //   deepseek-v4-flash  Multimodal  DeepSeek's Flash IS the
+          //   deepseek-flash  Multimodal  DeepSeek's Flash IS the
           //     image/video model; its image tokens bill at the same rate as
           //     text, so there is one row, not two.
+          //   deepseek-v4-pro  DeepSeek V4.1 Pro (reasoning-capable)
           //   MiniMax-M3.1-Flash-Preview  Preview  Token Plan / MiniMax Code
           //     only, so it needs a Token Plan key to be callable.
           //   MiniMax-M2.7-highspeed  2x Cost  same 204,800 context as M2.7 at
           //     exactly twice M3's $0.30 / $1.20.
           const MODEL_ROWS = [
             {
-              ids: ['deepseek-v4-flash', 'DeepSeek-V4.1-Flash', 'DeepSeek V4 Flash'],
-              label: 'DeepSeek V4 Flash',
+              ids: ['deepseek-flash', 'deepseek-v4-flash', 'DeepSeek-V41-Flash', 'DeepSeek-V4.1-Flash', 'DeepSeek V4.1 Flash', 'DeepSeek V4 Flash'],
+              label: 'DeepSeek-V4.1-Flash',
               badge: 'Multimodal',
               badgeTitle: 'Accepts image and video input at the same token rate as text — each image is capped at 1,024 tokens.',
             },
             {
-              ids: ['deepseek-v4-pro', 'DeepSeek-V4-Pro', 'DeepSeek V4 Pro'],
-              label: 'DeepSeek V4 Pro',
+              ids: ['deepseek-v4-pro', 'DeepSeek-V4-Pro', 'DeepSeek-V4.1-Pro', 'DeepSeek V4.1 Pro', 'DeepSeek V4 Pro'],
+              label: 'DeepSeek-V4.1-Pro',
             },
             {
               ids: ['MiniMax-M3.1-Flash-Preview', 'MiniMax M3.1 Flash Preview'],
-              label: 'MiniMax M3.1 Flash Preview',
+              label: 'MiniMax-M3.1-Flash-Preview',
               badge: 'Preview',
               badgeTitle: 'Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.',
             },
             {
               ids: ['MiniMax-M3', 'MiniMax M3'],
-              label: 'MiniMax M3',
+              label: 'MiniMax-M3',
             },
             {
               ids: ['MiniMax-M2.7-highspeed', 'MiniMax M2.7 Highspeed', 'MiniMax M2.7 highspeed'],
-              label: 'MiniMax M2.7 Highspeed',
+              label: 'MiniMax-M2.7-highspeed',
               badge: '2x Cost',
               badgeTitle: 'Same 204,800 context as M2.7 at $0.60 / M input and $2.40 / M output — exactly twice MiniMax M3.',
             },
           ];
+
+          // Disallow any legacy/extra DeepSeek models from appearing in the picker
+          const DISALLOWED_MODELS = [
+            'DeepSeek-V4-Flash',
+            'DeepSeek-V4-Flash-Vision-Exp',
+            'deepseek-v4-flash-vision-exp',
+            'DeepSeek V4 Flash Vision Exp'
+          ];
           const markPickerModelRows = () => {
+            // Hide disallowed model buttons in picker
+            document.querySelectorAll('button[role="menuitemradio"], button[class*="option"]').forEach((btn) => {
+              const bText = text(btn.textContent || '').trim();
+              if (DISALLOWED_MODELS.some((m) => bText === m || (bText.startsWith(m) && !bText.includes('4.1')))) {
+                btn.style.display = 'none';
+              }
+            });
+
+            // Decorate allowed model rows with labels and badges
             document.querySelectorAll('div, span, li, p, button, label').forEach((el) => {
               if (el.children.length > 0) return;
               const t = text(el.textContent || '').trim();
               if (!t) return;
               const row = MODEL_ROWS.find((candidate) => candidate.ids.includes(t));
               if (!row) return;
-              // Only write when the text actually changes.  Assigning
-              // textContent replaces the child text node even when the value is
-              // identical, and that is a DOM mutation -- so an unconditional
-              // write here would retrigger the observer forever and hang the
-              // page.  A row with no badge stays childless and is re-matched on
-              // every pass, so the guard is what makes it converge.
               if (t !== row.label) el.textContent = row.label;
-              // Idempotent by the same mechanism as the provider mark: the
-              // badge makes this a parent, so later observer passes skip it, and
-              // a re-render produces a fresh childless node to re-decorate.
               if (!row.badge) return;
               if (el.dataset.harnessModelRow === '1') return;
               el.dataset.harnessModelRow = '1';
@@ -346,25 +348,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               el.appendChild(chip);
             });
           };
-          markPickerModelRows();
-          const mo = new MutationObserver(() => {
-            // Re-run the brand rewrite + picker heading/logo pass on every DOM
-            // mutation.  Both layers are idempotent (data-harness-* checks).
-            const el = brandCandidates.find((b) => true);
-            if (el) {
-              // Re-apply icon insertion in case dsh-web replaced the brand anchor.
-              el.querySelectorAll('[data-harness-mm], [data-harness-ds]').forEach((n) => n.remove());
-              if (!el.querySelector('[data-harness-h]')) {
-                const h = document.createElement('img');
-                h.dataset.harnessH = '1';
-                h.src = \(cssSwiftLiteral(harnessMark));
-                h.alt = 'Harness';
-                h.style.cssText = 'width:22px;height:22px;margin-right:8px;border-radius:5px;vertical-align:middle;';
-                el.insertBefore(h, el.firstChild);
-              }
+
+          // Enforce reasoning effort level only for models where it is applicable:
+          // Applicable: DeepSeek-V4.1-Pro, MiniMax-M3.
+          // Not applicable: DeepSeek-V4.1-Flash, MiniMax-M3.1-Flash-Preview, MiniMax-M2.7-highspeed.
+          const fixEffortOption = () => {
+            const triggerLabel = document.querySelector('[class*="triggerLabel"]');
+            const activeModel = text(triggerLabel?.textContent || '').trim();
+            const isReasoning = /(pro|reasoner)/i.test(activeModel) || activeModel === 'MiniMax-M3';
+
+            const triggerEffort = document.querySelector('[class*="triggerEffort"]');
+            if (triggerEffort) {
+              triggerEffort.style.display = isReasoning ? '' : 'none';
             }
+
+            document.querySelectorAll('button[role="menuitem"]').forEach((btn) => {
+              const t = text(btn.textContent || '').trim().toLowerCase();
+              if (t.startsWith('effort') || t.includes('reasoning')) {
+                btn.style.display = isReasoning ? '' : 'none';
+              }
+            });
+          };
+
+          updateBrandHeader();
+          markPickerHeadings();
+          markPickerModelRows();
+          fixEffortOption();
+
+          const mo = new MutationObserver(() => {
+            updateBrandHeader();
             markPickerHeadings();
             markPickerModelRows();
+            fixEffortOption();
           });
           mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
         })();
