@@ -160,7 +160,11 @@ enum DeepSeekModels {
 
     /// One listing, as `{ "ok": true, "models": ["id", ...] }` or
     /// `{ "ok": false, "message": "..." }`.  Only ids cross the bridge.
-    static func listing(home: String = NSHomeDirectory()) -> [String: Any] {
+    ///
+    /// Async end to end: the first version waited on a semaphore for up
+    /// to 12 seconds, and its only caller is the script-message handler,
+    /// which runs on the main thread.
+    static func listing(home: String = NSHomeDirectory()) async -> [String: Any] {
         guard let key = credential(home: home) else {
             return ["ok": false, "message": "No \(credentialRef) in the dsh credential store."]
         }
@@ -173,25 +177,19 @@ enum DeepSeekModels {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let sem = DispatchSemaphore(value: 0)
-        var data: Data?
-        var status = 0
-        var transportError: Error?
-        URLSession.shared.dataTask(with: request) { replyData, response, error in
+        let data: Data
+        let status: Int
+        do {
+            let (replyData, response) = try await URLSession.shared.data(for: request)
             data = replyData
             status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            transportError = error
-            sem.signal()
-        }.resume()
-        _ = sem.wait(timeout: .now() + 12)
-
-        if transportError != nil {
+        } catch {
             return ["ok": false, "message": "Could not reach DeepSeek."]
         }
         if status == 401 || status == 403 {
             return ["ok": false, "message": "DeepSeek rejected the API key (\(status))."]
         }
-        guard status == 200, let data, !data.isEmpty else {
+        guard status == 200, !data.isEmpty else {
             return ["ok": false, "message": "DeepSeek answered \(status)."]
         }
         if data.count > maxBytes {
@@ -227,12 +225,17 @@ final class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler {
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
-        let reply = DeepSeekModels.listing()
-        let json = (try? JSONSerialization.data(withJSONObject: reply))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":false,"message":"bridge failure"}"#
         guard let webView = message.webView else { return }
-        let script = "window.__harnessDeepSeekModelsResolve && window.__harnessDeepSeekModelsResolve(\(json));"
-        DispatchQueue.main.async { webView.evaluateJavaScript(script, completionHandler: nil) }
+        // listing() awaits the network instead of blocking on a
+        // semaphore; run it off the main thread this handler is called
+        // on, and reply when the listing is ready.
+        Task {
+            let reply = await DeepSeekModels.listing()
+            let json = (try? JSONSerialization.data(withJSONObject: reply))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":false,"message":"bridge failure"}"#
+            let script = "window.__harnessDeepSeekModelsResolve && window.__harnessDeepSeekModelsResolve(\(json));"
+            DispatchQueue.main.async { webView.evaluateJavaScript(script, completionHandler: nil) }
+        }
     }
 }
 
