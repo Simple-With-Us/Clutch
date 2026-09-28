@@ -6,6 +6,7 @@ public enum ToolCategory: String, Codable, CaseIterable, Identifiable {
     case fleetRAG = "Fleet RAG"
     case builtIn = "Built-in"
     case mcp = "MCP Servers"
+    case subagents = "Subagents"
     
     public var id: String { rawValue }
     
@@ -16,6 +17,7 @@ public enum ToolCategory: String, Codable, CaseIterable, Identifiable {
         case .fleetRAG: return "externaldrive.badge.icloud"
         case .builtIn: return "terminal.fill"
         case .mcp: return "server.rack"
+        case .subagents: return "person.2.badge.gearshape.fill"
         }
     }
 }
@@ -80,6 +82,12 @@ public struct ToolItem: Identifiable, Codable, Hashable {
                 parametersSummary: "(mount: 'vm', cpu: 4, memoryMb: 8192)"
             ),
             ToolItem(
+                name: "computer_macos_guest_vm",
+                category: .computerUse,
+                description: "Dedicated headless Apple Virtualization macOS VM for xcodebuild, Simulator UI tests, and App Store Connect uploads.",
+                parametersSummary: "(mount: 'mac_vm', vmName: 'macos-builder', cpu: 6, memoryMb: 16384)"
+            ),
+            ToolItem(
                 name: "bash",
                 category: .builtIn,
                 description: "Execute safe shell commands on the host machine with timeout and process-group isolation.",
@@ -141,6 +149,36 @@ public struct ToolItem: Identifiable, Codable, Hashable {
                 category: .mcp,
                 description: "Inspect active crash reports, issue traces, and release health in Sentry.",
                 parametersSummary: "(org: string, project: string)"
+            ),
+            ToolItem(
+                name: "subagent_researcher",
+                category: .subagents,
+                description: "Read-only exploration: file inspection, web search, and fleet recall without write tools.",
+                parametersSummary: "(tools: ['view_file', 'search_web', 'recall_search'], model: 'Flash')"
+            ),
+            ToolItem(
+                name: "subagent_builder",
+                category: .subagents,
+                description: "Full implementation: file edits, write tools, and scoped terminal command execution.",
+                parametersSummary: "(tools: ['write_to_file', 'replace_file_content', 'run_command', 'view_file'], model: 'Pro')"
+            ),
+            ToolItem(
+                name: "subagent_verifier",
+                category: .subagents,
+                description: "Isolated verification: test execution, linter checks, and git diff analysis without write tools.",
+                parametersSummary: "(tools: ['run_command', 'view_file'], model: 'Flash')"
+            ),
+            ToolItem(
+                name: "subagent_xcode_ship",
+                category: .subagents,
+                description: "Headless macOS builder: xcodebuild, simctl screenshot, and TestFlight deployment inside guest VM.",
+                parametersSummary: "(tools: ['run_command', 'view_file'], mount: 'mac_vm', model: 'Flash')"
+            ),
+            ToolItem(
+                name: "subagent_coordinator",
+                category: .subagents,
+                description: "Task orchestration: DAG decomposition, worker subagent delegation, and board/Slack sync.",
+                parametersSummary: "(tools: ['invoke_subagent', 'send_message', 'manage_subagents', 'schedule'], model: 'Pro')"
             )
         ]
     }

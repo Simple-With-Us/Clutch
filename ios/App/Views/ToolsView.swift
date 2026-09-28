@@ -16,6 +16,7 @@ public struct ToolsView: View {
                     Text("Fleet RAG").tag(2)
                     Text("MCP").tag(3)
                     Text("Built-in").tag(4)
+                    Text("Subagents").tag(5)
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 14)
@@ -35,6 +36,8 @@ public struct ToolsView: View {
                     MCPListView(tools: tools.filter { $0.category == .mcp })
                 case 4:
                     BuiltInToolsListView(tools: tools.filter { $0.category == .builtIn })
+                case 5:
+                    SubagentProfilesListView(tools: tools.filter { $0.category == .subagents })
                 default:
                     EmptyView()
                 }
@@ -51,7 +54,7 @@ struct ComputerToolsListView: View {
         List {
             Section(
                 header: Text("BotFleet Computer Use Options"),
-                footer: Text("Supports This Mac (local), Cloud Box, Cloud VPS (Cua), and Local VM.&nbsp; DeepSeek and MiniMax interface with all computer mounts through Harness ACP.")
+                footer: Text("Supports This Mac (local), Cloud Box, Cloud VPS (Cua), Local MicroVM, and Headless macOS Guest VM (xcodebuild/TestFlight).&nbsp; DeepSeek and MiniMax interface with all computer mounts through Harness ACP.")
             ) {
                 ForEach(tools) { tool in
                     VStack(alignment: .leading, spacing: 6) {
@@ -153,6 +156,47 @@ struct MCPListView: View {
             Section(footer: Text("MCP servers are mounted to DSH through cordis overlay patches.&nbsp; Configure custom stdio or SSE servers in your host's cordis.patch.yml.")) {
                 NavigationLink(destination: Text("Add MCP Server configuration on host")) {
                     Label("Configure Remote MCP Server", systemImage: "plus.circle")
+                }
+            }
+        }
+    }
+}
+
+struct SubagentProfilesListView: View {
+    let tools: [ToolItem]
+
+    var body: some View {
+        List {
+            Section(
+                header: Text("Scoped Subagent Role Profiles"),
+                footer: Text("Subagents default to scoped toolsets and Flash models per the 30% rule.&nbsp; Builder and Coordinator roles escalate to Pro for complex multi-file logic.")
+            ) {
+                ForEach(tools) { tool in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Image(systemName: tool.category.iconName)
+                                .foregroundColor(.purple)
+                            Text(tool.name)
+                                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                            Spacer()
+                            Text("Active")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.green)
+                        }
+
+                        Text(tool.description)
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+
+                        Text(tool.parametersSummary)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(.secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .padding(.vertical, 4)
                 }
             }
         }

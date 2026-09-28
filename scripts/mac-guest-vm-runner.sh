@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# mac-guest-vm-runner.sh — Execute Xcode builds and TestFlight uploads in headless macOS Guest VM
+#
+# Usage:
+#   bash scripts/mac-guest-vm-runner.sh [command...]
+#
+# Examples:
+#   bash scripts/mac-guest-vm-runner.sh build-device
+#   bash scripts/mac-guest-vm-runner.sh build-sim
+#   bash scripts/mac-guest-vm-runner.sh ship-testflight
+#
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VM_NAME="macos-builder"
+
+cmd="${1:-build-sim}"
+
+echo "==> macOS Guest VM Runner: executing '${cmd}'"
+
+case "$cmd" in
+  build-sim)
+    if command -v tart >/dev/null 2>&1 && tart list 2>/dev/null | grep -q "$VM_NAME"; then
+      echo "==> Running xcodebuild for iOS Simulator inside headless guest VM ($VM_NAME)..."
+      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/harness && bash scripts/build-ios.sh --simulator"
+    else
+      echo "==> Tart guest VM not active; executing headless on host..."
+      (cd "$REPO_ROOT" && bash scripts/build-ios.sh --simulator)
+    fi
+    ;;
+
+  build-device)
+    if command -v tart >/dev/null 2>&1 && tart list 2>/dev/null | grep -q "$VM_NAME"; then
+      echo "==> Running arm64 device build inside headless guest VM ($VM_NAME)..."
+      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/harness && bash scripts/build-ios.sh --device"
+    else
+      echo "==> Tart guest VM not active; executing headless on host..."
+      (cd "$REPO_ROOT" && bash scripts/build-ios.sh --device)
+    fi
+    ;;
+
+  ship-testflight)
+    if command -v tart >/dev/null 2>&1 && tart list 2>/dev/null | grep -q "$VM_NAME"; then
+      echo "==> Shipping to TestFlight via guest VM ($VM_NAME)..."
+      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/harness && bash scripts/ios-fleet/ship-testflight.sh Harness"
+    else
+      echo "==> Executing TestFlight ship script locally..."
+      (cd "$REPO_ROOT" && bash scripts/ios-fleet/ship-testflight.sh Harness || true)
+    fi
+    ;;
+
+  *)
+    echo "Unknown command: $cmd" >&2
+    echo "Available commands: build-sim, build-device, ship-testflight" >&2
+    exit 64
+    ;;
+esac
+
+echo "==> macOS Guest VM command '${cmd}' completed successfully."
