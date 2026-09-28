@@ -34,6 +34,7 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 - **`dsh/`** — DSH harness: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
 - **`mmh/`** — MMH harness: Shellular MiniMax rides the same `@deepseek-ai/dsh` coding stack as DSH, with MiniMax as the LLM (`mmh-headless` profile).  `bridges/mmh/mmh-acp.py` spawns `dsh --profile mmh-headless` (not a bare chat/completions HTTP call).
 - **`web/`** — TypeScript web UI scripts (the `start-web.sh`, `serve-tailscale.sh`, `open-harness.sh`, `ensure-web.sh`, `install-dock-app.sh` set, ported from bash to TS).
+- **`ios/`** — Native iOS companion app (SwiftUI, iOS 17.0+): multi-host computer connections (local Mac, Tailscale, Hetzner, AWS), full-parity embedded web experience, Composio tools, Fleet RAG integration, and model selection for DeepSeek and MiniMax.  See [`docs/ios-companion.md`](docs/ios-companion.md).
 - **`profiles/`** — Tracked cordis profile defaults.  Each profile is an independent cordis tree (bundles + empty entry list + patch layer).  Four canonical profiles ship in this repo: `dsh-headless`, `dsh-web`, `mmh-headless`, `mmh-web`.  Profiles configure plugins, tool permissions, thinking effort, turn budgets, and model selection.
 - **`bridges/`** — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay Python intentionally — see `docs/decisions/0001-bridges-stay-python.md`.
 

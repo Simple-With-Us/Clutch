@@ -35,3 +35,10 @@ e2e/.launch-url.txt
 e2e/.auth-state.json
 test-results/
 playwright-report/
+
+# Xcode
+*.xcuserstate
+project.xcworkspace/xcuserdata/
+xcuserdata/
+DerivedData/
+.build/
