@@ -785,11 +785,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         return false
     }
 
+    // MARK: - Navigation state
+
+    /// A page finished loading and is live in the web view.  Only a load that
+    /// never reached `didFinish` leaves this false, which is what makes a
+    /// foreground re-activation safe to answer with "do nothing".
+    private var hasLoadedPage = false
+    /// The last main-frame load failed, so the web view is showing a WebKit
+    /// error page rather than the harness.  Re-activating should retry.
+    private var loadFailed = false
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        hasLoadedPage = true
+        loadFailed = false
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        loadFailed = true
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        loadFailed = true
+    }
+
+    /// Bring the window forward, reloading only when there is nothing live to
+    /// preserve.
+    ///
+    /// Bringing the app to the foreground used to call `loadHarness()`
+    /// unconditionally, so every Dock click re-navigated the WKWebView.  The
+    /// dsh web UI keeps its open panel, scroll position, and in-progress
+    /// settings edits in page state, so a reload discarded all of it and the
+    /// owner lost whatever settings screen they had open.  A foreground switch
+    /// is not a navigation, so it must not navigate.
+    ///
+    /// A reload is still correct in exactly three cases, and each one means the
+    /// page on screen is already worthless: nothing has loaded yet, the last
+    /// load failed, or the server was down and `ensureServer()` just restarted
+    /// it (the old page's live connection died with the process).
     private func showWindow() {
-        if pingHarness() {
-            loadHarness()
-        } else {
+        let serverWasUp = pingHarness()
+        if !serverWasUp {
             ensureServer()
+        }
+        if !hasLoadedPage || loadFailed || !serverWasUp {
             loadHarness()
         }
         window.makeKeyAndOrderFront(nil)
@@ -798,6 +836,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     private func loadHarness() {
         guard let url = URL(string: harnessURLString) else { return }
+        loadFailed = false
         webView.load(URLRequest(url: url))
     }
 }
