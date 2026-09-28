@@ -1,0 +1,45 @@
+name: HarnessCompanion
+options:
+  bundleIdPrefix: com.simplewithus
+  deploymentTarget:
+    iOS: '17.0'
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: '5.9'
+    IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: CC8UTF7ATG
+    ASSETCATALOG_FILTER_FOR_THINNING: false
+    ENABLE_ASSET_THINNING: false
+targets:
+  HarnessCompanion:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.harness.ios
+        DEVELOPMENT_TEAM: CC8UTF7ATG
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "202609280600"
+        SWIFT_VERSION: '5.9'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        SUPPORTS_MACCATALYST: false
+        ENABLE_ON_DEMAND_RESOURCES: false
+        CODE_SIGN_ENTITLEMENTS: HarnessCompanion.entitlements
+    info:
+      path: App/Info.plist
+schemes:
+  HarnessCompanion:
+    build:
+      targets:
+        HarnessCompanion: all
+    run:
+      config: Debug
+    archive:
+      config: Release
