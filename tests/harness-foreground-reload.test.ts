@@ -35,14 +35,13 @@ describe("HarnessWindow foreground does not reload the page", () => {
   it("loads only when there is no live page to preserve", () => {
     // The regression: `loadHarness()` ran on every foreground switch, so the
     // dsh web UI lost its open panel, scroll position, and half-typed settings
-    // form values.  A load is now conditional on the page being absent,
-    // failed, or orphaned by a server restart.
-    expect(showWindow).toMatch(/if !hasLoadedPage \|\| loadFailed \|\| !serverWasUp \{\s*loadHarness\(\)/);
+    // form values.  A load is now strictly guarded so that an active page is never
+    // re-navigated or pinged on foreground switches.
+    expect(showWindow).toMatch(/guard !hasLoadedPage \|\| loadFailed else \{ return \}/);
   });
 
-  it("keeps the health check result so a dead server still forces a reload", () => {
-    expect(showWindow).toMatch(/let serverWasUp = pingHarness\(\)/);
-    expect(showWindow).toMatch(/if !serverWasUp \{\s*ensureServer\(\)/);
+  it("recovers gracefully from WebKit web process termination", () => {
+    expect(SWIFT).toMatch(/func webViewWebContentProcessDidTerminate\(_ webView: WKWebView\)/);
   });
 
   it("still brings the window forward on every re-activation", () => {
