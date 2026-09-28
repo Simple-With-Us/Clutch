@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # mac-guest-vm-runner.sh — Execute Xcode builds and TestFlight uploads in headless macOS Guest VM
 #
+# Compute Policy (Owner Preference):
+#   For public repositories, build verification and Xcode testing should primarily
+#   be offloaded to free GitHub-hosted macOS runners (macos-15/macos-14) via GitHub Actions.
+#   Use this local headless Guest VM runner for private repos, offline development,
+#   or specialized builds requiring local signing keys and hardware.
+#
 # Usage:
 #   bash scripts/mac-guest-vm-runner.sh [command...]
 #
