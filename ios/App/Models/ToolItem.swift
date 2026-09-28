@@ -1,6 +1,7 @@
 import Foundation
 
 public enum ToolCategory: String, Codable, CaseIterable, Identifiable {
+    case computerUse = "Computer Use"
     case composio = "Composio"
     case fleetRAG = "Fleet RAG"
     case builtIn = "Built-in"
@@ -10,6 +11,7 @@ public enum ToolCategory: String, Codable, CaseIterable, Identifiable {
     
     public var iconName: String {
         switch self {
+        case .computerUse: return "display.2"
         case .composio: return "puzzlepiece.extension.fill"
         case .fleetRAG: return "externaldrive.badge.icloud"
         case .builtIn: return "terminal.fill"
@@ -47,6 +49,36 @@ public struct ToolItem: Identifiable, Codable, Hashable {
     
     public static var defaults: [ToolItem] {
         [
+            ToolItem(
+                name: "computer_control",
+                category: .computerUse,
+                description: "Native GUI interaction: take screenshots, move/click cursor, type keystrokes, and interact with desktop windows.",
+                parametersSummary: "(action: 'screenshot'|'mouse_click'|'key'|'cursor_position', ...)"
+            ),
+            ToolItem(
+                name: "computer_host_local",
+                category: .computerUse,
+                description: "Direct host machine execution for This Mac: shell commands, file reads, writes, and unified patch edits.",
+                parametersSummary: "(mount: 'local', cwd: string, timeoutMs: 60000)"
+            ),
+            ToolItem(
+                name: "computer_cloud_box",
+                category: .computerUse,
+                description: "ASCII.dev isolated remote cloud Linux sandbox container with network egress and computer proxy.",
+                parametersSummary: "(mount: 'box', apiKeyEnv: 'BOX_API_KEY')"
+            ),
+            ToolItem(
+                name: "computer_cloud_vps",
+                category: .computerUse,
+                description: "Dedicated self-hosted VPS / cloud virtual machine running full GUI desktop via Cua Driver.",
+                parametersSummary: "(mount: 'vps', endpoint: string, auth: 'bearer')"
+            ),
+            ToolItem(
+                name: "computer_local_vm",
+                category: .computerUse,
+                description: "Local microVM container running on Apple Silicon hypervisor with isolated filesystem.",
+                parametersSummary: "(mount: 'vm', cpu: 4, memoryMb: 8192)"
+            ),
             ToolItem(
                 name: "bash",
                 category: .builtIn,

@@ -11,7 +11,14 @@ export type EffortLevel = "none" | "low" | "medium" | "high" | "max";
 
 export interface ModelCatalog {
   default: string;
-  options: Array<{ id: string; label: string; contextWindow?: number; custom?: boolean }>;
+  options: Array<{
+    id: string;
+    label: string;
+    contextWindow?: number;
+    custom?: boolean;
+    badge?: string;
+    badgeTitle?: string;
+  }>;
 }
 
 export type ProviderErrorCode =

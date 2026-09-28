@@ -26,12 +26,13 @@ describe("mmh http client", () => {
 });
 
 describe("mmhSupport", () => {
-  it("is an HTTP adapter, not an MCP CLI", () => {
+  it("exposes MCP server mounts and full MiniMax model catalog", () => {
     expect(mmhSpawnArgs()).toEqual([]);
     expect(mmhSupport.driverKind).toBe("mmhAgent");
-    expect(mmhSupport.mcpServers).toBe(false);
+    expect(mmhSupport.mcpServers).toBe(true);
     expect(STATIC_MMH_MODELS.default).toBe("MiniMax-M2.7-highspeed");
     expect(STATIC_MMH_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3");
+    expect(STATIC_MMH_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3.1-Flash-Preview");
   });
 });
 

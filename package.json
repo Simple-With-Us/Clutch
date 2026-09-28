@@ -48,6 +48,7 @@
     "sync": "tsx scripts/sync-profiles.ts",
     "web": "tsx src/web/start-web.ts --no-open --host 127.0.0.1 --port 3080",
     "build:ios": "bash scripts/build-ios.sh",
+    "update:mac": "bash scripts/update-mac-app.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:ci-scope": "vitest run --typecheck",
