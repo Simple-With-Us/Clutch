@@ -93,14 +93,28 @@ Beyond GitHub Actions, the operator has access to three dedicated external agent
 
 ---
 
-## 7. Cloud Platform Economics — Unmetered VMs vs. Metered Cloud (Cursor Cloud Warning)
+## 7. Cloud Platform Economics — Unmetered VMs vs. Cursor Cloud & Ultra Tier
 
-Understanding provider billing structures is critical to avoid burning monthly resource budgets:
+Understanding provider billing structures and tiers is critical to maximize value without burning monthly resource budgets:
 
 - **Unmetered Cloud VMs (Meta Muse, Grok Bot, Instinct):**
-  These platforms decouple LLM token pricing from VM CPU runtime.&nbsp; Once a long-running process (e.g. ffmpeg, curl, python batch script) is spawned, the VM runs for hours or weeks at zero additional compute cost.
+  These platforms decouple LLM token pricing from VM CPU runtime.&nbsp; Once a long-running process (e.g. ffmpeg, curl, python batch script) is spawned, the VM runs for hours or weeks at zero additional compute cost.&nbsp; They are the optimal target for massive background batch jobs.
 
-- **Metered Cloud Runtimes (Cursor Cloud Anti-Pattern):**
-  Cursor Cloud bills heavily for background VM compute credits on top of standard token usage.&nbsp; Running compute-heavy or long-running tasks inside Cursor Cloud can exhaust an entire month's compute quota within 2–3 days.&nbsp;
+- **Cursor Cloud & Ultra Tier Utilization (Owner Preference):**
+  - **Non-Coding Compute Warning:** Never route pure background batch tasks (e.g. video transcoding, heavy log crunching) through Cursor Cloud, as extra VM compute credits rapidly drain the monthly allocation.
+  - **Agentic Coding Workloads (Composer 2.5):** For agentic coding tasks, the owner subscribes to Cursor's **Ultra tier** with substantial monthly quota.&nbsp; The fleet has ample coding work to fully utilize this entire tier each month.
+  - **Model Directive:** **Always select Composer 2.5 (or the newest available Composer model)** in Cursor to ensure maximum reasoning and coding capability while exhausting the monthly Ultra quota effectively.
 
-- **Fleet Directive:** Never schedule compute-heavy, background batch, or long-running tasks inside Cursor Cloud.&nbsp; Route them to Meta Muse, Instinct, Grok Bot, or free GitHub Actions runners.
+---
+
+## 8. Canonical Cloud MCP Endpoints
+
+When connecting cloud agents or external tools across the fleet, use the designated HTTPS MCP endpoints:
+
+1. **Grok / Shared Fleet Agents MCP:**
+   `https://agents.jays.services/mcp`
+   Provides unified access to shared fleet memory (recall search, stats, contribute), fleet coordination manifests, and agent services.
+
+2. **BotFleet Admin MCP:**
+   `https://botfleetadmin.jays.services/mcp`
+   Provides administrative control, bot orchestration, session inspection, and container/mount dispatch across BotFleet.
