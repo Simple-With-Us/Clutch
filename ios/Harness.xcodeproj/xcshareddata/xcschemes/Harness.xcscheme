@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "BB904F8440FA7F9A4DE82611"
-               BuildableName = "HarnessCompanion.app"
-               BlueprintName = "HarnessCompanion"
-               ReferencedContainer = "container:HarnessCompanion.xcodeproj">
+               BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
+               BuildableName = "Harness.app"
+               BlueprintName = "Harness"
+               ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "BB904F8440FA7F9A4DE82611"
-            BuildableName = "HarnessCompanion.app"
-            BlueprintName = "HarnessCompanion"
-            ReferencedContainer = "container:HarnessCompanion.xcodeproj">
+            BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
+            BuildableName = "Harness.app"
+            BlueprintName = "Harness"
+            ReferencedContainer = "container:Harness.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -55,10 +55,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "BB904F8440FA7F9A4DE82611"
-            BuildableName = "HarnessCompanion.app"
-            BlueprintName = "HarnessCompanion"
-            ReferencedContainer = "container:HarnessCompanion.xcodeproj">
+            BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
+            BuildableName = "Harness.app"
+            BlueprintName = "Harness"
+            ReferencedContainer = "container:Harness.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -74,10 +74,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "BB904F8440FA7F9A4DE82611"
-            BuildableName = "HarnessCompanion.app"
-            BlueprintName = "HarnessCompanion"
-            ReferencedContainer = "container:HarnessCompanion.xcodeproj">
+            BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
+            BuildableName = "Harness.app"
+            BlueprintName = "Harness"
+            ReferencedContainer = "container:Harness.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

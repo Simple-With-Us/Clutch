@@ -42,15 +42,15 @@ echo "==> 1. Generating Xcode project with xcodegen"
 
 if [ "$clean" -eq 1 ]; then
     echo "==> 2. Cleaning build folder"
-    xcodebuild -project "$IOS_DIR/HarnessCompanion.xcodeproj" \
-        -scheme HarnessCompanion \
+    xcodebuild -project "$IOS_DIR/Harness.xcodeproj" \
+        -scheme Harness \
         -destination "$dest" \
         clean
 fi
 
-echo "==> 3. Building HarnessCompanion ($config, $dest)"
-xcodebuild -project "$IOS_DIR/HarnessCompanion.xcodeproj" \
-    -scheme HarnessCompanion \
+echo "==> 3. Building Harness ($config, $dest)"
+xcodebuild -project "$IOS_DIR/Harness.xcodeproj" \
+    -scheme Harness \
     -destination "$dest" \
     -configuration "$config" \
     CODE_SIGNING_ALLOWED=NO \

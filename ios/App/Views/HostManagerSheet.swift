@@ -3,16 +3,105 @@ import SwiftUI
 public struct HostManagerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var connectionManager = HostConnectionManager.shared
+    @ObservedObject private var discovery = BonjourDiscovery.shared
+
     @State private var isShowingAddHost: Bool = false
+    @State private var isShowingQRScanner: Bool = false
     @State private var isShowingPairingInput: Bool = false
     @State private var pairingCodeText: String = ""
     @State private var pairingError: String?
-    
+
     public init() {}
-    
+
     public var body: some View {
         NavigationStack {
             List {
+                // Action Buttons at top
+                Section {
+                    Button(action: {
+                        isShowingQRScanner = true
+                    }) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(.system(size: 18))
+                                .foregroundColor(.accentColor)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Scan Pairing QR Code")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("Scan QR shown by Harness or MiniMax Companion")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+
+                    Button(action: {
+                        isShowingAddHost = true
+                    }) {
+                        Label("Add Host Manually", systemImage: "plus.circle.fill")
+                    }
+
+                    Button(action: {
+                        isShowingPairingInput = true
+                    }) {
+                        Label("Import via URL or Code", systemImage: "link")
+                    }
+                }
+
+                // Bonjour Discovered Hosts
+                if !discovery.discoveredHosts.isEmpty {
+                    Section {
+                        ForEach(discovery.discoveredHosts) { disc in
+                            HStack {
+                                Image(systemName: disc.isMiniMax ? "sparkles" : "cpu.fill")
+                                    .foregroundColor(.blue)
+                                    .font(.system(size: 18))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(disc.name)
+                                        .font(.system(size: 14, weight: .medium))
+                                    Text("\(disc.isMiniMax ? "MiniMax Companion" : "Harness Daemon") • \(disc.effectiveHost):\(disc.defaultPort)")
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button("Connect") {
+                                    let newHost = HostConnection(
+                                        name: disc.name,
+                                        host: disc.effectiveHost,
+                                        port: disc.defaultPort,
+                                        useTLS: false,
+                                        authToken: "",
+                                        isActive: true,
+                                        status: .online,
+                                        osType: "macOS",
+                                        hostKind: disc.isMiniMax ? .miniMaxCompanion : .harnessDaemon,
+                                        features: disc.isMiniMax ? ["chat", "crons", "agents", "drive"] : ["chat", "tools", "composio", "rag", "computer_use"]
+                                    )
+                                    connectionManager.addHost(newHost)
+                                    connectionManager.setActiveHost(newHost)
+                                    dismiss()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .font(.system(size: 12, weight: .semibold))
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    } header: {
+                        HStack {
+                            Text("Discovered On Local Network")
+                            Spacer()
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        }
+                    } footer: {
+                        Text("Discovered automatically via Bonjour (_harness._tcp and _minimax._tcp).  Tap Connect to pair instantly.")
+                    }
+                }
+
+                // Configured Hosts
                 Section {
                     ForEach(connectionManager.hosts) { host in
                         HostRowView(
@@ -35,38 +124,18 @@ public struct HostManagerSheet: View {
                         }
                     }
                 } header: {
-                    Text("Configured Computers & Clusters")
-                } footer: {
-                    Text("Harness saves each host endpoint and authentication token.&nbsp; Switch between your Mac, Hetzner cloud, or local server seamlessly.")
-                }
-                
-                Section {
-                    Button(action: {
-                        isShowingAddHost = true
-                    }) {
-                        Label("Add New Computer / Host", systemImage: "plus.circle.fill")
-                    }
-                    
-                    Button(action: {
-                        isShowingPairingInput = true
-                    }) {
-                        Label("Import via Pairing URL or Code", systemImage: "qrcode.viewfinder")
-                    }
-                    
-                    Button(action: {
-                        Task {
-                            await connectionManager.pingAllHosts()
-                        }
-                    }) {
-                        HStack {
-                            Label("Ping All Hosts", systemImage: "arrow.clockwise")
-                            if connectionManager.isPinging {
-                                Spacer()
-                                ProgressView()
-                                    .scaleEffect(0.8)
+                    HStack {
+                        Text("Configured Computers & Clusters")
+                        Spacer()
+                        Button("Ping All") {
+                            Task {
+                                await connectionManager.pingAllHosts()
                             }
                         }
+                        .font(.system(size: 12))
                     }
+                } footer: {
+                    Text("Harness saves each host endpoint and authentication token.  Switch between your Mac, Hetzner cloud, or local server seamlessly.")
                 }
             }
             .navigationTitle("Harness Computers")
@@ -78,11 +147,24 @@ public struct HostManagerSheet: View {
                     }
                 }
             }
+            .onAppear {
+                discovery.startDiscovery()
+            }
+            .onDisappear {
+                discovery.stopDiscovery()
+            }
+            .sheet(isPresented: $isShowingQRScanner) {
+                PairingScannerSheet { pairedHost in
+                    connectionManager.addHost(pairedHost)
+                    connectionManager.setActiveHost(pairedHost)
+                    dismiss()
+                }
+            }
             .sheet(isPresented: $isShowingAddHost) {
                 AddHostSheet()
             }
             .alert("Import Pairing Code", isPresented: $isShowingPairingInput) {
-                TextField("harness://pair?host=... or host:port", text: $pairingCodeText)
+                TextField("harness://pair?host=... or minimax://pair", text: $pairingCodeText)
                     .autocapitalization(.none)
                 Button("Cancel", role: .cancel) {
                     pairingCodeText = ""
@@ -97,7 +179,7 @@ public struct HostManagerSheet: View {
                     }
                 }
             } message: {
-                Text("Paste a harness:// URL generated on your Mac or cloud server.")
+                Text("Paste a harness:// or minimax:// URL generated on your Mac or server.")
             }
         }
     }
@@ -108,21 +190,29 @@ struct HostRowView: View {
     let isActive: Bool
     let onSelect: () -> Void
     let onPing: () -> Void
-    
+
     var body: some View {
         Button(action: onSelect) {
             HStack(spacing: 12) {
-                // Status icon
-                Image(systemName: host.status.icon)
-                    .foregroundColor(statusColor(host.status))
-                    .font(.system(size: 20))
-                
+                // Status & Host Type icon
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: host.hostKind.icon)
+                        .foregroundColor(.primary)
+                        .font(.system(size: 20))
+                        .frame(width: 28, height: 28)
+
+                    Circle()
+                        .fill(statusColor(host.status))
+                        .frame(width: 9, height: 9)
+                        .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 1.5))
+                }
+
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
                         Text(host.name)
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundColor(.primary)
-                        
+
                         if isActive {
                             Text("ACTIVE")
                                 .font(.system(size: 9, weight: .bold))
@@ -133,14 +223,22 @@ struct HostRowView: View {
                                 .clipShape(Capsule())
                         }
                     }
-                    
-                    Text("\(host.scheme)://\(host.hostAndPort)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(.secondary)
+
+                    HStack(spacing: 6) {
+                        Text(host.hostKind.rawValue)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Text("•")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        Text("\(host.scheme)://\(host.hostAndPort)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
-                
+
                 Spacer()
-                
+
                 if let latency = host.latencyMs {
                     Text("\(Int(latency))ms")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -150,7 +248,7 @@ struct HostRowView: View {
                         .background(Color(.secondarySystemBackground))
                         .clipShape(Capsule())
                 }
-                
+
                 Button(action: onPing) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .font(.system(size: 13))
@@ -162,7 +260,7 @@ struct HostRowView: View {
         }
         .buttonStyle(.plain)
     }
-    
+
     private func statusColor(_ status: ConnectionStatus) -> Color {
         switch status {
         case .online: return .green
@@ -177,20 +275,32 @@ struct HostRowView: View {
 struct AddHostSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var connectionManager = HostConnectionManager.shared
-    
+
     @State private var name: String = ""
     @State private var host: String = ""
     @State private var portText: String = "3080"
     @State private var useTLS: Bool = false
     @State private var authToken: String = ""
+    @State private var hostKind: HostKind = .harnessDaemon
     @State private var isTesting: Bool = false
     @State private var testResult: String?
-    
+
     var body: some View {
         NavigationStack {
             Form {
+                Section(header: Text("Host Type")) {
+                    Picker("Kind", selection: $hostKind) {
+                        ForEach(HostKind.allCases, id: \.self) { kind in
+                            Label(kind.rawValue, systemImage: kind.icon).tag(kind)
+                        }
+                    }
+                    .onChange(of: hostKind) { _, newKind in
+                        portText = String(newKind.defaultPort)
+                    }
+                }
+
                 Section(header: Text("Host Details")) {
-                    TextField("Display Name (e.g. Hetzner Cloud)", text: $name)
+                    TextField("Display Name (e.g. Hetzner Server)", text: $name)
                     TextField("Hostname / IP (e.g. 100.113.106.39)", text: $host)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
@@ -198,16 +308,16 @@ struct AddHostSheet: View {
                         .keyboardType(.numberPad)
                     Toggle("Use TLS (HTTPS)", isOn: $useTLS)
                 }
-                
+
                 Section(header: Text("Authentication")) {
-                    SecureField("Launch Token / Cookie Secret", text: $authToken)
+                    SecureField("Auth Token / Launch Secret", text: $authToken)
                         .autocapitalization(.none)
                         .autocorrectionDisabled()
-                    Text("Found in ~/.dsh/web-launch-url on your host or printed during startup.")
+                    Text("Found in ~/.dsh/web-launch-url, printed during MiniMax startup, or set in config.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
-                
+
                 Section {
                     Button(action: testConnection) {
                         HStack {
@@ -219,8 +329,7 @@ struct AddHostSheet: View {
                             }
                         }
                     }
-                    .disabled(host.isEmpty || isTesting)
-                    
+
                     if let result = testResult {
                         Text(result)
                             .font(.footnote)
@@ -236,50 +345,55 @@ struct AddHostSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        let port = Int(portText) ?? 3080
-                        let finalName = name.isEmpty ? host : name
-                        let newHost = HostConnection(
-                            name: finalName,
-                            host: host,
-                            port: port,
-                            useTLS: useTLS,
-                            authToken: authToken,
-                            isActive: true,
-                            status: .unknown
-                        )
-                        connectionManager.addHost(newHost)
-                        connectionManager.setActiveHost(newHost)
+                        saveHost()
                         dismiss()
                     }
-                    .disabled(host.isEmpty)
+                    .disabled(host.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
     }
-    
+
     private func testConnection() {
         isTesting = true
         testResult = nil
-        let port = Int(portText) ?? 3080
-        let temp = HostConnection(
-            name: "Test",
-            host: host,
+        let port = Int(portText) ?? hostKind.defaultPort
+        let testHost = HostConnection(
+            name: name.isEmpty ? "Test Host" : name,
+            host: host.trimmingCharacters(in: .whitespaces),
             port: port,
             useTLS: useTLS,
-            authToken: authToken
+            authToken: authToken,
+            hostKind: hostKind
         )
         Task {
-            let (status, latency) = await connectionManager.pingHost(temp)
+            let res = await connectionManager.pingHost(testHost)
             await MainActor.run {
                 isTesting = false
-                if status == .online {
-                    testResult = "Success: Host responded in \(Int(latency))ms!"
-                } else if status == .unauthorized {
-                    testResult = "Host reached (401 Auth Required): Set valid launch token."
+                if res.status == .online {
+                    testResult = "Success!  Host responded in \(Int(res.latencyMs))ms."
+                } else if res.status == .unauthorized {
+                    testResult = "Server reachable, but token is unauthorized."
                 } else {
-                    testResult = "Connection failed: Host unreachable."
+                    testResult = "Connection failed.  Host is unreachable."
                 }
             }
         }
+    }
+
+    private func saveHost() {
+        let port = Int(portText) ?? hostKind.defaultPort
+        let newHost = HostConnection(
+            name: name.isEmpty ? host : name,
+            host: host.trimmingCharacters(in: .whitespaces),
+            port: port,
+            useTLS: useTLS,
+            authToken: authToken,
+            isActive: connectionManager.hosts.isEmpty,
+            status: .unknown,
+            hostKind: hostKind,
+            features: hostKind == .miniMaxCompanion ? ["chat", "crons", "agents", "drive"] : ["chat", "tools", "composio", "rag", "computer_use"]
+        )
+        connectionManager.addHost(newHost)
     }
 }
