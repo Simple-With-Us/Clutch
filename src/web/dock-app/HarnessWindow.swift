@@ -104,6 +104,138 @@ private func ensureServer() {
     }
 }
 
+// MARK: - DeepSeek Model Discovery (Settings)
+
+/// Lists the models the DeepSeek account can call, for the Settings > Models
+/// panel.
+///
+/// The request has to happen here rather than in the page for two reasons.
+/// The web view is served from `http://127.0.0.1:3080/`, and DeepSeek's API
+/// sends no CORS headers for a browser origin, so a page-issued `fetch` is
+/// refused.  More importantly the credential lives in the dsh credential
+/// plane and must never be handed to page JavaScript.
+///
+/// The reply carries model ids only.  The key is read from
+/// `~/.dsh/.credentials.yaml` under `refs:`, is never logged, and never
+/// appears in an error string handed back to the page.
+enum DeepSeekModels {
+    static let modelsURL = "https://api.deepseek.com/models"
+    static let credentialRef = "DEEPSEEK_API_KEY"
+    /// Mirrors `DEEPSEEK_MODELS_MAX_BYTES` in `src/dsh/deepseek-models.ts`.
+    static let maxBytes = 2 * 1024 * 1024
+
+    /// Read one ref out of `~/.dsh/.credentials.yaml`.
+    ///
+    /// The store is a two-level map (`refs:` then the ref name), so a scoped
+    /// scan is honest and avoids pulling in a YAML parser for one scalar.
+    /// Quoted and unquoted scalars are both accepted; anything unrecognised
+    /// yields `nil` rather than a guess.
+    static func credential(home: String = NSHomeDirectory()) -> String? {
+        let path = (home as NSString).appendingPathComponent(".dsh/.credentials.yaml")
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        var inRefs = false
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            // A non-indented key ends the `refs:` block.
+            if !line.hasPrefix(" ") && !line.hasPrefix("\t") {
+                inRefs = trimmed == "refs:"
+                continue
+            }
+            guard inRefs else { continue }
+            let parts = trimmed.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let name = parts[0].trimmingCharacters(in: .whitespaces)
+            guard name == credentialRef else { continue }
+            var value = parts[1].trimmingCharacters(in: .whitespaces)
+            if value.count >= 2,
+               (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
+    /// One listing, as `{ "ok": true, "models": ["id", ...] }` or
+    /// `{ "ok": false, "message": "..." }`.  Only ids cross the bridge.
+    static func listing(home: String = NSHomeDirectory()) -> [String: Any] {
+        guard let key = credential(home: home) else {
+            return ["ok": false, "message": "No \(credentialRef) in the dsh credential store."]
+        }
+        guard let url = URL(string: modelsURL) else {
+            return ["ok": false, "message": "Bad model-list URL."]
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let sem = DispatchSemaphore(value: 0)
+        var data: Data?
+        var status = 0
+        var transportError: Error?
+        URLSession.shared.dataTask(with: request) { replyData, response, error in
+            data = replyData
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            transportError = error
+            sem.signal()
+        }.resume()
+        _ = sem.wait(timeout: .now() + 12)
+
+        if transportError != nil {
+            return ["ok": false, "message": "Could not reach DeepSeek."]
+        }
+        if status == 401 || status == 403 {
+            return ["ok": false, "message": "DeepSeek rejected the API key (\(status))."]
+        }
+        guard status == 200, let data, !data.isEmpty else {
+            return ["ok": false, "message": "DeepSeek answered \(status)."]
+        }
+        if data.count > maxBytes {
+            return ["ok": false, "message": "The model list is larger than expected."]
+        }
+        guard
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let entries = body["data"] as? [[String: Any]]
+        else {
+            return ["ok": false, "message": "DeepSeek did not answer with a model list."]
+        }
+
+        var ids: [String] = []
+        var seen = Set<String>()
+        for entry in entries {
+            guard let id = entry["id"] as? String else { continue }
+            let trimmed = id.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || seen.contains(trimmed) { continue }
+            seen.insert(trimmed)
+            ids.append(trimmed)
+        }
+        return ["ok": true, "models": ids]
+    }
+}
+
+/// Bridges the injected Settings script to `DeepSeekModels`.  Kept separate
+/// from the app delegate so the script message has one narrow job and the
+/// AppDelegate stays about windows.
+final class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler {
+    static let name = "harnessDeepSeekModels"
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        let reply = DeepSeekModels.listing()
+        let json = (try? JSONSerialization.data(withJSONObject: reply))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":false,"message":"bridge failure"}"#
+        guard let webView = message.webView else { return }
+        let script = "window.__harnessDeepSeekModelsResolve && window.__harnessDeepSeekModelsResolve(\(json));"
+        DispatchQueue.main.async { webView.evaluateJavaScript(script, completionHandler: nil) }
+    }
+}
+
 // MARK: - Mac In-App Updater (Seamless & TestFlight Aware)
 
 final class HarnessAppUpdater: NSObject {
@@ -290,6 +422,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var window: NSWindow!
     var webView: WKWebView!
     var updateMenuItem: NSMenuItem?
+    /// Retained for the life of the app: `WKUserContentController` keeps a
+    /// script message handler alive, but holding it here makes the lifetime
+    /// explicit rather than incidental.
+    var deepSeekModelsHandler: DeepSeekModelsMessageHandler?
 
     @objc func checkForUpdates(_ sender: Any?) {
         HarnessAppUpdater.shared.promptUserForUpdateCheck(window: window)
@@ -372,6 +508,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         config.websiteDataStore = .default()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         let userContent = WKUserContentController()
+        // Settings > Models asks the shell — not the page — for the live
+        // DeepSeek model list, because the API sends no CORS headers for a
+        // browser origin and the credential must stay out of page JavaScript.
+        let modelsHandler = DeepSeekModelsMessageHandler()
+        deepSeekModelsHandler = modelsHandler
+        userContent.add(modelsHandler, name: DeepSeekModelsMessageHandler.name)
         // Co-brand the top-left header that dsh-web renders inside the page
         // (separate from the macOS Dock app icon, which `install-dock-app.sh`
         // already swaps to the MMH master).  The upstream block from
@@ -677,6 +819,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             });
           };
 
+          // Settings > Models: give the DeepSeek card a way to list what the
+          // account can actually call.
+          //
+          // The upstream bundle already ships a "Fetch available models" button,
+          // but it is rendered only for `llm-pi-ai` providers: the DeepSeek card
+          // mounts `DeepSeekModelsEditor`, which is handed no fetch affordance,
+          // and `dsh-llm-deepseek` registers no model discovery at all.  So the
+          // affordance is added here.
+          //
+          // The request is made by the native shell, not the page: DeepSeek's API
+          // sends no CORS headers for a browser origin, and the credential lives
+          // in the dsh credential plane and must not reach page JavaScript.  The
+          // bridge replies with model ids only.
+          //
+          // Deliberately read-only.  Persisting an adopted model means writing
+          // `llm-deepseek.models` through the app's own settings writer, and
+          // driving that from injected script is not something to ship unverified;
+          // showing what the account can call is honest and immediately useful.
+          const mountDeepSeekModelsButton = () => {
+            const section = document.querySelector('section[aria-label="Models"], section[aria-label="模型"]');
+            if (!section) return;
+            if (section.querySelector('[data-harness-ds-models="1"]')) return;
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.harnessDsModels = '1';
+            button.textContent = 'Fetch available models';
+            button.style.cssText = 'margin-left:auto;padding:6px 12px;border-radius:6px;font-size:13px;'
+              + 'line-height:18px;cursor:pointer;';
+
+            const report = document.createElement('div');
+            report.dataset.harnessDsModelsReport = '1';
+            report.style.cssText = 'margin-top:8px;font-size:13px;line-height:20px;white-space:pre-wrap;';
+            report.hidden = true;
+
+            button.addEventListener('click', () => {
+              button.disabled = true;
+              const original = button.textContent;
+              button.textContent = 'Asking DeepSeek…';
+              report.hidden = true;
+
+              window.__harnessDeepSeekModelsResolve = (payload) => {
+                window.__harnessDeepSeekModelsResolve = undefined;
+                button.disabled = false;
+                button.textContent = original;
+                const models = Array.isArray(payload.models) ? payload.models : [];
+                if (payload.ok !== true) {
+                  report.textContent = payload.message || 'DeepSeek did not answer.';
+                  report.hidden = false;
+                  return;
+                }
+                report.textContent = models.length === 0
+                  ? 'DeepSeek listed no models.'
+                  : models.join('\n');
+                report.hidden = false;
+              };
+
+              try {
+                window.webkit.messageHandlers.harnessDeepSeekModels.postMessage({});
+              } catch (error) {
+                window.__harnessDeepSeekModelsResolve
+                  && window.__harnessDeepSeekModelsResolve({ ok: false, message: 'bridge unavailable' });
+              }
+            });
+
+            const head = section.firstElementChild;
+            if (head) head.appendChild(button);
+            section.appendChild(report);
+          };
+
           // Auto-bind workspace if the app is stuck on "Choose a workspace to start"
           // and allow clicking any workspace row to open a session in it.
           let lastAutoClick = { current: 0 };
@@ -739,6 +951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           markPickerModelRows();
           fixEffortOption();
           ensureWorkspaceSelected();
+          mountDeepSeekModelsButton();
 
           // Ensure standard keyboard shortcuts are permitted on webview inputs
           window.addEventListener('keydown', (e) => {
@@ -756,6 +969,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             markPickerModelRows();
             fixEffortOption();
             ensureWorkspaceSelected();
+            mountDeepSeekModelsButton();
           });
           mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
         })();
