@@ -273,6 +273,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // MiniMax provider mark, base64.  Used in the model-picker provider group
         // so choosing MiniMax shows the MiniMax logo next to the section heading.
         let miniMaxMark = harnessAssetDataURL("minimax-mark.svg", mime: "image/svg+xml")
+        // DeepSeek provider mark, base64.  Same role as miniMaxMark for the
+        // DeepSeek provider group heading in the model picker.
+        let deepSeekMark = harnessAssetDataURL("harness-icon-dsh-whale-1024.png", mime: "image/png")
 
         let brandAndPickerScript = """
         (function () {
@@ -342,20 +345,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           // brand case and put the MiniMax logo next to it, so choosing MiniMax
           // in the picker shows the MiniMax logo.
           const MINIMAX_MARK = \(cssSwiftLiteral(miniMaxMark));
+          const DEEPSEEK_MARK = \(cssSwiftLiteral(deepSeekMark));
           const markPickerHeadings = () => {
             document.querySelectorAll('div, span, li, p').forEach((el) => {
               if (el.children.length > 0) return;
               const t = text(el.textContent || '').trim();
-              if (t !== 'minimax' && t !== 'MiniMax') return;
+              // Exact provider names only.  Model rows ('MiniMax-M3',
+              // 'DeepSeek-V4.1-Flash', ...) are markPickerModelRows' job:
+              // tagging one here would give it a child, and the badge pass
+              // skips elements that already have children.
+              const isMM = t === 'minimax' || t === 'MiniMax';
+              const isDS = t === 'deepseek' || t === 'DeepSeek';
+              if (!isMM && !isDS) return;
               if (t === 'minimax') el.textContent = 'MiniMax';
-              if (el.dataset.harnessMmPicker === '1' || !MINIMAX_MARK) return;
-              el.dataset.harnessMmPicker = '1';
-              const img = document.createElement('img');
-              img.dataset.harnessMmPickerMark = '1';
-              img.src = MINIMAX_MARK;
-              img.alt = 'MiniMax';
-              img.style.cssText = 'width:14px;height:14px;margin-right:6px;vertical-align:-2px;';
-              el.insertBefore(img, el.firstChild);
+              if (t === 'deepseek') el.textContent = 'DeepSeek';
+              if (isMM) {
+                if (el.dataset.harnessMmPicker === '1' || !MINIMAX_MARK) return;
+                el.dataset.harnessMmPicker = '1';
+                const img = document.createElement('img');
+                img.dataset.harnessMmPickerMark = '1';
+                img.src = MINIMAX_MARK;
+                img.alt = 'MiniMax';
+                img.style.cssText = 'width:14px;height:14px;margin-right:6px;vertical-align:-2px;';
+                el.insertBefore(img, el.firstChild);
+              } else {
+                if (el.dataset.harnessDsPicker === '1' || !DEEPSEEK_MARK) return;
+                el.dataset.harnessDsPicker = '1';
+                const img = document.createElement('img');
+                img.dataset.harnessDsPickerMark = '1';
+                img.src = DEEPSEEK_MARK;
+                img.alt = 'DeepSeek';
+                img.style.cssText = 'width:14px;height:14px;margin-right:6px;vertical-align:-2px;';
+                el.insertBefore(img, el.firstChild);
+              }
             });
           };
 

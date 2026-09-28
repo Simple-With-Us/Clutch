@@ -70,12 +70,13 @@ describe("classifyDshError", () => {
 
 describe("dshSupport", () => {
   it("ships the current catalog and env contract", () => {
-    expect(STATIC_DSH_MODELS.default).toBe("deepseek-v4-flash");
+    expect(STATIC_DSH_MODELS.default).toBe("DeepSeek-V4.1-Flash");
     expect(STATIC_DSH_MODELS.options.map((option) => option.id)).toEqual([
-      "deepseek-v4-flash",
-      "deepseek-v4-pro",
+      "DeepSeek-V4.1-Flash",
+      "DeepSeek-V4.1-Pro",
+      "MiniMax-M3.1-Flash-Preview",
       "MiniMax-M3",
-      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
     ]);
     expect(DSH_MINIMUM_ACP_VERSION).toBe("0.1.5-rc.1");
     expect(dshSupport.driverKind).toBe("dshAgent");
