@@ -21,7 +21,12 @@ jobs:
 
   ios:
     name: iOS Build (Simulator)
-    runs-on: macos-15
+    # Bumped from macos-15 (Xcode 16.4 / Swift 6.1.0) to macos-26 (Xcode 26 /
+    # Swift 6.3) so SPM can resolve Kingfisher 8.13.0+, which declares
+    # swift-tools-version:6.2. CI run 36485314601 (2026-09-28T21:11Z) failed
+    # with "package 'kingfisher' @ 8.13.0 is using Swift tools version 6.2.0
+    # but the installed version is 6.1.0" on the older image.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
