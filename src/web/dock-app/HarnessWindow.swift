@@ -69,26 +69,19 @@ private func harnessAssetDataURL(_ name: String, mime: String) -> String {
     return "data:\(mime);base64," + data.base64EncodedString()
 }
 
-private func pingHarness() -> Bool {
+private func pingHarness() async -> Bool {
     guard let url = URL(string: harnessURLString) else { return false }
     // 8s: a 2s ping under CPU load false-negatives, then ensure-web.sh
     // pm2-restarts a healthy dsh-web and WebKit reports "Load failed".
     var req = URLRequest(url: url, timeoutInterval: 8)
     req.httpMethod = "GET"
-    let sem = DispatchSemaphore(value: 0)
-    var ok = false
-    URLSession.shared.dataTask(with: req) { _, resp, _ in
-        if let http = resp as? HTTPURLResponse, (200..<500).contains(http.statusCode) {
-            ok = true
-        }
-        sem.signal()
-    }.resume()
-    _ = sem.wait(timeout: .now() + 8.5)
-    return ok
+    guard let (_, response) = try? await URLSession.shared.data(for: req),
+          let http = response as? HTTPURLResponse else { return false }
+    return (200..<500).contains(http.statusCode)
 }
 
-private func ensureServer() {
-    if pingHarness() { return }
+private func ensureServer() async {
+    if await pingHarness() { return }
     let script = NSHomeDirectory() + "/apps/harness-runtime/scripts/ensure-web.sh"
     guard FileManager.default.isExecutableFile(atPath: script) else { return }
     let proc = Process()
@@ -96,11 +89,21 @@ private func ensureServer() {
     proc.arguments = [script]
     proc.standardOutput = FileHandle.nullDevice
     proc.standardError = FileHandle.nullDevice
-    try? proc.run()
-    proc.waitUntilExit()
+    // Register the termination handler before launch so an early exit
+    // cannot race past it, then await the exit instead of blocking on
+    // the process; a failed launch resumes immediately.
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+        proc.terminationHandler = { _ in continuation.resume() }
+        do {
+            try proc.run()
+        } catch {
+            proc.terminationHandler = nil
+            continuation.resume()
+        }
+    }
     for _ in 0..<20 {
-        if pingHarness() { return }
-        Thread.sleep(forTimeInterval: 0.4)
+        if await pingHarness() { return }
+        try? await Task.sleep(nanoseconds: 400_000_000)
     }
 }
 
@@ -485,7 +488,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             HarnessAppUpdater.shared.checkInBackground(updateMenuItem: self?.updateMenuItem)
         }
-        ensureServer()
+        // Ensure the server without freezing launch: the ping, the
+        // ensure-web wait, and the retry loop are all awaited.  If the
+        // first page load raced a server (re)start and failed, reload
+        // once the server answers.
+        Task { [weak self] in
+            await ensureServer()
+            await MainActor.run {
+                guard let self, self.loadFailed else { return }
+                self.loadHarness()
+            }
+        }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let width = min(1280, screen.width * 0.88)
         let height = min(860, screen.height * 0.88)
@@ -1050,11 +1063,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
         guard !hasLoadedPage || loadFailed else { return }
 
-        let serverWasUp = pingHarness()
-        if !serverWasUp {
-            ensureServer()
+        // A missing or failed page can mean a down server: ping and
+        // restart off the main thread, then reload once the server
+        // state settles.  The window is already forward, so nothing
+        // here may block the main thread.
+        Task { [weak self] in
+            let serverWasUp = await pingHarness()
+            if !serverWasUp {
+                await ensureServer()
+            }
+            await MainActor.run {
+                guard let self else { return }
+                if !self.hasLoadedPage || self.loadFailed || !serverWasUp {
+                    self.loadHarness()
+                }
+            }
         }
-        loadHarness()
     }
 
     private func loadHarness() {

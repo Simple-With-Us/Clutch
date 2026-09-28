@@ -40,6 +40,27 @@ describe("HarnessWindow foreground does not reload the page", () => {
     expect(showWindow).toMatch(/guard !hasLoadedPage \|\| loadFailed else \{ return \}/);
   });
 
+  it("pings asynchronously, and only for a missing or failed page", () => {
+    // The liveness check must never block the main thread, but it must
+    // not run for a healthy loaded page either (false-negative pings
+    // restart healthy servers).  The strict guard comes first, the
+    // awaited ping runs past it.
+    const guardIndex = showWindow.indexOf("guard !hasLoadedPage || loadFailed else { return }");
+    const pingIndex = showWindow.indexOf("await pingHarness()");
+    expect(guardIndex).toBeGreaterThanOrEqual(0);
+    expect(pingIndex).toBeGreaterThan(guardIndex);
+    expect(showWindow).toMatch(/Task \{ \[weak self\] in/);
+  });
+
+  it("keeps the server liveness path off the main thread", () => {
+    expect(swiftBody("private func pingHarness()")).toMatch(/async -> Bool/);
+    expect(swiftBody("private func ensureServer()")).toMatch(/\(\) async/);
+    // No blocking primitives anywhere in the shell.
+    expect(SWIFT).not.toMatch(/DispatchSemaphore/);
+    expect(SWIFT).not.toMatch(/Thread\.sleep/);
+    expect(SWIFT).not.toMatch(/\.waitUntilExit\(\)/);
+  });
+
   it("recovers gracefully from WebKit web process termination", () => {
     expect(SWIFT).toMatch(/func webViewWebContentProcessDidTerminate\(_ webView: WKWebView\)/);
   });
