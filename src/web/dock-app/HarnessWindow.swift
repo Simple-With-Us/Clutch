@@ -108,7 +108,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var window: NSWindow!
     var webView: WKWebView!
 
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        // Application Menu
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About Harness", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Hide Harness", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthersItem = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(withTitle: "Quit Harness", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // Edit Menu - Required for standard macOS keyboard shortcuts: Cmd+C, Cmd+V, Cmd+X, Cmd+A, Cmd+Z in WebKit
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: #selector(UndoManager.undo), keyEquivalent: "z")
+        let redoItem = editMenu.addItem(withTitle: "Redo", action: #selector(UndoManager.redo), keyEquivalent: "Z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        // Window Menu
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+
+        NSApp.mainMenu = mainMenu
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupMainMenu()
         ensureServer()
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let width = min(1280, screen.width * 0.88)
@@ -149,27 +192,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // DOM mutates (also fixes the model-picker section heading "minimax"
         // -> "MiniMax" when the dropdown is opened).
         let css = """
-        /* Hide the upstream whale SVG inside the brand block and rail */
-        [class*="_brandMark"] svg, [class*="_railMark"] svg,
-        [class*="_brand"] > svg {
+        /* Completely suppress any upstream brand elements, marks, names, or SVGs */
+        [data-slot*="brand"],
+        [data-slot*="brand"] *,
+        [class*="brandMark"],
+        [class*="brandMark"] *,
+        [class*="brandName"],
+        [class*="brandName"] *,
+        [class*="_brandIdentity"] > span,
+        [class*="_brandIdentity"] > div:not([data-harness-brand]),
+        button[class*="brand"] svg:not([data-harness-brand] svg),
+        button[class*="_brand"] svg:not([data-harness-brand] svg) {
           display: none !important;
         }
         /* Strip the empty-state hero whale (HeroFish) */
-        [class*="_fishHitbox"], [class*="_fish"] {
+        [class*="_fishHitbox"], [class*="_fish"], [class*="fishHitbox"], [class*="fish"] {
           display: none !important;
         }
         /* Tighten the sidebar top-left header */
         [class*="_logoRow"] {
-          height: 52px !important;
-          margin-bottom: 4px !important;
+          height: 48px !important;
+          margin-bottom: 2px !important;
           padding: 4px 8px 4px 4px !important;
           box-sizing: border-box !important;
           display: flex !important;
           align-items: center !important;
+          overflow: visible !important;
+        }
+        [class*="_collapsed"] [class*="_logoRow"] {
+          height: 40px !important;
+          margin-bottom: 6px !important;
         }
         [class*="_brand"] {
           height: auto !important;
           overflow: visible !important;
+          display: inline-flex !important;
         }
         [class*="_brandIdentity"] {
           height: auto !important;
@@ -178,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           flex-direction: column !important;
           align-items: flex-start !important;
           justify-content: center !important;
-          gap: 0 !important;
+          gap: 2px !important;
         }
         /* Ensure our H monogram brand SVG and container are always visible */
         [data-harness-brand] {
@@ -186,6 +243,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         }
         [data-harness-brand] svg {
           display: block !important;
+        }
+        [data-harness-rail-brand] {
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+        }
+        [data-harness-rail-brand] svg {
+          display: block !important;
+        }
+        /* Strip extra margins from newSession button to eliminate any top gap */
+        [class*="_newSession"] {
+          margin-top: 0 !important;
         }
         /* Make sure section headings in dropdowns use the brand case. */
         [class*="group-label"], [class*="vendor"], [class*="section-label"] {
@@ -209,39 +278,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         (function () {
           const text = (s) => (s || '').toString();
 
-          // Find the brand container in the sidebar top-left.
-          const findBrandEl = () => {
-            return document.querySelector('[class*="_brandIdentity"]')
-              || document.querySelector('button[class*="_brand"]')
-              || document.querySelector('[class*="_brand"]')
-              || document.querySelector('button[class*="brand"]');
-          };
-
-          // Update the top-left brand header to the H monogram with just HARNESS under that.
-          // No MM or DS logos; eliminates blank space in top left.
+          // Update the brand header to the H monogram with just HARNESS under that.
+          // In wide mode: injects H monogram + HARNESS into _brandIdentity.
+          // In rail (collapsed) mode: injects H monogram into _railMark.
+          // Eliminates any blank void in top left.
           const updateBrandHeader = () => {
-            const brandEl = findBrandEl();
-            if (!brandEl) return;
-
-            // Strip any legacy MM or DS marks
-            brandEl.querySelectorAll('[data-harness-mm], [data-harness-ds], [data-harness-h]').forEach((n) => n.remove());
-
-            if (!brandEl.querySelector('[data-harness-brand="1"]')) {
-              Array.from(brandEl.children).forEach((child) => {
-                if (!child.dataset.harnessBrand) {
-                  child.style.display = 'none';
+            const brandIdentity = document.querySelector('[class*="brandIdentity"]');
+            if (brandIdentity) {
+              brandIdentity.querySelectorAll('[data-harness-mm], [data-harness-ds], [data-harness-h]').forEach((n) => n.remove());
+              Array.from(brandIdentity.children).forEach((child) => {
+                if (child.dataset.harnessBrand !== '1') {
+                  child.style.setProperty('display', 'none', 'important');
                 }
               });
-              const hBrand = document.createElement('div');
-              hBrand.dataset.harnessBrand = '1';
-              hBrand.style.cssText = 'display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;line-height:1;user-select:none;cursor:pointer;padding:2px 0;';
-              hBrand.innerHTML = `
-                <svg width="22" height="18" viewBox="0 0 484 440" fill="currentColor" style="display:block;">
-                  <path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/>
-                </svg>
-                <span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">HARNESS</span>
-              `;
-              brandEl.appendChild(hBrand);
+              brandIdentity.querySelectorAll('svg').forEach((s) => {
+                if (!s.closest('[data-harness-brand="1"]')) {
+                  s.style.setProperty('display', 'none', 'important');
+                }
+              });
+              if (!brandIdentity.querySelector('[data-harness-brand="1"]')) {
+                const hBrand = document.createElement('div');
+                hBrand.dataset.harnessBrand = '1';
+                hBrand.style.cssText = 'display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;line-height:1;user-select:none;cursor:pointer;padding:1px 0;';
+                hBrand.innerHTML = `
+                  <svg width="22" height="18" viewBox="0 0 484 440" fill="currentColor" style="display:block;">
+                    <path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/>
+                  </svg>
+                  <span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">HARNESS</span>
+                `;
+                brandIdentity.appendChild(hBrand);
+              }
+            }
+
+            const railMark = document.querySelector('[class*="railMark"]');
+            if (railMark) {
+              Array.from(railMark.children).forEach((child) => {
+                if (child.dataset.harnessRailBrand !== '1') {
+                  child.style.setProperty('display', 'none', 'important');
+                }
+              });
+              railMark.querySelectorAll('svg').forEach((s) => {
+                if (!s.closest('[data-harness-rail-brand="1"]')) {
+                  s.style.setProperty('display', 'none', 'important');
+                }
+              });
+              if (!railMark.querySelector('[data-harness-rail-brand="1"]')) {
+                const railH = document.createElement('span');
+                railH.dataset.harnessRailBrand = '1';
+                railH.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;line-height:1;';
+                railH.innerHTML = `
+                  <svg width="18" height="15" viewBox="0 0 484 440" fill="currentColor" style="display:block;">
+                    <path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/>
+                  </svg>
+                `;
+                railMark.appendChild(railH);
+              }
             }
           };
 
@@ -370,16 +461,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             });
           };
 
+          // Auto-bind workspace if the app is stuck on "Choose a workspace to start"
+          // and allow clicking any workspace row to open a session in it.
+          let lastAutoClick = { current: 0 };
+          const ensureWorkspaceSelected = () => {
+            const bodyText = document.body ? (document.body.innerText || '') : '';
+            const isInert = bodyText.includes('Choose a workspace to start')
+              || !!document.querySelector('[data-composer-placeholder*="workspace" i]')
+              || !!document.querySelector('[data-phase="inert"]')
+              || !!document.querySelector('[class*="cardWorkspaceTrigger"]')
+              || !!document.querySelector('[aria-label*="Choose a workspace" i]');
+
+            const now = Date.now();
+            if (isInert && (now - lastAutoClick.current > 1000)) {
+              const firstNewBtn = document.querySelector('button[aria-label*="New session in "]')
+                || document.querySelector('button[aria-label*="session in" i]')
+                || document.querySelector('button[aria-label*="新建会话"]');
+              if (firstNewBtn) {
+                lastAutoClick.current = now;
+                firstNewBtn.click();
+              }
+            }
+
+            // Top "New Session" button fallback if clicked in inert state
+            const topNewBtn = document.querySelector('button[class*="_newSession"]');
+            if (topNewBtn && topNewBtn.dataset.harnessBound !== '1') {
+              topNewBtn.dataset.harnessBound = '1';
+              topNewBtn.addEventListener('click', () => {
+                setTimeout(() => {
+                  const checkInert = (document.body ? document.body.innerText : '').includes('Choose a workspace to start')
+                    || !!document.querySelector('[data-phase="inert"]')
+                    || !!document.querySelector('[class*="cardWorkspaceTrigger"]');
+                  if (checkInert) {
+                    const firstBtn = document.querySelector('button[aria-label*="New session in "]')
+                      || document.querySelector('button[aria-label*="session in" i]');
+                    if (firstBtn) firstBtn.click();
+                  }
+                }, 50);
+              });
+            }
+
+            // Clicking any workspace row opens a session in it
+            document.querySelectorAll('[role="treeitem"][class*="projectRow"]').forEach((row) => {
+              if (row.dataset.harnessRowBound === '1') return;
+              row.dataset.harnessRowBound = '1';
+              row.addEventListener('click', (e) => {
+                if (e.target && e.target.closest('button[aria-label*="Workspace actions for"]')) return;
+                const newBtn = row.querySelector('button[aria-label*="New session in "]')
+                  || row.querySelector('button[aria-label*="session in" i]')
+                  || row.querySelector('button[aria-label*="新建会话"]');
+                if (newBtn) {
+                  e.stopPropagation();
+                  newBtn.click();
+                }
+              });
+            });
+          };
+
           updateBrandHeader();
           markPickerHeadings();
           markPickerModelRows();
           fixEffortOption();
+          ensureWorkspaceSelected();
+
+          // Ensure standard keyboard shortcuts are permitted on webview inputs
+          window.addEventListener('keydown', (e) => {
+            if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+              const k = (e.key || "").toLowerCase();
+              if ("cvxaz".indexOf(k) !== -1) {
+                e.stopPropagation();
+              }
+            }
+          }, true);
 
           const mo = new MutationObserver(() => {
             updateBrandHeader();
             markPickerHeadings();
             markPickerModelRows();
             fixEffortOption();
+            ensureWorkspaceSelected();
           });
           mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
         })();
