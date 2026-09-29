@@ -28,6 +28,7 @@
     ".": "./src/index.ts",
     "./dsh/acp": "./src/dsh/acp/driver.ts",
     "./dsh/acp/driver": "./src/dsh/acp/driver.ts",
+    "./harness/dsh/acp": "./src/dsh/acp/driver.ts",
     "./dsh/mcp-patch": "./src/dsh/acp/mcp-patch.ts",
     "./mmh/acp": "./src/mmh/acp/driver.ts",
     "./mmh/acp/driver": "./src/mmh/acp/driver.ts",
@@ -39,6 +40,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
+    "harness": "./scripts/harness.sh",
     "harness-web": "./src/web/start-web.ts",
     "harness-serve-tailscale": "./src/web/serve-tailscale.ts",
     "harness-open": "./src/web/open-harness.ts",

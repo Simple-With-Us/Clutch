@@ -1,39 +1,20 @@
 #!/usr/bin/env bash
-# Pinned Harness CLI.  Never npx.  Never exec this file.
+# Legacy name for the pinned Harness CLI.  Retained so anything still
+# configured against `dsh` keeps working; new configuration should use
+# `harness`.
 #
-# Tracked copy: ai-fleet-coordinator/scripts/dsh-runtime/dsh.sh
-# Live install: ~/apps/harness-runtime/scripts/dsh.sh (symlink to
-# ~/Code/Harness/scripts/dsh.sh).
-#
-# 2026-09-16: a PATH wrapper that execs this script was copied *into* this
-# script.  bash then exec'd itself until the CPU pegged and nothing bound
-# :3080 (Harness "Load failed" on every thread).  Refuse that loop.
-#
-# Resolves node_modules relative to HARNESS_RUNTIME_ROOT (the repo root)
-# rather than this file's directory, so a symlinked install under
-# ~/apps/harness-runtime/scripts/ still finds node_modules at the
-# symlink target's root.
+# The implementation moved to scripts/harness.sh.  Delegating rather than
+# duplicating matters here: this script is the one the 2026-09-16 self-exec
+# incident happened in, and a second copy of the loop guard is a second place
+# for it to rot.
 set -euo pipefail
 
-if [[ -n "${HARNESS_RUNTIME_ROOT:-}" ]]; then
-  ROOT="$HARNESS_RUNTIME_ROOT"
-else
-  ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-fi
-BIN="$ROOT/node_modules/.bin/dsh"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TARGET="$HERE/harness.sh"
 
-if [[ ! -x "$BIN" ]]; then
-  echo "harness: missing $BIN — run npm ci in $ROOT (never npx)" >&2
+if [[ ! -x "$TARGET" ]]; then
+  echo "harness: missing $TARGET — the pinned CLI wrapper is not installed" >&2
   exit 127
 fi
 
-bin_dir="$(cd "$(dirname "$BIN")" && pwd)"
-case "$bin_dir" in
-  */node_modules/.bin) ;;
-  *)
-    echo "harness: $BIN is not under node_modules/.bin — refuse self-exec" >&2
-    exit 127
-    ;;
-esac
-
-exec "$BIN" "$@"
+exec "$TARGET" "$@"

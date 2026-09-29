@@ -67,7 +67,7 @@ if [[ -x "$ROOT/scripts/serve-tailscale.sh" ]]; then
 fi
 
 exec node "$ROOT/scripts/capture-launch-url.cjs" \
-  "$ROOT/scripts/dsh.sh" web --no-open --host "$HOST" --port "$PORT" \
+  "$ROOT/scripts/harness.sh" web --no-open --host "$HOST" --port "$PORT" \
   --trusted-host "127.0.0.1" \
   --trusted-host "127.0.0.1:${PORT}" \
   --trusted-host "localhost" \

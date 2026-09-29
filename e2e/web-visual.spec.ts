@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
  * Visual regression checks for the Harness web UI (the upstream dsh web
- * app served through `bash scripts/dsh.sh web`).
+ * app served through `bash scripts/harness.sh web`).
  *
  * The `chromium` project runs with the `storageState` minted by
  * `e2e/auth.setup.ts`, so every page here loads authenticated.  Server

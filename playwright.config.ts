@@ -5,7 +5,7 @@ import { join } from "node:path";
  * Playwright config for Harness web UI verification.
  *
  * The web UI itself is served by the upstream `@deepseek-ai/dsh` CLI
- * through `bash scripts/dsh.sh web` (the same entry the `npm run web`
+ * through `bash scripts/harness.sh web` (the same entry the `npm run web`
  * launcher uses, minus the Tailscale Serve sidecar).  The server binds
  * `http://127.0.0.1:3080` by default and is auth-walled: `/` answers 401
  * until a signed browser cookie is minted from the per-process launch
@@ -68,7 +68,7 @@ export default defineConfig({
     // reused server does not know, and the auth setup could never mint
     // its cookie.  The stale URL file is removed first so a previous
     // run's token can never be mistaken for this run's.
-    command: `rm -f ${LAUNCH_URL_FILE} && node scripts/capture-launch-url.cjs bash scripts/dsh.sh web --no-open --host 127.0.0.1 --port ${PORT}`,
+    command: `rm -f ${LAUNCH_URL_FILE} && node scripts/capture-launch-url.cjs bash scripts/harness.sh web --no-open --host 127.0.0.1 --port ${PORT}`,
     url: BASE_URL,
     timeout: 180_000,
     reuseExistingServer: false,

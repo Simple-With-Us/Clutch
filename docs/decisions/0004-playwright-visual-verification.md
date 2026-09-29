@@ -14,7 +14,7 @@ reinstating screenshot review as **automated-only**: Playwright for web
 surfaces, `simctl` for iOS simulator, never by him manually.
 
 Harness's web UI surface is the upstream `@deepseek-ai/dsh` web app,
-served through `bash scripts/dsh.sh web` on `127.0.0.1:3080` (see
+served through `bash scripts/harness.sh web` on `127.0.0.1:3080` (see
 README "Install").  It is auth-walled: `/` answers 401 until a signed
 browser cookie is minted from the per-process launch URL the server
 prints on stdout.  The 401 still counts as healthy (see
@@ -23,7 +23,7 @@ prints on stdout.  The 401 still counts as healthy (see
 ## Decision
 
 **1. Playwright covers the web UI.**  `playwright.config.ts` at the repo
-root boots the real server (`scripts/dsh.sh web`, isolated `DSH_HOME`
+root boots the real server (`scripts/harness.sh web`, isolated `DSH_HOME`
 under `e2e/`, no Tailscale sidecar), mints the launch-token cookie once
 in a `setup` project, and asserts `toHaveScreenshot` snapshots on
 stable deterministic screens.  Baselines are committed; flaky regions
