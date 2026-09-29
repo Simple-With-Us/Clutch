@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import type { EffortLevel, ModelCatalog, ProviderErrorCode } from "../../shared/contracts.ts";
 import type { AcpSupport } from "../../shared/acp-core.ts";
+import { isDshEngineCli } from "./mcp-patch.ts";
 
 export { isStockDshCli } from "./mcp-patch.ts";
 
@@ -76,10 +77,17 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
   return 0;
 }
 
-/** The native ACP profile first shipped in 0.1.5-rc.1.  Custom wrappers are
- * deliberately outside this stock-binary gate. */
+/** The native ACP profile first shipped in 0.1.5-rc.1.
+ *
+ *  The gate follows the *engine*, not the binary's name, so it keeps firing
+ *  when a wrapper is configured.  Matching on the literal `dsh` instead meant
+ *  that pointing an instance at a wrapper — including the one this repo
+ *  ships — silently disabled the check, which is the one guard standing
+ *  between an outdated CLI and a paid turn.  A CLI that is genuinely some
+ *  other engine is still exempt, because a DSH version floor is meaningless
+ *  for it. */
 export function dshVersionCompatibilityReason(version: string, cli = "dsh"): string | null {
-  if (cli !== "dsh") return null;
+  if (!isDshEngineCli(cli)) return null;
   const current = parseVersion(version);
   const minimum = parseVersion(DSH_MINIMUM_ACP_VERSION)!;
   if (current && compareVersions(current, minimum) >= 0) return null;
@@ -140,11 +148,11 @@ function currentConfigValue(result: unknown, configId: string): unknown {
 export const STATIC_DSH_MODELS: ModelCatalog = {
   default: "DeepSeek-V4.1-Flash",
   options: [
-    { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash" },
-    { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro" },
-    { id: "MiniMax-M3.1-Flash-Preview", label: "MiniMax-M3.1-Flash-Preview", contextWindow: 1_000_000 },
-    { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_000_000 },
-    { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800 },
+    { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash", images: true },
+    { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro", images: false },
+    { id: "MiniMax-M3.1-Flash-Preview", label: "MiniMax-M3.1-Flash-Preview", contextWindow: 1_000_000, images: true },
+    { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_000_000, images: true },
+    { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800, images: true },
   ],
 };
 
@@ -186,17 +194,31 @@ export function classifyDshError(error: unknown): ProviderErrorCode | undefined 
 export const dshSupport: AcpSupport = {
   driverKind: "dshAgent",
   displayName: "Harness",
-  // the vision model below is the one option that CAN take an image, and the
-  // flag gates the composer for the whole engine — so it stays off until the
-  // catalog can answer per model rather than per engine
-  images: false,
+  // Images ride the prompt as `<attached-image path="…"/>` refs the agent opens
+  // with its read tool, so the engine as a whole can consume one.  Whether a
+  // given model can *interpret* the bytes is per-model, and the catalog says
+  // so on each option — DeepSeek V4.1 Flash is the multimodal one, Pro is
+  // not.  The engine-wide answer stays true so an unknown or newly added
+  // model is not silently blocked.
+  images: true,
   models: STATIC_DSH_MODELS,
   resolveModels: () => STATIC_DSH_MODELS,
   effortLevels: DSH_EFFORT_LEVELS,
   mcpServers: true,
+  // Still `dsh` rather than the product's own `harness` wrapper, and the
+  // reason is ordering, not preference.  Consumers spawn this by name, and
+  // `harness` only resolves once `install-dock-app.sh` has linked it into
+  // ~/.local/bin — flipping the default before that lands would break every
+  // DeepSeek session with a spawn error.  The wrapper, the PATH link, and the
+  // engine identity that keeps MCP mounting and the version gate attached to a
+  // wrapper all ship here; the one-line default flip follows once the live
+  // runtime has the script.  Per-instance selection already works today in
+  // BotFleet's Engines Settings.
   defaultCli: "dsh",
   nativeSource: "dsh.acp",
-  loginNote: "DSH CLI auth missing — add ~/.dsh/.credentials.yaml",
+  // The credential store is the engine's own (~/.dsh), so it keeps the engine
+  // name even though the product and the CLI no longer do.
+  loginNote: "Harness CLI auth missing — add ~/.dsh/.credentials.yaml",
 
   install: {
     command: {

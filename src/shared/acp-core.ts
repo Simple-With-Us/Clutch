@@ -54,7 +54,23 @@ export interface AcpConfigureInput {
 export interface AcpSupport {
   readonly driverKind: string;
   readonly displayName: string;
+  /**
+   * Engine-wide answer to "can the agent behind this CLI consume a referenced
+   * image?".  Most coding agents can open a local file, so the default for an
+   * engine that never says otherwise is yes.  Per-model truth lives in
+   * {@link perModelImages}, which is what a catalog of mixed-vision models
+   * should use instead of this.
+   */
   readonly images?: boolean;
+  /**
+   * Per-model image support, keyed by model id.  Mirrors
+   * {@link perModelEffortLevels}: the map is folded onto the catalog by the
+   * consumer, so a surface reads one source of truth per model.
+   *
+   * A model absent from the map inherits the engine-wide `images` answer, so
+   * this overrides rather than replaces.
+   */
+  readonly perModelImages?: Readonly<Record<string, boolean>>;
   readonly models: ModelCatalog;
   readonly resolveModels?: (env: Record<string, string | undefined>) => ModelCatalog;
   readonly effortLevels?: readonly EffortLevel[];

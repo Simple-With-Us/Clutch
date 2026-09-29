@@ -93,13 +93,30 @@ if [[ -n "$live_real" && "$live_real" != "$root_real" ]]; then
   cp "$SWIFT" "${LIVE}/HarnessWindow.swift"
   cp "${ROOT}/scripts/ensure-web.sh" "${LIVE}/scripts/ensure-web.sh"
   cp "${ROOT}/scripts/open-harness.sh" "${LIVE}/scripts/open-harness.sh"
+  cp "${ROOT}/scripts/harness.sh" "${LIVE}/scripts/harness.sh"
+  cp "${ROOT}/scripts/dsh.sh" "${LIVE}/scripts/dsh.sh"
   cp "$PNG" "${LIVE}/assets/harness-icon-1024.png"
   # HarnessWindow.swift inlines the MiniMax mark for the sidebar chip and the
   # model-picker provider group, so it has to land in the live assets dir too.
   MARK="${ROOT}/assets/minimax-mark.svg"
   [[ -f "$MARK" ]] || MARK="${LIVE}/assets/minimax-mark.svg"
   [[ -f "$MARK" ]] && cp "$MARK" "${LIVE}/assets/minimax-mark.svg"
-  chmod 755 "${LIVE}/scripts/ensure-web.sh" "${LIVE}/scripts/open-harness.sh"
+  chmod 755 "${LIVE}/scripts/ensure-web.sh" "${LIVE}/scripts/open-harness.sh" \
+            "${LIVE}/scripts/harness.sh" "${LIVE}/scripts/dsh.sh"
+fi
+
+# Put the pinned `harness` CLI on PATH.  Consumers (BotFleet) spawn the ACP
+# engine by name, and `dshSupport.defaultCli` is `harness`, so this symlink is
+# what keeps that default resolvable.  ~/.local/bin is on the BotFleet
+# LaunchAgent's PATH.  Additive: ~/.local/bin/dsh is left alone, so anything
+# still configured against the old name keeps working.
+CLI_SH="${LIVE}/scripts/harness.sh"
+if [[ -x "$CLI_SH" ]]; then
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$CLI_SH" "$HOME/.local/bin/harness"
+  echo "linked $HOME/.local/bin/harness -> $CLI_SH"
+else
+  echo "harness CLI not found at $CLI_SH — 'harness' may not resolve on PATH" >&2
 fi
 
 if command -v dockutil >/dev/null 2>&1; then

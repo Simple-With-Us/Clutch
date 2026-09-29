@@ -47,7 +47,7 @@ git clone https://github.com/jaywedgeworth22/Harness.git
 cd Harness
 npm install
 npm run sync      # copy tracked profiles to ~/.dsh/profiles/
-bash scripts/dsh.sh web --no-open --host 127.0.0.1 --port 3080
+bash scripts/harness.sh web --no-open --host 127.0.0.1 --port 3080
 npm run typecheck
 npm test
 ```

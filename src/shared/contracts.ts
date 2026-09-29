@@ -18,6 +18,17 @@ export interface ModelCatalog {
     custom?: boolean;
     badge?: string;
     badgeTitle?: string;
+    /**
+     * Whether this model can interpret a referenced image.
+     *
+     * Images are never sent as binary content blocks: an ACP turn is a single
+     * text prompt, and an attachment rides as a `<attached-image path="…" />`
+     * tag that the agent opens with its own read tool.  So this flag is about
+     * what the model does once the bytes are in front of it, not about whether
+     * the transport could carry them.  Absent means "not established" and a
+     * surface should fall back to the engine-wide answer.
+     */
+    images?: boolean;
   }>;
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Legacy live-install shim.  Canonical implementation is scripts/harness.sh.
+# Live-install shim.  Canonical implementation is scripts/harness.sh.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export HARNESS_RUNTIME_ROOT="${HARNESS_RUNTIME_ROOT:-$HERE}"

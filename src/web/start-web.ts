@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { httpStatusIsUp } from "../shared/http-up.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const DSH_SH = join(ROOT, "scripts", "dsh.sh");
+const HARNESS_SH = join(ROOT, "scripts", "harness.sh");
 const HOST = process.env.DSH_WEB_HOST ?? "127.0.0.1";
 const PORT = process.env.DSH_WEB_PORT ?? "3080";
 const TAILNET_HOST = process.env.HARNESS_TAILNET_HOST ?? "macbook.boa-roygbiv.ts.net";
@@ -104,8 +104,8 @@ async function reclaimPort(port: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (!existsSync(DSH_SH)) {
-    log(`missing ${DSH_SH}`);
+  if (!existsSync(HARNESS_SH)) {
+    log(`missing ${HARNESS_SH}`);
     process.exit(127);
   }
 
@@ -153,8 +153,8 @@ async function main(): Promise<void> {
     `${TAILNET_IPV4}:${PORT}`,
   ];
 
-  log(`exec dsh.sh web on ${HOST}:${PORT}`);
-  const child = spawn(DSH_SH, args, {
+  log(`exec harness.sh web on ${HOST}:${PORT}`);
+  const child = spawn(HARNESS_SH, args, {
     stdio: "inherit",
     env: { ...process.env, HARNESS_RUNTIME_ROOT: ROOT, DSH_HOME: process.env.DSH_HOME ?? `${process.env.HOME}/.dsh` },
   });

@@ -34,9 +34,30 @@ export interface DshStdioMcpServer {
   readonly env: ReadonlyArray<{ readonly name: string; readonly value: string }>;
 }
 
-export function isStockDshCli(cli: string): boolean {
+/** CLI stems that resolve to the DSH engine.
+ *
+ * The engine ships as `dsh`, but Harness is the product name and ships its own
+ * pinned `harness` wrapper around that binary.  Both are the *same engine*, so
+ * every engine-scoped policy — MCP mounting, the minimum ACP version gate —
+ * has to recognise both.  Matching on the literal `dsh` alone is what made
+ * those policies silently switch off the moment a wrapper was configured.
+ */
+const DSH_ENGINE_STEMS: ReadonlySet<string> = new Set(["dsh", "harness"]);
+
+/** Whether a configured CLI is the DSH engine, under any of its names.
+ *
+ *  The extension strip is what lets an absolute path to a shell wrapper count
+ *  as its engine, so `harness.sh` and `dsh.sh` both resolve to the engine. */
+export function isDshEngineCli(cli: string): boolean {
   const stem = basename(cli).toLowerCase().replace(/\.(sh|bash|js|mjs|cjs|ts)$/u, "");
-  return stem === "dsh";
+  return DSH_ENGINE_STEMS.has(stem);
+}
+
+/** @deprecated Renamed to {@link isDshEngineCli}, which says the answer is about
+ *  the engine rather than about one particular binary name.  Kept because
+ *  BotFleet imports this name; remove once it adopts the new one. */
+export function isStockDshCli(cli: string): boolean {
+  return isDshEngineCli(cli);
 }
 
 export function dshMcpServerName(name: string, used: Set<string>): string {
