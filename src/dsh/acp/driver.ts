@@ -194,13 +194,12 @@ export function classifyDshError(error: unknown): ProviderErrorCode | undefined 
 export const dshSupport: AcpSupport = {
   driverKind: "dshAgent",
   displayName: "Harness",
-  // Images ride the prompt as `<attached-image path="…"/>` refs the agent opens
-  // with its read tool, so the engine as a whole can consume one.  Whether a
-  // given model can *interpret* the bytes is per-model, and the catalog says
-  // so on each option — DeepSeek V4.1 Flash is the multimodal one, Pro is
-  // not.  The engine-wide answer stays true so an unknown or newly added
-  // model is not silently blocked.
-  images: true,
+  // Keep the engine-wide gate closed until BotFleet consumes per-model image
+  // support.  Its current composer reads only this flag, so opening it now
+  // would accept attachments even for non-vision DeepSeek V4.1 Pro.  Flip to
+  // true only after that consumer lands and deploys; the catalog retains
+  // Flash's images: true and Pro's images: false for that future gate.
+  images: false,
   models: STATIC_DSH_MODELS,
   resolveModels: () => STATIC_DSH_MODELS,
   effortLevels: DSH_EFFORT_LEVELS,

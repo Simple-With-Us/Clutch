@@ -98,10 +98,10 @@ describe("harness CLI wrapper", () => {
 });
 
 describe("per-model image support", () => {
-  it("answers the engine question yes", () => {
-    // The engine can consume a referenced image: the ACP prompt is a single
-    // text block and the agent opens the path with its own read tool.
-    expect(dshSupport.images).toBe(true);
+  it("keeps the engine gate closed until BotFleet consumes per-model flags", () => {
+    // BotFleet currently gates image intake by engine alone.  Do not offer
+    // attachments on non-vision Pro before the per-model consumer deploys.
+    expect(dshSupport.images).toBe(false);
   });
 
   it("marks the multimodal model and not the reasoning one", () => {
