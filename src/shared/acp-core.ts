@@ -41,7 +41,13 @@ export interface AcpTurn {
 
 export interface AcpSelectModel {
   readonly configId: string;
-  readonly valueForModel: (model: string) => string;
+  /**
+   * Translate the picker model into the option's opaque ACP wire value.
+   * `advertised` is the session's `configOptions`, so a driver can send the
+   * value the agent itself declared instead of constructing one (dsh refuses
+   * any value it did not advertise).  Mirrors BotFleet's `valueForModel`.
+   */
+  readonly valueForModel: (model: string, advertised?: unknown) => string | null | undefined;
   readonly modelForValue: (value: unknown) => string | null;
 }
 
