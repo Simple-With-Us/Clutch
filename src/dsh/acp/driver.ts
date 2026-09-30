@@ -26,8 +26,17 @@ import { join } from "node:path";
 import type { EffortLevel, ModelCatalog, ProviderErrorCode } from "../../shared/contracts.ts";
 import type { AcpSupport } from "../../shared/acp-core.ts";
 import { isDshEngineCli } from "./mcp-patch.ts";
+import { DshModelNotOfferedError, resolveDshModelOption } from "./model-options.ts";
 
 export { isStockDshCli } from "./mcp-patch.ts";
+export {
+  DshModelNotOfferedError,
+  dshSameModel,
+  matchAdvertisedDshModel,
+  parseAdvertisedDshModels,
+  resolveDshModelOption,
+} from "./model-options.ts";
+export type { DshAdvertisedModel, DshModelMatch, DshResolvedModel } from "./model-options.ts";
 
 /** Current DSH exposes its standard ACP v1 server as a profile.  Core still
  * puts BotFleet mounts in session/new.mcpServers.  Stock dsh-acp rejects a
@@ -108,9 +117,23 @@ export function dshProviderForModel(model: string): string {
 }
 
 /** DSH deliberately makes model values opaque because one catalog may expose
- * the same model id through several providers. */
-export function dshModelOptionValue(model: string): string {
-  return JSON.stringify([dshProviderForModel(model), model]);
+ * the same model id through several providers.
+ *
+ * `advertised` is the session's `configOptions` from `session/new`.  With it,
+ * the picker model resolves against the options the installed dsh actually
+ * declares (by id, then display name, then a known alias) and the *declared*
+ * value is returned, because dsh refuses any value it did not advertise.  The
+ * ids a catalog or a saved selection carries are not reliably the ids a given
+ * install declares: stock dsh names its Flash model `deepseek-flash` while the
+ * picker says `DeepSeek-V4.1-Flash`, and an owner's settings can declare
+ * another spelling again.  See `./model-options.ts`.
+ *
+ * Without `advertised`, or when it lists no model, the value is built from the
+ * picker id as before.  A session that offers models but not this one throws
+ * {@link DshModelNotOfferedError}, classified as a model-catalog outage. */
+export function dshModelOptionValue(model: string, advertised?: unknown): string {
+  const provider = dshProviderForModel(model);
+  return resolveDshModelOption(model, provider, advertised)?.value ?? JSON.stringify([provider, model]);
 }
 
 export function dshModelIdFromOptionValue(value: unknown): string | null {
@@ -142,7 +165,13 @@ function currentConfigValue(result: unknown, configId: string): unknown {
   return option && typeof option === "object" ? (option as { currentValue?: unknown }).currentValue : undefined;
 }
 
-/** The harness's own current models.  The vision variant is deliberately
+/** The harness's own current models.  These ids are *picker* ids: what a
+ * catalog lists and a bot stores, not necessarily what the installed dsh
+ * declares on the wire (stock dsh calls Flash `deepseek-flash`).  They stay
+ * stable so saved selections keep working; `dshModelOptionValue` translates
+ * each one to the session's advertised value at send time.
+ *
+ * The vision variant is deliberately
  * absent: `images: false` disables image attachment for the whole engine, so
  * shipping a vision model here offered a capability the composer refused. */
 export const STATIC_DSH_MODELS: ModelCatalog = {
@@ -169,6 +198,9 @@ export function dshCredentialCandidates(env: Record<string, string | undefined>)
  * fallback chain treats DSH quota and auth failures like every other engine
  * instead of as a generic rpc_error. */
 export function classifyDshError(error: unknown): ProviderErrorCode | undefined {
+  // Our own resolution failure names arbitrary model ids, so classify it by
+  // type before any pattern below can misread an id as a quota or auth word.
+  if (error instanceof DshModelNotOfferedError) return "model_catalog_outage";
   const message = error instanceof Error ? error.message : String(error ?? "");
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   const blob = `${code ?? ""} ${message}`.toLowerCase();
