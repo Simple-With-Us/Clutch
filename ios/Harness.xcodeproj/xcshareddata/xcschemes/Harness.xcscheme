@@ -35,6 +35,20 @@
                ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "D533F13893EB6DD3E8D067C0"
+               BuildableName = "HarnessUITests.xctest"
+               BlueprintName = "HarnessUITests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -61,6 +75,17 @@
                BlueprintIdentifier = "D3F4CD28060BA8AF31CBC340"
                BuildableName = "HarnessTests.xctest"
                BlueprintName = "HarnessTests"
+               ReferencedContainer = "container:Harness.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "D533F13893EB6DD3E8D067C0"
+               BuildableName = "HarnessUITests.xctest"
+               BlueprintName = "HarnessUITests"
                ReferencedContainer = "container:Harness.xcodeproj">
             </BuildableReference>
          </TestableReference>

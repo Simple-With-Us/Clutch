@@ -101,6 +101,14 @@ public final class HostStore {
 
     // MARK: - Persistence
 
+    #if DEBUG
+    /// UI tests start from first run.  Must run before `shared` is created.
+    static func resetPersistedHosts(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: storageKey)
+        defaults.removeObject(forKey: activeKey)
+    }
+    #endif
+
     private func load() {
         if let data = defaults.data(forKey: Self.storageKey),
            let decoded = try? JSONDecoder().decode([HarnessHost].self, from: data) {

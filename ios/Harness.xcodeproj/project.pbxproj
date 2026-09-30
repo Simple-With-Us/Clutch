@@ -16,6 +16,7 @@
 		67D6F2621C19AC1F6364ABF4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA14FDEBC83D15D5FB9718F /* RootView.swift */; };
 		6C8725A4027808B915F202A2 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA8072D0122B18CE24D5A35 /* PairingLink.swift */; };
 		76C5F5B1E1001DB32FB428B4 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB3E7CBEF0FED933BD346331 /* HostStore.swift */; };
+		7B8BD2F6C255EF72A338BC31 /* HarnessLiveUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E72752D838C91698326F5ED /* HarnessLiveUITests.swift */; };
 		7E258C6443EC2FB41C5872FB /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6687C3998C021B81CBB0E7 /* PairView.swift */; };
 		CE065CCC112DF84103DA8E7A /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77267057D15598F1B40F001B /* PairingTests.swift */; };
 		FC4BAF5772B38964C911CE88 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 06159D5DC49892AE5A5851B1 /* Assets.xcassets */; };
@@ -30,6 +31,13 @@
 			remoteGlobalIDString = 9CAE8F41437D5C28E2B50B85;
 			remoteInfo = Harness;
 		};
+		948C115E5EFB86F9DBA0E0F2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 632666F4A8537121A1E942DC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9CAE8F41437D5C28E2B50B85;
+			remoteInfo = Harness;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -37,7 +45,9 @@
 		1AAF300521CA05CD1150A284 /* PairingScannerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerSheet.swift; sourceTree = "<group>"; };
 		1CA8072D0122B18CE24D5A35 /* PairingLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingLink.swift; sourceTree = "<group>"; };
 		213A27C84940BF6546EB7FC0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		3E72752D838C91698326F5ED /* HarnessLiveUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessLiveUITests.swift; sourceTree = "<group>"; };
 		5EDE366B4AF036E25FA963F7 /* HarnessHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessHost.swift; sourceTree = "<group>"; };
+		691E368E0067EC419B000AEB /* HarnessUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HarnessUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		77267057D15598F1B40F001B /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
 		7826A9FF687B540749B8887B /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
 		8B6687C3998C021B81CBB0E7 /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
@@ -108,9 +118,18 @@
 				1C791D76B069327F190C5E9E /* App */,
 				3EBC434810C8912C3519C537 /* Resources */,
 				5803B41021B8D17483A66B13 /* Tests */,
+				6CB77A9869E7E482F2979C6C /* UITests */,
 				06159D5DC49892AE5A5851B1 /* Assets.xcassets */,
 				8B9F84DC775F556DAE85C788 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		6CB77A9869E7E482F2979C6C /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				3E72752D838C91698326F5ED /* HarnessLiveUITests.swift */,
+			);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 		8B9F84DC775F556DAE85C788 /* Products */ = {
@@ -118,6 +137,7 @@
 			children = (
 				D3E473950CF7C898DE998767 /* Harness.app */,
 				9898A7D32835A9381715ED9A /* HarnessTests.xctest */,
+				691E368E0067EC419B000AEB /* HarnessUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -169,6 +189,24 @@
 			productReference = 9898A7D32835A9381715ED9A /* HarnessTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		D533F13893EB6DD3E8D067C0 /* HarnessUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D0C1AA257DF9612416CFB5E1 /* Build configuration list for PBXNativeTarget "HarnessUITests" */;
+			buildPhases = (
+				6A7A7CD73BB8E9DD5AF8FFD2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				331BF12F7179B937EA48EFA8 /* PBXTargetDependency */,
+			);
+			name = HarnessUITests;
+			packageProductDependencies = (
+			);
+			productName = HarnessUITests;
+			productReference = 691E368E0067EC419B000AEB /* HarnessUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -185,6 +223,11 @@
 					D3F4CD28060BA8AF31CBC340 = {
 						DevelopmentTeam = CC8UTF7ATG;
 						ProvisioningStyle = Automatic;
+					};
+					D533F13893EB6DD3E8D067C0 = {
+						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 9CAE8F41437D5C28E2B50B85;
 					};
 				};
 			};
@@ -204,6 +247,7 @@
 			targets = (
 				9CAE8F41437D5C28E2B50B85 /* Harness */,
 				D3F4CD28060BA8AF31CBC340 /* HarnessTests */,
+				D533F13893EB6DD3E8D067C0 /* HarnessUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -246,9 +290,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6A7A7CD73BB8E9DD5AF8FFD2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7B8BD2F6C255EF72A338BC31 /* HarnessLiveUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		331BF12F7179B937EA48EFA8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9CAE8F41437D5C28E2B50B85 /* Harness */;
+			targetProxy = 948C115E5EFB86F9DBA0E0F2 /* PBXContainerItemProxy */;
+		};
 		BD1CACAC25D6ECC87D6D5A8F /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 9CAE8F41437D5C28E2B50B85 /* Harness */;
@@ -474,6 +531,42 @@
 			};
 			name = Debug;
 		};
+		D61AC64F8DF576E41220F91E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Harness;
+			};
+			name = Debug;
+		};
+		DBC56EE94B850C2F5B7B90AB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Harness;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -491,6 +584,15 @@
 			buildConfigurations = (
 				A694A26AFD9C264E01D3F604 /* Debug */,
 				3801847D37DBC7ABC9DE5931 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D0C1AA257DF9612416CFB5E1 /* Build configuration list for PBXNativeTarget "HarnessUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D61AC64F8DF576E41220F91E /* Debug */,
+				DBC56EE94B850C2F5B7B90AB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
