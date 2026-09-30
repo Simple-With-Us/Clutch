@@ -208,6 +208,61 @@ describe("a model the session does not offer", () => {
     expect((error as DshModelNotOfferedError).offered).toHaveLength(5);
   });
 
+  it("lists each offered model with its provider route", () => {
+    let error: unknown;
+    try {
+      dshModelOptionValue("MiniMax-M3.1-Flash-Preview", OWNER_OVERRIDE);
+    } catch (caught) {
+      error = caught;
+    }
+    const offered = (error as DshModelNotOfferedError).offered;
+    expect(offered).toContain("deepseek-official/deepseek-v4.1-flash (Deepseek-v4.1-flash)");
+    expect(offered).toContain("minimax/MiniMax-M2.7-highspeed (MiniMax-M2.7-Highspeed)");
+    // Id and name agree: no redundant parenthetical.
+    expect(offered).toContain("minimax/MiniMax-M3");
+    // Declared nowhere else, so there is no route hint.
+    expect((error as DshModelNotOfferedError).elsewhere).toEqual([]);
+    expect((error as Error).message).not.toContain("declared only under");
+  });
+
+  it("names the route when another provider declares the model", () => {
+    // MiniMax-M3 exists, but only under a provider this bot does not route
+    // through.  Sending it there would use another route's credentials and
+    // billing, so it stays refused; the message must not read as a
+    // contradiction next to a list that seems to contain it.
+    const catalog = advertise({
+      "deepseek-official": [["deepseek-flash", "DeepSeek-V4.1-Flash"]],
+      "minimax-cn": [["MiniMax-M3", "MiniMax-M3"]],
+    });
+    let error: unknown;
+    try {
+      dshModelOptionValue("MiniMax-M3", catalog);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(DshModelNotOfferedError);
+    const typed = error as DshModelNotOfferedError;
+    expect(typed.elsewhere).toEqual(["minimax-cn"]);
+    expect(typed.offered).toContain("minimax-cn/MiniMax-M3");
+    expect(typed.message).toContain("MiniMax-M3 is declared only under minimax-cn");
+    expect(classifyDshError(typed)).toBe("model_catalog_outage");
+  });
+
+  it("lists every other provider once, matching on id or display name", () => {
+    const catalog = advertise({
+      "deepseek-official": [["deepseek-flash", "DeepSeek-V4.1-Flash"]],
+      openrouter: [["glm-5", "GLM-5"], ["glm-5:free", "glm-5"]],
+      zai: [["glm-5", "GLM-5"]],
+    });
+    let error: unknown;
+    try {
+      dshModelOptionValue("GLM-5", catalog);
+    } catch (caught) {
+      error = caught;
+    }
+    expect((error as DshModelNotOfferedError).elsewhere).toEqual(["openrouter", "zai"]);
+  });
+
   it("classifies as a model-catalog outage so the fallback chain moves on", () => {
     const error = new DshModelNotOfferedError("x", ["a"]);
     expect(classifyDshError(error)).toBe("model_catalog_outage");

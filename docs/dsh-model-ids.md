@@ -7,8 +7,9 @@ the driver now avoids it.
 
 `dsh` selects a model through the ACP `model` config option.  Each option value
 is an opaque route identity, `JSON.stringify([provider, modelId])`, and the agent
-answers `session/set_config_option` with an exact-string lookup in the set it
-advertised at `session/new`.  A value it did not advertise is refused with
+answers `session/set_config_option` with an exact-string lookup in the choices it
+builds from its current provider catalogs (the same set `session/new` advertises,
+rebuilt on each set).  A value it does not offer is refused with
 `Invalid params: unknown model option`, however reasonable it looks.
 
 The ids a picker catalog and a saved bot selection carry are not reliably the
@@ -42,7 +43,11 @@ selections keep their id and only the wire value is translated.
 - No `model` option in the reply, or one that lists no model: the value is built
   from the picker id exactly as before.
 - The session offers models but not this one: `DshModelNotOfferedError` is thrown
-  before the switch, naming what is offered.  `classifyDshError` maps it to
+  before the switch, naming what is offered as `provider/id (name)`.  The resolver
+  never crosses provider namespaces, because a model declared under another
+  provider is a different route with its own credentials, billing and quota.  When
+  another provider does declare the model, the error says so (`elsewhere`), so the
+  message does not seem to contradict itself.  `classifyDshError` maps it to
   `model_catalog_outage` by type, so the fallback chain moves on.  Sending a value
   dsh did not advertise would only be refused after a wasted round trip, and
   falling back to the session default would silently run a different model than
