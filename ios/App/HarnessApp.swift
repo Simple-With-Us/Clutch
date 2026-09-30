@@ -2,35 +2,29 @@ import SwiftUI
 
 @main
 struct HarnessApp: App {
-    @State private var connectionManager = HostConnectionManager.shared
+    /// Light is the first-run default; System and Dark are available in Settings.
     @AppStorage("harness_theme_preference") private var themePreference: String = "light"
+
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-HarnessResetHosts") {
+            HostStore.resetPersistedHosts()
+        }
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
-            MainTabView()
+            RootView()
                 .preferredColorScheme(colorScheme)
-                .onOpenURL { url in
-                    handleIncomingURL(url)
-                }
-                .task {
-                    // Initial health probe across all hosts on launch
-                    await connectionManager.pingAllHosts()
-                }
         }
     }
 
     private var colorScheme: ColorScheme? {
         switch themePreference {
         case "dark": return .dark
-        case "light": return .light
-        default: return nil
-        }
-    }
-
-    private func handleIncomingURL(_ url: URL) {
-        if let host = connectionManager.parsePairingURL(url) {
-            connectionManager.addHost(host)
-            connectionManager.setActiveHost(host)
+        case "system": return nil
+        default: return .light
         }
     }
 }

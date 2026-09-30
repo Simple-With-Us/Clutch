@@ -8,102 +8,60 @@
 
 /* Begin PBXBuildFile section */
 		0945AF7EEDAEDA8A01A3228B /* PairingScannerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AAF300521CA05CD1150A284 /* PairingScannerSheet.swift */; };
-		1CD319064B1A9937912DA172 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0070C1133EAD4C47D57470 /* ChatView.swift */; };
-		1D253847A906520A4379AA66 /* FleetRAGView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0348E2907A23280255B70A06 /* FleetRAGView.swift */; };
-		1D32170A38F8D0E6500590D9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A667DFD5A646D06CDF8AC8B /* SettingsView.swift */; };
 		2B63E95E4D138AC419BF777E /* HarnessApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACC5067BAD4697F45014F948 /* HarnessApp.swift */; };
-		2D397B48B9396B91B8653766 /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40C816DD77BFE591CD4FDE1F /* MainTabView.swift */; };
-		351F3E539F368BB905383767 /* ProviderBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8FC0969505ADB0E5111EFEE /* ProviderBadge.swift */; };
-		3A5B243031E67D782965FA05 /* ComposioModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1485ABE664072163322CB748 /* ComposioModels.swift */; };
-		3DA92910AD3C92922CDE7763 /* HostConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEB79729B2050714E3368F4F /* HostConnectionManager.swift */; };
-		47617C29158EADEE8FC9F764 /* ComposioClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 384A5323D25F51E045EF4616 /* ComposioClient.swift */; };
-		489C694622D4DE7E980F5DB0 /* HostConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE7F52AB6BD645CD82D071D3 /* HostConnection.swift */; };
-		4ADE92D1346007B1AB1FC719 /* CodeBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66FF3C9A0DB00F5994446CC0 /* CodeBlockView.swift */; };
-		57C18EBD27E088D6FBBABA8C /* ToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABEDA357A5EB6FD314E406C7 /* ToolsView.swift */; };
+		3A51A1A13DA1DD4E348C3CF4 /* HostProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D145B5F1A374E370A82A1CE /* HostProbe.swift */; };
+		4A43275316F742555E6C64F6 /* HarnessWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB42141E590B8C3A21A2EFFF /* HarnessWebView.swift */; };
+		4EE7A824AE5532AB0440BFFA /* HostsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7826A9FF687B540749B8887B /* HostsSheet.swift */; };
 		590A2B04108256704F5EFD78 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = C8FE65A555ACB8C12E2DDC9B /* AppIcon.png */; };
-		5E3882E26E1B92D9A54D14CC /* WebParityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0894FF7E875B37BD14A1143 /* WebParityView.swift */; };
-		66B801D28FAF27730BBC9399 /* WorkspaceItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 592FE4AEEE61FB90FB304604 /* WorkspaceItem.swift */; };
-		6B14A0030669D5EE184B7110 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A36ABA37C6939296B12C5D3 /* TranscriptionService.swift */; };
-		705374ECA51EA92560B1296A /* HostManagerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F2165EEE7A44767F0B7A49 /* HostManagerSheet.swift */; };
-		7E2C39227B229D8626012338 /* ModelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE46E37C5B24497715EB9634 /* ModelProvider.swift */; };
-		87D58E072A730F252BF6BC74 /* ExyteChat in Frameworks */ = {isa = PBXBuildFile; productRef = A619B56AE0E986895196FAB7 /* ExyteChat */; };
-		985F1E9BBB79B1CF2F1683A6 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D577733C8D3091053BCCCDE /* ComposerView.swift */; };
-		9ABAFC042159B9EE6DC2C216 /* ToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50B43C80FBB5E8D6A1FD9FCE /* ToolCallCard.swift */; };
-		AF51F06AA9A411D2A4AF25F8 /* ToolItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDA47D2FA0868DA01ECE60C6 /* ToolItem.swift */; };
-		B501ECF78EA17A01FAE0AEB9 /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D071391AEA5310E6A5846FB /* Session.swift */; };
-		C4D7F04AEB45FF4B360599E0 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E69F1F4927671463F9D9D21 /* SessionsView.swift */; };
-		C50EF0CA306F80098DCA15BB /* ComposioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85EB4D8670958E90D0FB1D0B /* ComposioView.swift */; };
-		C7DA984E0C2011CFD5EB9C17 /* BonjourDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F7CA2F7EF1A427184F41027 /* BonjourDiscovery.swift */; };
-		DFBDD4CCA33B049C298B5C15 /* ReasoningBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0881703B6B50972AE173F493 /* ReasoningBlockView.swift */; };
-		E446A1520532F0BE5F7CB600 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7D0F91612DF18418F982936 /* ChatMessage.swift */; };
-		E8CE3C7CA5972A3414F18588 /* HarnessAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F67036992B60BC2E580609D3 /* HarnessAPIClient.swift */; };
-		EB959711A0E72C10E60845D8 /* FleetRAGModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6907710CA8A115C08C0E9A6 /* FleetRAGModels.swift */; };
-		EB9BA759D97692C748D29DDD /* WorkspacesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 709E40972EF8689F0E5F0919 /* WorkspacesView.swift */; };
-		F1774C944497AD0AE147BFBC /* FleetRAGClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D0AFCB7E3024D0B99FCFB18 /* FleetRAGClient.swift */; };
+		67D6F2621C19AC1F6364ABF4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDA14FDEBC83D15D5FB9718F /* RootView.swift */; };
+		6C8725A4027808B915F202A2 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA8072D0122B18CE24D5A35 /* PairingLink.swift */; };
+		76C5F5B1E1001DB32FB428B4 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB3E7CBEF0FED933BD346331 /* HostStore.swift */; };
+		7B8BD2F6C255EF72A338BC31 /* HarnessLiveUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E72752D838C91698326F5ED /* HarnessLiveUITests.swift */; };
+		7E258C6443EC2FB41C5872FB /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6687C3998C021B81CBB0E7 /* PairView.swift */; };
+		CE065CCC112DF84103DA8E7A /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77267057D15598F1B40F001B /* PairingTests.swift */; };
 		FC4BAF5772B38964C911CE88 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 06159D5DC49892AE5A5851B1 /* Assets.xcassets */; };
+		FF658C0767E5678EB986839E /* HarnessHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EDE366B4AF036E25FA963F7 /* HarnessHost.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		0C32CD341DCF8D856B532BA7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 632666F4A8537121A1E942DC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9CAE8F41437D5C28E2B50B85;
+			remoteInfo = Harness;
+		};
+		948C115E5EFB86F9DBA0E0F2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 632666F4A8537121A1E942DC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9CAE8F41437D5C28E2B50B85;
+			remoteInfo = Harness;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
-		0348E2907A23280255B70A06 /* FleetRAGView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRAGView.swift; sourceTree = "<group>"; };
 		06159D5DC49892AE5A5851B1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		0881703B6B50972AE173F493 /* ReasoningBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningBlockView.swift; sourceTree = "<group>"; };
-		0D577733C8D3091053BCCCDE /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
-		1485ABE664072163322CB748 /* ComposioModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposioModels.swift; sourceTree = "<group>"; };
 		1AAF300521CA05CD1150A284 /* PairingScannerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerSheet.swift; sourceTree = "<group>"; };
-		1D0AFCB7E3024D0B99FCFB18 /* FleetRAGClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRAGClient.swift; sourceTree = "<group>"; };
+		1CA8072D0122B18CE24D5A35 /* PairingLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingLink.swift; sourceTree = "<group>"; };
 		213A27C84940BF6546EB7FC0 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		384A5323D25F51E045EF4616 /* ComposioClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposioClient.swift; sourceTree = "<group>"; };
-		3A667DFD5A646D06CDF8AC8B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		3D071391AEA5310E6A5846FB /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
-		40C816DD77BFE591CD4FDE1F /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
-		4A36ABA37C6939296B12C5D3 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
-		4E69F1F4927671463F9D9D21 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
-		50B43C80FBB5E8D6A1FD9FCE /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
-		592FE4AEEE61FB90FB304604 /* WorkspaceItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceItem.swift; sourceTree = "<group>"; };
-		66FF3C9A0DB00F5994446CC0 /* CodeBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBlockView.swift; sourceTree = "<group>"; };
-		709E40972EF8689F0E5F0919 /* WorkspacesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacesView.swift; sourceTree = "<group>"; };
-		85EB4D8670958E90D0FB1D0B /* ComposioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposioView.swift; sourceTree = "<group>"; };
-		9A0070C1133EAD4C47D57470 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		9F7CA2F7EF1A427184F41027 /* BonjourDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourDiscovery.swift; sourceTree = "<group>"; };
-		A1F2165EEE7A44767F0B7A49 /* HostManagerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostManagerSheet.swift; sourceTree = "<group>"; };
-		ABEDA357A5EB6FD314E406C7 /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
+		3E72752D838C91698326F5ED /* HarnessLiveUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessLiveUITests.swift; sourceTree = "<group>"; };
+		5EDE366B4AF036E25FA963F7 /* HarnessHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessHost.swift; sourceTree = "<group>"; };
+		691E368E0067EC419B000AEB /* HarnessUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HarnessUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		77267057D15598F1B40F001B /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
+		7826A9FF687B540749B8887B /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
+		8B6687C3998C021B81CBB0E7 /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
+		9898A7D32835A9381715ED9A /* HarnessTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = HarnessTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9D145B5F1A374E370A82A1CE /* HostProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProbe.swift; sourceTree = "<group>"; };
 		ACC5067BAD4697F45014F948 /* HarnessApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessApp.swift; sourceTree = "<group>"; };
-		AE7F52AB6BD645CD82D071D3 /* HostConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostConnection.swift; sourceTree = "<group>"; };
-		B7D0F91612DF18418F982936 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		C8FE65A555ACB8C12E2DDC9B /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
-		CDA47D2FA0868DA01ECE60C6 /* ToolItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolItem.swift; sourceTree = "<group>"; };
-		D0894FF7E875B37BD14A1143 /* WebParityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebParityView.swift; sourceTree = "<group>"; };
 		D3E473950CF7C898DE998767 /* Harness.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Harness.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		D6907710CA8A115C08C0E9A6 /* FleetRAGModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRAGModels.swift; sourceTree = "<group>"; };
-		DEB79729B2050714E3368F4F /* HostConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostConnectionManager.swift; sourceTree = "<group>"; };
-		E8FC0969505ADB0E5111EFEE /* ProviderBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderBadge.swift; sourceTree = "<group>"; };
-		EE46E37C5B24497715EB9634 /* ModelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelProvider.swift; sourceTree = "<group>"; };
-		F67036992B60BC2E580609D3 /* HarnessAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessAPIClient.swift; sourceTree = "<group>"; };
+		DB3E7CBEF0FED933BD346331 /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
+		DB42141E590B8C3A21A2EFFF /* HarnessWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessWebView.swift; sourceTree = "<group>"; };
+		DDA14FDEBC83D15D5FB9718F /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
-/* Begin PBXFrameworksBuildPhase section */
-		CD0891400EC7CA3E7DCB88CF /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				87D58E072A730F252BF6BC74 /* ExyteChat in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXFrameworksBuildPhase section */
-
 /* Begin PBXGroup section */
-		16B383A96D18E75E3B5F67FC /* Components */ = {
-			isa = PBXGroup;
-			children = (
-				66FF3C9A0DB00F5994446CC0 /* CodeBlockView.swift */,
-				E8FC0969505ADB0E5111EFEE /* ProviderBadge.swift */,
-				0881703B6B50972AE173F493 /* ReasoningBlockView.swift */,
-				50B43C80FBB5E8D6A1FD9FCE /* ToolCallCard.swift */,
-			);
-			path = Components;
-			sourceTree = "<group>";
-		};
 		1C791D76B069327F190C5E9E /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -119,12 +77,9 @@
 		3E608EF87AF1C7CA623290DC /* Services */ = {
 			isa = PBXGroup;
 			children = (
-				9F7CA2F7EF1A427184F41027 /* BonjourDiscovery.swift */,
-				384A5323D25F51E045EF4616 /* ComposioClient.swift */,
-				1D0AFCB7E3024D0B99FCFB18 /* FleetRAGClient.swift */,
-				F67036992B60BC2E580609D3 /* HarnessAPIClient.swift */,
-				DEB79729B2050714E3368F4F /* HostConnectionManager.swift */,
-				4A36ABA37C6939296B12C5D3 /* TranscriptionService.swift */,
+				9D145B5F1A374E370A82A1CE /* HostProbe.swift */,
+				DB3E7CBEF0FED933BD346331 /* HostStore.swift */,
+				1CA8072D0122B18CE24D5A35 /* PairingLink.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -140,21 +95,21 @@
 		4BF1CA2A5DDD1141E40B533D /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				16B383A96D18E75E3B5F67FC /* Components */,
-				9A0070C1133EAD4C47D57470 /* ChatView.swift */,
-				0D577733C8D3091053BCCCDE /* ComposerView.swift */,
-				85EB4D8670958E90D0FB1D0B /* ComposioView.swift */,
-				0348E2907A23280255B70A06 /* FleetRAGView.swift */,
-				A1F2165EEE7A44767F0B7A49 /* HostManagerSheet.swift */,
-				40C816DD77BFE591CD4FDE1F /* MainTabView.swift */,
+				DB42141E590B8C3A21A2EFFF /* HarnessWebView.swift */,
+				7826A9FF687B540749B8887B /* HostsSheet.swift */,
 				1AAF300521CA05CD1150A284 /* PairingScannerSheet.swift */,
-				4E69F1F4927671463F9D9D21 /* SessionsView.swift */,
-				3A667DFD5A646D06CDF8AC8B /* SettingsView.swift */,
-				ABEDA357A5EB6FD314E406C7 /* ToolsView.swift */,
-				D0894FF7E875B37BD14A1143 /* WebParityView.swift */,
-				709E40972EF8689F0E5F0919 /* WorkspacesView.swift */,
+				8B6687C3998C021B81CBB0E7 /* PairView.swift */,
+				DDA14FDEBC83D15D5FB9718F /* RootView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		5803B41021B8D17483A66B13 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				77267057D15598F1B40F001B /* PairingTests.swift */,
+			);
+			path = Tests;
 			sourceTree = "<group>";
 		};
 		5A46B0D24AB7DF64B93F488B = {
@@ -162,15 +117,27 @@
 			children = (
 				1C791D76B069327F190C5E9E /* App */,
 				3EBC434810C8912C3519C537 /* Resources */,
+				5803B41021B8D17483A66B13 /* Tests */,
+				6CB77A9869E7E482F2979C6C /* UITests */,
 				06159D5DC49892AE5A5851B1 /* Assets.xcassets */,
 				8B9F84DC775F556DAE85C788 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		6CB77A9869E7E482F2979C6C /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				3E72752D838C91698326F5ED /* HarnessLiveUITests.swift */,
+			);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 		8B9F84DC775F556DAE85C788 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				D3E473950CF7C898DE998767 /* Harness.app */,
+				9898A7D32835A9381715ED9A /* HarnessTests.xctest */,
+				691E368E0067EC419B000AEB /* HarnessUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -178,14 +145,7 @@
 		D3A0651A66FE664B209E0630 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				B7D0F91612DF18418F982936 /* ChatMessage.swift */,
-				1485ABE664072163322CB748 /* ComposioModels.swift */,
-				D6907710CA8A115C08C0E9A6 /* FleetRAGModels.swift */,
-				AE7F52AB6BD645CD82D071D3 /* HostConnection.swift */,
-				EE46E37C5B24497715EB9634 /* ModelProvider.swift */,
-				3D071391AEA5310E6A5846FB /* Session.swift */,
-				CDA47D2FA0868DA01ECE60C6 /* ToolItem.swift */,
-				592FE4AEEE61FB90FB304604 /* WorkspaceItem.swift */,
+				5EDE366B4AF036E25FA963F7 /* HarnessHost.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -199,7 +159,6 @@
 			buildPhases = (
 				093CFC9C0B64433157F91DE8 /* Sources */,
 				8FEB3F608FCC41A1DC444FC3 /* Resources */,
-				CD0891400EC7CA3E7DCB88CF /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -207,11 +166,46 @@
 			);
 			name = Harness;
 			packageProductDependencies = (
-				A619B56AE0E986895196FAB7 /* ExyteChat */,
 			);
 			productName = Harness;
 			productReference = D3E473950CF7C898DE998767 /* Harness.app */;
 			productType = "com.apple.product-type.application";
+		};
+		D3F4CD28060BA8AF31CBC340 /* HarnessTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A150339E1BCB4CEBF06194A2 /* Build configuration list for PBXNativeTarget "HarnessTests" */;
+			buildPhases = (
+				4667EA076337386947A908EC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BD1CACAC25D6ECC87D6D5A8F /* PBXTargetDependency */,
+			);
+			name = HarnessTests;
+			packageProductDependencies = (
+			);
+			productName = HarnessTests;
+			productReference = 9898A7D32835A9381715ED9A /* HarnessTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		D533F13893EB6DD3E8D067C0 /* HarnessUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D0C1AA257DF9612416CFB5E1 /* Build configuration list for PBXNativeTarget "HarnessUITests" */;
+			buildPhases = (
+				6A7A7CD73BB8E9DD5AF8FFD2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				331BF12F7179B937EA48EFA8 /* PBXTargetDependency */,
+			);
+			name = HarnessUITests;
+			packageProductDependencies = (
+			);
+			productName = HarnessUITests;
+			productReference = 691E368E0067EC419B000AEB /* HarnessUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -226,6 +220,15 @@
 						DevelopmentTeam = CC8UTF7ATG;
 						ProvisioningStyle = Automatic;
 					};
+					D3F4CD28060BA8AF31CBC340 = {
+						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
+					};
+					D533F13893EB6DD3E8D067C0 = {
+						DevelopmentTeam = CC8UTF7ATG;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 9CAE8F41437D5C28E2B50B85;
+					};
 				};
 			};
 			buildConfigurationList = EFDC44680DE6372609389CE8 /* Build configuration list for PBXProject "Harness" */;
@@ -237,15 +240,14 @@
 			);
 			mainGroup = 5A46B0D24AB7DF64B93F488B;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				053C6F2FAD66D347D5330755 /* XCRemoteSwiftPackageReference "Chat" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 8B9F84DC775F556DAE85C788 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				9CAE8F41437D5C28E2B50B85 /* Harness */,
+				D3F4CD28060BA8AF31CBC340 /* HarnessTests */,
+				D533F13893EB6DD3E8D067C0 /* HarnessUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -267,41 +269,49 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C7DA984E0C2011CFD5EB9C17 /* BonjourDiscovery.swift in Sources */,
-				E446A1520532F0BE5F7CB600 /* ChatMessage.swift in Sources */,
-				1CD319064B1A9937912DA172 /* ChatView.swift in Sources */,
-				4ADE92D1346007B1AB1FC719 /* CodeBlockView.swift in Sources */,
-				985F1E9BBB79B1CF2F1683A6 /* ComposerView.swift in Sources */,
-				47617C29158EADEE8FC9F764 /* ComposioClient.swift in Sources */,
-				3A5B243031E67D782965FA05 /* ComposioModels.swift in Sources */,
-				C50EF0CA306F80098DCA15BB /* ComposioView.swift in Sources */,
-				F1774C944497AD0AE147BFBC /* FleetRAGClient.swift in Sources */,
-				EB959711A0E72C10E60845D8 /* FleetRAGModels.swift in Sources */,
-				1D253847A906520A4379AA66 /* FleetRAGView.swift in Sources */,
-				E8CE3C7CA5972A3414F18588 /* HarnessAPIClient.swift in Sources */,
 				2B63E95E4D138AC419BF777E /* HarnessApp.swift in Sources */,
-				489C694622D4DE7E980F5DB0 /* HostConnection.swift in Sources */,
-				3DA92910AD3C92922CDE7763 /* HostConnectionManager.swift in Sources */,
-				705374ECA51EA92560B1296A /* HostManagerSheet.swift in Sources */,
-				2D397B48B9396B91B8653766 /* MainTabView.swift in Sources */,
-				7E2C39227B229D8626012338 /* ModelProvider.swift in Sources */,
+				FF658C0767E5678EB986839E /* HarnessHost.swift in Sources */,
+				4A43275316F742555E6C64F6 /* HarnessWebView.swift in Sources */,
+				3A51A1A13DA1DD4E348C3CF4 /* HostProbe.swift in Sources */,
+				76C5F5B1E1001DB32FB428B4 /* HostStore.swift in Sources */,
+				4EE7A824AE5532AB0440BFFA /* HostsSheet.swift in Sources */,
+				7E258C6443EC2FB41C5872FB /* PairView.swift in Sources */,
+				6C8725A4027808B915F202A2 /* PairingLink.swift in Sources */,
 				0945AF7EEDAEDA8A01A3228B /* PairingScannerSheet.swift in Sources */,
-				351F3E539F368BB905383767 /* ProviderBadge.swift in Sources */,
-				DFBDD4CCA33B049C298B5C15 /* ReasoningBlockView.swift in Sources */,
-				B501ECF78EA17A01FAE0AEB9 /* Session.swift in Sources */,
-				C4D7F04AEB45FF4B360599E0 /* SessionsView.swift in Sources */,
-				1D32170A38F8D0E6500590D9 /* SettingsView.swift in Sources */,
-				9ABAFC042159B9EE6DC2C216 /* ToolCallCard.swift in Sources */,
-				AF51F06AA9A411D2A4AF25F8 /* ToolItem.swift in Sources */,
-				57C18EBD27E088D6FBBABA8C /* ToolsView.swift in Sources */,
-				6B14A0030669D5EE184B7110 /* TranscriptionService.swift in Sources */,
-				5E3882E26E1B92D9A54D14CC /* WebParityView.swift in Sources */,
-				66B801D28FAF27730BBC9399 /* WorkspaceItem.swift in Sources */,
-				EB9BA759D97692C748D29DDD /* WorkspacesView.swift in Sources */,
+				67D6F2621C19AC1F6364ABF4 /* RootView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4667EA076337386947A908EC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CE065CCC112DF84103DA8E7A /* PairingTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6A7A7CD73BB8E9DD5AF8FFD2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7B8BD2F6C255EF72A338BC31 /* HarnessLiveUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		331BF12F7179B937EA48EFA8 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9CAE8F41437D5C28E2B50B85 /* Harness */;
+			targetProxy = 948C115E5EFB86F9DBA0E0F2 /* PBXContainerItemProxy */;
+		};
+		BD1CACAC25D6ECC87D6D5A8F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9CAE8F41437D5C28E2B50B85 /* Harness */;
+			targetProxy = 0C32CD341DCF8D856B532BA7 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		26A7E8C4A6E878110EB346AB /* Debug */ = {
@@ -380,7 +390,7 @@
 				CODE_SIGN_ENTITLEMENTS = Harness.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202609281200;
+				CURRENT_PROJECT_VERSION = 202609301500;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				ENABLE_ON_DEMAND_RESOURCES = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -388,13 +398,49 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios;
 				PRODUCT_NAME = Harness;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_VERSION = 5.9;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		710D9584F235CD31C13ABB0B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Harness.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Harness";
+			};
+			name = Debug;
+		};
+		7738416D11E0E2BC18A32893 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios.tests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Harness.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Harness";
 			};
 			name = Release;
 		};
@@ -467,7 +513,7 @@
 				CODE_SIGN_ENTITLEMENTS = Harness.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202609281200;
+				CURRENT_PROJECT_VERSION = 202609301500;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				ENABLE_ON_DEMAND_RESOURCES = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -475,7 +521,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.2.0;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios;
 				PRODUCT_NAME = Harness;
 				SDKROOT = iphoneos;
@@ -485,14 +531,68 @@
 			};
 			name = Debug;
 		};
+		D61AC64F8DF576E41220F91E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Harness;
+			};
+			name = Debug;
+		};
+		DBC56EE94B850C2F5B7B90AB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.simplewithus.harness.ios.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Harness;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A150339E1BCB4CEBF06194A2 /* Build configuration list for PBXNativeTarget "HarnessTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				710D9584F235CD31C13ABB0B /* Debug */,
+				7738416D11E0E2BC18A32893 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		C6F05FE989F73732C255F5CA /* Build configuration list for PBXNativeTarget "Harness" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A694A26AFD9C264E01D3F604 /* Debug */,
 				3801847D37DBC7ABC9DE5931 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D0C1AA257DF9612416CFB5E1 /* Build configuration list for PBXNativeTarget "HarnessUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D61AC64F8DF576E41220F91E /* Debug */,
+				DBC56EE94B850C2F5B7B90AB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
@@ -507,25 +607,6 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		053C6F2FAD66D347D5330755 /* XCRemoteSwiftPackageReference "Chat" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/exyte/Chat.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 3.3.5;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		A619B56AE0E986895196FAB7 /* ExyteChat */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 053C6F2FAD66D347D5330755 /* XCRemoteSwiftPackageReference "Chat" */;
-			productName = ExyteChat;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 632666F4A8537121A1E942DC /* Project object */;
 }

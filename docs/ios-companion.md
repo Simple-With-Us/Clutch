@@ -1,106 +1,87 @@
-# Harness iOS Companion App
+# Harness iOS App
 
-Native iOS companion app for **Harness** (`@deepseek-ai/dsh` and MiniMax harness).  Built with SwiftUI for iOS 17.0+ using XcodeGen.
+The Harness iOS app (bundle `com.simplewithus.harness.ios`, XcodeGen project in `ios/`) puts the harness web UI that runs on your Mac onto iPhone and iPad.  It is a native shell around one real backend, not a second client with its own API.
 
-## Overview
+## Architecture
 
-The Harness iOS Companion app brings the power of Harness to iPhone and iPad.  It provides both a rich native SwiftUI interface and a full-parity embedded web experience, allowing developers to manage coding sessions, connect to multiple computers (Mac, local servers, Hetzner, or cloud VMs), trigger Composio actions, search shared Fleet memory, and configure models from MiniMax and DeepSeek.
+```
+iPhone / iPad                          Mac
+┌────────────────────────────┐         ┌──────────────────────────────────────────┐
+│ Harness.app (SwiftUI)      │  HTTPS  │ Tailscale Serve  https://<magicdns>:3080  │
+│  • pairing (QR / paste)    │ ──────▶ │        │ proxy                           │
+│  • host switcher, probe    │ tailnet │        ▼                                 │
+│  • WKWebView ─ harness web │         │ pm2 harness-web  127.0.0.1:3080          │
+│    (sessions, streaming,   │         │   dsh web (@deepseek-ai/dsh) with the    │
+│     model picker, tools)   │         │   dsh-web / mmh-web cordis profiles      │
+└────────────────────────────┘         └──────────────────────────────────────────┘
+```
 
-## Key Features
+- **Backend:** the always-on `harness-web` process (`scripts/start-web.sh`, live install `~/apps/harness-runtime`).  DeepSeek and MiniMax models both come from it through the cordis profiles, so the app needs no model-specific code.
+- **Surface:** the full harness web UI in a `WKWebView` — session list, streaming replies, model switching, tools, settings, and file attachments all work exactly as on the desktop.  The Harness "H" monogram is injected the same way the Mac Dock app (`src/web/dock-app/HarnessWindow.swift`) does it.
+- **Native parts:** pairing (camera QR scan, paste, or typed address), a host switcher, a cookie-less health probe, and native cards for the "pairing expired" and "cannot reach host" states.  Links that leave the paired origin open in Safari.
 
-### 1. Multi-Host / Multi-Computer Support
-Connect to and manage multiple Harness instances:
-- **Saved Computer Profiles:** Store hostnames, Tailscale IPs, ports, TLS settings, and launch tokens for any number of machines.
-- **Active Host Switcher:** Switch between your local Mac (`127.0.0.1:3080`), remote Mac over Tailscale (`macbook.boa-roygbiv.ts.net:3080`), or cloud instances (`cloud.jays.services:3080`) with a single tap.
-- **Health Probing & Latency:** Real-time health indicators and millisecond ping latency tracking across all configured hosts.
-- **Deep-Link Pairing:** Scan a QR code or tap a link (`harness://pair?host=...&port=...&token=...`) to pair new computers instantly.
+### Why not a native chat client
 
-### 2. Full Web Interface Parity
-- High-performance `WKWebView` container with bidirectional JavaScript bridge.
-- Full injection of the Harness brand styling:
-  - Neutral sidebar with H monogram brand SVG and `HARNESS` label under.
-  - Model picker provider branding for **MiniMax** and **DeepSeek**.
-  - Model capability badges: `Preview` (M3.1 Flash), `Multimodal` (V4.1 Flash), and `2x Cost` (M2.7 Highspeed).
-  - Workspace auto-binding and keyboard navigation support.
-- Mobile controls: pull-to-refresh, navigation stack, and direct Safari sharing.
+`dsh web` exposes no REST API.  Its browser talks to `/api` over the cordis connection protocol (`@deepseek-ai/dsh-client-connection`), which is an internal, versioned-with-the-package transport.  A native client would have to re-implement it and would break on every upstream bump.  v0.2 of this app shipped native Chat, Tools, Sessions, Fleet RAG, and Composio tabs that called `/v1/*` endpoints nothing served (the only `/v1/*` server was the now-retired MiniMax Remote companion on port 7842), so those tabs never worked.  v0.3 removes them from the build and shows the real UI instead.
 
-### 3. Native SwiftUI Chat & Composer
-- Clean message history with user and assistant bubbles.
-- **Collapsible Reasoning Blocks:** Step-by-step thinking token streaming with animated indicators for reasoning models (`DeepSeek-V4.1-Pro` and `MiniMax-M3`).
-- **Tool Call Cards:** Expandable cards displaying tool names, arguments JSON, execution outputs, and duration in milliseconds.
-- **Code Highlighting & Copy:** Native code cards with language tags and one-tap clipboard copy.
-- **Model Picker Pill:** Instant switching between MiniMax and DeepSeek models with capability chips and reasoning effort controls (`Off`, `Low`, `Medium`, `High`).
+## Authentication And Pairing
 
-### 4. Tool & Ecosystem Integrations
-- **Composio Integration:** Manage connected apps (GitHub, Slack, Linear, Notion, Gmail, Discord), verify authorization status, and execute actions.
-- **Fleet RAG & Recall:** Direct client for the shared fleet knowledge base (`recall_search`, `recall_contribute`, `recall_stats`).  Query lessons across all agents and contribute new findings directly from mobile.
-- **MCP Servers:** Inspect mounted Model Context Protocol servers and tool allowlists.
-- **Built-in System Tools:** View execution logs for remote `bash` terminal and `file_editor`.
+`dsh web` mints a launch token per process and prints `http://127.0.0.1:3080/?token=<t>`; `scripts/capture-launch-url.cjs` saves it to `~/.dsh/web-launch-url`.  Visiting `/?token=<t>` on any trusted authority sets a signed cookie bound to that authority (30-day lifetime; the signing secret survives restarts) and redirects to `/`.  Every `/api` request must also carry a trusted `Host`, so `start-web` now trusts this Mac's detected Tailscale MagicDNS name as well as the legacy names.
 
-### 5. Supported Models Matrix
+To pair a phone, run on the Mac:
 
-| Model | Vendor | Badges | Reasoning | Context Window | Best For |
-|---|---|---|---|---|---|
-| `MiniMax-M3` | MiniMax | — | Yes | 204,800 | Balanced general coding and deep reasoning |
-| `MiniMax-M3.1-Flash-Preview` | MiniMax | `Preview` | No | 1,000,000 | Frontier multimodal coding with 1M context |
-| `MiniMax-M2.7-highspeed` | MiniMax | `2x Cost` | No | 204,800 | Ultra low-latency execution tier |
-| `DeepSeek-V4.1-Pro` | DeepSeek | — | Yes | 128,000 | Advanced reasoning-capable frontier model |
-| `DeepSeek-V4.1-Flash` | DeepSeek | `Multimodal` | No | 128,000 | Fast text, image, and video processing |
+```bash
+harness-pair-ios              # or: node ~/apps/harness-runtime/src/web/pair-ios.ts
+```
 
-## Project Structure
+It copies a `harness://pair?url=https://<magicdns>:3080/?token=<t>` link to the clipboard (Universal Clipboard carries it to the iPhone) and opens a QR code.  In the app, tap **Scan Pairing Code** or **Paste Pairing Link**.  The app loads the token URL once, harness web sets its cookie, and the app drops the token.  When the cookie expires the app shows **Pair This Device** again.
+
+For the Simulator on the same Mac: `harness-pair-ios --simulator` opens the link against `http://127.0.0.1:3080` in the booted simulator.  `--print` prints the link (it contains the token).
+
+Accepted pairing inputs (`ios/App/Services/PairingLink.swift`):
+
+| Input | Example |
+|---|---|
+| Pairing link | `harness://pair?url=https%3A%2F%2Fmac.tailnet.ts.net%3A3080%2F%3Ftoken%3D…&name=Studio` |
+| v0.2 link | `harness://pair?h=studio.local&p=3080&tls=0&t=…` |
+| Launch URL | `http://127.0.0.1:3080/?token=…` |
+| Address | `mac.tailnet.ts.net` (defaults to port 3080, HTTPS) or `127.0.0.1:3080` |
+
+`minimax://` links and port 7842 are rejected with a message that MiniMax Remote is retired.
+
+## Project Layout
 
 ```
 ios/
-├── project.yml                     # XcodeGen project specification
-├── HarnessCompanion.entitlements   # iOS entitlements
-├── Assets.xcassets/                # Universal 1024x1024 app icon & accent colors
+├── project.yml                 # XcodeGen spec (app + HarnessTests)
+├── Harness.entitlements
+├── Assets.xcassets             # full-bleed square 1024 icon, accent color
+├── Resources/AppIcon.png       # in-app copy of the icon
+├── Tests/PairingTests.swift    # pairing parser, host model, probe, store
 └── App/
-    ├── HarnessCompanionApp.swift   # SwiftUI App entry point & URL routing
-    ├── Info.plist                  # Bundle config, ATS, and Bonjour permissions
-    ├── Models/                     # Swift data structures
-    │   ├── HostConnection.swift    # Multi-host connection model
-    │   ├── ModelProvider.swift     # MiniMax & DeepSeek models catalog
-    │   ├── ChatMessage.swift       # Messages and tool call models
-    │   ├── Session.swift           # Session workspace model
-    │   ├── WorkspaceItem.swift     # Remote workspace models
-    │   ├── ToolItem.swift          # Built-in, Composio, RAG, MCP tool items
-    │   ├── ComposioModels.swift    # Composio app & action models
-    │   └── FleetRAGModels.swift    # Recall hits, stats, and lesson models
-    ├── Services/                   # Services & network clients
-    │   ├── HostConnectionManager.swift # Multi-computer persistence & ping
-    │   ├── HarnessAPIClient.swift  # Chat streaming & session orchestration
-    │   ├── ComposioClient.swift    # Composio app connections & triggers
-    │   └── FleetRAGClient.swift    # Fleet memory search & contribute
-    └── Views/                      # SwiftUI Views
-        ├── MainTabView.swift       # Tab bar: Chat, Sessions, Workspaces, Tools, Web
-        ├── HostManagerSheet.swift  # Multi-computer manager & pairing modal
-        ├── ChatView.swift          # Native chat interface
-        ├── ComposerView.swift      # Model picker pill & prompt composer
-        ├── SessionsView.swift      # Conversation history sidebar
-        ├── WorkspacesView.swift    # Remote workspace directory selector
-        ├── ToolsView.swift         # Tool inventory container
-        ├── ComposioView.swift      # Composio connection manager
-        ├── FleetRAGView.swift      # Fleet recall search & contribute UI
-        ├── WebParityView.swift     # Embedded WKWebView with Harness JS/CSS
-        ├── SettingsView.swift      # API keys, theme, and host defaults
-        └── Components/             # Reusable UI components
-            ├── ProviderBadge.swift
-            ├── ReasoningBlockView.swift
-            ├── ToolCallCard.swift
-            └── CodeBlockView.swift
+    ├── HarnessApp.swift        # entry; light theme by default
+    ├── Info.plist              # generated from project.yml
+    ├── Models/HarnessHost.swift
+    ├── Services/PairingLink.swift, HostProbe.swift, HostStore.swift
+    └── Views/RootView.swift, HarnessWebView.swift, PairView.swift,
+              HostsSheet.swift, PairingScannerSheet.swift
 ```
 
-## Building & Running
+The v0.2 mock surfaces still in `ios/App` are listed under `excludes:` in `project.yml` and are not compiled; they are pending deletion.
 
-Generate and build using the included script:
+## Building And Testing
 
 ```bash
-# Build for generic iOS device (arm64)
-bash scripts/build-ios.sh --device
-
-# Build for iOS Simulator
-bash scripts/build-ios.sh --simulator
-
-# Regenerate .xcodeproj manually
-cd ios && xcodegen generate
+bash scripts/build-ios.sh --simulator     # generic simulator build (CI)
+bash scripts/build-ios.sh --device        # generic device build, unsigned
+cd ios && xcodegen generate && xcodebuild -project Harness.xcodeproj -scheme Harness \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
+
+Never hand-edit `Harness.xcodeproj`; change `project.yml` and regenerate.
+
+## Known Limits
+
+- The phone reaches harness web only over Tailscale (the web process binds loopback).  Tailscale must be connected on the phone.
+- Pairing links stop working when `harness-web` restarts; an already-paired phone keeps working on its cookie for 30 days.
+- The harness web layout is the upstream one; very narrow phone widths get the upstream mobile layout, not a bespoke native design.

@@ -2,28 +2,35 @@ import SwiftUI
 import AVFoundation
 import VisionKit
 
+/// Camera QR scanner for the pairing code that `harness-pair-ios` shows on the Mac.
 public struct PairingScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
-    public let onPairScanned: (HostConnection) -> Void
+    public let onPaired: (PairingPayload) -> Void
 
     @State private var cameraAuthorized: Bool = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
     @State private var permissionResolved: Bool = AVCaptureDevice.authorizationStatus(for: .video) != .notDetermined
     @State private var scanErrorMessage: String?
 
-    public init(onPairScanned: @escaping (HostConnection) -> Void) {
-        self.onPairScanned = onPairScanned
+    public init(onPaired: @escaping (PairingPayload) -> Void) {
+        self.onPaired = onPaired
     }
 
     public var body: some View {
         NavigationStack {
             Group {
-                if !permissionResolved {
+                if !DataScannerViewController.isSupported {
+                    ContentUnavailableView {
+                        Label("Scanner Unavailable", systemImage: "qrcode.viewfinder")
+                    } description: {
+                        Text(Copy.gap("This device cannot scan codes.", "Paste the pairing link instead."))
+                    }
+                } else if !permissionResolved {
                     ProgressView("Requesting camera access…")
                 } else if !cameraAuthorized {
                     ContentUnavailableView {
                         Label("Camera Access Required", systemImage: "camera.fill")
                     } description: {
-                        Text("Allow camera access to scan the pairing QR code shown by your Mac or server.")
+                        Text("Allow camera access to scan the pairing code shown on your Mac.")
                     } actions: {
                         Button("Open Settings") {
                             if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -32,11 +39,11 @@ public struct PairingScannerSheet: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                } else if !DataScannerViewController.isSupported || !DataScannerViewController.isAvailable {
+                } else if !DataScannerViewController.isAvailable {
                     ContentUnavailableView {
                         Label("Scanner Unavailable", systemImage: "qrcode.viewfinder")
                     } description: {
-                        Text("Your device does not support VisionKit scanning.  Please enter your host details manually.")
+                        Text(Copy.gap("The camera is not available right now.", "Paste the pairing link instead."))
                     }
                 } else {
                     ZStack(alignment: .bottom) {
@@ -45,20 +52,18 @@ public struct PairingScannerSheet: View {
                         }
                         .ignoresSafeArea(edges: .bottom)
 
-                        VStack(spacing: 8) {
-                            Text(scanErrorMessage ?? "Point camera at the QR code on your Mac or server")
-                                .font(.system(size: 14, weight: .medium))
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(scanErrorMessage == nil ? .primary : .red)
-                        }
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 12)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                        .padding(.bottom, 24)
+                        Text(scanErrorMessage ?? "Point the camera at the pairing code on your Mac.")
+                            .font(.system(size: 14, weight: .medium))
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(scanErrorMessage == nil ? .primary : .red)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                            .padding(.bottom, 24)
                     }
                 }
             }
-            .navigationTitle("Scan Pairing QR")
+            .navigationTitle("Scan Pairing Code")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -75,30 +80,22 @@ public struct PairingScannerSheet: View {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             cameraAuthorized = true
-            permissionResolved = true
         case .notDetermined:
             cameraAuthorized = await AVCaptureDevice.requestAccess(for: .video)
-            permissionResolved = true
         default:
             cameraAuthorized = false
-            permissionResolved = true
         }
+        permissionResolved = true
     }
 
     private func handleScannedPayload(_ payload: String) -> Bool {
-        guard let url = URL(string: payload) else {
-            scanErrorMessage = "Scanned QR code is not a valid URL."
-            return false
-        }
-
-        if let host = HostConnectionManager.shared.parsePairingURL(url) {
-            HostConnectionManager.shared.addHost(host)
-            HostConnectionManager.shared.setActiveHost(host)
-            onPairScanned(host)
+        switch PairingLink.parse(payload) {
+        case .success(let pairing):
+            onPaired(pairing)
             dismiss()
             return true
-        } else {
-            scanErrorMessage = "Unrecognized QR code schema.  Expected harness://pair or minimax://pair."
+        case .failure(let error):
+            scanErrorMessage = error.message
             return false
         }
     }
@@ -128,7 +125,8 @@ struct VisionKitQRScanner: UIViewControllerRepresentable {
         Coordinator(onCodeScanned: onCodeScanned)
     }
 
-    class Coordinator: NSObject, DataScannerViewControllerDelegate {
+    @MainActor
+    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         let onCodeScanned: (String) -> Bool
         private var didSucceed = false
 
@@ -138,11 +136,9 @@ struct VisionKitQRScanner: UIViewControllerRepresentable {
 
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
             guard !didSucceed, let first = addedItems.first else { return }
-            if case let .barcode(code) = first, let payload = code.payloadStringValue {
-                if onCodeScanned(payload) {
-                    didSucceed = true
-                    dataScanner.stopScanning()
-                }
+            if case let .barcode(code) = first, let payload = code.payloadStringValue, onCodeScanned(payload) {
+                didSucceed = true
+                dataScanner.stopScanning()
             }
         }
     }

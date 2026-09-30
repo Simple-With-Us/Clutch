@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { httpStatusIsUp } from "../shared/http-up.ts";
+import { tailnetDnsName, trustedHostArgs } from "./pair-link.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HARNESS_SH = join(ROOT, "scripts", "harness.sh");
@@ -103,6 +104,25 @@ async function reclaimPort(port: string): Promise<void> {
   await new Promise((r) => setTimeout(r, 500));
 }
 
+/** This Mac's MagicDNS name, so /api accepts the Host the iOS app sends over Tailscale. */
+async function detectTailnetHost(): Promise<string | null> {
+  return new Promise((resolvePromise) => {
+    const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => resolvePromise(null));
+    child.on("exit", () => {
+      try {
+        resolvePromise(tailnetDnsName(JSON.parse(out)));
+      } catch {
+        resolvePromise(null);
+      }
+    });
+  });
+}
+
 async function main(): Promise<void> {
   if (!existsSync(HARNESS_SH)) {
     log(`missing ${HARNESS_SH}`);
@@ -128,6 +148,7 @@ async function main(): Promise<void> {
     });
   }
 
+  const extraHosts = (process.env.HARNESS_TRUSTED_HOSTS ?? "").split(",");
   const args = [
     "web",
     "--no-open",
@@ -135,22 +156,7 @@ async function main(): Promise<void> {
     HOST,
     "--port",
     PORT,
-    "--trusted-host",
-    "127.0.0.1",
-    "--trusted-host",
-    `127.0.0.1:${PORT}`,
-    "--trusted-host",
-    "localhost",
-    "--trusted-host",
-    `localhost:${PORT}`,
-    "--trusted-host",
-    TAILNET_HOST,
-    "--trusted-host",
-    `${TAILNET_HOST}:${PORT}`,
-    "--trusted-host",
-    TAILNET_IPV4,
-    "--trusted-host",
-    `${TAILNET_IPV4}:${PORT}`,
+    ...trustedHostArgs(["127.0.0.1", "localhost", TAILNET_HOST, TAILNET_IPV4, await detectTailnetHost(), ...extraHosts], PORT),
   ];
 
   log(`exec harness.sh web on ${HOST}:${PORT}`);

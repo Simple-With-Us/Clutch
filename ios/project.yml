@@ -13,29 +13,53 @@ settings:
     DEVELOPMENT_TEAM: CC8UTF7ATG
     ASSETCATALOG_FILTER_FOR_THINNING: false
     ENABLE_ASSET_THINNING: false
-packages:
-  ExyteChat:
-    url: https://github.com/exyte/Chat.git
-    from: 3.3.5
 targets:
   Harness:
     type: application
     platform: iOS
     sources:
       - path: App
+        # Retired v0.2 native surfaces (mock chat, tools, sessions, Fleet RAG,
+        # Composio, Bonjour, MiniMax Remote companion routing).  None had a
+        # backend; v0.3 shows the real harness web UI instead.  Kept out of
+        # the build until they are deleted.
+        excludes:
+          - Models/ChatMessage.swift
+          - Models/ComposioModels.swift
+          - Models/FleetRAGModels.swift
+          - Models/HostConnection.swift
+          - Models/ModelProvider.swift
+          - Models/Session.swift
+          - Models/ToolItem.swift
+          - Models/WorkspaceItem.swift
+          - Services/BonjourDiscovery.swift
+          - Services/ComposioClient.swift
+          - Services/FleetRAGClient.swift
+          - Services/HarnessAPIClient.swift
+          - Services/HostConnectionManager.swift
+          - Services/TranscriptionService.swift
+          - Views/ChatView.swift
+          - Views/ComposerView.swift
+          - Views/ComposioView.swift
+          - Views/FleetRAGView.swift
+          - Views/HostManagerSheet.swift
+          - Views/MainTabView.swift
+          - Views/SessionsView.swift
+          - Views/SettingsView.swift
+          - Views/ToolsView.swift
+          - Views/WebParityView.swift
+          - Views/WorkspacesView.swift
+          - Views/Components/**
       - path: Resources
       - path: Assets.xcassets
-    dependencies:
-      - package: ExyteChat
-        product: ExyteChat
     settings:
       base:
         PRODUCT_NAME: Harness
         PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.harness.ios
         DEVELOPMENT_TEAM: CC8UTF7ATG
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "0.2.0"
-        CURRENT_PROJECT_VERSION: "202609281200"
+        MARKETING_VERSION: "0.3.0"
+        CURRENT_PROJECT_VERSION: "202609301500"
         SWIFT_VERSION: '5.9'
         TARGETED_DEVICE_FAMILY: '1,2'
         SUPPORTS_MACCATALYST: false
@@ -56,7 +80,6 @@ targets:
           - CFBundleURLName: com.simplewithus.harness.pairing
             CFBundleURLSchemes:
               - harness
-              - minimax
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -67,25 +90,50 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSLocalNetworkUsageDescription: Harness connects to your Mac, Hetzner, or cloud servers on this network.
-        NSCameraUsageDescription: Harness uses the camera to scan host pairing QR codes.
-        NSMicrophoneUsageDescription: Harness records your voice while you hold to talk to dictate coding directives.
-        NSSpeechRecognitionUsageDescription: Harness transcribes speech into coding directives and prompts.
-        NSBonjourServices:
-          - _harness._tcp
-          - _minimax._tcp
+        NSLocalNetworkUsageDescription: Harness connects to harness running on a Mac on your local network.
+        NSCameraUsageDescription: Harness uses the camera to scan the pairing code shown on your Mac.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-          NSExceptionDomains:
-            local:
-              NSIncludesSubdomains: true
-              NSExceptionAllowsInsecureHTTPLoads: true
+  HarnessTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Harness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.harness.ios.tests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Harness.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Harness
+        BUNDLE_LOADER: $(TEST_HOST)
+        SWIFT_VERSION: '5.9'
+  HarnessUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Harness
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.simplewithus.harness.ios.uitests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Harness
+        SWIFT_VERSION: '5.9'
 schemes:
   Harness:
     build:
       targets:
         Harness: all
+        HarnessTests: [test]
+        HarnessUITests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - HarnessTests
+        - HarnessUITests
     archive:
       config: Release
