@@ -5,8 +5,10 @@
  * `dsh` selects a model through the ACP `model` config option, and the option
  * values are opaque route identities: `JSON.stringify([provider, modelId])`.
  * The agent answers `session/set_config_option` with an exact-string lookup in
- * the set it advertised at `session/new`, so a value it did not advertise is
- * refused with `unknown model option`, however reasonable it looks.
+ * the choices it builds from its current provider catalogs (the same set
+ * `session/new` advertises, rebuilt on each set), so a value it does not
+ * offer is refused with `unknown model option`, however reasonable it
+ * looks.
  *
  * The picker ids BotFleet stores are not the ids `dsh` declares:
  *
@@ -56,13 +58,19 @@ export interface DshResolvedModel extends DshAdvertisedModel {
 export class DshModelNotOfferedError extends Error {
   readonly model: string;
   readonly offered: readonly string[];
+  /** Providers that declare this model under another route, when any do. */
+  readonly elsewhere: readonly string[];
 
-  constructor(model: string, offered: readonly string[]) {
+  constructor(model: string, offered: readonly string[], elsewhere: readonly string[] = []) {
     const list = offered.length ? offered.join(", ") : "none";
-    super(`unknown model ${model}: the installed Harness CLI does not offer it (offers: ${list})`);
+    // A model declared only under a different provider reads as "not offered"
+    // next to a list that contains it, so say which route it is on.
+    const hint = elsewhere.length ? `; ${model} is declared only under ${elsewhere.join(", ")}` : "";
+    super(`unknown model ${model}: the installed Harness CLI does not offer it (offers: ${list}${hint})`);
     this.name = "DshModelNotOfferedError";
     this.model = model;
     this.offered = offered;
+    this.elsewhere = elsewhere;
   }
 }
 
@@ -220,8 +228,25 @@ export function resolveDshModelOption(
   if (!models || models.length === 0) return undefined;
   const match = matchAdvertisedDshModel(model, provider, models);
   if (match) return match;
+  // A different provider may declare this very model.  That is a different
+  // route (its own credentials, billing and quota), so it is never sent
+  // silently in place of the one this bot routes through; it is named in the
+  // error instead, because the offered list alone would seem to contain it.
+  const key = plainKey(model);
+  const elsewhere = [
+    ...new Set(
+      models
+        .filter((entry) => entry.provider && entry.provider !== provider)
+        .filter((entry) => plainKey(entry.id) === key || plainKey(entry.name) === key)
+        .map((entry) => entry.provider),
+    ),
+  ];
   throw new DshModelNotOfferedError(
     model,
-    models.map((entry) => (entry.name === entry.id ? entry.id : `${entry.id} (${entry.name})`)),
+    models.map((entry) => {
+      const route = entry.provider ? `${entry.provider}/${entry.id}` : entry.id;
+      return entry.name === entry.id ? route : `${route} (${entry.name})`;
+    }),
+    elsewhere,
   );
 }
