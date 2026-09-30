@@ -6,7 +6,8 @@ set -euo pipefail
 
 PORT="${DSH_WEB_PORT:-3080}"
 TARGET="http://127.0.0.1:${PORT}"
-HOST="${HARNESS_TAILNET_HOST:-macbook.boa-roygbiv.ts.net}"
+HOST="${HARNESS_TAILNET_HOST:-$(tailscale status --self --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{process.stdout.write(String(JSON.parse(s).Self.DNSName||"").replace(/\.$/,""))}catch{}})' 2>/dev/null || true)}"
+HOST="${HOST:-macbook.boa-roygbiv.ts.net}"
 
 if ! command -v tailscale >/dev/null 2>&1; then
   echo "harness serve-tailscale: tailscale CLI not on PATH" >&2

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Always-on Harness web UI.  Loopback only; Tailscale Serve
-# publishes https://macbook.boa-roygbiv.ts.net:3080
+# publishes https://<this Mac's MagicDNS name>:3080 (see serve-tailscale.sh).
 # Live install: ~/apps/harness-runtime/scripts/start-web.sh
 #
 # HARNESS_RUNTIME_ROOT lets pm2 point the script's $ROOT at the repo root
@@ -66,13 +66,27 @@ if [[ -x "$ROOT/scripts/serve-tailscale.sh" ]]; then
   "$ROOT/scripts/serve-tailscale.sh" || true
 fi
 
+# Every /api request must carry a trusted Host.  Trust loopback, the legacy
+# tailnet name/IP, this Mac's detected MagicDNS name (what the Harness iOS app
+# uses over Tailscale), and any comma-separated HARNESS_TRUSTED_HOSTS.
+TRUSTED_HOSTS=(127.0.0.1 localhost "${HARNESS_TAILNET_HOST:-macbook.boa-roygbiv.ts.net}" "${HARNESS_TAILNET_IPV4:-100.113.106.39}")
+detected_dns="$(tailscale status --self --json 2>/dev/null \
+  | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const d=String(JSON.parse(s).Self.DNSName||"").replace(/\.$/,"").toLowerCase();if(/^[a-z0-9.-]+$/.test(d)&&d.includes("."))process.stdout.write(d)}catch{}})' 2>/dev/null || true)"
+if [[ -n "$detected_dns" ]]; then TRUSTED_HOSTS+=("$detected_dns"); fi
+IFS=',' read -r -a extra_hosts <<< "${HARNESS_TRUSTED_HOSTS:-}"
+for h in "${extra_hosts[@]:-}"; do
+  if [[ -n "$h" ]]; then TRUSTED_HOSTS+=("$h"); fi
+done
+
+TRUSTED_ARGS=()
+seen_hosts=" "
+for h in "${TRUSTED_HOSTS[@]}"; do
+  h="$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')"
+  case "$seen_hosts" in *" $h "*) continue ;; esac
+  seen_hosts+="$h "
+  TRUSTED_ARGS+=(--trusted-host "$h" --trusted-host "$h:${PORT}")
+done
+
 exec node "$ROOT/scripts/capture-launch-url.cjs" \
   "$ROOT/scripts/harness.sh" web --no-open --host "$HOST" --port "$PORT" \
-  --trusted-host "127.0.0.1" \
-  --trusted-host "127.0.0.1:${PORT}" \
-  --trusted-host "localhost" \
-  --trusted-host "localhost:${PORT}" \
-  --trusted-host "macbook.boa-roygbiv.ts.net" \
-  --trusted-host "macbook.boa-roygbiv.ts.net:${PORT}" \
-  --trusted-host "100.113.106.39" \
-  --trusted-host "100.113.106.39:${PORT}"
+  "${TRUSTED_ARGS[@]}"

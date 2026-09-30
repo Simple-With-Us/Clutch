@@ -46,7 +46,8 @@
     "harness-open": "./src/web/open-harness.ts",
     "harness-ensure": "./src/web/ensure-web.ts",
     "harness-install-dock": "./src/web/install-dock-app.ts",
-    "harness-sync-profiles": "./scripts/sync-profiles.ts"
+    "harness-sync-profiles": "./scripts/sync-profiles.ts",
+    "harness-pair-ios": "./src/web/pair-ios.ts"
   },
   "scripts": {
     "sync": "tsx scripts/sync-profiles.ts",
