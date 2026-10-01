@@ -137,7 +137,7 @@ work should be an *independent* project that consumes the upstream via
 the package manager and credits it via `NOTICE` and the README.  GitHub
 forks (`gh repo fork`) and any "spiritual successor" repo that ships
 the upstream's commit history are both out of scope.  See
-`docs/decisions/0003-no-forks-of-other-repositories.md` (when written).
+`docs/decisions/0003-no-external-contact-and-no-forks.md`.
 
 The closest analogue in the fleet today is BotFleet's relationship to
 OpenMausBot: BotFleet is its own original repo, not a GitHub fork, and
