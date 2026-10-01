@@ -52,7 +52,9 @@ child.stdout.on('data', (chunk) => {
   while ((m = urlRe.exec(buf)) !== null) {
     const url = m[1];
     try {
-      fs.writeFileSync(launchURLFile, url + '\n');
+      // The URL carries a launch token, so keep it owner-only.
+      fs.writeFileSync(launchURLFile, url + '\n', { mode: 0o600 });
+      fs.chmodSync(launchURLFile, 0o600);
       process.stderr.write(`capture-launch-url: wrote ${url} to ${launchURLFile}\n`);
     } catch (err) {
       process.stderr.write(`capture-launch-url: failed to write ${launchURLFile}: ${err.message || err}\n`);
