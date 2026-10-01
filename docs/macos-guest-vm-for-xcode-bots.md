@@ -26,7 +26,7 @@ Running inside a headless macOS Guest VM (`mac_vm`) completely eliminates these 
 ┌─────────────────────────────────────────────────────────────┐
 │                       Host Mac (Host OS)                    │
 │  - Operator desktop: Cursor, Slack, Terminal (Uninterrupted)│
-│  - BotFleet / Harness Agent Orchestrator                    │
+│  - BotFleet / Clutch Agent Orchestrator                     │
 └──────────────────────────────┬──────────────────────────────┘
                                │ Mounts repo worktree & dispatches
                                ▼
@@ -60,7 +60,7 @@ The fleet enforces a three-tier execution hierarchy for Xcode builds, Simulator 
 - **Policy:** Reserved for scenarios where GitHub hosted runners cannot or should not be used:
   1. **Private Repositories:** Where GitHub Actions macOS runner minutes incur billable per-minute costs.
   2. **Specialized Credential Enclaves:** Jobs requiring local hardware signing keys, local secrets, or sensitive provisioning certificates that must not reside on public cloud runners.
-  3. **Local/Offline Workflows:** Rapid iteration during offline development or when testing local daemon communication (e.g. testing Harness daemon on `127.0.0.1:3080` against an active iOS simulator).
+  3. **Local/Offline Workflows:** Rapid iteration during offline development or when testing local daemon communication (e.g. testing the clutch web daemon on `127.0.0.1:3180` against an active iOS simulator).
 - **Execution:** Headless execution via Apple Virtualization / Tart (`scripts/mac-guest-vm-runner.sh`) ensures simulators and compilers run without stealing active window focus or mouse/keyboard events on the host Mac.
 
 ### Tier 3: Direct Host Mac (`local`) — Fallback Only
@@ -79,16 +79,16 @@ tart clone ghcr.io/cirruslabs/macos-sonoma-xcode:latest macos-builder
 ### Step B: Launch Headless VM with Mounted Worktree
 ```bash
 # Run headless (no GUI window on host display) with shared repo directory
-tart run macos-builder --no-graphics --dir harness-lane:/Users/jay/apps/harness-ag
+tart run macos-builder --no-graphics --dir clutch-lane:/Users/jay/apps/clutch-<seat>
 ```
 
 ### Step C: Execute Build / TestFlight Command Inside VM
 ```bash
 # SSH into guest VM and execute the build pipeline
 tart exec macos-builder -- bash -c "
-  cd /Volumes/My\ Shared\ Files/harness-lane
+  cd /Volumes/My\ Shared\ Files/clutch-lane
   bash scripts/build-ios.sh --device
-  bash scripts/ios-fleet/ship-testflight.sh Harness
+  bash scripts/ios-fleet/ship-testflight.sh clutch
 "
 ```
 

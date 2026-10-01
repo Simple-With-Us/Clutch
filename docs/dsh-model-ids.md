@@ -56,7 +56,7 @@ selections keep their id and only the wire value is translated.
 ## Consumers
 
 BotFleet's ACP core already passes the session's `configOptions` as the second
-argument of `selectModel.valueForModel`, so bumping the `harness` dependency is
+argument of `selectModel.valueForModel`, so bumping the `clutch` dependency is
 enough.  `dshSameModel(a, b)` is exported for a catalog merge that needs to fold a
 settings-file row such as `deepseek-v4.1-flash` onto the static `DeepSeek-V4.1-Flash`
 row instead of listing the model twice.

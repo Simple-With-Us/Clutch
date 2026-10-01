@@ -1,8 +1,8 @@
-Harness
+Clutch
 Copyright 2026 Jay Wedgeworth
 
 This product includes software developed at
-Jay Wedgeworth (https://github.com/jaywedgeworth22/Harness).
+Jay Wedgeworth (https://github.com/jaywedgeworth22/Clutch).
 
 ================================================================================
 DERIVED WORK — DeepSeek Harness
@@ -17,8 +17,8 @@ derived from, the DeepSeek Harness (DSH) open-source project:
     Copyright DeepSeek AI and contributors
     Licensed under the terms published by the upstream project.
 
-Harness is not affiliated with, endorsed by, or sponsored by DeepSeek AI.
-The relationship between Harness and DSH is one of in-repo derivation: code
+Clutch is not affiliated with, endorsed by, or sponsored by DeepSeek AI.
+The relationship between Clutch and DSH is one of in-repo derivation: code
 in this repository reads, extends, and configures the upstream
 @deepseek-ai/dsh binary as a pinned dependency, and a subset of files in
 this repository were ported from prior BotFleet and Fleet-OPS work that
@@ -39,7 +39,7 @@ Specific derivations (each noted with the path in this repository):
     server/drivers/acp/dsh-mcp.ts on 2026-09-19.
 
 - bridges/dsh/dsh-acp.py
-    The stdio JSON-RPC bridge that drives `dsh --profile dsh-headless`
+    The stdio JSON-RPC bridge that drives `dsh --profile deepseek-headless`
     for Shellular and other agent callers.  Carries production fixes
     (DEVNULL stdin, process-group kill, heartbeats) earned through real
     failures documented in
@@ -48,16 +48,17 @@ Specific derivations (each noted with the path in this repository):
     ~/apps/dsh-runtime/dsh-acp.py install (tracked under
     ai-fleet-coordinator/scripts/dsh-runtime/dsh-acp.py).
 
-- src/profiles/dsh-headless/
-    Tracked defaults for the dsh-headless cordis profile.  Pattern ported
-    from the prior ~/.dsh/profiles/headless/ install; the profile was
-    renamed (headless -> dsh-headless) on 2026-09-19 to fix a boot
+- src/profiles/deepseek-headless/
+    Tracked defaults for the deepseek-headless cordis profile.  Pattern
+    ported from the prior ~/.dsh/profiles/headless/ install; the profile
+    was renamed (headless -> dsh-headless) on 2026-09-19 to fix a boot
     manifest regression caused by patch cascade leakage into the web
-    profile (see docs/migrate-from-dsh-runtime.md).
+    profile (see docs/migrate-from-dsh-runtime.md), and again to
+    deepseek-headless on 2026-09-30 to match its Shellular agent id.
 
-- src/web/start-web.ts, serve-tailscale.ts, ensure-web.ts, open-harness.ts,
+- src/web/start-web.ts, serve-tailscale.ts, ensure-web.ts, open-clutch.ts,
   install-dock-app.ts
-    The web UI scripts that pm2 runs as `harness-web` on :3080.  Ported
+    The web UI scripts that pm2 runs as `clutch-web` on :3180.  Ported
     from the prior ~/apps/dsh-runtime/start-web.sh and related shell
     scripts.
 
@@ -78,13 +79,13 @@ forking:
     Licensed under the terms published by the BotFleet repository.
 
 ================================================================================
-INDEPENDENT COMPONENT — MiniMax Harness (MMH)
+INDEPENDENT COMPONENT — Clutch MiniMax Bridge
 ================================================================================
 
-The mmh/ half of this repository (bridges/mmh/mmh-acp.py and
-src/profiles/mmh-*/) is original work by the Harness author.  MiniMax
+The minimax/ half of this repository (bridges/minimax/minimax-acp.py and
+src/profiles/minimax-*/) is original work by the Clutch author.  MiniMax
 itself ships an HTTP chat-completions API and rate-limit / balance
-endpoints at https://platform.minimax.io — Harness talks that API directly
+endpoints at https://platform.minimax.io — Clutch talks that API directly
 because MiniMax does not (yet) publish an open-source CLI, sandbox, or
 plugin system.  No code from any third-party MiniMax project is included.
 
