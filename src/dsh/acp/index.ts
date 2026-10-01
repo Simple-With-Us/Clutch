@@ -9,6 +9,7 @@ export {
   dshEngineStem,
   dshLoginNote,
   dshModelIdFromOptionValue,
+  dshCanonicalWireModelId,
   dshModelOptionValue,
   dshProviderForModel,
   dshSameModel,

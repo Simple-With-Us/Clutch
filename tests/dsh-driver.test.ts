@@ -24,8 +24,10 @@ describe("model option round-trip", () => {
   it("encodes and decodes a catalog id", () => {
     expect(dshProviderForModel("deepseek-v4-flash")).toBe(DSH_PROVIDER_ID);
     const value = dshModelOptionValue("deepseek-v4-flash");
-    expect(value).toBe('["deepseek-official","deepseek-v4-flash"]');
-    expect(dshModelIdFromOptionValue(value)).toBe("deepseek-v4-flash");
+    // Retired Flash spelling folds onto the preferred stock wire id when
+    // nothing is advertised.
+    expect(value).toBe('["deepseek-official","deepseek-flash"]');
+    expect(dshModelIdFromOptionValue(value)).toBe("deepseek-flash");
 
     expect(dshProviderForModel("MiniMax-M3")).toBe(DSH_MINIMAX_PROVIDER_ID);
     const mmValue = dshModelOptionValue("MiniMax-M3");

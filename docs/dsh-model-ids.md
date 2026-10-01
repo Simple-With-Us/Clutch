@@ -15,11 +15,14 @@ rebuilt on each set).  A value it does not offer is refused with
 The ids a picker catalog and a saved bot selection carry are not reliably the
 ids an install declares:
 
-| Picker id | Stock dsh 0.1.5-rc.x declares | An owner `settings.yaml` override may declare |
+| Picker id / alias | Stock dsh 0.1.5-rc.x declares | An owner `settings.yaml` override may declare |
 |---|---|---|
 | `DeepSeek-V4.1-Flash` | `deepseek-flash` (display name "DeepSeek-V4.1-Flash") | `deepseek-v4.1-flash` |
+| `deepseek-flash` (nice alias / stock wire id) | `deepseek-flash` | `deepseek-v4.1-flash` (via alias fold) |
+| `deepseek-v4.1-flash` (Jay's settings.yaml spelling) | `deepseek-flash` (via alias fold) | `deepseek-v4.1-flash` |
 | `DeepSeek-V4.1-Pro` | `deepseek-v4-pro` (display name "DeepSeek-V4.1-Pro") | `deepseek-v4-pro` |
-| `deepseek-v4-flash` (saved before the V4.1 rename) | nothing | nothing |
+| `deepseek-pro` (nice alias) | `deepseek-v4-pro` (via alias fold) | `deepseek-v4-pro` |
+| `deepseek-v4-flash` (saved before the V4.1 rename) | nothing (folds onto Flash) | nothing (folds onto Flash) |
 | `deepseek-v4-pro` (saved before the V4.1 rename) | `deepseek-v4-pro` | `deepseek-v4-pro` |
 
 Building the value from the picker id therefore fails on stock dsh and on an
@@ -35,13 +38,18 @@ within the model's own provider namespace.  First hit wins, strongest first:
 2. **id**: the declared id, ignoring case
 3. **name**: the declared display name, ignoring case
 4. **alias**: another spelling of the same DeepSeek model (Flash: `DeepSeek-V4.1-Flash`,
-   `deepseek-flash`, `deepseek-v4-flash`; Pro: `DeepSeek-V4.1-Pro`, `deepseek-v4-pro`)
+   `deepseek-flash`, `deepseek-v4-flash`, `deepseek-v4.1-flash`; Pro: `DeepSeek-V4.1-Pro`,
+   `deepseek-v4-pro`, `deepseek-pro`)
 
 The declared value is what gets sent.  The picker id is never rewritten, so saved
 selections keep their id and only the wire value is translated.
 
 - No `model` option in the reply, or one that lists no model: the value is built
-  from the picker id exactly as before.
+  from the preferred stock wire id via `dshCanonicalWireModelId` — Flash family
+  members become `deepseek-flash`, Pro family members (including the nice alias
+  `deepseek-pro`) become `deepseek-v4-pro`, and non-DeepSeek models pass through
+  unchanged.  Building from the raw picker display id used to produce
+  `unknown model option: ["deepseek-official","DeepSeek-V4.1-Flash"]` on stock dsh.
 - The session offers models but not this one: `DshModelNotOfferedError` is thrown
   before the switch, naming what is offered as `provider/id (name)`.  The resolver
   never crosses provider namespaces, because a model declared under another

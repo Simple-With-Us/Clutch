@@ -74,18 +74,24 @@ export class DshModelNotOfferedError extends Error {
   }
 }
 
-/** Spellings of one DeepSeek model, most current first.  Compared by
- *  {@link aliasKey}, so case, spaces and punctuation do not matter.
+/** Spellings of one DeepSeek model.  The first entry of each family is the
+ *  preferred stock wire id (`deepseek-flash` / `deepseek-v4-pro`); the rest are
+ *  picker display ids, owner `settings.yaml` spellings, and nice aliases.
+ *  Compared by {@link aliasKey}, so case, spaces and punctuation do not matter.
  *
- *  Pro keeps `deepseek-v4-pro` as a live member: it is still the declared id
- *  on stock dsh 0.1.5-rc.2 (only its display name gained ".1"), so treating it
- *  as retired would reject an id the CLI serves.  Flash's `deepseek-v4-flash`
- *  is the one genuinely retired spelling; it resolves to whichever Flash the
- *  install declares so selections saved under it keep working. */
+ *  Pro keeps `deepseek-v4-pro` as the preferred (and still-declared) id on stock
+ *  dsh 0.1.5-rc.2; `deepseek-pro` is the nice alias that folds onto it.
+ *  Flash's `deepseek-v4-flash` is the one genuinely retired spelling; it
+ *  resolves to whichever Flash the install declares so selections saved under
+ *  it keep working.  `deepseek-v4.1-flash` is Jay's settings.yaml spelling. */
 const DSH_MODEL_FAMILIES: readonly (readonly string[])[] = [
-  ["DeepSeek-V4.1-Flash", "deepseek-flash", "deepseek-v4-flash"],
-  ["DeepSeek-V4.1-Pro", "deepseek-v4-pro"],
-].map((family) => family.map(aliasKey));
+  ["deepseek-flash", "DeepSeek-V4.1-Flash", "deepseek-v4-flash", "deepseek-v4.1-flash"],
+  ["deepseek-v4-pro", "DeepSeek-V4.1-Pro", "deepseek-pro"],
+];
+
+const DSH_MODEL_FAMILY_KEYS: readonly (readonly string[])[] = DSH_MODEL_FAMILIES.map((family) =>
+  family.map(aliasKey),
+);
 
 function aliasKey(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/gu, "");
@@ -97,7 +103,25 @@ function plainKey(value: string): string {
 
 function familyOf(model: string): readonly string[] | undefined {
   const key = aliasKey(model);
-  return DSH_MODEL_FAMILIES.find((family) => family.includes(key));
+  return DSH_MODEL_FAMILY_KEYS.find((family) => family.includes(key));
+}
+
+function familyPreferredWireId(model: string): string | undefined {
+  const key = aliasKey(model);
+  const index = DSH_MODEL_FAMILY_KEYS.findIndex((family) => family.includes(key));
+  return index >= 0 ? DSH_MODEL_FAMILIES[index]![0] : undefined;
+}
+
+/** Map a picker id or alias onto the preferred stock dsh wire id when it is a
+ *  known DeepSeek family member (`deepseek-flash` / `deepseek-v4-pro`).  Non-
+ *  DeepSeek models (MiniMax and anything else) pass through unchanged.
+ *
+ *  Used by the empty-advertisement fallback of {@link dshModelOptionValue}: when
+ *  the session advertises no model options, constructing a value from the raw
+ *  picker display id (`DeepSeek-V4.1-Flash`) produces `unknown model option`.
+ *  Sending the preferred stock wire id instead matches what stock dsh declares. */
+export function dshCanonicalWireModelId(pickerOrAlias: string): string {
+  return familyPreferredWireId(pickerOrAlias) ?? pickerOrAlias;
 }
 
 /** True when both spellings name the same DeepSeek model, or are the same

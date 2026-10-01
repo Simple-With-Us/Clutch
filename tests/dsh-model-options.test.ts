@@ -4,6 +4,7 @@ import {
   DshModelNotOfferedError,
   STATIC_DSH_MODELS,
   classifyDshError,
+  dshCanonicalWireModelId,
   dshModelIdFromOptionValue,
   dshModelOptionValue,
   dshSameModel,
@@ -280,25 +281,39 @@ describe("a model the session does not offer", () => {
 });
 
 describe("nothing advertised to resolve against", () => {
-  const legacy = (model: string) => JSON.stringify([model.startsWith("MiniMax") ? "minimax" : "deepseek-official", model]);
+  const wire = (provider: string, id: string) => JSON.stringify([provider, id]);
 
-  it("builds the value from the picker id as before", () => {
-    expect(dshModelOptionValue("deepseek-v4-flash")).toBe('["deepseek-official","deepseek-v4-flash"]');
-    expect(dshModelOptionValue("MiniMax-M3")).toBe('["minimax","MiniMax-M3"]');
-    expect(dshModelOptionValue("DeepSeek-V4.1-Flash", undefined)).toBe(legacy("DeepSeek-V4.1-Flash"));
+  it("maps DeepSeek picker/alias ids onto preferred stock wire ids", () => {
+    // Empty-advertisement fallback used to send the picker display id and
+    // produce `unknown model option: ["deepseek-official","DeepSeek-V4.1-Flash"]`.
+    for (const spelling of [
+      "DeepSeek-V4.1-Flash",
+      "deepseek-flash",
+      "deepseek-v4.1-flash",
+      "deepseek-v4-flash",
+    ]) {
+      expect(dshModelOptionValue(spelling), spelling).toBe(wire("deepseek-official", "deepseek-flash"));
+    }
+    for (const spelling of ["DeepSeek-V4.1-Pro", "deepseek-pro", "deepseek-v4-pro"]) {
+      expect(dshModelOptionValue(spelling), spelling).toBe(wire("deepseek-official", "deepseek-v4-pro"));
+    }
+    expect(dshModelOptionValue("MiniMax-M3")).toBe(wire("minimax", "MiniMax-M3"));
+    expect(dshModelOptionValue("DeepSeek-V4.1-Flash", undefined)).toBe(wire("deepseek-official", "deepseek-flash"));
   });
 
   it("does the same when the reply carries no model option", () => {
     const noModel = [{ id: "reasoning_effort", currentValue: "high" }];
     for (const advertised of [noModel, [], null, {}, "x", 7]) {
-      expect(dshModelOptionValue("DeepSeek-V4.1-Flash", advertised)).toBe(legacy("DeepSeek-V4.1-Flash"));
+      expect(dshModelOptionValue("DeepSeek-V4.1-Flash", advertised)).toBe(
+        wire("deepseek-official", "deepseek-flash"),
+      );
     }
   });
 
   it("does the same when the model option lists no model", () => {
     const empty = [{ id: "model", type: "select", currentValue: "", options: [] }];
     expect(parseAdvertisedDshModels(empty)).toEqual([]);
-    expect(dshModelOptionValue("DeepSeek-V4.1-Flash", empty)).toBe(legacy("DeepSeek-V4.1-Flash"));
+    expect(dshModelOptionValue("DeepSeek-V4.1-Flash", empty)).toBe(wire("deepseek-official", "deepseek-flash"));
   });
 
   it("ignores malformed entries instead of throwing", () => {
@@ -361,13 +376,29 @@ describe("dshSameModel", () => {
     expect(dshSameModel("deepseek-flash", "DeepSeek-V4.1-Flash")).toBe(true);
     expect(dshSameModel("deepseek-v4-flash", "deepseek-flash")).toBe(true);
     expect(dshSameModel("deepseek-v4-pro", "DeepSeek-V4.1-Pro")).toBe(true);
+    expect(dshSameModel("deepseek-pro", "DeepSeek-V4.1-Pro")).toBe(true);
     expect(dshSameModel("MiniMax-M3", "minimax-m3")).toBe(true);
   });
 
   it("keeps different models apart", () => {
     expect(dshSameModel("deepseek-v4-pro", "deepseek-v4-flash")).toBe(false);
+    expect(dshSameModel("deepseek-pro", "deepseek-flash")).toBe(false);
     expect(dshSameModel("DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro")).toBe(false);
     expect(dshSameModel("MiniMax-M3", "MiniMax-M3.1-Flash-Preview")).toBe(false);
+  });
+});
+
+describe("dshCanonicalWireModelId", () => {
+  it("maps DeepSeek family members onto preferred stock wire ids", () => {
+    expect(dshCanonicalWireModelId("DeepSeek-V4.1-Flash")).toBe("deepseek-flash");
+    expect(dshCanonicalWireModelId("deepseek-v4.1-flash")).toBe("deepseek-flash");
+    expect(dshCanonicalWireModelId("deepseek-pro")).toBe("deepseek-v4-pro");
+    expect(dshCanonicalWireModelId("DeepSeek-V4.1-Pro")).toBe("deepseek-v4-pro");
+  });
+
+  it("leaves MiniMax and unknown ids unchanged", () => {
+    expect(dshCanonicalWireModelId("MiniMax-M3")).toBe("MiniMax-M3");
+    expect(dshCanonicalWireModelId("some-other-model")).toBe("some-other-model");
   });
 });
 
@@ -378,7 +409,7 @@ describe("dshSupport.selectModel", () => {
     expect(select?.valueForModel("DeepSeek-V4.1-Flash", OWNER_OVERRIDE)).toBe(
       route("deepseek-official", "deepseek-v4.1-flash"),
     );
-    expect(select?.valueForModel("DeepSeek-V4.1-Flash")).toBe(route("deepseek-official", "DeepSeek-V4.1-Flash"));
+    expect(select?.valueForModel("DeepSeek-V4.1-Flash")).toBe(route("deepseek-official", "deepseek-flash"));
   });
 
   it("still decodes a confirmed value back to a model id", () => {
