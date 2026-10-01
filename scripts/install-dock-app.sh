@@ -12,7 +12,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-LIVE="${HARNESS_RUNTIME_ROOT:-${HOME}/apps/harness-runtime}"
+LIVE="${CLUTCH_RUNTIME_ROOT:-${HOME}/apps/clutch-runtime}"
 APP="${HOME}/Applications/Harness.app"
 PNG="${ROOT}/assets/harness-icon-1024.png"
 [[ -f "$PNG" ]] || PNG="${LIVE}/assets/harness-icon-1024.png"
@@ -89,34 +89,36 @@ codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
 live_real="$(cd "$LIVE" 2>/dev/null && pwd -P || true)"
 root_real="$(cd "$ROOT" && pwd -P)"
 if [[ -n "$live_real" && "$live_real" != "$root_real" ]]; then
-  mkdir -p "${LIVE}/assets"
+  mkdir -p "${LIVE}/assets" "${LIVE}/scripts/lib"
   cp "$SWIFT" "${LIVE}/HarnessWindow.swift"
+  cp "${ROOT}/scripts/lib/clutch-env.sh" "${LIVE}/scripts/lib/clutch-env.sh"
   cp "${ROOT}/scripts/ensure-web.sh" "${LIVE}/scripts/ensure-web.sh"
-  cp "${ROOT}/scripts/open-harness.sh" "${LIVE}/scripts/open-harness.sh"
-  cp "${ROOT}/scripts/harness.sh" "${LIVE}/scripts/harness.sh"
-  cp "${ROOT}/scripts/dsh.sh" "${LIVE}/scripts/dsh.sh"
+  cp "${ROOT}/scripts/open-clutch.sh" "${LIVE}/scripts/open-clutch.sh"
+  cp "${ROOT}/scripts/clutch.sh" "${LIVE}/scripts/clutch.sh"
   cp "$PNG" "${LIVE}/assets/harness-icon-1024.png"
   # HarnessWindow.swift inlines the MiniMax mark for the sidebar chip and the
   # model-picker provider group, so it has to land in the live assets dir too.
   MARK="${ROOT}/assets/minimax-mark.svg"
   [[ -f "$MARK" ]] || MARK="${LIVE}/assets/minimax-mark.svg"
   [[ -f "$MARK" ]] && cp "$MARK" "${LIVE}/assets/minimax-mark.svg"
-  chmod 755 "${LIVE}/scripts/ensure-web.sh" "${LIVE}/scripts/open-harness.sh" \
-            "${LIVE}/scripts/harness.sh" "${LIVE}/scripts/dsh.sh"
+  chmod 755 "${LIVE}/scripts/ensure-web.sh" "${LIVE}/scripts/open-clutch.sh" \
+            "${LIVE}/scripts/clutch.sh"
 fi
 
-# Put the pinned `harness` CLI on PATH.  Consumers (BotFleet) spawn the ACP
-# engine by name, and `dshSupport.defaultCli` is `harness`, so this symlink is
-# what keeps that default resolvable.  ~/.local/bin is on the BotFleet
-# LaunchAgent's PATH.  Additive: ~/.local/bin/dsh is left alone, so anything
-# still configured against the old name keeps working.
-CLI_SH="${LIVE}/scripts/harness.sh"
+# Put the pinned `clutch` CLI on PATH as a real wrapper file, not a symlink:
+# scripts/clutch.sh resolves its lib relative to itself, and a link would
+# resolve it under ~/.local instead.  ~/.local/bin/dsh (vanilla dsh) is left
+# alone.
+CLI_SH="${LIVE}/scripts/clutch.sh"
 if [[ -x "$CLI_SH" ]]; then
   mkdir -p "$HOME/.local/bin"
-  ln -sf "$CLI_SH" "$HOME/.local/bin/harness"
-  echo "linked $HOME/.local/bin/harness -> $CLI_SH"
+  rm -f "$HOME/.local/bin/clutch"
+  printf '#!/usr/bin/env bash\nexport CLUTCH_RUNTIME_ROOT="%s"\nexec "%s" "$@"\n' "$LIVE" "$CLI_SH" \
+    > "$HOME/.local/bin/clutch"
+  chmod 755 "$HOME/.local/bin/clutch"
+  echo "wrote $HOME/.local/bin/clutch -> $CLI_SH"
 else
-  echo "harness CLI not found at $CLI_SH — 'harness' may not resolve on PATH" >&2
+  echo "clutch CLI not found at $CLI_SH — 'clutch' may not resolve on PATH" >&2
 fi
 
 if command -v dockutil >/dev/null 2>&1; then

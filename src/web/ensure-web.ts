@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /**
- * Idempotent recovery loop for Harness web on :PORT.
+ * Idempotent recovery loop for Clutch web on CLUTCH_WEB_PORT (default 3180).
  *
- * Delegates to `scripts/ensure-web.sh` (pm2 `harness-web`, 401 counts as up).
+ * Delegates to `scripts/ensure-web.sh` (pm2 `clutch-web`, 401 counts as up).
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { clutchWebPort } from "../shared/ports.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = resolve(ROOT, "scripts", "ensure-web.sh");
@@ -19,6 +21,6 @@ if (!existsSync(SCRIPT)) {
 
 const child = spawn(SCRIPT, [], {
   stdio: "inherit",
-  env: { ...process.env, HARNESS_RUNTIME_ROOT: ROOT },
+  env: { ...process.env, CLUTCH_RUNTIME_ROOT: ROOT, CLUTCH_WEB_PORT: clutchWebPort() },
 });
 child.on("exit", (code) => process.exit(code ?? 0));

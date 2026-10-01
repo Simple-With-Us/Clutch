@@ -1,8 +1,0 @@
-# mmh-headless profile — MiniMax Harness headless (phone / Shellular spawn).
-#
-# MiniMax has no upstream CLI / sandbox / plugin system today, so this
-# profile is intentionally minimal: the mmh-acp.py bridge talks directly to
-# the MM HTTP API and synthesizes ACP frames.  The cordis tree exists so the
-# Shellular id can spawn `dsh --profile mmh-headless` for parity with the DSH
-# phone path.
-[]

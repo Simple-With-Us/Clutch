@@ -32,10 +32,10 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 ## What you get
 
 - **`src/dsh/`** — DSH harness: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
-- **`src/mmh/`** — MMH harness: Shellular MiniMax rides the same `@deepseek-ai/dsh` coding stack as DSH, with MiniMax as the LLM (`mmh-headless` profile).  `bridges/mmh/mmh-acp.py` spawns `dsh --profile mmh-headless` (not a bare chat/completions HTTP call).
-- **`src/web/`** — TypeScript web UI scripts (the `start-web.sh`, `serve-tailscale.sh`, `open-harness.sh`, `ensure-web.sh`, `install-dock-app.sh` set, ported from bash to TS).
+- **`src/minimax/`** — The Clutch MiniMax bridge: Shellular MiniMax rides the same `@deepseek-ai/dsh` coding stack as DSH, with MiniMax as the LLM (`minimax-headless` profile).  `bridges/minimax/minimax-acp.py` spawns `dsh --profile minimax-headless` (not a bare chat/completions HTTP call).
+- **`src/web/`** — TypeScript web UI scripts (the `start-web.sh`, `serve-tailscale.sh`, `open-clutch.sh`, `ensure-web.sh`, `install-dock-app.sh` set, ported from bash to TS).
 - **`ios/`** — Native iOS companion app (SwiftUI, iOS 17.0+): multi-host computer connections (local Mac, Tailscale, Hetzner, AWS), full-parity embedded web experience, Composio tools, Fleet RAG integration, and model selection for DeepSeek and MiniMax.  See [`docs/ios-companion.md`](docs/ios-companion.md).
-- **`src/profiles/`** — Tracked cordis profile defaults.  Each profile is an independent cordis tree (bundles + empty entry list + patch layer).  Four canonical profiles ship in this repo: `dsh-headless`, `dsh-web`, `mmh-headless`, `mmh-web`.  Profiles configure plugins, tool permissions, thinking effort, turn budgets, and model selection.
+- **`src/profiles/`** — Tracked cordis profile defaults.  Each profile is an independent cordis tree (bundles + empty entry list + patch layer).  Two profiles ship in this repo, one per Shellular agent id: `deepseek-headless` and `minimax-headless`.  Profiles configure plugins, tool permissions, thinking effort, turn budgets, and model selection.
 - **`bridges/`** — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay Python intentionally — see `docs/decisions/0001-bridges-stay-python.md`.
 
 ## Install
@@ -46,13 +46,13 @@ Requires Node.js 22 or later and credentials for the provider you intend to use.
 git clone https://github.com/jaywedgeworth22/Harness.git
 cd Harness
 npm install
-npm run sync      # copy tracked profiles to ~/.dsh/profiles/
-bash scripts/harness.sh web --no-open --host 127.0.0.1 --port 3080
+npm run sync      # copy tracked profiles to ~/.clutch/dsh/profiles/
+bash scripts/clutch.sh web --no-open --host 127.0.0.1 --port 3180
 npm run typecheck
 npm test
 ```
 
-The command above binds the web interface to your own machine.  The managed `npm run web` entry point in `src/web/` also attempts to configure Tailscale Serve for remote access; review its host settings before using it.  Shell wrappers remain under `scripts/` for existing installations.
+The command above binds the web interface to your own machine.  The managed `npm run web` entry point in `src/web/` also attempts to configure Tailscale Serve for remote access; review its host settings before using it.  Shell wrappers live under `scripts/`.  Clutch keeps its engine state in `~/.clutch/dsh` and serves on port 3180, so vanilla `dsh` (state in `~/.dsh`, web on 3080) runs alongside it untouched.
 
 ## Icons
 
@@ -64,13 +64,13 @@ BotFleet and other TypeScript consumers install this repo as an npm git
 dependency.  Full export table: [`docs/package.md`](./docs/package.md).
 
 ```json
-"harness": "github:jaywedgeworth22/Harness#main"
+"clutch": "github:jaywedgeworth22/Clutch#main"
 ```
 
 ```ts
-import { dshSupport } from "harness/dsh/acp";
-import { writeDshMcpPatch } from "harness/dsh/mcp-patch";
-import { mmhSupport } from "harness/mmh/acp";
+import { dshSupport } from "clutch/dsh/acp";
+import { writeDshMcpPatch } from "clutch/dsh/mcp-patch";
+import { minimaxSupport } from "clutch/minimax/acp";
 ```
 
 ## Consumers
@@ -85,7 +85,7 @@ Driver and bridge changes belong in this repository.  BotFleet and other consume
 
 ## Provider configurations
 
-The MiniMax headless bridge launches `dsh --profile mmh-headless`, using MiniMax as the model provider within the upstream coding stack.  DeepSeek and MiniMax profiles share parts of that stack, but model responses, provider features, and tool support can differ.
+The MiniMax headless bridge launches `dsh --profile minimax-headless`, using MiniMax as the model provider within the upstream coding stack.  DeepSeek and MiniMax profiles share parts of that stack, but model responses, provider features, and tool support can differ.
 
 ## Why Python for the bridges
 

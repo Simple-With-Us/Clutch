@@ -15,7 +15,7 @@
  *
  * Ported from BotFleet `server/drivers/acp/dsh-mcp.ts` on 2026-09-19; the
  * patch YAML and the temp-file write pattern are unchanged because they are
- * pure DSH-shape data, not harness runtime.
+ * pure DSH-shape data, not ACP runtime.
  */
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -25,8 +25,8 @@ import { basename, join } from "node:path";
 const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 export const DSH_MCP_PATCH_PREFIX = "botfleet-dsh-mcp-";
 
-/** A single stdio MCP server the harness wants to mount.  Mirrors BotFleet's
- * `AcpStdioMcpServer`; redeclared here so Harness's pure code is import-free. */
+/** A single stdio MCP server the host wants to mount.  Mirrors BotFleet's
+ * `AcpStdioMcpServer`; redeclared here so Clutch's pure code is import-free. */
 export interface DshStdioMcpServer {
   readonly name: string;
   readonly command: string;
@@ -36,28 +36,21 @@ export interface DshStdioMcpServer {
 
 /** CLI stems that resolve to the DSH engine.
  *
- * The engine ships as `dsh`, but Harness is the product name and ships its own
- * pinned `harness` wrapper around that binary.  Both are the *same engine*, so
- * every engine-scoped policy — MCP mounting, the minimum ACP version gate —
- * has to recognise both.  Matching on the literal `dsh` alone is what made
- * those policies silently switch off the moment a wrapper was configured.
+ * The engine ships as `dsh`, and Clutch ships its own pinned `clutch` wrapper
+ * around that binary (same engine, separate state home).  Every engine-scoped
+ * policy — MCP mounting, the minimum ACP version gate — has to recognise
+ * both.  Matching on the literal `dsh` alone is what made those policies
+ * silently switch off the moment a wrapper was configured.
  */
-const DSH_ENGINE_STEMS: ReadonlySet<string> = new Set(["dsh", "harness"]);
+const DSH_ENGINE_STEMS: ReadonlySet<string> = new Set(["dsh", "clutch"]);
 
 /** Whether a configured CLI is the DSH engine, under any of its names.
  *
  *  The extension strip is what lets an absolute path to a shell wrapper count
- *  as its engine, so `harness.sh` and `dsh.sh` both resolve to the engine. */
+ *  as its engine, so `clutch.sh` and `dsh.sh` both resolve to the engine. */
 export function isDshEngineCli(cli: string): boolean {
   const stem = basename(cli).toLowerCase().replace(/\.(sh|bash|js|mjs|cjs|ts)$/u, "");
   return DSH_ENGINE_STEMS.has(stem);
-}
-
-/** @deprecated Renamed to {@link isDshEngineCli}, which says the answer is about
- *  the engine rather than about one particular binary name.  Kept because
- *  BotFleet imports this name; remove once it adopts the new one. */
-export function isStockDshCli(cli: string): boolean {
-  return isDshEngineCli(cli);
 }
 
 export function dshMcpServerName(name: string, used: Set<string>): string {
@@ -150,8 +143,8 @@ export function writeDshMcpPatch(servers: readonly DshStdioMcpServer[]): string 
 
 /** The BotFleet-side spawn rewrite shape.  This is what BotFleet's driver
  * composes with `writeDshMcpPatch` and `dsh-acp-bridge` to satisfy stock
- * `dsh`.  Re-declared here so Harness consumers can typecheck the spawn
- * rewrite without importing the harness runtime. */
+ * `dsh`.  Re-declared here so Clutch consumers can typecheck the spawn
+ * rewrite without importing the ACP runtime. */
 export interface DshSpawnRewrite {
   readonly cli: string;
   readonly args: readonly string[];

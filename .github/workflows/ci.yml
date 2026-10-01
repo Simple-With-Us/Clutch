@@ -16,7 +16,7 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
-      - run: python3 -m py_compile bridges/dsh/dsh-acp.py bridges/mmh/mmh-acp.py
+      - run: python3 -m py_compile bridges/dsh/dsh-acp.py bridges/minimax/minimax-acp.py bridges/grok/grok-acp.py
       - run: git diff --check
 
   ios:

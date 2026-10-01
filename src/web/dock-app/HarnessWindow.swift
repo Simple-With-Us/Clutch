@@ -6,32 +6,32 @@ import WebKit
 /// spawning another Chrome --app instance.
 ///
 /// URL resolution order:
-///   1. `DSH_WEB_URL` env var — explicit override (also lets tests point at
+///   1. `CLUTCH_WEB_URL` env var — explicit override (also lets tests point at
 ///      a non-local server).
-///   2. `~/.dsh/web-launch-url` — written by `scripts/capture-launch-url.cjs`
+///   2. `~/.clutch/web-launch-url` — written by `scripts/capture-launch-url.cjs`
 ///      on every dsh-web start.  Contains the per-process `?token=...` URL
 ///      that mints the signed browser cookie.  Visiting it once mints the
 ///      cookie; subsequent `/` requests use the cookie, not the launch
 ///      token, so the cookie persists across dsh-web restarts (the signing
 ///      secret at `$DSH_HOME/credentials` is reused).
-///   3. Bare `http://127.0.0.1:3080/` — last resort; gets 401 until the
-///      user runs `bash ~/apps/harness-runtime/scripts/start-web.sh`
+///   3. Bare `http://127.0.0.1:3180/` — last resort; gets 401 until the
+///      user runs `bash ~/apps/clutch-runtime/scripts/start-web.sh`
 ///      interactively (which prints the launch URL to stdout) and visits
 ///      it once in any browser.
 private var harnessURLString: String {
-    if let envURL = ProcessInfo.processInfo.environment["DSH_WEB_URL"],
+    if let envURL = ProcessInfo.processInfo.environment["CLUTCH_WEB_URL"],
        !envURL.isEmpty {
         return envURL
     }
     let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
-    let launchURLPath = (home as NSString).appendingPathComponent(".dsh/web-launch-url")
+    let launchURLPath = (home as NSString).appendingPathComponent(".clutch/web-launch-url")
     if let content = try? String(contentsOfFile: launchURLPath, encoding: .utf8) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             return trimmed
         }
     }
-    return "http://127.0.0.1:3080/"
+    return "http://127.0.0.1:3180/"
 }
 
 /// Escape a Swift string into a JavaScript-safe single-quoted string literal.
@@ -56,12 +56,12 @@ private func harnessAssetPath(_ name: String) -> String? {
     if let root = ProcessInfo.processInfo.environment["HARNESS_ASSETS_ROOT"], !root.isEmpty {
         candidates.append("\(root)/\(name)")
     }
-    candidates.append("\(home)/apps/harness-runtime/assets/\(name)")
+    candidates.append("\(home)/apps/clutch-runtime/assets/\(name)")
     return candidates.first { fm.fileExists(atPath: $0) }
 }
 
 /// Base64 data URL for an asset.  The injected JS cannot fetch `file://`
-/// subresources from the `http://127.0.0.1:3080/` page, so the bytes ride
+/// subresources from the `http://127.0.0.1:3180/` page, so the bytes ride
 /// along in the user script.
 private func harnessAssetDataURL(_ name: String, mime: String) -> String {
     guard let path = harnessAssetPath(name),
@@ -82,7 +82,7 @@ private func pingHarness() async -> Bool {
 
 private func ensureServer() async {
     if await pingHarness() { return }
-    let script = NSHomeDirectory() + "/apps/harness-runtime/scripts/ensure-web.sh"
+    let script = NSHomeDirectory() + "/apps/clutch-runtime/scripts/ensure-web.sh"
     guard FileManager.default.isExecutableFile(atPath: script) else { return }
     let proc = Process()
     proc.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -113,13 +113,13 @@ private func ensureServer() async {
 /// panel.
 ///
 /// The request has to happen here rather than in the page for two reasons.
-/// The web view is served from `http://127.0.0.1:3080/`, and DeepSeek's API
+/// The web view is served from `http://127.0.0.1:3180/`, and DeepSeek's API
 /// sends no CORS headers for a browser origin, so a page-issued `fetch` is
 /// refused.  More importantly the credential lives in the dsh credential
 /// plane and must never be handed to page JavaScript.
 ///
 /// The reply carries model ids only.  The key is read from
-/// `~/.dsh/.credentials.yaml` under `refs:`, is never logged, and never
+/// `~/.clutch/dsh/.credentials.yaml` under `refs:`, is never logged, and never
 /// appears in an error string handed back to the page.
 enum DeepSeekModels {
     static let modelsURL = "https://api.deepseek.com/models"
@@ -127,14 +127,14 @@ enum DeepSeekModels {
     /// Mirrors `DEEPSEEK_MODELS_MAX_BYTES` in `src/dsh/deepseek-models.ts`.
     static let maxBytes = 2 * 1024 * 1024
 
-    /// Read one ref out of `~/.dsh/.credentials.yaml`.
+    /// Read one ref out of `~/.clutch/dsh/.credentials.yaml`.
     ///
     /// The store is a two-level map (`refs:` then the ref name), so a scoped
     /// scan is honest and avoids pulling in a YAML parser for one scalar.
     /// Quoted and unquoted scalars are both accepted; anything unrecognised
     /// yields `nil` rather than a guess.
     static func credential(home: String = NSHomeDirectory()) -> String? {
-        let path = (home as NSString).appendingPathComponent(".dsh/.credentials.yaml")
+        let path = (home as NSString).appendingPathComponent(".clutch/dsh/.credentials.yaml")
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         var inRefs = false
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -366,7 +366,7 @@ final class HarnessAppUpdater: NSObject {
     private func checkLocalRepoUpdate(window: NSWindow?) {
         let home = NSHomeDirectory()
         let scriptCandidates = [
-            "\(home)/apps/harness-runtime/scripts/update-mac-app.sh",
+            "\(home)/apps/clutch-runtime/scripts/update-mac-app.sh",
             "\(home)/Code/Harness/scripts/update-mac-app.sh"
         ]
         if scriptCandidates.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
@@ -392,13 +392,13 @@ final class HarnessAppUpdater: NSObject {
     func performLocalUpdateAndRelaunch() {
         let home = NSHomeDirectory()
         let scriptCandidates = [
-            "\(home)/apps/harness-runtime/scripts/update-mac-app.sh",
+            "\(home)/apps/clutch-runtime/scripts/update-mac-app.sh",
             "\(home)/Code/Harness/scripts/update-mac-app.sh"
         ]
         guard let script = scriptCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             let alert = NSAlert()
             alert.messageText = "Update Script Not Found"
-            alert.informativeText = "Could not locate update-mac-app.sh in harness-runtime or Code/Harness."
+            alert.informativeText = "Could not locate update-mac-app.sh in clutch-runtime or Code/Harness."
             alert.alertStyle = .critical
             alert.runModal()
             return

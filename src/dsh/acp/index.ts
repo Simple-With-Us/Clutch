@@ -6,6 +6,8 @@ export {
   DshModelNotOfferedError,
   classifyDshError,
   dshCredentialCandidates,
+  dshEngineStem,
+  dshLoginNote,
   dshModelIdFromOptionValue,
   dshModelOptionValue,
   dshProviderForModel,
@@ -18,4 +20,4 @@ export {
   resolveDshModelOption,
 } from "./driver.ts";
 export type { DshAdvertisedModel, DshModelMatch, DshResolvedModel } from "./driver.ts";
-export { isStockDshCli } from "./mcp-patch.ts";
+export { isDshEngineCli } from "./mcp-patch.ts";

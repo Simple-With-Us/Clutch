@@ -1,0 +1,20 @@
+# Settings for the deepseek-headless profile only (dsh --profile
+# deepseek-headless, the path Shellular's DeepSeek agent uses).  The web
+# profile keeps reading ~/.clutch/dsh/settings.yaml; this file scopes the
+# phone path to a fast, fully auto-approved configuration.
+#
+# Wire-up: ~/.clutch/dsh/profiles/deepseek-headless/cordis.patch.yml patches
+# the `settings` row with `path: <engine home>/settings-deepseek-headless.yaml`.
+#
+# Keep `permission.defaultPreset: danger-full-access` here: without it the
+# headless sandbox falls back to workspace-write and approval: ask, which the
+# phone cannot answer.
+permission:
+  defaultPreset: danger-full-access
+
+# Flash model + low reasoning effort keep phone replies snappy.  Raise
+# reasoningEffort to high/max here if you prefer deeper answers over speed.
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-flash
+  reasoningEffort: low

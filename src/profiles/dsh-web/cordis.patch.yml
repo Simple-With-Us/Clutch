@@ -1,5 +1,0 @@
-# Patch layer for the dsh-web profile.
-# Empty by default; the web profile keeps every plugin so the picker,
-# settings, and tool-inventory rows show up.  Add `disabled: true` rows
-# here for plugins the operator does not want exposed in the web UI.
-[]

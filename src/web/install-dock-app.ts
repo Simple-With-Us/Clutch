@@ -19,6 +19,6 @@ if (!existsSync(SCRIPT)) {
 
 const child = spawn(SCRIPT, [], {
   stdio: "inherit",
-  env: { ...process.env, HARNESS_RUNTIME_ROOT: ROOT },
+  env: { ...process.env, CLUTCH_RUNTIME_ROOT: ROOT },
 });
 child.on("exit", (code) => process.exit(code ?? 0));

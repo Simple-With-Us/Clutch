@@ -1,0 +1,60 @@
+# Settings for the minimax-headless profile only (dsh --profile minimax-headless).
+# Shellular MiniMax → minimax-acp.py → dsh --profile minimax-headless with the
+# MiniMax LLM.
+#
+# Keep permission.defaultPreset: danger-full-access — the phone cannot answer
+# approval: ask prompts (same posture as settings-deepseek-headless.yaml).
+permission:
+  defaultPreset: danger-full-access
+
+agent-default-model:
+  provider: minimax
+  model: MiniMax-M3
+  reasoningEffort: low
+
+# MiniMax models ride the llm-pi-ai provider namespace inside @deepseek-ai/dsh.
+# apiKeyEnv must match MINIMAX_API_KEY (loaded by minimax-acp / credentials.yaml).
+#
+# Model list is the owner-facing set (2026-09-27): M3.1 Flash Preview, M3, and
+# M2.7 Highspeed.  M2.7 (non-highspeed) stays out — M3 dominates on context.
+# M2.7-highspeed keeps a place because it is the same 204,800 context at
+# exactly 2x M3's price; the picker badges it so the cost is visible up front.
+# M3.1-Flash-Preview is offered by MiniMax through Token Plan and MiniMax Code
+# only, so it needs a Token Plan key to be callable.
+llm-pi-ai:
+  providers:
+    {
+      minimax:
+        {
+          apiKeyEnv: MINIMAX_API_KEY,
+          models:
+            [
+              {
+                  id: MiniMax-M3.1-Flash-Preview,
+                  name: MiniMax-M3.1-Flash-Preview,
+                  contextWindow: 1000000,
+                  maxTokens: 128000,
+                  reasoningEfforts: false
+                },
+              {
+                  id: MiniMax-M3,
+                  name: MiniMax-M3,
+                  contextWindow: 1000000,
+                  maxTokens: 128000,
+                  reasoningEfforts:
+                    {
+                      low: low,
+                      medium: medium,
+                      high: high
+                    }
+                },
+              {
+                  id: MiniMax-M2.7-highspeed,
+                  name: MiniMax-M2.7-highspeed,
+                  contextWindow: 204800,
+                  maxTokens: 131072,
+                  reasoningEfforts: false
+                }
+            ]
+        }
+    }

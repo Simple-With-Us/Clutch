@@ -1,17 +1,17 @@
 {
-  "name": "harness",
-  "version": "0.1.0",
+  "name": "clutch",
+  "version": "0.4.0",
   "private": false,
   "license": "Apache-2.0",
-  "description": "Friendly adaptation of @deepseek-ai/dsh extended for DSH and MiniMax harness parity.",
+  "description": "Clutch: web UI, coding profiles, and ACP bridges for the upstream DeepSeek Harness engine (@deepseek-ai/dsh).",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jaywedgeworth22/Harness.git"
+    "url": "git+https://github.com/jaywedgeworth22/Clutch.git"
   },
-  "homepage": "https://github.com/jaywedgeworth22/Harness",
+  "homepage": "https://clutch.codes",
   "bugs": {
-    "url": "https://github.com/jaywedgeworth22/Harness/issues"
+    "url": "https://github.com/jaywedgeworth22/Clutch/issues"
   },
   "files": [
     "src",
@@ -28,30 +28,30 @@
     ".": "./src/index.ts",
     "./dsh/acp": "./src/dsh/acp/driver.ts",
     "./dsh/acp/driver": "./src/dsh/acp/driver.ts",
-    "./harness/dsh/acp": "./src/dsh/acp/driver.ts",
     "./dsh/mcp-patch": "./src/dsh/acp/mcp-patch.ts",
-    "./mmh/acp": "./src/mmh/acp/driver.ts",
-    "./mmh/acp/driver": "./src/mmh/acp/driver.ts",
-    "./mmh/http-client": "./src/mmh/http-client/index.ts",
+    "./minimax/acp": "./src/minimax/acp/driver.ts",
+    "./minimax/acp/driver": "./src/minimax/acp/driver.ts",
+    "./minimax/http-client": "./src/minimax/http-client/index.ts",
     "./shared/contracts": "./src/shared/contracts.ts",
     "./shared/acp-core": "./src/shared/acp-core.ts",
+    "./shared/ports": "./src/shared/ports.ts",
     "./shared/sanitize-context": "./src/shared/sanitize-context.ts",
     "./shared/subagent-tool-profiles": "./src/shared/subagent-tool-profiles.ts",
     "./package.json": "./package.json"
   },
   "bin": {
-    "harness": "./scripts/harness.sh",
-    "harness-web": "./src/web/start-web.ts",
-    "harness-serve-tailscale": "./src/web/serve-tailscale.ts",
-    "harness-open": "./src/web/open-harness.ts",
-    "harness-ensure": "./src/web/ensure-web.ts",
-    "harness-install-dock": "./src/web/install-dock-app.ts",
-    "harness-sync-profiles": "./scripts/sync-profiles.ts",
-    "harness-pair-ios": "./src/web/pair-ios.ts"
+    "clutch": "./scripts/clutch.sh",
+    "clutch-web": "./src/web/start-web.ts",
+    "clutch-serve-tailscale": "./src/web/serve-tailscale.ts",
+    "clutch-open": "./src/web/open-clutch.ts",
+    "clutch-ensure": "./src/web/ensure-web.ts",
+    "clutch-install-dock": "./src/web/install-dock-app.ts",
+    "clutch-sync-profiles": "./scripts/sync-profiles.ts",
+    "clutch-pair-ios": "./src/web/pair-ios.ts"
   },
   "scripts": {
     "sync": "tsx scripts/sync-profiles.ts",
-    "web": "tsx src/web/start-web.ts --no-open --host 127.0.0.1 --port 3080",
+    "web": "tsx src/web/start-web.ts",
     "build:ios": "bash scripts/build-ios.sh",
     "update:mac": "bash scripts/update-mac-app.sh",
     "typecheck": "tsc --noEmit",

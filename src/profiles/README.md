@@ -1,26 +1,30 @@
 # Profiles
 
 Tracked cordis profile defaults.  Each profile is a fully independent cordis
-tree (bundles + empty entry list + patch layer).  Four canonical profiles
-ship in this repo:
+tree (bundles + empty entry list + patch layer).  Two profiles ship in this
+repo, one per Shellular agent id:
 
 | Profile | Bundles | Use case |
 |---|---|---|
-| `dsh-headless/` | `dsh-base` + `dsh-headless` | DeepSeek Harness headless (phone, Shellular spawn) |
-| `dsh-web/` | `dsh-base` + `dsh-web-app` | DeepSeek Harness web UI on `:3080` |
-| `mmh-headless/` | `dsh-base` + `dsh-headless` | MiniMax coding via Harness (phone; MiniMax LLM + local tools) |
-| `mmh-web/` | `dsh-base` + `dsh-web-app` | MiniMax Harness web UI on `:3081` (future) |
+| `deepseek-headless/` | `dsh-base` + `dsh-headless` | DeepSeek on the dsh engine, headless (phone, Shellular id `deepseek`) |
+| `minimax-headless/` | `dsh-base` + `dsh-headless` | MiniMax on the dsh engine, headless (phone, Shellular id `minimax`; MiniMax LLM + local tools) |
+
+The web UI boots upstream's shipped `web` profile, so it has no tracked
+profile here.
 
 ## Sync
 
 `scripts/sync-profiles.ts` copies each profile directory to
-`~/.dsh/profiles/<name>/` and writes the matching `~/.dsh/settings-<name>.yaml`
-when present.  Run via `npm run sync` after every `npm ci` and every
-profile change.
+`$CLUTCH_HOME/dsh/profiles/<name>/` (default `~/.clutch/dsh/profiles/`) and
+writes the matching `$CLUTCH_HOME/dsh/settings-<name>.yaml` when present.  The
+vanilla `~/.dsh` is never touched.  Tracked patch files refer to the engine
+home as `__DSH_HOME__`, which the sync replaces with the real path, so no
+tracked file is machine-specific.  Run via `npm run sync` after every
+`npm ci` and every profile change.
 
-A per-machine override file (`~/.dsh/profiles/<name>/local.patch.yml`) wins
-over the tracked default — the cordis patch loader applies the cascade in
-order: bundles → tracked patch → local patch.
+A per-machine override file (`<engine home>/profiles/<name>/local.patch.yml`)
+wins over the tracked default — the cordis patch loader applies the cascade
+in order: bundles → tracked patch → local patch.
 
 ## Per-profile feature depth
 
@@ -34,13 +38,13 @@ The matrix is open-ended.  Any profile may independently:
   is the consumer-side gate)
 - Pin a model for that profile only
 
-The four shipped profiles are starting points, not final configurations.
+The shipped profiles are starting points, not final configurations.
 Operators tune the matrix on each machine.
 
 ## Adding a profile
 
 ```bash
-mkdir -p src/profiles/<engine>-<use-case>
+mkdir -p src/profiles/<provider>-<use-case>
 # Copy cordis.yml + cordis.patch.yml + package.json + pnpm-workspace.yaml
 # from the closest existing profile
 # Edit package.json to set the bundle list
@@ -48,5 +52,5 @@ mkdir -p src/profiles/<engine>-<use-case>
 # Add settings-<name>.yaml if the profile needs a settings override
 ```
 
-Then `npm run sync` to push it to `~/.dsh/profiles/`.  Restart any pm2 job
-that uses the new profile so the cordis patch loader picks it up.
+Then `npm run sync` to push it to `~/.clutch/dsh/profiles/`.  Restart any pm2
+job that uses the new profile so the cordis patch loader picks it up.

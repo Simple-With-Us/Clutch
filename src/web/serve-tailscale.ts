@@ -1,15 +1,19 @@
 #!/usr/bin/env node
 /**
- * Re-assert the Tailscale Serve mapping for Harness web.
+ * Re-assert the Tailscale Serve mapping for Clutch web.
  *
- * Same mapping as `scripts/serve-tailscale.sh`: `tailscale serve --bg --https PORT TARGET`.
- * Idempotent.  Does not enable Funnel (tailnet only).  Missing binary is non-fatal.
+ * Same mapping as `scripts/serve-tailscale.sh`:
+ * `tailscale serve --bg --https=PORT http://127.0.0.1:PORT`, with PORT from
+ * CLUTCH_WEB_PORT (default 3180).  Idempotent.  Does not enable Funnel
+ * (tailnet only).  A missing binary is non-fatal.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
-const PORT = process.env.DSH_WEB_PORT ?? "3080";
-const TAILNET_HOST = process.env.HARNESS_TAILNET_HOST ?? "macbook.boa-roygbiv.ts.net";
+import { clutchWebPort } from "../shared/ports.ts";
+import { tailnetDnsName } from "./pair-link.ts";
+
+const PORT = clutchWebPort();
 
 const TAILSCALE_PATHS = [
   "/Applications/Tailscale.app/Contents/MacOS/tailscale",
@@ -32,6 +36,27 @@ async function run(bin: string, args: string[]): Promise<number> {
   });
 }
 
+/** This Mac's MagicDNS name, unless CLUTCH_TAILNET_HOST overrides it. */
+async function tailnetHost(bin: string): Promise<string | null> {
+  const override = process.env.CLUTCH_TAILNET_HOST?.trim();
+  if (override) return override;
+  return new Promise((resolvePromise) => {
+    const child = spawn(bin, ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => resolvePromise(null));
+    child.on("exit", () => {
+      try {
+        resolvePromise(tailnetDnsName(JSON.parse(out)));
+      } catch {
+        resolvePromise(null);
+      }
+    });
+  });
+}
+
 async function main(): Promise<void> {
   const bin = findTailscale();
   if (bin === null) {
@@ -40,9 +65,10 @@ async function main(): Promise<void> {
   }
 
   const target = `http://127.0.0.1:${PORT}`;
-  const url = `https://${TAILNET_HOST}:${PORT}`;
+  const host = (await tailnetHost(bin)) ?? "<this Mac's MagicDNS name>";
+  const url = `https://${host}:${PORT}`;
   process.stderr.write(`serve-tailscale: mapping ${url} -> ${target}\n`);
-  const code = await run(bin, ["serve", "--bg", "--https", PORT, target]);
+  const code = await run(bin, ["serve", "--bg", `--https=${PORT}`, target]);
   if (code !== 0) {
     process.stderr.write(`serve-tailscale: set returned ${code}\n`);
     process.exit(code);

@@ -30,7 +30,7 @@ live/
 
 # Playwright e2e scratch (server state, launch URL, auth cookie, reports).
 # Baselines under e2e/*-snapshots/ ARE committed; everything else is local.
-e2e/.dsh-home/
+e2e/.clutch-home/
 e2e/.launch-url.txt
 e2e/.auth-state.json
 test-results/

@@ -2,7 +2,7 @@
  * DeepSeek model discovery — `GET https://api.deepseek.com/models`.
  *
  * DeepSeek's model list is the authority on which models the account can
- * actually call, and it changes without a Harness release: new point
+ * actually call, and it changes without a Clutch release: new point
  * versions land, and the owner's own models differ from the public
  * catalogue.  `STATIC_DSH_MODELS` in `./acp/driver.ts` is therefore a
  * starting list, not the truth, and this module is how the truth is fetched.
@@ -40,7 +40,7 @@ export const DEEPSEEK_MODELS_URL = "https://api.deepseek.com/models";
  *  plausible model list and far below a response worth rendering. */
 export const DEEPSEEK_MODELS_MAX_BYTES = 2 * 1024 * 1024;
 
-/** A model as DeepSeek advertises it, normalized onto the Harness catalog
+/** A model as DeepSeek advertises it, normalized onto the Clutch catalog
  *  shape.  `contextWindow` is omitted rather than guessed: DeepSeek does not
  *  return it, and a wrong window is worse than none because callers size
  *  truncation against it. */
@@ -142,7 +142,7 @@ function concat(chunks: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
- * Normalize a DeepSeek listing onto the Harness model shape.
+ * Normalize a DeepSeek listing onto the Clutch model shape.
  *
  * DeepSeek answers in the OpenAI list shape: `{ object: "list", data: [{ id,
  * object, owned_by }] }`.  `data` is the contract; anything else is a shape

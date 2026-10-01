@@ -2,26 +2,28 @@ import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
 
 /**
- * Playwright config for Harness web UI verification.
+ * Playwright config for Clutch web UI verification.
  *
  * The web UI itself is served by the upstream `@deepseek-ai/dsh` CLI
- * through `bash scripts/harness.sh web` (the same entry the `npm run web`
+ * through `bash scripts/clutch.sh web` (the same entry the `npm run web`
  * launcher uses, minus the Tailscale Serve sidecar).  The server binds
- * `http://127.0.0.1:3080` by default and is auth-walled: `/` answers 401
+ * `http://127.0.0.1:3180` by default and is auth-walled: `/` answers 401
  * until a signed browser cookie is minted from the per-process launch
  * URL the server prints on stdout (`dsh web: <url>`).  The `setup`
  * project visits that launch URL once (see `e2e/auth.setup.ts`) and
  * persists the cookie to `e2e/.auth-state.json` for the visual project.
  *
  * Server state (profiles, credentials) lives in an isolated
- * `e2e/.dsh-home` so runs never touch the operator's real `~/.dsh`.
+ * `e2e/.clutch-home` (engine home `e2e/.clutch-home/dsh`, forced by
+ * scripts/clutch.sh), so runs never touch the operator's real `~/.clutch`
+ * or the vanilla `~/.dsh`.
  */
 
 const CONFIG_DIR = import.meta.dirname;
-const PORT = Number.parseInt(process.env.HARNESS_E2E_PORT ?? "3080", 10);
+const PORT = Number.parseInt(process.env.CLUTCH_E2E_PORT ?? "3180", 10);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const AUTH_STATE = join(CONFIG_DIR, "e2e", ".auth-state.json");
-const DSH_HOME = join(CONFIG_DIR, "e2e", ".dsh-home");
+const CLUTCH_HOME = join(CONFIG_DIR, "e2e", ".clutch-home");
 const LAUNCH_URL_FILE = join(CONFIG_DIR, "e2e", ".launch-url.txt");
 
 export default defineConfig({
@@ -68,14 +70,14 @@ export default defineConfig({
     // reused server does not know, and the auth setup could never mint
     // its cookie.  The stale URL file is removed first so a previous
     // run's token can never be mistaken for this run's.
-    command: `rm -f ${LAUNCH_URL_FILE} && node scripts/capture-launch-url.cjs bash scripts/harness.sh web --no-open --host 127.0.0.1 --port ${PORT}`,
+    command: `rm -f ${LAUNCH_URL_FILE} && node scripts/capture-launch-url.cjs bash scripts/clutch.sh web --no-open --host 127.0.0.1 --port ${PORT}`,
     url: BASE_URL,
     timeout: 180_000,
     reuseExistingServer: false,
     env: {
-      DSH_HOME,
-      DSH_LAUNCH_URL_FILE: LAUNCH_URL_FILE,
-      HARNESS_RUNTIME_ROOT: CONFIG_DIR,
+      CLUTCH_HOME,
+      CLUTCH_LAUNCH_URL_FILE: LAUNCH_URL_FILE,
+      CLUTCH_RUNTIME_ROOT: CONFIG_DIR,
     },
   },
 });

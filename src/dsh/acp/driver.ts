@@ -4,31 +4,31 @@
  * This module owns every DSH-specific knob: model catalog, version gate,
  * error classification, credential candidates, model-id round-trip, env
  * contract, install instructions, prompt composition.  Anything DSH-shaped
- * that doesn't depend on the harness runtime lives here.
+ * that doesn't depend on the ACP runtime lives here.
  *
- * The harness runtime primitives — the ACP JSON-RPC client, the spawn
+ * The ACP runtime primitives — the ACP JSON-RPC client, the spawn
  * wrapper, the MCP mount assembler — stay in BotFleet (`acp/core.ts`,
  * `acp/dsh-mcp.ts`).  BotFleet imports this module and composes the two:
  *
- *     import { dshSupport, DSH_MINIMUM_ACP_VERSION } from "harness/dsh/acp/driver";
+ *     import { dshSupport, DSH_MINIMUM_ACP_VERSION } from "clutch/dsh/acp/driver";
  *     import { createAcpDriver } from "../acp/core";
  *     export const DshAgentDriver = createAcpDriver(dshSupport);
  *
  * That keeps the ACP runtime in one place (BotFleet) and the DSH engine
- * shape in one place (Harness).  See
+ * shape in one place (Clutch).  See
  * `docs/decisions/0002-acp-core-stays-in-botfleet.md` for the long-term
  * plan to lift the ACP core too.
  */
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import type { EffortLevel, ModelCatalog, ProviderErrorCode } from "../../shared/contracts.ts";
 import type { AcpSupport } from "../../shared/acp-core.ts";
 import { isDshEngineCli } from "./mcp-patch.ts";
 import { DshModelNotOfferedError, resolveDshModelOption } from "./model-options.ts";
 
-export { isStockDshCli } from "./mcp-patch.ts";
+export { isDshEngineCli } from "./mcp-patch.ts";
 export {
   DshModelNotOfferedError,
   dshSameModel,
@@ -165,7 +165,7 @@ function currentConfigValue(result: unknown, configId: string): unknown {
   return option && typeof option === "object" ? (option as { currentValue?: unknown }).currentValue : undefined;
 }
 
-/** The harness's own current models.  These ids are *picker* ids: what a
+/** The engine's own current models.  These ids are *picker* ids: what a
  * catalog lists and a bot stores, not necessarily what the installed dsh
  * declares on the wire (stock dsh calls Flash `deepseek-flash`).  They stay
  * stable so saved selections keep working; `dshModelOptionValue` translates
@@ -185,13 +185,38 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
   ],
 };
 
-/** Candidate credential file, honoring the same DSH_HOME / HOME precedence the
- * published `dsh` harness uses.  Other DeepSeek clients have separate stores
- * that do not authenticate this CLI. */
-export function dshCredentialCandidates(env: Record<string, string | undefined>): string[] {
+/** Which state home a configured engine CLI uses: `clutch` (the Clutch
+ * wrapper, engine home $CLUTCH_HOME/dsh) or `dsh` (vanilla, $DSH_HOME or
+ * ~/.dsh).  Anything else is treated as vanilla `dsh`. */
+export function dshEngineStem(cli: string): "clutch" | "dsh" {
+  const stem = basename(cli).toLowerCase().replace(/\.(sh|bash|js|mjs|cjs|ts)$/u, "");
+  return stem === "clutch" ? "clutch" : "dsh";
+}
+
+function clutchEngineHome(env: Record<string, string | undefined>, home: string): string {
+  return join(env.CLUTCH_HOME || join(home, ".clutch"), "dsh");
+}
+
+/** Candidate credential files for the engine.
+ *
+ * The answer follows the CLI stem: `clutch` always reads
+ * $CLUTCH_HOME/dsh/.credentials.yaml (the Clutch wrapper forces DSH_HOME
+ * there), and vanilla `dsh` honours the same DSH_HOME / HOME precedence the
+ * upstream engine uses.  The CLI defaults to `dsh`, matching
+ * `dshSupport.defaultCli`, so the store checked is always the one the spawned
+ * process reads.  Other DeepSeek clients have separate stores that do not
+ * authenticate this engine. */
+export function dshCredentialCandidates(env: Record<string, string | undefined>, cli = "dsh"): string[] {
   const home = env.HOME || env.USERPROFILE || homedir();
-  const dshHome = env.DSH_HOME || join(home, ".dsh");
-  return [join(dshHome, ".credentials.yaml")];
+  if (dshEngineStem(cli) === "clutch") return [join(clutchEngineHome(env, home), ".credentials.yaml")];
+  return [join(env.DSH_HOME || join(home, ".dsh"), ".credentials.yaml")];
+}
+
+/** The login hint for a configured engine CLI, naming the store it reads. */
+export function dshLoginNote(cli: string): string {
+  return dshEngineStem(cli) === "clutch"
+    ? "Clutch CLI auth missing — add ~/.clutch/dsh/.credentials.yaml"
+    : "dsh CLI auth missing — add ~/.dsh/.credentials.yaml";
 }
 
 /** Map DSH/DeepSeek failure text onto the canonical provider-error codes so the
@@ -222,10 +247,10 @@ export function classifyDshError(error: unknown): ProviderErrorCode | undefined 
   return undefined;
 }
 
-/** The DSH support shape.  Pure engine data — no harness runtime coupling. */
+/** The DSH support shape.  Pure engine data — no ACP runtime coupling. */
 export const dshSupport: AcpSupport = {
   driverKind: "dshAgent",
-  displayName: "Harness",
+  displayName: "Clutch",
   // Keep the engine-wide gate closed until BotFleet consumes per-model image
   // support.  Its current composer reads only this flag, so opening it now
   // would accept attachments even for non-vision DeepSeek V4.1 Pro.  Flip to
@@ -236,20 +261,15 @@ export const dshSupport: AcpSupport = {
   resolveModels: () => STATIC_DSH_MODELS,
   effortLevels: DSH_EFFORT_LEVELS,
   mcpServers: true,
-  // Still `dsh` rather than the product's own `harness` wrapper, and the
-  // reason is ordering, not preference.  Consumers spawn this by name, and
-  // `harness` only resolves once `install-dock-app.sh` has linked it into
-  // ~/.local/bin — flipping the default before that lands would break every
-  // DeepSeek session with a spawn error.  The wrapper, the PATH link, and the
-  // engine identity that keeps MCP mounting and the version gate attached to a
-  // wrapper all ship here; the one-line default flip follows once the live
-  // runtime has the script.  Per-instance selection already works today in
-  // BotFleet's Engines Settings.
+  // Vanilla `dsh` against ~/.dsh, by design.  BotFleet keeps spawning the
+  // upstream engine with its own state; the `clutch` wrapper (state in
+  // ~/.clutch/dsh) is a per-instance choice in BotFleet's Engines Settings,
+  // and isDshEngineCli keeps MCP mounting and the version gate attached to it.
   defaultCli: "dsh",
   nativeSource: "dsh.acp",
-  // The credential store is the engine's own (~/.dsh), so it keeps the engine
-  // name even though the product and the CLI no longer do.
-  loginNote: "Harness CLI auth missing — add ~/.dsh/.credentials.yaml",
+  // Matches defaultCli.  A consumer that spawns `clutch` should show
+  // dshLoginNote(cli) instead, which names the Clutch store.
+  loginNote: dshLoginNote("dsh"),
 
   install: {
     command: {
@@ -297,8 +317,9 @@ export const dshSupport: AcpSupport = {
     "DEEPSEEK_API_KEY",
     "MINIMAX_API_KEY",
     "DSH_HOME",
-    "DSH_RUNTIME_ROOT",
-    "HARNESS_RUNTIME_ROOT",
+    "CLUTCH_HOME",
+    "CLUTCH_RUNTIME_ROOT",
+    // Upstream-read: the shipped dsh-base cordis.patch.yml evaluates it.
     "DSH_PERMISSION_MODE",
   ],
 

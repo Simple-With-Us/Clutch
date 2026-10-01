@@ -9,9 +9,9 @@ GitHub: `jaywedgeworth22/Harness`.  Integration tree on this Mac: `/Users/jay/Co
 Harness provides a web interface, coding profiles, and ACP bridges around the upstream DeepSeek Harness (`@deepseek-ai/dsh`).  It includes DeepSeek and MiniMax configurations; capabilities depend on the profile, model, and provider.
 
 - `dsh/` — DSH harness: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
-- `mmh/` — MMH harness: the headless Python ACP bridge launches `dsh --profile mmh-headless` with MiniMax as its model provider.  The package also includes lower-level HTTP client exports; these are separate from the headless bridge.
-- `web/` — TypeScript web UI scripts (`start-web.ts`, `serve-tailscale.ts`, `open-harness.ts`, `ensure-web.ts`, `install-dock-app.ts`).
-- `profiles/` — Tracked cordis profile defaults (`dsh-headless`, `dsh-web`, `mmh-headless`, `mmh-web`).  Each profile is independent and customized for its use case; the matrix (per-profile feature depth: plugins enabled, tool allowlist, thinking effort, turn budgets, model selection) is open-ended.
+- `minimax/` — The Clutch MiniMax bridge: the headless Python ACP bridge launches `dsh --profile minimax-headless` with MiniMax as its model provider.  The package also includes lower-level HTTP client exports; these are separate from the headless bridge.
+- `web/` — TypeScript web UI scripts (`start-web.ts`, `serve-tailscale.ts`, `open-clutch.ts`, `ensure-web.ts`, `install-dock-app.ts`).
+- `profiles/` — Tracked cordis profile defaults (`deepseek-headless`, `minimax-headless`).  Each profile is independent and customized for its use case; the matrix (per-profile feature depth: plugins enabled, tool allowlist, thinking effort, turn budgets, model selection) is open-ended.
 - `bridges/` — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay in Python intentionally — see "Bridges are Python" below.
 
 ## Seat Identity And Branches
@@ -35,11 +35,11 @@ Before substantial work: list, then claim (or file and claim).  When done: set a
 
 ## Bridges are Python
 
-The stdio JSON-RPC bridges in `bridges/dsh/` and `bridges/mmh/` are Python, stdlib-only, intentionally.  The DSH bridge predates this repo and carries production fixes (DEVNULL stdin, process-group kill, heartbeats) earned through real failures.  Porting it to TypeScript is a coin-flip on whether every fix comes across correctly.  The MMH bridge is greenfield and could be TS, but it would still need to spawn a Node `dsh` child the same way Python does — no functional gain.  See `docs/decisions/0001-bridges-stay-python.md` once it lands.
+The stdio JSON-RPC bridges in `bridges/dsh/` and `bridges/minimax/` are Python, stdlib-only, intentionally.  The DSH bridge predates this repo and carries production fixes (DEVNULL stdin, process-group kill, heartbeats) earned through real failures.  Porting it to TypeScript is a coin-flip on whether every fix comes across correctly.  The MiniMax bridge is greenfield and could be TS, but it would still need to spawn a Node `dsh` child the same way Python does — no functional gain.  See `docs/decisions/0001-bridges-stay-python.md` once it lands.
 
 ## Profile Matrix
 
-Each profile in `src/profiles/<name>/` is a fully independent cordis tree: bundles (`package.json`), empty entry list (`cordis.yml`), and patch layer (`cordis.patch.yml`).  Profiles are *applied* by `scripts/sync-profiles.ts` to `~/.dsh/profiles/<name>/` on every install; the patch loader applies them in cascade, so a per-machine override (`~/.dsh/profiles/<name>/local.patch.yml`) wins over the tracked default.
+Each profile in `src/profiles/<name>/` is a fully independent cordis tree: bundles (`package.json`), empty entry list (`cordis.yml`), and patch layer (`cordis.patch.yml`).  Profiles are *applied* by `scripts/sync-profiles.ts` to `~/.clutch/dsh/profiles/<name>/` on every install; the patch loader applies them in cascade, so a per-machine override (`~/.clutch/dsh/profiles/<name>/local.patch.yml`) wins over the tracked default.
 
 Per-use-case feature depth is the open-ended part: any profile may independently disable plugins, set thinking effort, set turn budgets, set tool allowlists, override cordis config.  The Harness repo ships the framework and four canonical examples; the operator tunes the matrix on each machine.
 
@@ -47,7 +47,7 @@ Per-use-case feature depth is the open-ended part: any profile may independently
 
 This repo is **canonical for the DSH ACP driver** and the **MMH ACP bridge**.  BotFleet imports from `jaywedgeworth22/harness` via an npm git dependency (`"harness": "github:jaywedgeworth22/Harness"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `HarnessWindow.swift`, `install-dock-app.sh`).
 
-**Never edit driver or bridge code in BotFleet.**  Edit it here, in `src/dsh/acp/` or `src/mmh/acp/`.  BotFleet and AFC consume via PR.
+**Never edit driver or bridge code in BotFleet.**  Edit it here, in `src/dsh/acp/` or `src/minimax/acp/`.  BotFleet and AFC consume via PR.
 
 ## Inter-Agent Coordination
 
@@ -73,7 +73,7 @@ UI changes must be covered by automated visual verification where feasible: Play
 
 ## Mac Local Processes (binding)
 
-Harness runs always-on pieces on the Mac: `com.jay.harness-web` (web on `127.0.0.1:3080`, Tailscale receiver `https://macbook.boa-roygbiv.ts.net:3080`).  The Shellular bridges (`dsh-acp.sh` for id `deepseek`, `mmh-acp.sh` for id `minimax`) spawn fresh per session and are not always-on pm2 jobs.  If you create, change, load, bootout, or retire any LaunchAgent, cron row, pm2 job, or helper script other agents run, you **must** update `/Users/jay/apps/MAC-LOCAL-PROCESSES.md` and refresh the Apple Note (`apple-notes-coding.sh --update`) in the same change, and say whether it is always-on or on-demand.  Canonical: `AGENT-SYNC.md` § Mac local processes.
+Harness runs always-on pieces on the Mac: pm2 `clutch-web` after the cutover (web on `127.0.0.1:3180`, Tailscale receiver `https://<this Mac's MagicDNS name>:3180`; until then the legacy pm2 job serves 3080).  The Shellular bridges (`scripts/dsh-acp.sh` for id `deepseek`, `scripts/minimax-acp.sh` for id `minimax`) spawn fresh per session and are not always-on pm2 jobs.  If you create, change, load, bootout, or retire any LaunchAgent, cron row, pm2 job, or helper script other agents run, you **must** update `/Users/jay/apps/MAC-LOCAL-PROCESSES.md` and refresh the Apple Note (`apple-notes-coding.sh --update`) in the same change, and say whether it is always-on or on-demand.  Canonical: `AGENT-SYNC.md` § Mac local processes.
 
 ## Apple Notes For Owner-Facing Documents
 
