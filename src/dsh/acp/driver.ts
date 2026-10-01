@@ -106,6 +106,61 @@ export function dshVersionCompatibilityReason(version: string, cli = "dsh"): str
 
 const DSH_EFFORT_LEVELS = ["none", "high", "max"] as const satisfies readonly EffortLevel[];
 
+/** Per-model reasoning-effort levels, keyed by picker id.  A row listed here
+ *  gets its own levels instead of the engine-wide `DSH_EFFORT_LEVELS`; every
+ *  other row keeps the engine-wide list.
+ *
+ *  MiniMax-M3.1-Flash-Preview is newer than the pi-ai catalog dsh installs,
+ *  so dsh only knows it from the `llm-pi-ai.providers.minimax.models` entry in
+ *  `settings.yaml`.  That entry declares `reasoningEfforts` low through max
+ *  and `compat.forceAdaptiveThinking: true`, which makes pi-ai send
+ *  `thinking: {type: "adaptive"}` plus `output_config.effort` to MiniMax's
+ *  Anthropic-compatible endpoint.  dsh then advertises exactly these five
+ *  `reasoning_effort` ids plus the provider-default value, and no `off`, so
+ *  `none` is deliberately absent: dsh would refuse the `off` it maps to.  An
+ *  install whose settings entry lacks `reasoningEfforts` refuses every level
+ *  here, so the rollout adds the entry before a consumer ships this map. */
+export const DSH_PER_MODEL_EFFORT_LEVELS: Readonly<Record<string, readonly EffortLevel[]>> = {
+  "MiniMax-M3.1-Flash-Preview": ["low", "medium", "high", "xhigh", "max"],
+};
+
+/** dsh-acp's `reasoning_effort` value for "the provider's own default".  It
+ *  clears an effort an earlier turn left on a resumed session, and dsh only
+ *  accepts it for a model whose route sets no default effort of its own. */
+export const DSH_PROVIDER_DEFAULT_EFFORT = "";
+
+/** The per-model levels for a picker id (exact id first, then ignoring case),
+ *  or `undefined` when the row has none and falls back to the engine-wide
+ *  list. */
+export function dshPerModelEffortLevels(model: string | undefined): readonly EffortLevel[] | undefined {
+  if (!model) return undefined;
+  const exact = DSH_PER_MODEL_EFFORT_LEVELS[model];
+  if (exact) return exact;
+  const lower = model.toLowerCase();
+  const key = Object.keys(DSH_PER_MODEL_EFFORT_LEVELS).find((id) => id.toLowerCase() === lower);
+  return key === undefined ? undefined : DSH_PER_MODEL_EFFORT_LEVELS[key];
+}
+
+/** Effective effort levels for a picker id: its per-model entry when it has
+ *  one, otherwise the engine-wide list. */
+export function dshEffortLevelsForModel(model: string): readonly EffortLevel[] {
+  return dshPerModelEffortLevels(model) ?? DSH_EFFORT_LEVELS;
+}
+
+/** The `reasoning_effort` value a turn sends, or `undefined` to leave the
+ *  session's current level alone.
+ *
+ *  An explicit effort sends its level (`none` becomes dsh's `off`).  A turn
+ *  with no effort (the picker's Default) sends the provider-default value only
+ *  for a row with per-model levels, so a level a previous turn pinned on a
+ *  resumed session does not silently stick.  Other rows keep the old
+ *  behavior of sending nothing: DeepSeek routes carry a default effort of
+ *  their own, and dsh refuses the provider-default value for those. */
+export function dshReasoningEffortValue(turn: { readonly effort?: EffortLevel; readonly model?: string }): string | undefined {
+  if (turn.effort) return turn.effort === "none" ? "off" : turn.effort;
+  return dshPerModelEffortLevels(turn.model) ? DSH_PROVIDER_DEFAULT_EFFORT : undefined;
+}
+
 export const DSH_PROVIDER_ID = "deepseek-official";
 export const DSH_MINIMAX_PROVIDER_ID = "minimax";
 
@@ -267,6 +322,7 @@ export const dshSupport: AcpSupport = {
   models: STATIC_DSH_MODELS,
   resolveModels: () => STATIC_DSH_MODELS,
   effortLevels: DSH_EFFORT_LEVELS,
+  perModelEffortLevels: DSH_PER_MODEL_EFFORT_LEVELS,
   mcpServers: true,
   // Vanilla `dsh` against ~/.dsh, by design.  BotFleet keeps spawning the
   // upstream engine with its own state; the `clutch` wrapper (state in
@@ -298,8 +354,23 @@ export const dshSupport: AcpSupport = {
   versionCompatibilityReason: (version, config) => dshVersionCompatibilityReason(version, config.cli),
 
   configureSession: async ({ request, sessionId, turn }) => {
-    if (!turn.effort) return;
-    const requested = turn.effort === "none" ? "off" : turn.effort;
+    const requested = dshReasoningEffortValue(turn);
+    if (requested === undefined) return;
+    if (requested === DSH_PROVIDER_DEFAULT_EFFORT) {
+      // Default is best effort: a route that declares its own default effort
+      // refuses this value, and then the session keeps whatever level it had,
+      // which is exactly what Default did before.  Never fail a turn over it.
+      try {
+        await request("session/set_config_option", {
+          sessionId,
+          configId: "reasoning_effort",
+          value: requested,
+        });
+      } catch {
+        // keep the session's current level
+      }
+      return;
+    }
     const result = await request("session/set_config_option", {
       sessionId,
       configId: "reasoning_effort",

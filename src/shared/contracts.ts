@@ -7,7 +7,9 @@
  * in isolation.  Keep the two lists in sync when adding a code.
  */
 
-export type EffortLevel = "none" | "low" | "medium" | "high" | "max";
+/** Reasoning-effort levels, ascending.  Same union as BotFleet's
+ * `EFFORT_LEVELS`; each driver declares the subset its engine takes. */
+export type EffortLevel = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelCatalog {
   default: string;
