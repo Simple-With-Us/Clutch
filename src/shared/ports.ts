@@ -1,6 +1,6 @@
 /**
  * Default port for Clutch web.  Vanilla `dsh web` keeps its upstream default
- * of 3080, so Clutch uses its own port and the two can run side by side.
+ * of 3080 (vanilla), so Clutch uses its own port and the two can run side by side.
  * `CLUTCH_WEB_PORT` overrides it at runtime.
  */
 export const CLUTCH_WEB_PORT_DEFAULT = 3180;
