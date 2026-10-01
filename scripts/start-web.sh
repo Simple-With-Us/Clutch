@@ -35,7 +35,8 @@ reclaim_clutch_port() {
   holder="$(/usr/sbin/lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
   [[ -n "$holder" ]] || return 0
   cmd="$(ps -o command= -p "$holder" 2>/dev/null || true)"
-  case "$cmd" in
+  # Case-insensitive: a checkout named `Clutch` is still ours.
+  case "$(printf '%s' "$cmd" | tr '[:upper:]' '[:lower:]')" in
     *clutch-runtime*|*clutch*)
       if http_up "http://${HOST}:${PORT}/"; then
         echo "clutch-web: :$PORT already healthy (pid $holder), skip reclaim" >&2

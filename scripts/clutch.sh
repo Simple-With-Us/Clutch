@@ -10,11 +10,19 @@
 # web port ("Load failed" on every thread).  Refuse that loop.
 #
 # node_modules resolves relative to CLUTCH_RUNTIME_ROOT (the repo root), so the
-# ~/.local/bin/clutch wrapper can exec this file from anywhere.
+# ~/.local/bin/clutch wrapper can exec this file from anywhere.  npm exposes
+# this file as the `clutch` bin through a node_modules/.bin symlink, so the
+# real path is resolved before lib/ is located.
 set -euo pipefail
 
+self="${BASH_SOURCE[0]}"
+while [[ -L "$self" ]]; do
+  link_dir="$(cd "$(dirname "$self")" && pwd -P)"
+  self="$(readlink "$self")"
+  [[ "$self" == /* ]] || self="$link_dir/$self"
+done
 # shellcheck source=lib/clutch-env.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/clutch-env.sh"
+source "$(cd "$(dirname "$self")" && pwd -P)/lib/clutch-env.sh"
 
 BIN="$CLUTCH_RUNTIME_ROOT/node_modules/.bin/dsh"
 

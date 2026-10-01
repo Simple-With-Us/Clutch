@@ -199,18 +199,17 @@ function clutchEngineHome(env: Record<string, string | undefined>, home: string)
 
 /** Candidate credential files for the engine.
  *
- * With a CLI, the answer follows its stem: `clutch` always reads
+ * The answer follows the CLI stem: `clutch` always reads
  * $CLUTCH_HOME/dsh/.credentials.yaml (the Clutch wrapper forces DSH_HOME
  * there), and vanilla `dsh` honours the same DSH_HOME / HOME precedence the
- * upstream engine uses.  Without a CLI, both stores are candidates, vanilla
- * first.  Other DeepSeek clients have separate stores that do not
+ * upstream engine uses.  The CLI defaults to `dsh`, matching
+ * `dshSupport.defaultCli`, so the store checked is always the one the spawned
+ * process reads.  Other DeepSeek clients have separate stores that do not
  * authenticate this engine. */
-export function dshCredentialCandidates(env: Record<string, string | undefined>, cli?: string): string[] {
+export function dshCredentialCandidates(env: Record<string, string | undefined>, cli = "dsh"): string[] {
   const home = env.HOME || env.USERPROFILE || homedir();
-  const vanilla = join(env.DSH_HOME || join(home, ".dsh"), ".credentials.yaml");
-  const clutch = join(clutchEngineHome(env, home), ".credentials.yaml");
-  if (cli === undefined) return [vanilla, clutch];
-  return dshEngineStem(cli) === "clutch" ? [clutch] : [vanilla];
+  if (dshEngineStem(cli) === "clutch") return [join(clutchEngineHome(env, home), ".credentials.yaml")];
+  return [join(env.DSH_HOME || join(home, ".dsh"), ".credentials.yaml")];
 }
 
 /** The login hint for a configured engine CLI, naming the store it reads. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +88,8 @@ describe("engine state home per CLI stem", () => {
     expect(dshCredentialCandidates(env, "dsh")).toEqual(["/elsewhere/.credentials.yaml"]);
     expect(dshCredentialCandidates({ HOME: "/home/u" }, "dsh")).toEqual(["/home/u/.dsh/.credentials.yaml"]);
     expect(dshCredentialCandidates({ HOME: "/home/u" }, "clutch")).toEqual(["/home/u/.clutch/dsh/.credentials.yaml"]);
+    // No CLI means the default (vanilla dsh), never "either store".
+    expect(dshCredentialCandidates(env)).toEqual(["/elsewhere/.credentials.yaml"]);
   });
 
   it("names the matching store in the login note", () => {
@@ -150,6 +152,33 @@ describe("clutch CLI wrapper", () => {
       expect(out).toBe(join(clutchHome, "dsh"));
       expect(statSync(join(clutchHome, "dsh")).isDirectory()).toBe(true);
       expect(statSync(join(clutchHome, "dsh")).mode & 0o077).toBe(0);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it("finds its lib when npm runs it through a node_modules/.bin symlink", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "clutch-bin-link-"));
+    try {
+      const runtime = join(scratch, "runtime");
+      const binDir = join(runtime, "node_modules", ".bin");
+      mkdirSync(binDir, { recursive: true });
+      const stub = join(binDir, "dsh");
+      writeFileSync(stub, '#!/usr/bin/env bash\nprintf "%s" "$DSH_HOME"\n');
+      chmodSync(stub, 0o755);
+      const link = join(binDir, "clutch");
+      symlinkSync(join(ROOT, "scripts/clutch.sh"), link);
+      const clutchHome = join(scratch, "clutch-home");
+      const out = execFileSync(link, ["--version"], {
+        env: {
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          HOME: scratch,
+          CLUTCH_RUNTIME_ROOT: runtime,
+          CLUTCH_HOME: clutchHome,
+        },
+        encoding: "utf8",
+      });
+      expect(out).toBe(join(clutchHome, "dsh"));
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

@@ -80,7 +80,8 @@ async function reclaimPort(port: string): Promise<void> {
   const holder = await holderOnPort(port);
   if (holder === null) return;
   const cmd = await readCommand(holder);
-  if (cmd === null || !cmd.includes("clutch")) {
+  // Case-insensitive: a checkout named `Clutch` is still ours.
+  if (cmd === null || !cmd.toLowerCase().includes("clutch")) {
     log(`:${port} held by pid ${holder} (${cmd ?? "unknown"}) — not clutch, refusing to reclaim`);
     process.exit(3);
   }
