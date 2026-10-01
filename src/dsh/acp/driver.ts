@@ -119,7 +119,9 @@ const DSH_EFFORT_LEVELS = ["none", "high", "max"] as const satisfies readonly Ef
  *  `reasoning_effort` ids plus the provider-default value, and no `off`, so
  *  `none` is deliberately absent: dsh would refuse the `off` it maps to.  An
  *  install whose settings entry lacks `reasoningEfforts` refuses every level
- *  here, so the rollout adds the entry before a consumer ships this map. */
+ *  here, so a consumer that can read the install's settings.yaml should use
+ *  `dshInstalledEffortLevels`, which narrows this map to what the file
+ *  declares. */
 export const DSH_PER_MODEL_EFFORT_LEVELS: Readonly<Record<string, readonly EffortLevel[]>> = {
   "MiniMax-M3.1-Flash-Preview": ["low", "medium", "high", "xhigh", "max"],
 };
@@ -139,6 +141,62 @@ export function dshPerModelEffortLevels(model: string | undefined): readonly Eff
   const lower = model.toLowerCase();
   const key = Object.keys(DSH_PER_MODEL_EFFORT_LEVELS).find((id) => id.toLowerCase() === lower);
   return key === undefined ? undefined : DSH_PER_MODEL_EFFORT_LEVELS[key];
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The settings.yaml model entry dsh serves a picker id from: the entry under
+ *  the provider route the driver sends it to (`dshProviderForModel`), at
+ *  `llm-pi-ai.providers` or a top-level `providers`, matched ignoring case. */
+function installedModelEntry(settings: unknown, model: string): Record<string, unknown> | undefined {
+  if (!isPlainRecord(settings)) return undefined;
+  const route = dshProviderForModel(model);
+  const piAi = settings["llm-pi-ai"];
+  const maps = [isPlainRecord(piAi) ? piAi.providers : undefined, settings.providers];
+  const lower = model.toLowerCase();
+  for (const providers of maps) {
+    if (!isPlainRecord(providers)) continue;
+    const block = providers[route];
+    if (!isPlainRecord(block) || !Array.isArray(block.models)) continue;
+    const entry = block.models.find(
+      (candidate) => isPlainRecord(candidate) && typeof candidate.id === "string" && candidate.id.toLowerCase() === lower,
+    );
+    if (isPlainRecord(entry)) return entry;
+  }
+  return undefined;
+}
+
+/** The per-model levels this install can actually take, from its parsed
+ *  settings.yaml (pass `undefined` when the file is missing or unreadable).
+ *
+ *  `DSH_PER_MODEL_EFFORT_LEVELS` says what a row offers when it is configured
+ *  as documented; this narrows it to what the installed settings declare, so
+ *  a consumer that reads the file never offers a level dsh would refuse.  A
+ *  row keeps a level only when its entry under the row's provider route maps
+ *  that level in `reasoningEfforts` to a wire value.  A row with no entry,
+ *  `reasoningEfforts: false`, or no `reasoningEfforts` gets `[]`: stock dsh
+ *  does not catalog M3.1, so the entry is the only thing that makes the
+ *  levels exist.  Every row of `DSH_PER_MODEL_EFFORT_LEVELS` is present in the
+ *  result, so an explicit `[]` can win over the static map. */
+export function dshInstalledEffortLevels(settings: unknown): Record<string, readonly EffortLevel[]> {
+  const installed: Record<string, readonly EffortLevel[]> = {};
+  for (const [model, levels] of Object.entries(DSH_PER_MODEL_EFFORT_LEVELS)) {
+    const declared = installedModelEntry(settings, model)?.reasoningEfforts;
+    installed[model] = isPlainRecord(declared)
+      ? levels.filter((level) => {
+          if (level === "none") {
+            // dsh's `off` may map to null, which means "omit the thinking field".
+            const off = declared.off;
+            return off === null || (typeof off === "string" && off.length > 0);
+          }
+          const wire = declared[level];
+          return typeof wire === "string" && wire.length > 0;
+        })
+      : [];
+  }
+  return installed;
 }
 
 /** Effective effort levels for a picker id: its per-model entry when it has

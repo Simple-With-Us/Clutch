@@ -10,6 +10,7 @@ export {
   dshCredentialCandidates,
   dshEffortLevelsForModel,
   dshEngineStem,
+  dshInstalledEffortLevels,
   dshLoginNote,
   dshModelIdFromOptionValue,
   dshCanonicalWireModelId,

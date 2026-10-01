@@ -9,6 +9,7 @@ import {
   DSH_PROVIDER_DEFAULT_EFFORT,
   classifyDshError,
   dshEffortLevelsForModel,
+  dshInstalledEffortLevels,
   dshModelIdFromOptionValue,
   dshModelOptionValue,
   dshPerModelEffortLevels,
@@ -209,5 +210,46 @@ describe("per-model effort levels", () => {
     await expect(
       dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31, effort: "max" } }),
     ).rejects.toThrow(/still high/);
+  });
+
+  describe("installed levels", () => {
+    const settingsWith = (entry: Record<string, unknown>, route = "minimax") => ({
+      "llm-pi-ai": { providers: { [route]: { apiKeyEnv: "MINIMAX_API_KEY", models: [{ id: "MiniMax-M3", name: "MiniMax-M3" }, entry] } } },
+    });
+    const configured = {
+      id: M31,
+      name: M31,
+      reasoningEfforts: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+      compat: { forceAdaptiveThinking: true },
+    };
+
+    it("offers every level an install's settings entry declares", () => {
+      expect(dshInstalledEffortLevels(settingsWith(configured))).toEqual({ [M31]: ["low", "medium", "high", "xhigh", "max"] });
+    });
+
+    it("keeps only the declared levels, in picker order", () => {
+      const partial = { ...configured, reasoningEfforts: { max: "max", low: "low" } };
+      expect(dshInstalledEffortLevels(settingsWith(partial))[M31]).toEqual(["low", "max"]);
+    });
+
+    it("matches the entry ignoring case and accepts a top-level providers map", () => {
+      const lower = { ...configured, id: M31.toLowerCase() };
+      expect(dshInstalledEffortLevels({ providers: { minimax: { models: [lower] } } })[M31]).toEqual(DSH_PER_MODEL_EFFORT_LEVELS[M31]);
+    });
+
+    it("offers nothing when the install cannot take a level", () => {
+      // The repo's minimax-headless profile declares M3.1 with reasoningEfforts: false.
+      expect(dshInstalledEffortLevels(settingsWith({ id: M31, reasoningEfforts: false }))[M31]).toEqual([]);
+      // An entry without reasoningEfforts is a non-reasoning model to dsh, since pi-ai does not catalog M3.1.
+      expect(dshInstalledEffortLevels(settingsWith({ id: M31, name: M31 }))[M31]).toEqual([]);
+      // Declared under another route: the driver sends ["minimax", id], which dsh refuses anyway.
+      expect(dshInstalledEffortLevels(settingsWith(configured, "minimax-cn"))[M31]).toEqual([]);
+      // Empty wire values are not levels.
+      expect(dshInstalledEffortLevels(settingsWith({ id: M31, reasoningEfforts: { low: "", max: null } }))[M31]).toEqual([]);
+      // No settings file, or a malformed one.
+      for (const settings of [undefined, null, "text", [], { "llm-pi-ai": { providers: { minimax: { models: "x" } } } }]) {
+        expect(dshInstalledEffortLevels(settings)).toEqual({ [M31]: [] });
+      }
+    });
   });
 });
