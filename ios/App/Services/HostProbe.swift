@@ -1,8 +1,8 @@
 import Foundation
 
-/// Cookie-less health probe of a harness web origin.
+/// Cookie-less health probe of a clutch web origin.
 ///
-/// harness web (`dsh web`) auth-walls `/`: without its signed cookie it
+/// clutch web (`dsh web`) auth-walls `/`: without its signed cookie it
 /// answers `401` with a fixed plain-text body.  That wall is the most reliable
 /// fingerprint available without credentials, so an ephemeral session (no
 /// shared cookies) is used on purpose.
@@ -14,12 +14,12 @@ public enum HostProbe {
             return .online
         }
         if statusCode > 0 {
-            return .notHarness
+            return .notClutch
         }
         return .offline
     }
 
-    public static func probe(_ host: HarnessHost, timeout: TimeInterval = 5) async -> HostStatus {
+    public static func probe(_ host: ClutchHost, timeout: TimeInterval = 5) async -> HostStatus {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout

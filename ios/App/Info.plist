@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Harness</string>
+	<string>Clutch</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Clutch</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -22,10 +22,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.simplewithus.harness.pairing</string>
+			<string>codes.clutch.pairing</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>harness</string>
+				<string>clutch</string>
 			</array>
 		</dict>
 	</array>
@@ -41,9 +41,9 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Harness uses the camera to scan the pairing code shown on your Mac.</string>
+	<string>Clutch uses the camera to scan the pairing code shown on your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Harness connects to harness running on a Mac on your local network.</string>
+	<string>Clutch connects to the clutch server running on a Mac on your local network.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

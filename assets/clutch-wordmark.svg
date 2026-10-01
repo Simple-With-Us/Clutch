@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Clutch">
+  <!-- Mirrors assets/clutch-icon.svg (the Dock icon) at 256px.  Full-bleed
+       1:1 square with 90 degree corners — the previous revision used rx="56",
+       a pre-baked squircle, which the fleet icon rule forbids.  Neutral C plus
+       CLUTCH identity; no third-party mark. -->
+  <rect width="256" height="256" fill="#151820"/>
+  <rect y="253" width="256" height="3" fill="#1E293B"/>
+  <path fill="#F8FAFC" d="M176.6 64.6A55 55 0 1 0 176.6 135.4L155.2 117.4A27 27 0 1 1 155.2 82.6z"/>
+  <text x="128" y="200" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="26" font-weight="600" letter-spacing="3"
+        fill="#94A3B8">CLUTCH</text>
+</svg>

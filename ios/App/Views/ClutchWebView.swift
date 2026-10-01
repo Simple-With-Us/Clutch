@@ -2,20 +2,20 @@ import SwiftUI
 import UIKit
 import WebKit
 
-/// What the embedded harness web page is doing.
+/// What the embedded clutch web page is doing.
 public enum WebSurfaceState: Equatable {
     case loading
     case ready
-    /// harness web answered 401: no valid cookie and no valid launch token.
+    /// clutch web answered 401: no valid cookie and no valid launch token.
     case needsPairing
     case failed(String)
 }
 
-/// The full harness web UI (sessions, streaming chat, model picker, settings)
-/// in a `WKWebView`, with the Harness brand treatment injected the same way
+/// The full clutch web UI (sessions, streaming chat, model picker, settings)
+/// in a `WKWebView`, with the Clutch brand treatment injected the same way
 /// the Mac Dock app does it.
-struct HarnessWebView: UIViewRepresentable {
-    let host: HarnessHost
+struct ClutchWebView: UIViewRepresentable {
+    let host: ClutchHost
     /// Changes whenever the page must be (re)loaded: new host, new pairing, or Reload.
     let loadKey: String
     @Binding var state: WebSurfaceState
@@ -29,7 +29,7 @@ struct HarnessWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.allowsInlineMediaPlayback = true
-        config.applicationNameForUserAgent = "HarnessiOS/\(Bundle.main.shortVersion)"
+        config.applicationNameForUserAgent = "ClutchiOS/\(Bundle.main.shortVersion)"
         config.userContentController = Self.brandingController()
 
         let webView = WKWebView(frame: .zero, configuration: config)
@@ -57,15 +57,15 @@ struct HarnessWebView: UIViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-        var parent: HarnessWebView
+        var parent: ClutchWebView
         var loadedKey: String?
-        private var currentHost: HarnessHost?
+        private var currentHost: ClutchHost?
 
-        init(parent: HarnessWebView) {
+        init(parent: ClutchWebView) {
             self.parent = parent
         }
 
-        func load(host: HarnessHost, key: String, in webView: WKWebView) {
+        func load(host: ClutchHost, key: String, in webView: WKWebView) {
             loadedKey = key
             currentHost = host
             setState(.loading)
@@ -215,23 +215,23 @@ struct HarnessWebView: UIViewRepresentable {
 
     // MARK: - Branding
 
-    /// Hides the upstream brand mark and adds the Harness "H" monogram,
-    /// matching `src/web/dock-app/HarnessWindow.swift` on the Mac.
+    /// Hides the upstream brand mark and adds the Clutch "C" monogram,
+    /// matching `src/web/dock-app/ClutchWindow.swift` on the Mac.
     static func brandingController() -> WKUserContentController {
         let controller = WKUserContentController()
         let css = """
         [data-slot*="brand"], [data-slot*="brand"] *, [class*="brandMark"], [class*="brandMark"] *,
         [class*="brandName"], [class*="brandName"] *, [class*="_brandIdentity"] > span,
-        [class*="_brandIdentity"] > div:not([data-harness-brand]),
-        button[class*="brand"] svg:not([data-harness-brand] svg),
-        button[class*="_brand"] svg:not([data-harness-brand] svg) {
+        [class*="_brandIdentity"] > div:not([data-clutch-brand]),
+        button[class*="brand"] svg:not([data-clutch-brand] svg),
+        button[class*="_brand"] svg:not([data-clutch-brand] svg) {
           display: none !important;
         }
         [class*="_fishHitbox"], [class*="_fish"], [class*="fishHitbox"] {
           display: none !important;
         }
-        [data-harness-brand] { display: inline-flex !important; }
-        [data-harness-brand] svg { display: block !important; }
+        [data-clutch-brand] { display: inline-flex !important; }
+        [data-clutch-brand] svg { display: block !important; }
         """
         let cssBootstrap = """
         (function () {
@@ -246,12 +246,12 @@ struct HarnessWebView: UIViewRepresentable {
         (function () {
           const mark = () => {
             const identity = document.querySelector('[class*="brandIdentity"]');
-            if (identity && !identity.querySelector('[data-harness-brand="1"]')) {
+            if (identity && !identity.querySelector('[data-clutch-brand="1"]')) {
               const h = document.createElement('div');
-              h.dataset.harnessBrand = '1';
+              h.dataset.clutchBrand = '1';
               h.style.cssText = 'display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;line-height:1;user-select:none;padding:1px 0;';
-              h.innerHTML = '<svg width="22" height="18" viewBox="0 0 484 440" fill="currentColor" style="display:block;"><path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/></svg>'
-                + '<span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">HARNESS</span>';
+              h.innerHTML = '<svg width="22" height="18" viewBox="0 0 484 440" fill="currentColor" style="display:block;"><path d="M436.5 78.6A220 220 0 1 0 436.5 361.4L350.7 289.4A108 108 0 1 1 350.7 150.6z"/></svg>'
+                + '<span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">CLUTCH</span>';
               identity.appendChild(h);
             }
           };

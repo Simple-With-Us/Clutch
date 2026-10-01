@@ -1,8 +1,8 @@
 import Foundation
 
-/// A host the app can pair with: the harness web origin plus the one-time
+/// A host the app can pair with: the clutch web origin plus the one-time
 /// launch token that `dsh web` mints per process.  Visiting
-/// `<origin>/?token=<launchToken>` once makes harness-web set a signed,
+/// `<origin>/?token=<launchToken>` once makes clutch-web set a signed,
 /// authority-bound cookie (30-day lifetime) and redirect to `/`; after that the
 /// cookie alone authenticates, so the token is only needed for the first load.
 public struct PairingPayload: Equatable {
@@ -13,7 +13,6 @@ public struct PairingPayload: Equatable {
 
 public enum PairingLinkError: Error, Equatable {
     case empty
-    case retiredCompanion
     case unsupportedScheme(String)
     case missingHost
     case invalidURL
@@ -22,10 +21,8 @@ public enum PairingLinkError: Error, Equatable {
         switch self {
         case .empty:
             return "Enter a pairing link or an address."
-        case .retiredCompanion:
-            return "MiniMax Remote has been retired.\u{00A0} Pair with harness on your Mac instead — MiniMax models are available there."
         case .unsupportedScheme(let scheme):
-            return "Links starting with \(scheme):// are not harness pairing links."
+            return "Links starting with \(scheme):// are not clutch pairing links."
         case .missingHost:
             return "That pairing link does not name a host."
         case .invalidURL:
@@ -34,17 +31,14 @@ public enum PairingLinkError: Error, Equatable {
     }
 }
 
-/// Parses everything a person can hand the app to reach harness web:
+/// Parses everything a person can hand the app to reach clutch web:
 ///
-/// - `harness://pair?url=<launch URL>&name=<label>` — what `harness-pair-ios` prints and encodes as a QR code.
-/// - `harness://pair?h=<host>&p=<port>&tls=1&t=<token>&name=<label>` — the original v0.2 pairing form.
+/// - `clutch://pair?url=<launch URL>&name=<label>` — what `clutch-pair-ios` prints and encodes as a QR code.
+/// - `clutch://pair?h=<host>&p=<port>&tls=1&t=<token>&name=<label>` — the original v0.2 pairing form.
 /// - a plain `http(s)://host[:port]/?token=…` launch URL, as printed by `dsh web`.
-/// - a bare `host[:port]` address, which defaults to port 3080.
-///
-/// The retired MiniMax Remote companion (`minimax://`, port 7842) is rejected with a clear message.
+/// - a bare `host[:port]` address, which defaults to port 3180.
 public enum PairingLink {
-    public static let defaultPort = 3080
-    static let retiredCompanionPort = 7842
+    public static let defaultPort = 3180
 
     public static func parse(_ raw: String) -> Result<PairingPayload, PairingLinkError> {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -53,12 +47,10 @@ public enum PairingLink {
         if let schemeEnd = trimmed.range(of: "://") {
             let scheme = trimmed[..<schemeEnd.lowerBound].lowercased()
             switch scheme {
-            case "harness":
-                return parseHarnessLink(trimmed)
+            case "clutch":
+                return parseClutchLink(trimmed)
             case "http", "https":
                 return parseWebURL(trimmed, name: nil)
-            case "minimax", "minimax-remote":
-                return .failure(.retiredCompanion)
             default:
                 return .failure(.unsupportedScheme(scheme))
             }
@@ -69,7 +61,7 @@ public enum PairingLink {
 
     // MARK: - Forms
 
-    private static func parseHarnessLink(_ raw: String) -> Result<PairingPayload, PairingLinkError> {
+    private static func parseClutchLink(_ raw: String) -> Result<PairingPayload, PairingLinkError> {
         guard let comps = URLComponents(string: raw), comps.host?.lowercased() == "pair" else {
             return .failure(.invalidURL)
         }
@@ -123,7 +115,6 @@ public enum PairingLink {
     }
 
     private static func build(origin: URL, token: String?, name: String?) -> Result<PairingPayload, PairingLinkError> {
-        if origin.port == retiredCompanionPort { return .failure(.retiredCompanion) }
         let cleanedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines)
         return .success(PairingPayload(
             name: (name?.isEmpty == false ? name! : defaultName(for: origin)),

@@ -1,20 +1,20 @@
 import XCTest
 
-/// End-to-end run against a live harness web on the Mac hosting the Simulator.
+/// End-to-end run against a live clutch web on the Mac hosting the Simulator.
 ///
-/// Opt-in: skipped unless `HARNESS_PAIR_LINK` reaches the runner, e.g.
+/// Opt-in: skipped unless `CLUTCH_PAIR_LINK` reaches the runner, e.g.
 ///
-///     TEST_RUNNER_HARNESS_PAIR_LINK="$(node src/web/pair-ios.ts --simulator --print)" \
-///       xcodebuild … -only-testing:HarnessUITests test
+///     TEST_RUNNER_CLUTCH_PAIR_LINK="$(node src/web/pair-ios.ts --simulator --print)" \
+///       xcodebuild … -only-testing:ClutchUITests test
 ///
 /// Screenshots are kept as attachments named `ios-<state>`.
-final class HarnessLiveUITests: XCTestCase {
+final class ClutchLiveUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-HarnessResetHosts"]
+        app.launchArguments = ["-ClutchResetHosts"]
     }
 
     private func snap(_ name: String) {
@@ -41,8 +41,8 @@ final class HarnessLiveUITests: XCTestCase {
     }
 
     private func pairLink() throws -> URL {
-        let raw = ProcessInfo.processInfo.environment["HARNESS_PAIR_LINK"] ?? ""
-        try XCTSkipIf(raw.isEmpty, "HARNESS_PAIR_LINK not set; live run skipped")
+        let raw = ProcessInfo.processInfo.environment["CLUTCH_PAIR_LINK"] ?? ""
+        try XCTSkipIf(raw.isEmpty, "CLUTCH_PAIR_LINK not set; live run skipped")
         return try XCTUnwrap(URL(string: raw))
     }
 
@@ -50,20 +50,20 @@ final class HarnessLiveUITests: XCTestCase {
         let link = try pairLink()
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Pair With Harness"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30))
         snap("ios-pairing")
 
         app.open(link)
         let web = app.webViews.firstMatch
         XCTAssertTrue(web.waitForExistence(timeout: 60))
         XCTAssertTrue(waitAny([web.buttons["New Session"], web.buttons["Settings"], web.staticTexts["Into the Unknown"]], timeout: 90),
-                      "harness web did not render after pairing")
+                      "clutch web did not render after pairing")
         sleep(2)
         snap("ios-connected")
         dump("tree-connected")
 
         // New session in a workspace, then a short prompt with a streamed reply.
-        let workspace = ProcessInfo.processInfo.environment["HARNESS_WORKSPACE_HINT"] ?? "harness"
+        let workspace = ProcessInfo.processInfo.environment["CLUTCH_WORKSPACE_HINT"] ?? "clutch"
         tapFirst([web.buttons["New Session"], web.buttons["New session"]])
         let chooser = web.buttons["Choose workspace"]
         XCTAssertTrue(chooser.waitForExistence(timeout: 30), "no workspace chooser")
@@ -89,7 +89,7 @@ final class HarnessLiveUITests: XCTestCase {
         snap("ios-streamed-reply")
         dump("tree-reply")
 
-        // Switch model through the harness web model picker.
+        // Switch model through the clutch web model picker.
         let picker = web.buttons.matching(NSPredicate(format: "label BEGINSWITH[c] 'Select model'")).firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 30), "no model picker")
         let before = picker.label

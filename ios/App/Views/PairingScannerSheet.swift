@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import VisionKit
 
-/// Camera QR scanner for the pairing code that `harness-pair-ios` shows on the Mac.
+/// Camera QR scanner for the pairing code that `clutch-pair-ios` shows on the Mac.
 public struct PairingScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
     public let onPaired: (PairingPayload) -> Void

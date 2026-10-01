@@ -3,19 +3,19 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** The model-picker decoration script is embedded as a Swift string literal in
- *  HarnessWindow.swift, so the only honest unit test extracts the functions
+ *  ClutchWindow.swift, so the only honest unit test extracts the functions
  *  from that file and runs them against a minimal fake DOM.  Extraction is by
  *  brace counting from each `const name = () => {` marker. */
 
 const SWIFT = readFileSync(
-  join(__dirname, "..", "src", "web", "dock-app", "HarnessWindow.swift"),
+  join(__dirname, "..", "src", "web", "dock-app", "ClutchWindow.swift"),
   "utf8",
 );
 
 function extractConstFn(source: string, name: string): string {
   const marker = `const ${name} = () => {`;
   const start = source.indexOf(marker);
-  if (start === -1) throw new Error(`${name} not found in HarnessWindow.swift`);
+  if (start === -1) throw new Error(`${name} not found in ClutchWindow.swift`);
   let depth = 0;
   for (let i = source.indexOf("{", start); i < source.length; i++) {
     const ch = source[i];
@@ -99,7 +99,7 @@ function loadPickerFns(elements: FakeEl[]) {
   };
 }
 
-describe("HarnessWindow model-picker decoration", () => {
+describe("ClutchWindow model-picker decoration", () => {
   it("applies badges to model rows: the heading pass must not consume them", () => {
     // Regression: markPickerHeadings matched 'MiniMax-*'/'DeepSeek-*' rows and
     // inserted a logo child, and markPickerModelRows skips elements that
@@ -113,7 +113,7 @@ describe("HarnessWindow model-picker decoration", () => {
     markPickerHeadings();
     markPickerModelRows();
     const badges = rows.map(
-      (row) => row.children.find((c) => c.dataset.harnessModelBadge === "1")?.textContent,
+      (row) => row.children.find((c) => c.dataset.clutchModelBadge === "1")?.textContent,
     );
     expect(badges).toEqual(["Preview", "Multimodal", "2x Cost"]);
   });
@@ -123,7 +123,7 @@ describe("HarnessWindow model-picker decoration", () => {
     const { markPickerHeadings } = loadPickerFns([row]);
     markPickerHeadings();
     expect(row.children).toHaveLength(0);
-    expect(row.dataset.harnessMmPicker).toBeUndefined();
+    expect(row.dataset.clutchMmPicker).toBeUndefined();
     expect(row.textContent).toBe("MiniMax-M3");
   });
 
@@ -133,11 +133,11 @@ describe("HarnessWindow model-picker decoration", () => {
     const { markPickerHeadings } = loadPickerFns([mm, ds]);
     markPickerHeadings();
     expect(mm.textContent).toBe("MiniMax");
-    expect(mm.dataset.harnessMmPicker).toBe("1");
+    expect(mm.dataset.clutchMmPicker).toBe("1");
     expect(mm.firstChild?.tagName).toBe("img");
-    expect(mm.firstChild?.dataset.harnessMmPickerMark).toBe("1");
+    expect(mm.firstChild?.dataset.clutchMmPickerMark).toBe("1");
     expect(ds.textContent).toBe("DeepSeek");
-    expect(ds.dataset.harnessDsPicker).toBe("1");
-    expect(ds.firstChild?.dataset.harnessDsPickerMark).toBe("1");
+    expect(ds.dataset.clutchDsPicker).toBe("1");
+    expect(ds.firstChild?.dataset.clutchDsPickerMark).toBe("1");
   });
 });

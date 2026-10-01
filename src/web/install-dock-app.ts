@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Build ~/Applications/Harness.app.  The production installer is
- * `scripts/install-dock-app.sh` (bundle id `com.simplewithus.harness.mac` so
- * existing Dock pins survive).  This TS entry execs that script.
+ * Build ~/Applications/Clutch.app.  The production installer is
+ * `scripts/install-dock-app.sh` (bundle id `codes.clutch.macos`).  This TS
+ * entry execs that script against this checkout.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";

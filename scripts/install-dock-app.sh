@@ -1,36 +1,29 @@
 #!/usr/bin/env bash
-# Build ~/Applications/Harness.app (WKWebView shell around DeepSeek Harness web,
+# Build ~/Applications/Clutch.app (WKWebView shell around the clutch web UI,
 # Dock running-dot) and pin it to the Dock.  Icon is a full-bleed 1:1 square,
-# sharp 90° corners.  Display name "Harness"; bundle id history (newest first):
-#   2026-09-23 — com.simplewithus.harness.mac (consumer rebrand; ownership
-#                transferred to simplewithus.com).  Dock pin and saved frames
-#                do NOT survive the rename — re-pin after install.
-#   2026-09-19 — services.jays.harness (interim owner-personal id).
-#   earlier    — com.jays.dsh-harness-web.
+# sharp 90° corners.  Display name "Clutch"; bundle id codes.clutch.macos;
+# version 1.0 (1).  The app is ad-hoc signed.  Sources and assets come from
+# the runtime clone ($CLUTCH_RUNTIME_ROOT, default ~/apps/clutch-runtime), so
+# this script copies nothing into it.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
 LIVE="${CLUTCH_RUNTIME_ROOT:-${HOME}/apps/clutch-runtime}"
-APP="${HOME}/Applications/Harness.app"
-PNG="${ROOT}/assets/harness-icon-1024.png"
-[[ -f "$PNG" ]] || PNG="${LIVE}/assets/harness-icon-1024.png"
-SWIFT="${ROOT}/src/web/dock-app/HarnessWindow.swift"
-[[ -f "$SWIFT" ]] || SWIFT="${ROOT}/HarnessWindow.swift"
-[[ -f "$SWIFT" ]] || SWIFT="${LIVE}/HarnessWindow.swift"
+APP="${HOME}/Applications/Clutch.app"
+PNG="${LIVE}/assets/clutch-icon-1024.png"
+SWIFT="${LIVE}/src/web/dock-app/ClutchWindow.swift"
 
 if [[ ! -f "$PNG" ]]; then
-  echo "missing harness-icon-1024.png" >&2
+  echo "missing ${PNG}" >&2
   exit 1
 fi
 if [[ ! -f "$SWIFT" ]]; then
-  echo "missing HarnessWindow.swift" >&2
+  echo "missing ${SWIFT}" >&2
   exit 1
 fi
 
 # Terminate existing running instance so new build takes effect immediately
-pkill -f DeepSeekHarness 2>/dev/null || true
+pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
 
 mkdir -p "${HOME}/Applications"
 rm -rf "$APP"
@@ -41,9 +34,9 @@ swiftc -O \
   -target arm64-apple-macos14 \
   -sdk "$SDK" \
   -framework Cocoa -framework WebKit \
-  -o "$APP/Contents/MacOS/DeepSeekHarness" \
+  -o "$APP/Contents/MacOS/Clutch" \
   "$SWIFT"
-chmod 755 "$APP/Contents/MacOS/DeepSeekHarness"
+chmod 755 "$APP/Contents/MacOS/Clutch"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -60,15 +53,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleDisplayName</key><string>Harness</string>
-  <key>CFBundleExecutable</key><string>DeepSeekHarness</string>
+  <key>CFBundleDisplayName</key><string>Clutch</string>
+  <key>CFBundleExecutable</key><string>Clutch</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>com.simplewithus.harness.mac</string>
+  <key>CFBundleIdentifier</key><string>codes.clutch.macos</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>Harness</string>
+  <key>CFBundleName</key><string>Clutch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.1</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSMultipleInstancesProhibited</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -83,27 +76,6 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 echo -n "APPL????" > "$APP/Contents/PkgInfo"
 codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
-
-# LIVE is a symlink to this repo on the owner's Mac.  Copying onto itself
-# is a no-op at best and a loop at worst.
-live_real="$(cd "$LIVE" 2>/dev/null && pwd -P || true)"
-root_real="$(cd "$ROOT" && pwd -P)"
-if [[ -n "$live_real" && "$live_real" != "$root_real" ]]; then
-  mkdir -p "${LIVE}/assets" "${LIVE}/scripts/lib"
-  cp "$SWIFT" "${LIVE}/HarnessWindow.swift"
-  cp "${ROOT}/scripts/lib/clutch-env.sh" "${LIVE}/scripts/lib/clutch-env.sh"
-  cp "${ROOT}/scripts/ensure-web.sh" "${LIVE}/scripts/ensure-web.sh"
-  cp "${ROOT}/scripts/open-clutch.sh" "${LIVE}/scripts/open-clutch.sh"
-  cp "${ROOT}/scripts/clutch.sh" "${LIVE}/scripts/clutch.sh"
-  cp "$PNG" "${LIVE}/assets/harness-icon-1024.png"
-  # HarnessWindow.swift inlines the MiniMax mark for the sidebar chip and the
-  # model-picker provider group, so it has to land in the live assets dir too.
-  MARK="${ROOT}/assets/minimax-mark.svg"
-  [[ -f "$MARK" ]] || MARK="${LIVE}/assets/minimax-mark.svg"
-  [[ -f "$MARK" ]] && cp "$MARK" "${LIVE}/assets/minimax-mark.svg"
-  chmod 755 "${LIVE}/scripts/ensure-web.sh" "${LIVE}/scripts/open-clutch.sh" \
-            "${LIVE}/scripts/clutch.sh"
-fi
 
 # Put the pinned `clutch` CLI on PATH as a real wrapper file, not a symlink:
 # scripts/clutch.sh resolves its lib relative to itself, and a link would
@@ -122,18 +94,14 @@ else
 fi
 
 if command -v dockutil >/dev/null 2>&1; then
-  # Legacy pins from the pre-rebrand .app name.  Remove by either label.
-  for label in "Harness" "DeepSeek Harness Web"; do
-    if dockutil --list | grep -q "$label"; then
-      dockutil --remove "$label" --no-restart || true
+  if ! dockutil --list | awk -F'\t' '{print $1}' | grep -qx "Clutch"; then
+    if dockutil --list | awk -F'\t' '{print $1}' | grep -qx "DeepSeek"; then
+      dockutil --add "$APP" --after "DeepSeek" --no-restart
+    else
+      dockutil --add "$APP" --no-restart
     fi
-  done
-  if dockutil --list | awk -F'\t' '{print $1}' | grep -qx "DeepSeek"; then
-    dockutil --add "$APP" --after "DeepSeek" --no-restart
-  else
-    dockutil --add "$APP" --no-restart
+    killall Dock 2>/dev/null || true
   fi
-  killall Dock 2>/dev/null || true
 else
   echo "dockutil not installed; app is at $APP — drag it to the Dock" >&2
 fi

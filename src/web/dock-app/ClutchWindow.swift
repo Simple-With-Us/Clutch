@@ -18,13 +18,19 @@ import WebKit
 ///      user runs `bash ~/apps/clutch-runtime/scripts/start-web.sh`
 ///      interactively (which prints the launch URL to stdout) and visits
 ///      it once in any browser.
-private var harnessURLString: String {
+/// State home: `$CLUTCH_HOME`, default `~/.clutch`.
+private func clutchHomePath() -> String {
+    if let h = ProcessInfo.processInfo.environment["CLUTCH_HOME"], !h.isEmpty { return h }
+    let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+    return (home as NSString).appendingPathComponent(".clutch")
+}
+
+private var clutchURLString: String {
     if let envURL = ProcessInfo.processInfo.environment["CLUTCH_WEB_URL"],
        !envURL.isEmpty {
         return envURL
     }
-    let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
-    let launchURLPath = (home as NSString).appendingPathComponent(".clutch/web-launch-url")
+    let launchURLPath = (clutchHomePath() as NSString).appendingPathComponent("web-launch-url")
     if let content = try? String(contentsOfFile: launchURLPath, encoding: .utf8) {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
@@ -47,13 +53,13 @@ private func cssSwiftLiteral(_ s: String) -> String {
 }
 
 /// Resolve a bundled asset.  `install-dock-app.sh` copies assets into the live
-/// runtime tree, so that is the primary location; `HARNESS_ASSETS_ROOT` lets a
+/// runtime tree, so that is the primary location; `CLUTCH_ASSETS_ROOT` lets a
 /// dev/test run point at a checkout instead.
-private func harnessAssetPath(_ name: String) -> String? {
+private func clutchAssetPath(_ name: String) -> String? {
     let fm = FileManager.default
     let home = NSHomeDirectory()
     var candidates: [String] = []
-    if let root = ProcessInfo.processInfo.environment["HARNESS_ASSETS_ROOT"], !root.isEmpty {
+    if let root = ProcessInfo.processInfo.environment["CLUTCH_ASSETS_ROOT"], !root.isEmpty {
         candidates.append("\(root)/\(name)")
     }
     candidates.append("\(home)/apps/clutch-runtime/assets/\(name)")
@@ -63,14 +69,14 @@ private func harnessAssetPath(_ name: String) -> String? {
 /// Base64 data URL for an asset.  The injected JS cannot fetch `file://`
 /// subresources from the `http://127.0.0.1:3180/` page, so the bytes ride
 /// along in the user script.
-private func harnessAssetDataURL(_ name: String, mime: String) -> String {
-    guard let path = harnessAssetPath(name),
+private func clutchAssetDataURL(_ name: String, mime: String) -> String {
+    guard let path = clutchAssetPath(name),
           let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return "" }
     return "data:\(mime);base64," + data.base64EncodedString()
 }
 
-private func pingHarness() async -> Bool {
-    guard let url = URL(string: harnessURLString) else { return false }
+private func pingClutch() async -> Bool {
+    guard let url = URL(string: clutchURLString) else { return false }
     // 8s: a 2s ping under CPU load false-negatives, then ensure-web.sh
     // pm2-restarts a healthy dsh-web and WebKit reports "Load failed".
     var req = URLRequest(url: url, timeoutInterval: 8)
@@ -81,7 +87,7 @@ private func pingHarness() async -> Bool {
 }
 
 private func ensureServer() async {
-    if await pingHarness() { return }
+    if await pingClutch() { return }
     let script = NSHomeDirectory() + "/apps/clutch-runtime/scripts/ensure-web.sh"
     guard FileManager.default.isExecutableFile(atPath: script) else { return }
     let proc = Process()
@@ -102,7 +108,7 @@ private func ensureServer() async {
         }
     }
     for _ in 0..<20 {
-        if await pingHarness() { return }
+        if await pingClutch() { return }
         try? await Task.sleep(nanoseconds: 400_000_000)
     }
 }
@@ -119,7 +125,7 @@ private func ensureServer() async {
 /// plane and must never be handed to page JavaScript.
 ///
 /// The reply carries model ids only.  The key is read from
-/// `~/.clutch/dsh/.credentials.yaml` under `refs:`, is never logged, and never
+/// `$CLUTCH_HOME/dsh/.credentials.yaml` (default `~/.clutch`) under `refs:`, is never logged, and never
 /// appears in an error string handed back to the page.
 enum DeepSeekModels {
     static let modelsURL = "https://api.deepseek.com/models"
@@ -127,14 +133,14 @@ enum DeepSeekModels {
     /// Mirrors `DEEPSEEK_MODELS_MAX_BYTES` in `src/dsh/deepseek-models.ts`.
     static let maxBytes = 2 * 1024 * 1024
 
-    /// Read one ref out of `~/.clutch/dsh/.credentials.yaml`.
+    /// Read one ref out of `$CLUTCH_HOME/dsh/.credentials.yaml`.
     ///
     /// The store is a two-level map (`refs:` then the ref name), so a scoped
     /// scan is honest and avoids pulling in a YAML parser for one scalar.
     /// Quoted and unquoted scalars are both accepted; anything unrecognised
     /// yields `nil` rather than a guess.
-    static func credential(home: String = NSHomeDirectory()) -> String? {
-        let path = (home as NSString).appendingPathComponent(".clutch/dsh/.credentials.yaml")
+    static func credential(clutchHome: String = clutchHomePath()) -> String? {
+        let path = (clutchHome as NSString).appendingPathComponent("dsh/.credentials.yaml")
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         var inRefs = false
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -167,8 +173,8 @@ enum DeepSeekModels {
     /// Async end to end: the first version waited on a semaphore for up
     /// to 12 seconds, and its only caller is the script-message handler,
     /// which runs on the main thread.
-    static func listing(home: String = NSHomeDirectory()) async -> [String: Any] {
-        guard let key = credential(home: home) else {
+    static func listing(clutchHome: String = clutchHomePath()) async -> [String: Any] {
+        guard let key = credential(clutchHome: clutchHome) else {
             return ["ok": false, "message": "No \(credentialRef) in the dsh credential store."]
         }
         guard let url = URL(string: modelsURL) else {
@@ -222,7 +228,7 @@ enum DeepSeekModels {
 /// from the app delegate so the script message has one narrow job and the
 /// AppDelegate stays about windows.
 final class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler {
-    static let name = "harnessDeepSeekModels"
+    static let name = "clutchDeepSeekModels"
 
     func userContentController(
         _ userContentController: WKUserContentController,
@@ -236,7 +242,7 @@ final class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler {
             let reply = await DeepSeekModels.listing()
             let json = (try? JSONSerialization.data(withJSONObject: reply))
                 .flatMap { String(data: $0, encoding: .utf8) } ?? #"{"ok":false,"message":"bridge failure"}"#
-            let script = "window.__harnessDeepSeekModelsResolve && window.__harnessDeepSeekModelsResolve(\(json));"
+            let script = "window.__clutchDeepSeekModelsResolve && window.__clutchDeepSeekModelsResolve(\(json));"
             DispatchQueue.main.async { webView.evaluateJavaScript(script, completionHandler: nil) }
         }
     }
@@ -244,11 +250,11 @@ final class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler {
 
 // MARK: - Mac In-App Updater (Seamless & TestFlight Aware)
 
-final class HarnessAppUpdater: NSObject {
-    static let shared = HarnessAppUpdater()
+final class ClutchAppUpdater: NSObject {
+    static let shared = ClutchAppUpdater()
 
     private let repoOwner = "jaywedgeworth22"
-    private let repoName = "Harness"
+    private let repoName = "Clutch"
     private(set) var latestVersionFound: String?
     private(set) var isChecking: Bool = false
 
@@ -280,7 +286,7 @@ final class HarnessAppUpdater: NSObject {
 
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.setValue("Harness-Mac-Updater/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Clutch-Mac-Updater/\(currentVersion)", forHTTPHeaderField: "User-Agent")
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             guard let self = self else { return }
@@ -306,7 +312,7 @@ final class HarnessAppUpdater: NSObject {
         if isTestFlightOrAppStore {
             let alert = NSAlert()
             alert.messageText = "Managed by TestFlight"
-            alert.informativeText = "Harness is distributed via TestFlight / App Store.  Updates are installed automatically by macOS TestFlight in the background."
+            alert.informativeText = "Clutch is distributed via TestFlight / App Store.  Updates are installed automatically by macOS TestFlight in the background."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -318,7 +324,7 @@ final class HarnessAppUpdater: NSObject {
 
         var request = URLRequest(url: url, timeoutInterval: 10)
         request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-        request.setValue("Harness-Mac-Updater/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Clutch-Mac-Updater/\(currentVersion)", forHTTPHeaderField: "User-Agent")
 
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             guard let self = self else { return }
@@ -334,7 +340,7 @@ final class HarnessAppUpdater: NSObject {
                         self.latestVersionFound = remoteVersion
                         let updateAlert = NSAlert()
                         updateAlert.messageText = "Update Available"
-                        updateAlert.informativeText = "Harness \(remoteVersion) is now available (you have \(self.currentVersion)).  Would you like to install it now?"
+                        updateAlert.informativeText = "Clutch \(remoteVersion) is now available (you have \(self.currentVersion)).  Would you like to install it now?"
                         updateAlert.alertStyle = .informational
                         updateAlert.addButton(withTitle: "Update & Relaunch")
                         updateAlert.addButton(withTitle: "View Release Notes")
@@ -351,7 +357,7 @@ final class HarnessAppUpdater: NSObject {
                     } else {
                         let upToDateAlert = NSAlert()
                         upToDateAlert.messageText = "You're Up to Date!"
-                        upToDateAlert.informativeText = "Harness \(self.currentVersion) (build \(self.currentBuild)) is currently the newest version available."
+                        upToDateAlert.informativeText = "Clutch \(self.currentVersion) (build \(self.currentBuild)) is currently the newest version available."
                         upToDateAlert.alertStyle = .informational
                         upToDateAlert.addButton(withTitle: "OK")
                         upToDateAlert.runModal()
@@ -366,13 +372,12 @@ final class HarnessAppUpdater: NSObject {
     private func checkLocalRepoUpdate(window: NSWindow?) {
         let home = NSHomeDirectory()
         let scriptCandidates = [
-            "\(home)/apps/clutch-runtime/scripts/update-mac-app.sh",
-            "\(home)/Code/Harness/scripts/update-mac-app.sh"
+            "\(home)/apps/clutch-runtime/scripts/update-mac-app.sh"
         ]
         if scriptCandidates.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             let alert = NSAlert()
-            alert.messageText = "Harness Local Update"
-            alert.informativeText = "Harness is installed from local runtime.  Run update script to pull latest commits and recompile?"
+            alert.messageText = "Clutch Local Update"
+            alert.informativeText = "Clutch is installed from local runtime.  Run update script to pull latest commits and recompile?"
             alert.alertStyle = .informational
             alert.addButton(withTitle: "Update & Relaunch")
             alert.addButton(withTitle: "Cancel")
@@ -382,7 +387,7 @@ final class HarnessAppUpdater: NSObject {
         } else {
             let alert = NSAlert()
             alert.messageText = "You're Up to Date"
-            alert.informativeText = "Harness \(currentVersion) is running normally."
+            alert.informativeText = "Clutch \(currentVersion) is running normally."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -392,13 +397,12 @@ final class HarnessAppUpdater: NSObject {
     func performLocalUpdateAndRelaunch() {
         let home = NSHomeDirectory()
         let scriptCandidates = [
-            "\(home)/apps/clutch-runtime/scripts/update-mac-app.sh",
-            "\(home)/Code/Harness/scripts/update-mac-app.sh"
+            "\(home)/apps/clutch-runtime/scripts/update-mac-app.sh"
         ]
         guard let script = scriptCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             let alert = NSAlert()
             alert.messageText = "Update Script Not Found"
-            alert.informativeText = "Could not locate update-mac-app.sh in clutch-runtime or Code/Harness."
+            alert.informativeText = "Could not locate update-mac-app.sh in clutch-runtime."
             alert.alertStyle = .critical
             alert.runModal()
             return
@@ -434,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var deepSeekModelsHandler: DeepSeekModelsMessageHandler?
 
     @objc func checkForUpdates(_ sender: Any?) {
-        HarnessAppUpdater.shared.promptUserForUpdateCheck(window: window)
+        ClutchAppUpdater.shared.promptUserForUpdateCheck(window: window)
     }
 
     private func setupMainMenu() {
@@ -443,17 +447,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // Application Menu
         let appMenuItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Harness", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About Clutch", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         let updateItem = appMenu.addItem(withTitle: "Check for Updates...", action: #selector(checkForUpdates(_:)), keyEquivalent: "u")
         updateItem.target = self
         self.updateMenuItem = updateItem
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Hide Harness", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide Clutch", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         let hideOthersItem = appMenu.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
         hideOthersItem.keyEquivalentModifierMask = [.command, .option]
         appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Quit Harness", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit Clutch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
@@ -486,7 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         setupMainMenu()
         // Non-intrusive background update check after 3 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-            HarnessAppUpdater.shared.checkInBackground(updateMenuItem: self?.updateMenuItem)
+            ClutchAppUpdater.shared.checkInBackground(updateMenuItem: self?.updateMenuItem)
         }
         // Ensure the server without freezing launch: the ping, the
         // ensure-web wait, and the retry loop are all awaited.  If the
@@ -496,7 +500,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             await ensureServer()
             await MainActor.run {
                 guard let self, self.loadFailed else { return }
-                self.loadHarness()
+                self.loadClutch()
             }
         }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
@@ -514,10 +518,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             backing: .buffered,
             defer: false
         )
-        window.title = "Harness"
+        window.title = "Clutch"
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.setFrameAutosaveName("ComSimplewithusHarnessMacMain")
+        window.setFrameAutosaveName("CodesClutchMacMain")
         window.tabbingMode = .disallowed
 
         let config = WKWebViewConfiguration()
@@ -534,7 +538,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // (separate from the macOS Dock app icon, which `install-dock-app.sh`
         // already swaps to the MMH master).  The upstream block from
         // @deepseek-ai/dsh-client-ui-dockkit is a whale SVG + the wordmark
-        // "deepseek HARNESS".  The owner wants the HARNESS wordmark kept, the
+        // "deepseek HARNESS" (retired-name: upstream wordmark).  The owner wants
+        // the CLUTCH wordmark kept, the
         // upstream whale hidden, and the MM logo (the MMH master already
         // shipped via the icon-swap PR) + a small DS mark shown alongside.
         //
@@ -552,9 +557,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         [class*="brandName"],
         [class*="brandName"] *,
         [class*="_brandIdentity"] > span,
-        [class*="_brandIdentity"] > div:not([data-harness-brand]),
-        button[class*="brand"] svg:not([data-harness-brand] svg),
-        button[class*="_brand"] svg:not([data-harness-brand] svg) {
+        [class*="_brandIdentity"] > div:not([data-clutch-brand]),
+        button[class*="brand"] svg:not([data-clutch-brand] svg),
+        button[class*="_brand"] svg:not([data-clutch-brand] svg) {
           display: none !important;
         }
         /* Strip the empty-state hero whale (HeroFish) */
@@ -590,18 +595,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           gap: 2px !important;
         }
         /* Ensure our H monogram brand SVG and container are always visible */
-        [data-harness-brand] {
+        [data-clutch-brand] {
           display: inline-flex !important;
         }
-        [data-harness-brand] svg {
+        [data-clutch-brand] svg {
           display: block !important;
         }
-        [data-harness-rail-brand] {
+        [data-clutch-rail-brand] {
           display: flex !important;
           align-items: center !important;
           justify-content: center !important;
         }
-        [data-harness-rail-brand] svg {
+        [data-clutch-rail-brand] svg {
           display: block !important;
         }
         /* Strip extra margins from newSession button to eliminate any top gap */
@@ -624,42 +629,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
         // MiniMax provider mark, base64.  Used in the model-picker provider group
         // so choosing MiniMax shows the MiniMax logo next to the section heading.
-        let miniMaxMark = harnessAssetDataURL("minimax-mark.svg", mime: "image/svg+xml")
+        let miniMaxMark = clutchAssetDataURL("minimax-mark.svg", mime: "image/svg+xml")
         // DeepSeek provider mark, base64.  Same role as miniMaxMark for the
         // DeepSeek provider group heading in the model picker.
-        let deepSeekMark = harnessAssetDataURL("harness-icon-dsh-whale-1024.png", mime: "image/png")
+        let deepSeekMark = clutchAssetDataURL("dsh-whale-1024.png", mime: "image/png")
 
         let brandAndPickerScript = """
         (function () {
           const text = (s) => (s || '').toString();
 
-          // Update the brand header to the H monogram with just HARNESS under that.
-          // In wide mode: injects H monogram + HARNESS into _brandIdentity.
-          // In rail (collapsed) mode: injects H monogram into _railMark.
+          // Update the brand header to the C monogram with just CLUTCH under that.
+          // In wide mode: injects C monogram + CLUTCH into _brandIdentity.
+          // In rail (collapsed) mode: injects C monogram into _railMark.
           // Eliminates any blank void in top left.
           const updateBrandHeader = () => {
             const brandIdentity = document.querySelector('[class*="brandIdentity"]');
             if (brandIdentity) {
-              brandIdentity.querySelectorAll('[data-harness-mm], [data-harness-ds], [data-harness-h]').forEach((n) => n.remove());
+              brandIdentity.querySelectorAll('[data-clutch-mm], [data-clutch-ds], [data-clutch-h]').forEach((n) => n.remove());
               Array.from(brandIdentity.children).forEach((child) => {
-                if (child.dataset.harnessBrand !== '1') {
+                if (child.dataset.clutchBrand !== '1') {
                   child.style.setProperty('display', 'none', 'important');
                 }
               });
               brandIdentity.querySelectorAll('svg').forEach((s) => {
-                if (!s.closest('[data-harness-brand="1"]')) {
+                if (!s.closest('[data-clutch-brand="1"]')) {
                   s.style.setProperty('display', 'none', 'important');
                 }
               });
-              if (!brandIdentity.querySelector('[data-harness-brand="1"]')) {
+              if (!brandIdentity.querySelector('[data-clutch-brand="1"]')) {
                 const hBrand = document.createElement('div');
-                hBrand.dataset.harnessBrand = '1';
+                hBrand.dataset.clutchBrand = '1';
                 hBrand.style.cssText = 'display:inline-flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:2px;line-height:1;user-select:none;cursor:pointer;padding:1px 0;';
                 hBrand.innerHTML = `
                   <svg width="22" height="18" viewBox="0 0 484 440" fill="currentColor" style="display:block;">
-                    <path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/>
+                    <path d="M436.5 78.6A220 220 0 1 0 436.5 361.4L350.7 289.4A108 108 0 1 1 350.7 150.6z"/>
                   </svg>
-                  <span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">HARNESS</span>
+                  <span style="font-size:9.5px;font-weight:700;letter-spacing:0.12em;line-height:1;color:inherit;opacity:0.85;">CLUTCH</span>
                 `;
                 brandIdentity.appendChild(hBrand);
               }
@@ -668,22 +673,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             const railMark = document.querySelector('[class*="railMark"]');
             if (railMark) {
               Array.from(railMark.children).forEach((child) => {
-                if (child.dataset.harnessRailBrand !== '1') {
+                if (child.dataset.clutchRailBrand !== '1') {
                   child.style.setProperty('display', 'none', 'important');
                 }
               });
               railMark.querySelectorAll('svg').forEach((s) => {
-                if (!s.closest('[data-harness-rail-brand="1"]')) {
+                if (!s.closest('[data-clutch-rail-brand="1"]')) {
                   s.style.setProperty('display', 'none', 'important');
                 }
               });
-              if (!railMark.querySelector('[data-harness-rail-brand="1"]')) {
+              if (!railMark.querySelector('[data-clutch-rail-brand="1"]')) {
                 const railH = document.createElement('span');
-                railH.dataset.harnessRailBrand = '1';
+                railH.dataset.clutchRailBrand = '1';
                 railH.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;line-height:1;';
                 railH.innerHTML = `
                   <svg width="18" height="15" viewBox="0 0 484 440" fill="currentColor" style="display:block;">
-                    <path d="M0 0h112v172h260V0h112v440H372V268H112v172H0z"/>
+                    <path d="M436.5 78.6A220 220 0 1 0 436.5 361.4L350.7 289.4A108 108 0 1 1 350.7 150.6z"/>
                   </svg>
                 `;
                 railMark.appendChild(railH);
@@ -712,19 +717,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               if (t === 'minimax') el.textContent = 'MiniMax';
               if (t === 'deepseek') el.textContent = 'DeepSeek';
               if (isMM) {
-                if (el.dataset.harnessMmPicker === '1' || !MINIMAX_MARK) return;
-                el.dataset.harnessMmPicker = '1';
+                if (el.dataset.clutchMmPicker === '1' || !MINIMAX_MARK) return;
+                el.dataset.clutchMmPicker = '1';
                 const img = document.createElement('img');
-                img.dataset.harnessMmPickerMark = '1';
+                img.dataset.clutchMmPickerMark = '1';
                 img.src = MINIMAX_MARK;
                 img.alt = 'MiniMax';
                 img.style.cssText = 'width:14px;height:14px;margin-right:6px;vertical-align:-2px;';
                 el.insertBefore(img, el.firstChild);
               } else {
-                if (el.dataset.harnessDsPicker === '1' || !DEEPSEEK_MARK) return;
-                el.dataset.harnessDsPicker = '1';
+                if (el.dataset.clutchDsPicker === '1' || !DEEPSEEK_MARK) return;
+                el.dataset.clutchDsPicker = '1';
                 const img = document.createElement('img');
-                img.dataset.harnessDsPickerMark = '1';
+                img.dataset.clutchDsPickerMark = '1';
                 img.src = DEEPSEEK_MARK;
                 img.alt = 'DeepSeek';
                 img.style.cssText = 'width:14px;height:14px;margin-right:6px;vertical-align:-2px;';
@@ -799,10 +804,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               if (!row) return;
               if (t !== row.label) el.textContent = row.label;
               if (!row.badge) return;
-              if (el.dataset.harnessModelRow === '1') return;
-              el.dataset.harnessModelRow = '1';
+              if (el.dataset.clutchModelRow === '1') return;
+              el.dataset.clutchModelRow = '1';
               const chip = document.createElement('span');
-              chip.dataset.harnessModelBadge = '1';
+              chip.dataset.clutchModelBadge = '1';
               chip.textContent = row.badge;
               chip.title = row.badgeTitle ?? row.badge;
               chip.setAttribute('role', 'img');
@@ -856,17 +861,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           const mountDeepSeekModelsButton = () => {
             const section = document.querySelector('section[aria-label="Models"], section[aria-label="模型"]');
             if (!section) return;
-            if (section.querySelector('[data-harness-ds-models="1"]')) return;
+            if (section.querySelector('[data-clutch-ds-models="1"]')) return;
 
             const button = document.createElement('button');
             button.type = 'button';
-            button.dataset.harnessDsModels = '1';
+            button.dataset.clutchDsModels = '1';
             button.textContent = 'Fetch available models';
             button.style.cssText = 'margin-left:auto;padding:6px 12px;border-radius:6px;font-size:13px;'
               + 'line-height:18px;cursor:pointer;';
 
             const report = document.createElement('div');
-            report.dataset.harnessDsModelsReport = '1';
+            report.dataset.clutchDsModelsReport = '1';
             report.style.cssText = 'margin-top:8px;font-size:13px;line-height:20px;white-space:pre-wrap;';
             report.hidden = true;
 
@@ -876,8 +881,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               button.textContent = 'Asking DeepSeek…';
               report.hidden = true;
 
-              window.__harnessDeepSeekModelsResolve = (payload) => {
-                window.__harnessDeepSeekModelsResolve = undefined;
+              window.__clutchDeepSeekModelsResolve = (payload) => {
+                window.__clutchDeepSeekModelsResolve = undefined;
                 button.disabled = false;
                 button.textContent = original;
                 const models = Array.isArray(payload.models) ? payload.models : [];
@@ -893,10 +898,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               };
 
               try {
-                window.webkit.messageHandlers.harnessDeepSeekModels.postMessage({});
+                window.webkit.messageHandlers.clutchDeepSeekModels.postMessage({});
               } catch (error) {
-                window.__harnessDeepSeekModelsResolve
-                  && window.__harnessDeepSeekModelsResolve({ ok: false, message: 'bridge unavailable' });
+                window.__clutchDeepSeekModelsResolve
+                  && window.__clutchDeepSeekModelsResolve({ ok: false, message: 'bridge unavailable' });
               }
             });
 
@@ -931,8 +936,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
             // Top "New Session" button fallback if clicked in inert state
             const topNewBtn = document.querySelector('button[class*="_newSession"]');
-            if (topNewBtn && topNewBtn.dataset.harnessBound !== '1') {
-              topNewBtn.dataset.harnessBound = '1';
+            if (topNewBtn && topNewBtn.dataset.clutchBound !== '1') {
+              topNewBtn.dataset.clutchBound = '1';
               topNewBtn.addEventListener('click', () => {
                 setTimeout(() => {
                   const checkInert = (document.body ? document.body.innerText : '').includes('Choose a workspace to start');
@@ -947,8 +952,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
             // Clicking any workspace row opens a session in it
             document.querySelectorAll('[role="treeitem"][class*="projectRow"]').forEach((row) => {
-              if (row.dataset.harnessRowBound === '1') return;
-              row.dataset.harnessRowBound = '1';
+              if (row.dataset.clutchRowBound === '1') return;
+              row.dataset.clutchRowBound = '1';
               row.addEventListener('click', (e) => {
                 if (e.target && e.target.closest('button[aria-label*="Workspace actions for"]')) return;
                 const newBtn = row.querySelector('button[aria-label*="New session in "]')
@@ -996,7 +1001,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         window.contentView = webView
-        loadHarness()
+        loadClutch()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -1028,7 +1033,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     /// foreground re-activation safe to answer with "do nothing".
     private var hasLoadedPage = false
     /// The last main-frame load failed, so the web view is showing a WebKit
-    /// error page rather than the harness.  Re-activating should retry.
+    /// error page rather than clutch.  Re-activating should retry.
     private var loadFailed = false
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1047,7 +1052,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         hasLoadedPage = false
         loadFailed = true
-        loadHarness()
+        loadClutch()
     }
 
     /// Bring the window forward, reloading only when there is nothing live to
@@ -1068,21 +1073,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // state settles.  The window is already forward, so nothing
         // here may block the main thread.
         Task { [weak self] in
-            let serverWasUp = await pingHarness()
+            let serverWasUp = await pingClutch()
             if !serverWasUp {
                 await ensureServer()
             }
             await MainActor.run {
                 guard let self else { return }
                 if !self.hasLoadedPage || self.loadFailed || !serverWasUp {
-                    self.loadHarness()
+                    self.loadClutch()
                 }
             }
         }
     }
 
-    private func loadHarness() {
-        guard let url = URL(string: harnessURLString) else { return }
+    private func loadClutch() {
+        guard let url = URL(string: clutchURLString) else { return }
         loadFailed = false
         webView.load(URLRequest(url: url))
     }

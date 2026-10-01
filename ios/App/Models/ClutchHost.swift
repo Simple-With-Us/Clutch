@@ -2,10 +2,10 @@ import Foundation
 
 /// Reachability of a host as seen by a cookie-less probe of `/`.
 public enum HostStatus: String, Codable, Equatable {
-    /// harness web answered with its auth wall — it is running.
+    /// clutch web answered with its auth wall — it is running.
     case online
-    /// Something answered, but it is not recognizably harness web.
-    case notHarness
+    /// Something answered, but it is not recognizably clutch web.
+    case notClutch
     /// No answer (offline, wrong address, or Tailscale not connected).
     case offline
     case unknown
@@ -13,7 +13,7 @@ public enum HostStatus: String, Codable, Equatable {
     public var label: String {
         switch self {
         case .online: return "Online"
-        case .notHarness: return "Not Harness"
+        case .notClutch: return "Not Clutch"
         case .offline: return "Offline"
         case .unknown: return "Checking"
         }
@@ -22,21 +22,21 @@ public enum HostStatus: String, Codable, Equatable {
     public var symbol: String {
         switch self {
         case .online: return "checkmark.circle.fill"
-        case .notHarness: return "exclamationmark.triangle.fill"
+        case .notClutch: return "exclamationmark.triangle.fill"
         case .offline: return "xmark.circle.fill"
         case .unknown: return "circle.dotted"
         }
     }
 }
 
-/// One harness web deployment the app can show — a Mac over Tailscale, or
-/// `127.0.0.1:3080` when running in the Simulator on that Mac.
-public struct HarnessHost: Identifiable, Codable, Equatable, Hashable {
+/// One clutch web deployment the app can show — a Mac over Tailscale, or
+/// `127.0.0.1:3180` when running in the Simulator on that Mac.
+public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     public var id: UUID
     public var name: String
     /// `scheme://host[:port]` with no path.
     public var origin: URL
-    /// The launch token from the pairing link.  Cleared once harness web has
+    /// The launch token from the pairing link.  Cleared once clutch web has
     /// exchanged it for its signed cookie, so it is never kept longer than needed.
     public var pendingLaunchToken: String?
     public var status: HostStatus
@@ -89,7 +89,7 @@ public struct HarnessHost: Identifiable, Codable, Equatable, Hashable {
         guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return false }
         return scheme == origin.scheme?.lowercased()
             && host == origin.host?.lowercased()
-            && HarnessHost.effectivePort(url) == HarnessHost.effectivePort(origin)
+            && ClutchHost.effectivePort(url) == ClutchHost.effectivePort(origin)
     }
 
     static func effectivePort(_ url: URL) -> Int? {

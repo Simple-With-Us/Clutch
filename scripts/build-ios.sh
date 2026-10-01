@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-ios.sh — Build Harness iOS Companion App via XcodeGen & xcodebuild
+# build-ios.sh — Build Clutch iOS app via XcodeGen & xcodebuild
 #
 # Usage:
 #   bash scripts/build-ios.sh [options]
@@ -42,15 +42,15 @@ echo "==> 1. Generating Xcode project with xcodegen"
 
 if [ "$clean" -eq 1 ]; then
     echo "==> 2. Cleaning build folder"
-    xcodebuild -project "$IOS_DIR/Harness.xcodeproj" \
-        -scheme Harness \
+    xcodebuild -project "$IOS_DIR/Clutch.xcodeproj" \
+        -scheme Clutch \
         -destination "$dest" \
         clean
 fi
 
-echo "==> 3. Building Harness ($config, $dest)"
-xcodebuild -project "$IOS_DIR/Harness.xcodeproj" \
-    -scheme Harness \
+echo "==> 3. Building Clutch ($config, $dest)"
+xcodebuild -project "$IOS_DIR/Clutch.xcodeproj" \
+    -scheme Clutch \
     -destination "$dest" \
     -configuration "$config" \
     CODE_SIGNING_ALLOWED=NO \

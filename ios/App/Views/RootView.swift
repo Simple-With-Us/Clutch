@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// First run shows pairing; after that the active host's harness web UI.
+/// First run shows pairing; after that the active host's clutch web UI.
 struct RootView: View {
     @State private var store = HostStore.shared
 
     var body: some View {
         Group {
             if let host = store.activeHost {
-                HarnessScreen(host: host, store: store)
+                ClutchScreen(host: host, store: store)
             } else {
                 PairView { payload in
                     store.pair(payload)
@@ -22,11 +22,11 @@ struct RootView: View {
     }
 }
 
-/// The main surface: harness web for the active host, a slim native toolbar
+/// The main surface: clutch web for the active host, a slim native toolbar
 /// (host switcher, reload, hosts and settings), and native overlays for the
 /// pairing-expired and unreachable states.
-struct HarnessScreen: View {
-    let host: HarnessHost
+struct ClutchScreen: View {
+    let host: ClutchHost
     let store: HostStore
 
     @Environment(\.scenePhase) private var scenePhase
@@ -37,7 +37,7 @@ struct HarnessScreen: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                HarnessWebView(
+                ClutchWebView(
                     host: host,
                     loadKey: "\(host.id.uuidString)#\(store.loadGeneration)",
                     state: $webState,
@@ -168,7 +168,7 @@ struct HarnessScreen: View {
                 symbol: "wifi.exclamationmark",
                 title: "Cannot Reach \(host.name)",
                 message: Copy.gap(
-                    "Make sure Tailscale is connected on this device and harness is running on the Mac.",
+                    "Make sure Tailscale is connected on this device and clutch is running on the Mac.",
                     reason
                 )
             ) {

@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 /**
- * harness-pair-ios — pair the Harness iOS app with this Mac's harness web.
+ * clutch-pair-ios — pair the Clutch iOS app with this Mac's clutch web.
  *
  * Reads the current launch URL that `scripts/capture-launch-url.cjs` saves
  * (`~/.dsh/web-launch-url`), points it at this Mac's Tailscale name, and
- * hands it to the phone as a `harness://pair?url=…` link:
+ * hands it to the phone as a `clutch://pair?url=…` link:
  *
- *   harness-pair-ios              copy the link to the clipboard (Universal
+ *   clutch-pair-ios              copy the link to the clipboard (Universal
  *                                 Clipboard reaches the iPhone) and open a QR
  *                                 code to scan with the app
- *   harness-pair-ios --simulator  open the link in the booted iOS Simulator,
+ *   clutch-pair-ios --simulator  open the link in the booted iOS Simulator,
  *                                 pointed at http://127.0.0.1:<port>
- *   harness-pair-ios --print      print the link (it contains the launch token)
+ *   clutch-pair-ios --print      print the link (it contains the launch token)
  *
- * The link stays valid until harness web restarts; the cookie it mints on the
+ * The link stays valid until clutch web restarts; the cookie it mints on the
  * phone lasts 30 days.  The token is never printed unless --print is given.
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -31,7 +31,7 @@ const CLUTCH_HOME = process.env.CLUTCH_HOME ?? join(homedir(), ".clutch");
 const LAUNCH_URL_FILE = process.env.CLUTCH_LAUNCH_URL_FILE ?? join(CLUTCH_HOME, "web-launch-url");
 
 function log(line: string): void {
-  process.stderr.write(`harness-pair-ios: ${line}\n`);
+  process.stderr.write(`clutch-pair-ios: ${line}\n`);
 }
 
 function detectTailnetHost(): string {
@@ -63,8 +63,8 @@ function run(cmd: string, args: string[], input?: string): boolean {
 }
 
 function showQr(link: string): void {
-  const dir = mkdtempSync(join(tmpdir(), "harness-pair-"));
-  const png = join(dir, "harness-pairing-code.png");
+  const dir = mkdtempSync(join(tmpdir(), "clutch-pair-"));
+  const png = join(dir, "clutch-pairing-code.png");
   const script = join(ROOT, "scripts", "qr-png.swift");
   // The link goes over stdin, never argv, so the token stays out of the process table.
   if (!run("/usr/bin/swift", [script, png], link)) {
@@ -80,8 +80,8 @@ function main(): void {
   if (args.has("-h") || args.has("--help")) {
     process.stdout.write(
       [
-        "usage: harness-pair-ios [--simulator | --print]",
-        "  (default)    copy the pairing link to the clipboard and open a QR code for the Harness iOS app",
+        "usage: clutch-pair-ios [--simulator | --print]",
+        "  (default)    copy the pairing link to the clipboard and open a QR code for the Clutch iOS app",
         "  --simulator  open the pairing link in the booted iOS Simulator (http://127.0.0.1:<port>)",
         "  --print      print the pairing link (contains the launch token)",
         "",
@@ -101,17 +101,17 @@ function main(): void {
   }
   if (simulator) {
     if (!run("xcrun", ["simctl", "openurl", "booted", link])) {
-      log("no booted simulator accepted the link (is the Harness app installed?).");
+      log("no booted simulator accepted the link (is the Clutch app installed?).");
       process.exit(1);
     }
     log(`paired the booted simulator with ${origin}.`);
     return;
   }
   if (run("/usr/bin/pbcopy", [], link)) {
-    log("copied the pairing link to the clipboard — on the iPhone, open Harness and tap Paste Pairing Link.");
+    log("copied the pairing link to the clipboard — on the iPhone, open Clutch and tap Paste Pairing Link.");
   }
   showQr(link);
-  log(`the app will open ${origin} over Tailscale; the link works until harness web restarts.`);
+  log(`the app will open ${origin} over Tailscale; the link works until clutch web restarts.`);
 }
 
 main();

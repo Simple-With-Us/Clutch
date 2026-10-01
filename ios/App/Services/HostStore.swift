@@ -2,18 +2,18 @@ import Foundation
 import Observation
 import WebKit
 
-/// The paired harness web hosts and which one is showing.  Persisted in
-/// `UserDefaults`; launch tokens are dropped as soon as harness web has
+/// The paired clutch web hosts and which one is showing.  Persisted in
+/// `UserDefaults`; launch tokens are dropped as soon as clutch web has
 /// exchanged them for its cookie (see `consumeLaunchToken`).
 @MainActor
 @Observable
 public final class HostStore {
     public static let shared = HostStore()
 
-    static let storageKey = "com.simplewithus.harness.hosts.v3"
-    static let activeKey = "com.simplewithus.harness.activeHost.v3"
+    static let storageKey = "codes.clutch.hosts.v3"
+    static let activeKey = "codes.clutch.activeHost.v3"
 
-    public private(set) var hosts: [HarnessHost] = []
+    public private(set) var hosts: [ClutchHost] = []
     public private(set) var activeHostID: UUID?
     /// Bumped whenever the web view must reload (new pairing or Reload).
     public private(set) var loadGeneration = 0
@@ -25,7 +25,7 @@ public final class HostStore {
         load()
     }
 
-    public var activeHost: HarnessHost? {
+    public var activeHost: ClutchHost? {
         guard let id = activeHostID else { return hosts.first }
         return hosts.first(where: { $0.id == id }) ?? hosts.first
     }
@@ -35,7 +35,7 @@ public final class HostStore {
     /// Adds a host from a pairing link, or refreshes the token of an already
     /// paired host on the same origin, and makes it the active host.
     @discardableResult
-    public func pair(_ payload: PairingPayload) -> HarnessHost {
+    public func pair(_ payload: PairingPayload) -> ClutchHost {
         if let index = hosts.firstIndex(where: { $0.isSameOrigin(payload.origin) }) {
             if let token = payload.launchToken { hosts[index].pendingLaunchToken = token }
             activeHostID = hosts[index].id
@@ -43,7 +43,7 @@ public final class HostStore {
             save()
             return hosts[index]
         }
-        let host = HarnessHost(pairing: payload)
+        let host = ClutchHost(pairing: payload)
         hosts.append(host)
         activeHostID = host.id
         loadGeneration += 1
@@ -51,7 +51,7 @@ public final class HostStore {
         return host
     }
 
-    public func activate(_ host: HarnessHost) {
+    public func activate(_ host: ClutchHost) {
         guard hosts.contains(where: { $0.id == host.id }) else { return }
         activeHostID = host.id
         save()
@@ -61,7 +61,7 @@ public final class HostStore {
         loadGeneration += 1
     }
 
-    public func rename(_ host: HarnessHost, to name: String) {
+    public func rename(_ host: ClutchHost, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let index = hosts.firstIndex(where: { $0.id == host.id }) else { return }
         hosts[index].name = trimmed
@@ -69,14 +69,14 @@ public final class HostStore {
     }
 
     /// Forgets a host and signs this device out of it (drops its cookies).
-    public func remove(_ host: HarnessHost) {
+    public func remove(_ host: ClutchHost) {
         hosts.removeAll(where: { $0.id == host.id })
         if activeHostID == host.id { activeHostID = hosts.first?.id }
         save()
         Self.clearWebsiteData(for: host)
     }
 
-    /// Called once harness web has served `/` after a token load: the cookie
+    /// Called once clutch web has served `/` after a token load: the cookie
     /// now authenticates, so the one-time token is no longer stored.
     public func consumeLaunchToken(for hostID: UUID) {
         guard let index = hosts.firstIndex(where: { $0.id == hostID }),
@@ -111,7 +111,7 @@ public final class HostStore {
 
     private func load() {
         if let data = defaults.data(forKey: Self.storageKey),
-           let decoded = try? JSONDecoder().decode([HarnessHost].self, from: data) {
+           let decoded = try? JSONDecoder().decode([ClutchHost].self, from: data) {
             hosts = decoded
         }
         if let raw = defaults.string(forKey: Self.activeKey), let id = UUID(uuidString: raw),
@@ -129,7 +129,7 @@ public final class HostStore {
         defaults.set(activeHostID?.uuidString, forKey: Self.activeKey)
     }
 
-    private static func clearWebsiteData(for host: HarnessHost) {
+    private static func clearWebsiteData(for host: ClutchHost) {
         guard let hostname = host.origin.host?.lowercased() else { return }
         let store = WKWebsiteDataStore.default()
         let types = WKWebsiteDataStore.allWebsiteDataTypes()

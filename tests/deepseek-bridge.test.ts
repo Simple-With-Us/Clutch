@@ -8,7 +8,7 @@ import { join } from "node:path";
  *  though the parser itself is Swift. */
 
 const SWIFT = readFileSync(
-  join(__dirname, "..", "src", "web", "dock-app", "HarnessWindow.swift"),
+  join(__dirname, "..", "src", "web", "dock-app", "ClutchWindow.swift"),
   "utf8",
 );
 
@@ -52,15 +52,15 @@ describe("DeepSeek model bridge", () => {
 
   it("is wired to a script message handler the page can actually call", () => {
     expect(SWIFT).toContain("class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler");
-    expect(SWIFT).toContain('static let name = "harnessDeepSeekModels"');
+    expect(SWIFT).toContain('static let name = "clutchDeepSeekModels"');
     expect(SWIFT).toMatch(/userContent\.add\(modelsHandler, name: DeepSeekModelsMessageHandler\.name\)/);
-    expect(SWIFT).toContain("window.webkit.messageHandlers.harnessDeepSeekModels.postMessage");
+    expect(SWIFT).toContain("window.webkit.messageHandlers.clutchDeepSeekModels.postMessage");
   });
 
   it("mounts the affordance in the Models section, guarded against re-mounting", () => {
     expect(SWIFT).toContain("const mountDeepSeekModelsButton = () =>");
     expect(SWIFT).toContain('section[aria-label="Models"]');
-    expect(SWIFT).toContain('button.dataset.harnessDsModels = \'1\'');
+    expect(SWIFT).toContain('button.dataset.clutchDsModels = \'1\'');
     // A missing target must be a no-op, never a throw: this runs inside a
     // MutationObserver, and a throw there would break every other patch.
     expect(SWIFT).toMatch(/if \(!section\) return;/);
@@ -76,7 +76,7 @@ describe("DeepSeek model bridge", () => {
 /** Pull a Swift function body by brace counting from its signature. */
 function swiftBody(signature: string): string {
   const start = SWIFT.indexOf(signature);
-  if (start === -1) throw new Error(`${signature} not found in HarnessWindow.swift`);
+  if (start === -1) throw new Error(`${signature} not found in ClutchWindow.swift`);
   let depth = 0;
   for (let i = SWIFT.indexOf("{", start); i < SWIFT.length; i++) {
     const ch = SWIFT[i];
