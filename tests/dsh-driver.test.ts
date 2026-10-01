@@ -188,13 +188,35 @@ describe("per-model effort levels", () => {
   });
 
   it("never fails a turn when the engine refuses the provider default", async () => {
+    // dsh-acp answers a value the route does not offer with invalid params,
+    // and the ACP core copies the wire code onto the rejected Error.
     const { calls, request } = recorder(() => {
-      throw new Error("unknown reasoning effort for minimax/MiniMax-M3.1-Flash-Preview: ");
+      throw Object.assign(new Error("Invalid params: unknown reasoning effort for minimax/MiniMax-M3.1-Flash-Preview: "), {
+        code: -32602,
+      });
     });
     await expect(
       dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31 } }),
     ).resolves.toBeUndefined();
-    expect(calls).toHaveLength(1);
+    expect(calls).toEqual([
+      { method: "session/set_config_option", params: { sessionId: "s1", configId: "reasoning_effort", value: "" } },
+    ]);
+  });
+
+  it("surfaces any other failure of the provider-default request", async () => {
+    // A timeout carries no wire code, and an internal error carries -32603:
+    // neither is a refusal, so the turn must not run on a session in an unknown state.
+    for (const failure of [
+      new Error("session/set_config_option timed out after 20 s"),
+      Object.assign(new Error("Internal error"), { code: -32603 }),
+    ]) {
+      const { request } = recorder(() => {
+        throw failure;
+      });
+      await expect(
+        dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31 } }),
+      ).rejects.toBe(failure);
+    }
   });
 
   it("still sends nothing for Default on a DeepSeek row", async () => {
@@ -210,6 +232,15 @@ describe("per-model effort levels", () => {
     await expect(
       dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31, effort: "max" } }),
     ).rejects.toThrow(/still high/);
+  });
+
+  it("words the effort mismatch without naming an engine brand", async () => {
+    const { request } = recorder(() => ({
+      configOptions: [{ id: "reasoning_effort", currentValue: "high" }],
+    }));
+    await expect(
+      dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31, effort: "max" } }),
+    ).rejects.toThrow(/^Engine did not switch reasoning effort to max \(still high\)$/);
   });
 
   describe("installed levels", () => {
@@ -235,6 +266,27 @@ describe("per-model effort levels", () => {
     it("matches the entry ignoring case and accepts a top-level providers map", () => {
       const lower = { ...configured, id: M31.toLowerCase() };
       expect(dshInstalledEffortLevels({ providers: { minimax: { models: [lower] } } })[M31]).toEqual(DSH_PER_MODEL_EFFORT_LEVELS[M31]);
+    });
+
+    it("offers nothing unless the entry forces adaptive thinking", () => {
+      // Without the flag pi-ai sends fixed token budgets, clamps xhigh and max to high,
+      // and sends no output_config.effort, so the levels would not do what the picker says.
+      const { compat: _compat, ...missing } = configured;
+      expect(dshInstalledEffortLevels(settingsWith(missing))[M31]).toEqual([]);
+      for (const compat of [
+        { forceAdaptiveThinking: false },
+        { forceAdaptiveThinking: "true" },
+        { forceAdaptiveThinking: 1 },
+        {},
+        null,
+        "forceAdaptiveThinking",
+      ]) {
+        expect(dshInstalledEffortLevels(settingsWith({ ...configured, compat }))[M31]).toEqual([]);
+      }
+      // Other compat keys do not stand in for it, and the flag still works beside them.
+      expect(
+        dshInstalledEffortLevels(settingsWith({ ...configured, compat: { forceAdaptiveThinking: true, other: false } }))[M31],
+      ).toEqual(["low", "medium", "high", "xhigh", "max"]);
     });
 
     it("offers nothing when the install cannot take a level", () => {

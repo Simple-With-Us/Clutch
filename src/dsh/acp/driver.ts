@@ -119,9 +119,10 @@ const DSH_EFFORT_LEVELS = ["none", "high", "max"] as const satisfies readonly Ef
  *  `reasoning_effort` ids plus the provider-default value, and no `off`, so
  *  `none` is deliberately absent: dsh would refuse the `off` it maps to.  An
  *  install whose settings entry lacks `reasoningEfforts` refuses every level
- *  here, so a consumer that can read the install's settings.yaml should use
- *  `dshInstalledEffortLevels`, which narrows this map to what the file
- *  declares. */
+ *  here, and one that lacks the adaptive flag accepts them but collapses
+ *  xhigh and max into high, so a consumer that can read the install's
+ *  settings.yaml should use `dshInstalledEffortLevels`, which narrows this map
+ *  to what the file declares. */
 export const DSH_PER_MODEL_EFFORT_LEVELS: Readonly<Record<string, readonly EffortLevel[]>> = {
   "MiniMax-M3.1-Flash-Preview": ["low", "medium", "high", "xhigh", "max"],
 };
@@ -175,16 +176,23 @@ function installedModelEntry(settings: unknown, model: string): Record<string, u
  *  as documented; this narrows it to what the installed settings declare, so
  *  a consumer that reads the file never offers a level dsh would refuse.  A
  *  row keeps a level only when its entry under the row's provider route maps
- *  that level in `reasoningEfforts` to a wire value.  A row with no entry,
- *  `reasoningEfforts: false`, or no `reasoningEfforts` gets `[]`: stock dsh
- *  does not catalog M3.1, so the entry is the only thing that makes the
+ *  that level in `reasoningEfforts` to a wire value, and only when the entry
+ *  also sets `compat.forceAdaptiveThinking: true`.  Without that flag pi-ai
+ *  falls back to fixed thinking budgets, clamps xhigh and max to high, and
+ *  sends no `output_config.effort`, so most of the offered levels would run
+ *  the identical request.  A row with no entry, `reasoningEfforts: false`, no
+ *  `reasoningEfforts`, or a missing or non-true adaptive flag gets `[]`: stock
+ *  dsh does not catalog M3.1, so the entry is the only thing that makes the
  *  levels exist.  Every row of `DSH_PER_MODEL_EFFORT_LEVELS` is present in the
  *  result, so an explicit `[]` can win over the static map. */
 export function dshInstalledEffortLevels(settings: unknown): Record<string, readonly EffortLevel[]> {
   const installed: Record<string, readonly EffortLevel[]> = {};
   for (const [model, levels] of Object.entries(DSH_PER_MODEL_EFFORT_LEVELS)) {
-    const declared = installedModelEntry(settings, model)?.reasoningEfforts;
-    installed[model] = isPlainRecord(declared)
+    const entry = installedModelEntry(settings, model);
+    const declared = entry?.reasoningEfforts;
+    const compat = entry?.compat;
+    const adaptive = isPlainRecord(compat) && compat.forceAdaptiveThinking === true;
+    installed[model] = isPlainRecord(declared) && adaptive
       ? levels.filter((level) => {
           if (level === "none") {
             // dsh's `off` may map to null, which means "omit the thinking field".
@@ -197,6 +205,15 @@ export function dshInstalledEffortLevels(settings: unknown): Record<string, read
       : [];
   }
   return installed;
+}
+
+/** JSON-RPC "invalid params" (-32602), which dsh-acp answers when it refuses
+ *  a `reasoning_effort` value the route does not offer.  The ACP core copies
+ *  the wire error's `code` onto the Error it rejects with. */
+const ACP_INVALID_PARAMS = -32602;
+
+function isInvalidParamsRefusal(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === ACP_INVALID_PARAMS;
 }
 
 /** Effective effort levels for a picker id: its per-model entry when it has
@@ -416,16 +433,18 @@ export const dshSupport: AcpSupport = {
     if (requested === undefined) return;
     if (requested === DSH_PROVIDER_DEFAULT_EFFORT) {
       // Default is best effort: a route that declares its own default effort
-      // refuses this value, and then the session keeps whatever level it had,
-      // which is exactly what Default did before.  Never fail a turn over it.
+      // refuses this value (dsh answers invalid params), and then the session
+      // keeps whatever level it had, which is exactly what Default did before.
+      // Only that refusal is swallowed.  A timeout or an internal error means
+      // the session is in a state nobody has looked at, so it still surfaces.
       try {
         await request("session/set_config_option", {
           sessionId,
           configId: "reasoning_effort",
           value: requested,
         });
-      } catch {
-        // keep the session's current level
+      } catch (error) {
+        if (!isInvalidParamsRefusal(error)) throw error;
       }
       return;
     }
@@ -440,7 +459,7 @@ export const dshSupport: AcpSupport = {
     // compare, and failing on that refused every effort-pinned turn (BotFleet #486).
     if (confirmed !== undefined && confirmed !== requested) {
       throw new Error(
-        `DeepSeek Harness did not switch reasoning effort to ${requested} (still ${String(confirmed ?? "unknown")})`,
+        `Engine did not switch reasoning effort to ${requested} (still ${String(confirmed ?? "unknown")})`,
       );
     }
   },
