@@ -5,10 +5,16 @@ import {
   DSH_MINIMUM_ACP_VERSION,
   DSH_PROVIDER_ID,
   DSH_MINIMAX_PROVIDER_ID,
+  DSH_PER_MODEL_EFFORT_LEVELS,
+  DSH_PROVIDER_DEFAULT_EFFORT,
   classifyDshError,
+  dshEffortLevelsForModel,
+  dshInstalledEffortLevels,
   dshModelIdFromOptionValue,
   dshModelOptionValue,
+  dshPerModelEffortLevels,
   dshProviderForModel,
+  dshReasoningEffortValue,
   dshSpawnArgs,
   dshSupport,
   dshVersionCompatibilityReason,
@@ -109,5 +115,141 @@ describe("dshSupport", () => {
         turn: { text: "hi", effort: "high" },
       }),
     ).rejects.toThrow(/still max/);
+  });
+});
+
+describe("per-model effort levels", () => {
+  const M31 = "MiniMax-M3.1-Flash-Preview";
+
+  type Call = { method: string; params: Record<string, unknown> };
+  const recorder = (reply: (call: Call) => unknown = () => ({})) => {
+    const calls: Call[] = [];
+    const request = async (method: string, params: Record<string, unknown>) => {
+      const call = { method, params };
+      calls.push(call);
+      return reply(call);
+    };
+    return { calls, request };
+  };
+
+  it("publishes low through max, with xhigh and without none, for MiniMax M3.1", () => {
+    expect(DSH_PER_MODEL_EFFORT_LEVELS[M31]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(dshSupport.perModelEffortLevels).toBe(DSH_PER_MODEL_EFFORT_LEVELS);
+    expect(dshSupport.perModelEffortLevels?.[M31]).not.toContain("none");
+  });
+
+  it("only names rows the static catalog ships", () => {
+    const ids = new Set(STATIC_DSH_MODELS.options.map((option) => option.id));
+    for (const id of Object.keys(DSH_PER_MODEL_EFFORT_LEVELS)) expect(ids.has(id)).toBe(true);
+  });
+
+  it("keeps every other row on the engine-wide list", () => {
+    expect(dshSupport.effortLevels).toEqual(["none", "high", "max"]);
+    for (const id of ["DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro", "MiniMax-M3", "MiniMax-M2.7-highspeed", "unknown"]) {
+      expect(dshPerModelEffortLevels(id)).toBeUndefined();
+      expect(dshEffortLevelsForModel(id)).toEqual(["none", "high", "max"]);
+    }
+    expect(dshPerModelEffortLevels(undefined)).toBeUndefined();
+  });
+
+  it("matches a per-model row ignoring case", () => {
+    expect(dshEffortLevelsForModel("minimax-m3.1-flash-preview")).toEqual(DSH_PER_MODEL_EFFORT_LEVELS[M31]);
+  });
+
+  it("maps each turn to the reasoning_effort value it sends", () => {
+    expect(dshReasoningEffortValue({ model: M31, effort: "xhigh" })).toBe("xhigh");
+    expect(dshReasoningEffortValue({ model: M31, effort: "max" })).toBe("max");
+    expect(dshReasoningEffortValue({ model: M31 })).toBe(DSH_PROVIDER_DEFAULT_EFFORT);
+    expect(DSH_PROVIDER_DEFAULT_EFFORT).toBe("");
+    expect(dshReasoningEffortValue({ model: "DeepSeek-V4.1-Flash", effort: "none" })).toBe("off");
+    expect(dshReasoningEffortValue({ model: "DeepSeek-V4.1-Flash" })).toBeUndefined();
+    expect(dshReasoningEffortValue({ model: "MiniMax-M2.7-highspeed" })).toBeUndefined();
+    expect(dshReasoningEffortValue({})).toBeUndefined();
+  });
+
+  it("sends xhigh to dsh for MiniMax M3.1", async () => {
+    const { calls, request } = recorder(() => ({
+      configOptions: [{ id: "reasoning_effort", currentValue: "xhigh" }],
+    }));
+    await dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31, effort: "xhigh" } });
+    expect(calls).toEqual([
+      { method: "session/set_config_option", params: { sessionId: "s1", configId: "reasoning_effort", value: "xhigh" } },
+    ]);
+  });
+
+  it("clears a sticky level to the provider default when an M3.1 turn picks Default", async () => {
+    const { calls, request } = recorder(() => ({
+      configOptions: [{ id: "reasoning_effort", currentValue: "" }],
+    }));
+    await dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31 } });
+    expect(calls).toEqual([
+      { method: "session/set_config_option", params: { sessionId: "s1", configId: "reasoning_effort", value: "" } },
+    ]);
+  });
+
+  it("never fails a turn when the engine refuses the provider default", async () => {
+    const { calls, request } = recorder(() => {
+      throw new Error("unknown reasoning effort for minimax/MiniMax-M3.1-Flash-Preview: ");
+    });
+    await expect(
+      dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31 } }),
+    ).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("still sends nothing for Default on a DeepSeek row", async () => {
+    const { calls, request } = recorder();
+    await dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: "DeepSeek-V4.1-Pro" } });
+    expect(calls).toEqual([]);
+  });
+
+  it("still fails when an explicit M3.1 level does not take", async () => {
+    const { request } = recorder(() => ({
+      configOptions: [{ id: "reasoning_effort", currentValue: "high" }],
+    }));
+    await expect(
+      dshSupport.configureSession?.({ request, sessionId: "s1", turn: { text: "hi", model: M31, effort: "max" } }),
+    ).rejects.toThrow(/still high/);
+  });
+
+  describe("installed levels", () => {
+    const settingsWith = (entry: Record<string, unknown>, route = "minimax") => ({
+      "llm-pi-ai": { providers: { [route]: { apiKeyEnv: "MINIMAX_API_KEY", models: [{ id: "MiniMax-M3", name: "MiniMax-M3" }, entry] } } },
+    });
+    const configured = {
+      id: M31,
+      name: M31,
+      reasoningEfforts: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+      compat: { forceAdaptiveThinking: true },
+    };
+
+    it("offers every level an install's settings entry declares", () => {
+      expect(dshInstalledEffortLevels(settingsWith(configured))).toEqual({ [M31]: ["low", "medium", "high", "xhigh", "max"] });
+    });
+
+    it("keeps only the declared levels, in picker order", () => {
+      const partial = { ...configured, reasoningEfforts: { max: "max", low: "low" } };
+      expect(dshInstalledEffortLevels(settingsWith(partial))[M31]).toEqual(["low", "max"]);
+    });
+
+    it("matches the entry ignoring case and accepts a top-level providers map", () => {
+      const lower = { ...configured, id: M31.toLowerCase() };
+      expect(dshInstalledEffortLevels({ providers: { minimax: { models: [lower] } } })[M31]).toEqual(DSH_PER_MODEL_EFFORT_LEVELS[M31]);
+    });
+
+    it("offers nothing when the install cannot take a level", () => {
+      // The repo's minimax-headless profile declares M3.1 with reasoningEfforts: false.
+      expect(dshInstalledEffortLevels(settingsWith({ id: M31, reasoningEfforts: false }))[M31]).toEqual([]);
+      // An entry without reasoningEfforts is a non-reasoning model to dsh, since pi-ai does not catalog M3.1.
+      expect(dshInstalledEffortLevels(settingsWith({ id: M31, name: M31 }))[M31]).toEqual([]);
+      // Declared under another route: the driver sends ["minimax", id], which dsh refuses anyway.
+      expect(dshInstalledEffortLevels(settingsWith(configured, "minimax-cn"))[M31]).toEqual([]);
+      // Empty wire values are not levels.
+      expect(dshInstalledEffortLevels(settingsWith({ id: M31, reasoningEfforts: { low: "", max: null } }))[M31]).toEqual([]);
+      // No settings file, or a malformed one.
+      for (const settings of [undefined, null, "text", [], { "llm-pi-ai": { providers: { minimax: { models: "x" } } } }]) {
+        expect(dshInstalledEffortLevels(settings)).toEqual({ [M31]: [] });
+      }
+    });
   });
 });

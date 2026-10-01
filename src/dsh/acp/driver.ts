@@ -106,6 +106,119 @@ export function dshVersionCompatibilityReason(version: string, cli = "dsh"): str
 
 const DSH_EFFORT_LEVELS = ["none", "high", "max"] as const satisfies readonly EffortLevel[];
 
+/** Per-model reasoning-effort levels, keyed by picker id.  A row listed here
+ *  gets its own levels instead of the engine-wide `DSH_EFFORT_LEVELS`; every
+ *  other row keeps the engine-wide list.
+ *
+ *  MiniMax-M3.1-Flash-Preview is newer than the pi-ai catalog dsh installs,
+ *  so dsh only knows it from the `llm-pi-ai.providers.minimax.models` entry in
+ *  `settings.yaml`.  That entry declares `reasoningEfforts` low through max
+ *  and `compat.forceAdaptiveThinking: true`, which makes pi-ai send
+ *  `thinking: {type: "adaptive"}` plus `output_config.effort` to MiniMax's
+ *  Anthropic-compatible endpoint.  dsh then advertises exactly these five
+ *  `reasoning_effort` ids plus the provider-default value, and no `off`, so
+ *  `none` is deliberately absent: dsh would refuse the `off` it maps to.  An
+ *  install whose settings entry lacks `reasoningEfforts` refuses every level
+ *  here, so a consumer that can read the install's settings.yaml should use
+ *  `dshInstalledEffortLevels`, which narrows this map to what the file
+ *  declares. */
+export const DSH_PER_MODEL_EFFORT_LEVELS: Readonly<Record<string, readonly EffortLevel[]>> = {
+  "MiniMax-M3.1-Flash-Preview": ["low", "medium", "high", "xhigh", "max"],
+};
+
+/** dsh-acp's `reasoning_effort` value for "the provider's own default".  It
+ *  clears an effort an earlier turn left on a resumed session, and dsh only
+ *  accepts it for a model whose route sets no default effort of its own. */
+export const DSH_PROVIDER_DEFAULT_EFFORT = "";
+
+/** The per-model levels for a picker id (exact id first, then ignoring case),
+ *  or `undefined` when the row has none and falls back to the engine-wide
+ *  list. */
+export function dshPerModelEffortLevels(model: string | undefined): readonly EffortLevel[] | undefined {
+  if (!model) return undefined;
+  const exact = DSH_PER_MODEL_EFFORT_LEVELS[model];
+  if (exact) return exact;
+  const lower = model.toLowerCase();
+  const key = Object.keys(DSH_PER_MODEL_EFFORT_LEVELS).find((id) => id.toLowerCase() === lower);
+  return key === undefined ? undefined : DSH_PER_MODEL_EFFORT_LEVELS[key];
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The settings.yaml model entry dsh serves a picker id from: the entry under
+ *  the provider route the driver sends it to (`dshProviderForModel`), at
+ *  `llm-pi-ai.providers` or a top-level `providers`, matched ignoring case. */
+function installedModelEntry(settings: unknown, model: string): Record<string, unknown> | undefined {
+  if (!isPlainRecord(settings)) return undefined;
+  const route = dshProviderForModel(model);
+  const piAi = settings["llm-pi-ai"];
+  const maps = [isPlainRecord(piAi) ? piAi.providers : undefined, settings.providers];
+  const lower = model.toLowerCase();
+  for (const providers of maps) {
+    if (!isPlainRecord(providers)) continue;
+    const block = providers[route];
+    if (!isPlainRecord(block) || !Array.isArray(block.models)) continue;
+    const entry = block.models.find(
+      (candidate) => isPlainRecord(candidate) && typeof candidate.id === "string" && candidate.id.toLowerCase() === lower,
+    );
+    if (isPlainRecord(entry)) return entry;
+  }
+  return undefined;
+}
+
+/** The per-model levels this install can actually take, from its parsed
+ *  settings.yaml (pass `undefined` when the file is missing or unreadable).
+ *
+ *  `DSH_PER_MODEL_EFFORT_LEVELS` says what a row offers when it is configured
+ *  as documented; this narrows it to what the installed settings declare, so
+ *  a consumer that reads the file never offers a level dsh would refuse.  A
+ *  row keeps a level only when its entry under the row's provider route maps
+ *  that level in `reasoningEfforts` to a wire value.  A row with no entry,
+ *  `reasoningEfforts: false`, or no `reasoningEfforts` gets `[]`: stock dsh
+ *  does not catalog M3.1, so the entry is the only thing that makes the
+ *  levels exist.  Every row of `DSH_PER_MODEL_EFFORT_LEVELS` is present in the
+ *  result, so an explicit `[]` can win over the static map. */
+export function dshInstalledEffortLevels(settings: unknown): Record<string, readonly EffortLevel[]> {
+  const installed: Record<string, readonly EffortLevel[]> = {};
+  for (const [model, levels] of Object.entries(DSH_PER_MODEL_EFFORT_LEVELS)) {
+    const declared = installedModelEntry(settings, model)?.reasoningEfforts;
+    installed[model] = isPlainRecord(declared)
+      ? levels.filter((level) => {
+          if (level === "none") {
+            // dsh's `off` may map to null, which means "omit the thinking field".
+            const off = declared.off;
+            return off === null || (typeof off === "string" && off.length > 0);
+          }
+          const wire = declared[level];
+          return typeof wire === "string" && wire.length > 0;
+        })
+      : [];
+  }
+  return installed;
+}
+
+/** Effective effort levels for a picker id: its per-model entry when it has
+ *  one, otherwise the engine-wide list. */
+export function dshEffortLevelsForModel(model: string): readonly EffortLevel[] {
+  return dshPerModelEffortLevels(model) ?? DSH_EFFORT_LEVELS;
+}
+
+/** The `reasoning_effort` value a turn sends, or `undefined` to leave the
+ *  session's current level alone.
+ *
+ *  An explicit effort sends its level (`none` becomes dsh's `off`).  A turn
+ *  with no effort (the picker's Default) sends the provider-default value only
+ *  for a row with per-model levels, so a level a previous turn pinned on a
+ *  resumed session does not silently stick.  Other rows keep the old
+ *  behavior of sending nothing: DeepSeek routes carry a default effort of
+ *  their own, and dsh refuses the provider-default value for those. */
+export function dshReasoningEffortValue(turn: { readonly effort?: EffortLevel; readonly model?: string }): string | undefined {
+  if (turn.effort) return turn.effort === "none" ? "off" : turn.effort;
+  return dshPerModelEffortLevels(turn.model) ? DSH_PROVIDER_DEFAULT_EFFORT : undefined;
+}
+
 export const DSH_PROVIDER_ID = "deepseek-official";
 export const DSH_MINIMAX_PROVIDER_ID = "minimax";
 
@@ -267,6 +380,7 @@ export const dshSupport: AcpSupport = {
   models: STATIC_DSH_MODELS,
   resolveModels: () => STATIC_DSH_MODELS,
   effortLevels: DSH_EFFORT_LEVELS,
+  perModelEffortLevels: DSH_PER_MODEL_EFFORT_LEVELS,
   mcpServers: true,
   // Vanilla `dsh` against ~/.dsh, by design.  BotFleet keeps spawning the
   // upstream engine with its own state; the `clutch` wrapper (state in
@@ -298,8 +412,23 @@ export const dshSupport: AcpSupport = {
   versionCompatibilityReason: (version, config) => dshVersionCompatibilityReason(version, config.cli),
 
   configureSession: async ({ request, sessionId, turn }) => {
-    if (!turn.effort) return;
-    const requested = turn.effort === "none" ? "off" : turn.effort;
+    const requested = dshReasoningEffortValue(turn);
+    if (requested === undefined) return;
+    if (requested === DSH_PROVIDER_DEFAULT_EFFORT) {
+      // Default is best effort: a route that declares its own default effort
+      // refuses this value, and then the session keeps whatever level it had,
+      // which is exactly what Default did before.  Never fail a turn over it.
+      try {
+        await request("session/set_config_option", {
+          sessionId,
+          configId: "reasoning_effort",
+          value: requested,
+        });
+      } catch {
+        // keep the session's current level
+      }
+      return;
+    }
     const result = await request("session/set_config_option", {
       sessionId,
       configId: "reasoning_effort",
