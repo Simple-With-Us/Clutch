@@ -1,4 +1,4 @@
-# Contributing to Harness
+# Contributing to Clutch
 
 Thanks for contributing.  This file is the human-facing counterpart to
 [`AGENTS.md`](./AGENTS.md), which is binding for AI agents working on this

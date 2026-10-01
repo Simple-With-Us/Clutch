@@ -1,13 +1,15 @@
-# Harness Effort Log — cross-agent board
+# Clutch Effort Log — cross-agent board
 
 The source of truth for active work is THE BOARD at
-`https://mac.jays.services/board`, filtered to `--app harness`. This file
+`https://mac.jays.services/board`, filtered to `--app clutch`. This file
 is a per-repo mirror; every coherent finished unit gets an entry here,
 plus a board comment, plus (when the unit ships code) a PR with
 auto-merge armed. Format follows `BotFleet/docs/EFFORT-LOG.md` and
 `ai-fleet-coordinator/EFFORT-LOG-PROTOCOL.md`.
 
 ## Entries
+
+- **2026-09-30 — CLAUDE — IN PROGRESS — Rename Harness to Clutch (repo `jaywedgeworth22/Clutch`, decision `docs/decisions/0005-rename-harness-to-clutch.md`).**  Core rename landed in PR #60 (package `clutch` 0.4.0, `clutch*` bins, `CLUTCH_*` env, `~/.clutch` state home with forced `DSH_HOME=~/.clutch/dsh`, port 3180, `src/minimax`, `deepseek-headless` and `minimax-headless` profiles, root shims deleted).  This docs unit updates README, AGENTS.md, NOTICE, CONTRIBUTING and `docs/`, renames the BotFleet integration doc, and records the decision.  The Dock app and iOS rename (P4) and the Mac cutover (pm2 `clutch-web`, Tailscale Serve, Shellular paths) follow.  Dated rows below are history and are left as written.
 
 - **2026-09-30 — CLAUDE — LANDED, TESTFLIGHT PENDING — Harness iOS v0.3.0 works end-to-end against harness web (board `19f04f95`, branch `claude/harness-ios-works`).**  Diagnosis: v0.2 native Chat, Tools, Sessions, Fleet RAG, and Composio tabs called `/v1/*` endpoints that nothing serves (the only `/v1/*` server was the retired MiniMax Remote companion on :7842), and Fleet RAG and Composio returned hard-coded results.  `dsh web` has no REST API — its UI speaks the cordis connection protocol over `/api` — so v0.3 makes the real harness web UI the app: a `WKWebView` with Harness branding, native pairing (QR scan, paste, address), a host switcher, a cookie-less auth-wall probe, and native "Pair This Device" and "Cannot Reach" cards.  Pairing uses the `dsh web` launch token: new `harness-pair-ios` (`src/web/pair-ios.ts`) wraps `~/.dsh/web-launch-url` as `harness://pair?url=https://<magicdns>:3080/?token=…`, copies it to the clipboard, and opens a QR code (`scripts/qr-png.swift`, token over stdin); `--simulator` pairs the booted simulator.  Backend fix: `/api` answered 403 over Tailscale because `start-web` only trusted `macbook.boa-roygbiv.ts.net`, which does not resolve — this Mac is `jay-macbook.boa-roygbiv.ts.net` — so `start-web.sh`/`.ts` and `serve-tailscale.sh` now detect the MagicDNS name via `tailscale status --self --json` (plus `HARNESS_TRUSTED_HOSTS`).  Retired: `minimax://` scheme, `_minimax._tcp`/`_harness._tcp` Bonjour, the `.miniMaxCompanion` host kind, :7842 defaults, mic/speech permissions, and the ExyteChat/Kingfisher dependency.  v0.2 mock sources are excluded from the build in `ios/project.yml` pending deletion.  Version 0.3.0 (build 202609301500).  Tests: `ios/Tests/PairingTests.swift` (XCTest) and `tests/pair-link.test.ts` (vitest).
 

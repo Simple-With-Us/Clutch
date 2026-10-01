@@ -21,7 +21,7 @@ Every lesson contributed to Fleet Recall carries lifecycle metadata:
 ```json
 {
   "id": "22373b9d-fdd1-5eb0-83d2-cade76f76b79",
-  "app": "harness",
+  "app": "clutch",
   "category": "lesson",
   "title": "Context image sanitization for multimodal-to-reasoning model switching",
   "status": "active",
@@ -73,7 +73,7 @@ Dense Vector Search            Sparse BM25 Search             Metadata Filter
 ```
 
 ### Why Vector Search Alone Fails
-Vector search (cosine similarity on embedding vectors) frequently matches conceptually related topics while missing exact symbol constraints (such as `mcpServers: true`, `HarnessWindow.swift`, or specific flags).
+Vector search (cosine similarity on embedding vectors) frequently matches conceptually related topics while missing exact symbol constraints (such as `mcpServers: true`, `ClutchWindow.swift`, or specific flags).
 
 ### Two-Stage Retrieval
 1. **Candidate Retrieval (RRF):** Dense search retrieves semantic context; sparse BM25 matches exact variable, file, and error identifiers.  Combined via Reciprocal Rank Fusion.
