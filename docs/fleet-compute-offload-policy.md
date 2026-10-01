@@ -47,7 +47,7 @@ The headless macOS Guest VM (`scripts/mac-guest-vm-runner.sh` via Apple Virtuali
 - **Private Repositories:** Where GitHub Actions macOS runners incur metered per-minute billing.
 - **Hardware Credential Isolation:** Workflows requiring local physical security keys, hardware enclaves, or provisioning identities that cannot be stored in GitHub Secrets.
 - **Offline Development:** Air-gapped or travel environments without internet connectivity.
-- **Live Local Daemon Integration:** Testing native iOS apps against a locally running daemon on `127.0.0.1:3080` before publishing.
+- **Live Local Daemon Integration:** Testing native iOS apps against a locally running daemon on `127.0.0.1:3180` before publishing.
 
 ---
 
