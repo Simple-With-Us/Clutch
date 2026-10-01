@@ -1,0 +1,8 @@
+# minimax-headless profile — the dsh engine with MiniMax as the model,
+# headless (phone / Shellular spawn, agent id `minimax`).
+#
+# Bundle: @deepseek-ai/dsh-base + @deepseek-ai/dsh-headless, the same stack
+# as deepseek-headless.  settings-minimax-headless.yaml points the default
+# model at the MiniMax provider.  The minimax-acp.py bridge spawns
+# `dsh --profile minimax-headless` for parity with the DeepSeek phone path.
+[]

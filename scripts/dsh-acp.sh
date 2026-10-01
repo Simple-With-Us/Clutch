@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Shellular ACP spawn for DeepSeek Harness. Stdout is JSON-RPC only.
-# Canonical: this repo.  Live: ~/apps/harness-runtime/dsh-acp.sh (root shim).
+# Shellular ACP spawn for the DeepSeek agent (id `deepseek`).  Stdout is
+# JSON-RPC only.  Live: ~/apps/clutch-runtime/scripts/dsh-acp.sh.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
-export HARNESS_RUNTIME_ROOT="${HARNESS_RUNTIME_ROOT:-$ROOT}"
-export DSH_RUNTIME_ROOT="${DSH_RUNTIME_ROOT:-$HARNESS_RUNTIME_ROOT}"
-export DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
-export DSH_PERMISSION_MODE="${DSH_PERMISSION_MODE:-danger-full-access}"
-export DSH_PROFILE="${DSH_PROFILE:-dsh-headless}"
+# shellcheck source=lib/clutch-env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/clutch-env.sh"
 
-exec /opt/homebrew/bin/python3 "$ROOT/bridges/dsh/dsh-acp.py" "$@"
+# DSH_PERMISSION_MODE keeps its upstream name: the shipped dsh-base
+# cordis.patch.yml reads it.  The phone cannot answer approval prompts.
+export DSH_PERMISSION_MODE="${DSH_PERMISSION_MODE:-danger-full-access}"
+export CLUTCH_DEEPSEEK_PROFILE="${CLUTCH_DEEPSEEK_PROFILE:-deepseek-headless}"
+
+exec /opt/homebrew/bin/python3 "$CLUTCH_RUNTIME_ROOT/bridges/dsh/dsh-acp.py" "$@"

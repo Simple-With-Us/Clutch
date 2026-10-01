@@ -16,7 +16,7 @@
  *     "DeepSeek-V4.1-Flash") and `deepseek-v4-pro` (display name
  *     "DeepSeek-V4.1-Pro").  The picker's `DeepSeek-V4.1-Flash` is the
  *     *display name*, not an id.
- *   - An owner `~/.dsh/settings.yaml` can replace that list outright
+ *   - An owner `settings.yaml` in the engine home can replace that list outright
  *     (`llm-deepseek.models`), for example with `deepseek-v4.1-flash`.
  *   - Selections saved before the V4.1 rename say `deepseek-v4-flash`, an id
  *     no current catalog declares.
@@ -66,7 +66,7 @@ export class DshModelNotOfferedError extends Error {
     // A model declared only under a different provider reads as "not offered"
     // next to a list that contains it, so say which route it is on.
     const hint = elsewhere.length ? `; ${model} is declared only under ${elsewhere.join(", ")}` : "";
-    super(`unknown model ${model}: the installed Harness CLI does not offer it (offers: ${list}${hint})`);
+    super(`unknown model ${model}: the installed engine CLI does not offer it (offers: ${list}${hint})`);
     this.name = "DshModelNotOfferedError";
     this.model = model;
     this.offered = offered;

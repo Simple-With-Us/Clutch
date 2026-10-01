@@ -1,6 +1,0 @@
-# dsh-headless profile — DeepSeek Harness headless (phone / Shellular spawn).
-#
-# Bundle: @deepseek-ai/dsh-base + @deepseek-ai/dsh-headless.
-# Patch: see cordis.patch.yml (disables plugins the phone cannot steer).
-# Tracked in this repo; sync-profiles.ts copies it to ~/.dsh/profiles/.
-[]

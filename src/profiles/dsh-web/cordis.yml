@@ -1,6 +1,0 @@
-# dsh-web profile — DeepSeek Harness web UI on :3080.
-#
-# Bundle: @deepseek-ai/dsh-base + @deepseek-ai/dsh-web-app.
-# Patch: see cordis.patch.yml (currently empty; the web profile keeps
-# every plugin so the picker, settings, and tool-inventory rows show up).
-[]

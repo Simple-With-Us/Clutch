@@ -1,9 +1,9 @@
 /**
- * Shared engine contract types for Harness.
+ * Shared engine contract types for Clutch.
  *
  * These mirror the subset of `server/contracts.ts` from BotFleet that the
  * driver / bridge code in this repo needs.  The canonical runtime lives in
- * BotFleet; this file is the type-level contract so Harness typechecks
+ * BotFleet; this file is the type-level contract so Clutch typechecks
  * in isolation.  Keep the two lists in sync when adding a code.
  */
 

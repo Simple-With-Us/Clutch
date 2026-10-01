@@ -1,17 +1,17 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 /**
- * Visual regression checks for the Harness web UI (the upstream dsh web
- * app served through `bash scripts/harness.sh web`).
+ * Visual regression checks for the Clutch web UI (the upstream dsh web
+ * app served through `bash scripts/clutch.sh web`).
  *
  * The `chromium` project runs with the `storageState` minted by
  * `e2e/auth.setup.ts`, so every page here loads authenticated.  Server
- * state is isolated to `e2e/.dsh-home`, so the app starts from a clean
+ * state is isolated to `e2e/.clutch-home`, so the app starts from a clean
  * slate on CI: empty session list, default settings.
  *
- * A fresh `DSH_HOME` shows two first-run modals (the internal-testing
+ * A fresh engine home shows two first-run modals (the internal-testing
  * notice and the API-key prompt).  Both are dismissed before asserting;
- * the guards make the tests idempotent against a warm `DSH_HOME` on
+ * the guards make the tests idempotent against a warm engine home on
  * local re-runs.  Selectors are role-based — the app's CSS class names
  * are hashed and must not be used.
  *
@@ -39,7 +39,7 @@ async function dismissOnboarding(page: Page): Promise<void> {
   await expect(page.getByText("Into the Unknown")).toBeVisible();
 }
 
-test.describe("Harness web UI", () => {
+test.describe("Clutch web UI", () => {
   // Cold boots (server start + browser launch on a busy CI runner) can
   // exceed the 30s default; the assertions below still fail fast on
   // real regressions.

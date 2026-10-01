@@ -80,7 +80,10 @@ describe("dshSupport", () => {
     ]);
     expect(DSH_MINIMUM_ACP_VERSION).toBe("0.1.5-rc.1");
     expect(dshSupport.driverKind).toBe("dshAgent");
-    expect(dshSupport.credentialEnv).toContain("HARNESS_RUNTIME_ROOT");
+    expect(dshSupport.credentialEnv).toContain("CLUTCH_RUNTIME_ROOT");
+    expect(dshSupport.credentialEnv).toContain("CLUTCH_HOME");
+    // Upstream-read (dsh-base cordis.patch.yml), so it keeps its name.
+    expect(dshSupport.credentialEnv).toContain("DSH_PERMISSION_MODE");
     expect(dshSupport.mcpServers).toBe(true);
   });
 
@@ -94,7 +97,7 @@ describe("dshSupport", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("throws when the harness reports a different effort", async () => {
+  it("throws when the engine reports a different effort", async () => {
     await expect(
       dshSupport.configureSession?.({
         request: async () => ({

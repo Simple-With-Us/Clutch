@@ -22,19 +22,20 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { clutchWebPort } from "../shared/ports.ts";
 import { LEGACY_TAILNET_HOST, pairingLink, tailnetDnsName } from "./pair-link.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PORT = process.env.DSH_WEB_PORT ?? "3080";
-const DSH_HOME = process.env.DSH_HOME ?? join(homedir(), ".dsh");
-const LAUNCH_URL_FILE = process.env.DSH_LAUNCH_URL_FILE ?? join(DSH_HOME, "web-launch-url");
+const PORT = clutchWebPort();
+const CLUTCH_HOME = process.env.CLUTCH_HOME ?? join(homedir(), ".clutch");
+const LAUNCH_URL_FILE = process.env.CLUTCH_LAUNCH_URL_FILE ?? join(CLUTCH_HOME, "web-launch-url");
 
 function log(line: string): void {
   process.stderr.write(`harness-pair-ios: ${line}\n`);
 }
 
 function detectTailnetHost(): string {
-  if (process.env.HARNESS_TAILNET_HOST) return process.env.HARNESS_TAILNET_HOST;
+  if (process.env.CLUTCH_TAILNET_HOST) return process.env.CLUTCH_TAILNET_HOST;
   const result = spawnSync("tailscale", ["status", "--self", "--json"], { encoding: "utf8", timeout: 30000 });
   if (result.status === 0) {
     try {
@@ -50,7 +51,7 @@ function detectTailnetHost(): string {
 
 function readLaunchUrl(): string {
   if (!existsSync(LAUNCH_URL_FILE)) {
-    log(`${LAUNCH_URL_FILE} not found — start harness web first (pm2 harness-web).`);
+    log(`${LAUNCH_URL_FILE} not found — start clutch web first (pm2 clutch-web).`);
     process.exit(2);
   }
   return readFileSync(LAUNCH_URL_FILE, "utf8").trim();

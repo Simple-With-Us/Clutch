@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 /**
- * Mints the signed browser cookie for the Harness web UI.
+ * Mints the signed browser cookie for the Clutch web UI.
  *
  * `dsh web` prints a per-process launch URL (`dsh web: <url>?token=...`)
  * on stdout; `scripts/capture-launch-url.cjs` (run as the Playwright

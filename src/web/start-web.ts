@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
- * Harness web UI — loopback bind + Tailscale Serve receiver.
+ * Clutch web UI — loopback bind + Tailscale Serve receiver.
  *
- * Same semantics as `scripts/start-web.sh`, which is what pm2 `harness-web`
- * actually runs today.  This TS entry is the npm bin (`harness-web`).
+ * Same semantics as `scripts/start-web.sh`, which is what pm2 `clutch-web`
+ * runs.  This TS entry is the npm bin (`clutch-web`).  Engine state lives in
+ * $CLUTCH_HOME/dsh: `scripts/clutch.sh` forces DSH_HOME there, so this never
+ * touches the vanilla ~/.dsh.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -11,18 +13,17 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { httpStatusIsUp } from "../shared/http-up.ts";
+import { clutchWebPort } from "../shared/ports.ts";
 import { tailnetDnsName, trustedHostArgs } from "./pair-link.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const HARNESS_SH = join(ROOT, "scripts", "harness.sh");
-const HOST = process.env.DSH_WEB_HOST ?? "127.0.0.1";
-const PORT = process.env.DSH_WEB_PORT ?? "3080";
-const TAILNET_HOST = process.env.HARNESS_TAILNET_HOST ?? "macbook.boa-roygbiv.ts.net";
-const TAILNET_IPV4 = process.env.HARNESS_TAILNET_IPV4 ?? "100.113.106.39";
+const CLUTCH_SH = join(ROOT, "scripts", "clutch.sh");
+const HOST = process.env.CLUTCH_WEB_HOST ?? "127.0.0.1";
+const PORT = clutchWebPort();
 const SERVE_TAILSCALE = join(ROOT, "scripts", "serve-tailscale.sh");
 
 function log(line: string): void {
-  process.stderr.write(`harness-web: ${line}\n`);
+  process.stderr.write(`clutch-web: ${line}\n`);
 }
 
 async function readCommand(pid: number): Promise<string | null> {
@@ -74,12 +75,13 @@ async function probe(url: string): Promise<boolean> {
   });
 }
 
+/** Reclaim the port only from a Clutch process; anything else exits 3. */
 async function reclaimPort(port: string): Promise<void> {
   const holder = await holderOnPort(port);
   if (holder === null) return;
   const cmd = await readCommand(holder);
-  if (cmd === null || (!cmd.includes("dsh") && !cmd.includes("harness"))) {
-    log(`:${port} held by pid ${holder} (${cmd ?? "unknown"}) — not harness, refusing to reclaim`);
+  if (cmd === null || !cmd.includes("clutch")) {
+    log(`:${port} held by pid ${holder} (${cmd ?? "unknown"}) — not clutch, refusing to reclaim`);
     process.exit(3);
   }
   if (await probe(`http://${HOST}:${PORT}/`)) {
@@ -104,8 +106,13 @@ async function reclaimPort(port: string): Promise<void> {
   await new Promise((r) => setTimeout(r, 500));
 }
 
-/** This Mac's MagicDNS name, so /api accepts the Host the iOS app sends over Tailscale. */
+/**
+ * This Mac's MagicDNS name, so /api accepts the Host the iOS app sends over
+ * Tailscale.  CLUTCH_TAILNET_HOST overrides the detected name.
+ */
 async function detectTailnetHost(): Promise<string | null> {
+  const override = process.env.CLUTCH_TAILNET_HOST?.trim();
+  if (override) return override;
   return new Promise((resolvePromise) => {
     const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
@@ -124,8 +131,8 @@ async function detectTailnetHost(): Promise<string | null> {
 }
 
 async function main(): Promise<void> {
-  if (!existsSync(HARNESS_SH)) {
-    log(`missing ${HARNESS_SH}`);
+  if (!existsSync(CLUTCH_SH)) {
+    log(`missing ${CLUTCH_SH}`);
     process.exit(127);
   }
 
@@ -135,20 +142,14 @@ async function main(): Promise<void> {
     await new Promise<void>((resolvePromise) => {
       const child = spawn(SERVE_TAILSCALE, [], {
         stdio: "inherit",
-        env: {
-          ...process.env,
-          DSH_WEB_PORT: PORT,
-          HARNESS_TAILNET_HOST: TAILNET_HOST,
-          HARNESS_TAILNET_IPV4: TAILNET_IPV4,
-          HARNESS_RUNTIME_ROOT: ROOT,
-        },
+        env: { ...process.env, CLUTCH_WEB_PORT: PORT, CLUTCH_RUNTIME_ROOT: ROOT },
       });
       child.on("exit", () => resolvePromise());
       child.on("error", () => resolvePromise());
     });
   }
 
-  const extraHosts = (process.env.HARNESS_TRUSTED_HOSTS ?? "").split(",");
+  const extraHosts = (process.env.CLUTCH_TRUSTED_HOSTS ?? "").split(",");
   const args = [
     "web",
     "--no-open",
@@ -156,13 +157,16 @@ async function main(): Promise<void> {
     HOST,
     "--port",
     PORT,
-    ...trustedHostArgs(["127.0.0.1", "localhost", TAILNET_HOST, TAILNET_IPV4, await detectTailnetHost(), ...extraHosts], PORT),
+    ...trustedHostArgs(
+      ["127.0.0.1", "localhost", await detectTailnetHost(), process.env.CLUTCH_TAILNET_IPV4, ...extraHosts],
+      PORT,
+    ),
   ];
 
-  log(`exec harness.sh web on ${HOST}:${PORT}`);
-  const child = spawn(HARNESS_SH, args, {
+  log(`exec clutch.sh web on ${HOST}:${PORT}`);
+  const child = spawn(CLUTCH_SH, args, {
     stdio: "inherit",
-    env: { ...process.env, HARNESS_RUNTIME_ROOT: ROOT, DSH_HOME: process.env.DSH_HOME ?? `${process.env.HOME}/.dsh` },
+    env: { ...process.env, CLUTCH_RUNTIME_ROOT: ROOT, CLUTCH_WEB_HOST: HOST, CLUTCH_WEB_PORT: PORT },
   });
   child.on("exit", (code) => process.exit(code ?? 0));
   process.on("SIGINT", () => child.kill("SIGINT"));

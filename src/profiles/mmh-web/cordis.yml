@@ -1,7 +1,0 @@
-# mmh-web profile — MiniMax Harness web UI on :3081.
-#
-# The MMH web profile is a future surface.  Today the MMH harness is the
-# HTTP adapter only; the web UI would mirror dsh-web once MM ships an
-# official web frontend.  Until then, this profile exists so a single
-# `harness-web-mmh` pm2 job can be added without restructuring.
-[]

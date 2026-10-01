@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /*
  * capture-launch-url.cjs — run dsh web through a Node shim that tees the
- * launch URL to $DSH_LAUNCH_URL_FILE (default: $HOME/.dsh/web-launch-url)
- * while passing the rest of stdout straight through to pm2 logs.
+ * launch URL to $CLUTCH_LAUNCH_URL_FILE (default: $CLUTCH_HOME/web-launch-url,
+ * i.e. ~/.clutch/web-launch-url) while passing the rest of stdout straight
+ * through to pm2 logs.
  *
  * Why: dsh web 0.1.5-rc.2+ mints a per-process launch token on startup and
  * prints it on the `dsh web: <URL>` line as part of the connection's
@@ -15,8 +16,10 @@
  *   node capture-launch-url.cjs <dsh-binary> [dsh-args...]
  *
  * Env:
- *   DSH_LAUNCH_URL_FILE  override the destination path.
- *   DSH_HOME             default file parent if DSH_LAUNCH_URL_FILE unset.
+ *   CLUTCH_LAUNCH_URL_FILE  override the destination path.
+ *   CLUTCH_HOME             default file parent if CLUTCH_LAUNCH_URL_FILE unset.
+ *
+ * The `dsh web:` line format is the upstream engine's and stays as is.
  */
 
 'use strict';
@@ -26,8 +29,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const launchURLFile =
-  process.env.DSH_LAUNCH_URL_FILE ||
-  path.join(process.env.DSH_HOME || path.join(process.env.HOME || '', '.dsh'), 'web-launch-url');
+  process.env.CLUTCH_LAUNCH_URL_FILE ||
+  path.join(process.env.CLUTCH_HOME || path.join(process.env.HOME || '', '.clutch'), 'web-launch-url');
 
 fs.mkdirSync(path.dirname(launchURLFile), { recursive: true });
 

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * Unauthenticated smoke checks for the Harness web UI server.
+ * Unauthenticated smoke checks for the Clutch web UI server.
  *
  * The web UI is auth-walled: `/` answers 401 until the signed browser
  * cookie is minted (see `e2e/auth.setup.ts`).  That 401 still counts as

@@ -1,0 +1,7 @@
+# deepseek-headless profile — the DeepSeek Harness engine, headless (phone /
+# Shellular spawn, agent id `deepseek`).
+#
+# Bundle: @deepseek-ai/dsh-base + @deepseek-ai/dsh-headless.
+# Patch: see cordis.patch.yml (disables plugins the phone cannot steer).
+# Tracked in this repo; sync-profiles.ts copies it to ~/.clutch/dsh/profiles/.
+[]

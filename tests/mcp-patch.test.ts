@@ -6,7 +6,7 @@ import {
   DSH_MCP_PATCH_PREFIX,
   dshMcpPatchYaml,
   dshMcpServerName,
-  isStockDshCli,
+  isDshEngineCli,
   writeDshMcpPatch,
 } from "../src/dsh/acp/mcp-patch.ts";
 
@@ -18,11 +18,11 @@ afterEach(() => {
   }
 });
 
-describe("isStockDshCli", () => {
+describe("isDshEngineCli", () => {
   it("matches a stock dsh binary name", () => {
-    expect(isStockDshCli("dsh")).toBe(true);
-    expect(isStockDshCli("/usr/local/bin/dsh")).toBe(true);
-    expect(isStockDshCli("dsh-acp.sh")).toBe(false);
+    expect(isDshEngineCli("dsh")).toBe(true);
+    expect(isDshEngineCli("/usr/local/bin/dsh")).toBe(true);
+    expect(isDshEngineCli("dsh-acp.sh")).toBe(false);
   });
 });
 

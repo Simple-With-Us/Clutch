@@ -3,17 +3,17 @@
  * record that BotFleet's `acp/core.ts` consumes via `createAcpDriver(support)`.
  *
  * BotFleet owns the runtime (the spawn wrapper, the JSON-RPC client, the
- * MCP mount assembler); Harness owns the engine-specific support shape
+ * MCP mount assembler); Clutch owns the engine-specific support shape
  * (catalog, error classifier, version gate, etc.).  Both sides typecheck
  * against this interface, so drift between them surfaces at compile time.
  *
- * Long-term: lift the ACP core into Harness too.  See
+ * Long-term: lift the ACP core into Clutch too.  See
  * `docs/decisions/0002-acp-core-stays-in-botfleet.md`.
  */
 
 import type { ModelCatalog, EffortLevel } from "./contracts.ts";
 
-/** A single config option the harness can set on a session.  Mirrors
+/** A single config option the host can set on a session.  Mirrors
  * BotFleet's `AcpConfigOption`; defined here so types align across repos. */
 export interface AcpConfigOption {
   readonly id: string;
