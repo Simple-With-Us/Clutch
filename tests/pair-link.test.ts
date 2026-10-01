@@ -22,36 +22,36 @@ describe("tailnetDnsName", () => {
 
 describe("trustedHostArgs", () => {
   it("emits bare and ported authorities once each, skipping empties", () => {
-    expect(trustedHostArgs(["127.0.0.1", "LOCALHOST", "localhost", null, "", "mac.ts.net"], "3080")).toEqual([
+    expect(trustedHostArgs(["127.0.0.1", "LOCALHOST", "localhost", null, "", "mac.ts.net"], "3180")).toEqual([
       "--trusted-host", "127.0.0.1",
-      "--trusted-host", "127.0.0.1:3080",
+      "--trusted-host", "127.0.0.1:3180",
       "--trusted-host", "localhost",
-      "--trusted-host", "localhost:3080",
+      "--trusted-host", "localhost:3180",
       "--trusted-host", "mac.ts.net",
-      "--trusted-host", "mac.ts.net:3080",
+      "--trusted-host", "mac.ts.net:3180",
     ]);
   });
 });
 
 describe("pairingLink", () => {
-  const launch = "http://127.0.0.1:3080/?token=abc-123_XYZ";
+  const launch = "http://127.0.0.1:3180/?token=abc-123_XYZ";
 
   it("extracts the launch token", () => {
     expect(launchToken(launch)).toBe("abc-123_XYZ");
-    expect(launchToken("http://127.0.0.1:3080/")).toBeNull();
+    expect(launchToken("http://127.0.0.1:3180/")).toBeNull();
     expect(launchToken("not a url")).toBeNull();
   });
 
-  it("re-points the launch URL at the tailnet origin inside a harness:// link", () => {
-    const link = new URL(pairingLink({ launchUrl: launch, origin: "https://jay-macbook.boa-roygbiv.ts.net:3080", name: "Jay's Mac" }));
-    expect(link.protocol).toBe("harness:");
+  it("re-points the launch URL at the tailnet origin inside a clutch:// link", () => {
+    const link = new URL(pairingLink({ launchUrl: launch, origin: "https://jay-macbook.boa-roygbiv.ts.net:3180", name: "Jay's Mac" }));
+    expect(link.protocol).toBe("clutch:");
     expect(link.host).toBe("pair");
-    expect(link.searchParams.get("url")).toBe("https://jay-macbook.boa-roygbiv.ts.net:3080/?token=abc-123_XYZ");
+    expect(link.searchParams.get("url")).toBe("https://jay-macbook.boa-roygbiv.ts.net:3180/?token=abc-123_XYZ");
     expect(link.searchParams.get("name")).toBe("Jay's Mac");
   });
 
   it("refuses a launch URL without a token and non-web origins", () => {
-    expect(() => pairingLink({ launchUrl: "http://127.0.0.1:3080/", origin: "http://127.0.0.1:3080" })).toThrow(/no token/);
+    expect(() => pairingLink({ launchUrl: "http://127.0.0.1:3180/", origin: "http://127.0.0.1:3180" })).toThrow(/no token/);
     expect(() => pairingLink({ launchUrl: launch, origin: "minimax://127.0.0.1:7842" })).toThrow(/http/);
   });
 });
@@ -67,11 +67,13 @@ describe("start-web trusted hosts", () => {
   });
 });
 
-describe("iOS app retires the MiniMax Remote companion", () => {
+describe("iOS app registers only the clutch scheme", () => {
   it("no longer registers minimax:// or browses _minimax._tcp", () => {
     const projectYml = readFileSync(join(ROOT, "ios", "project.yml"), "utf8");
     expect(projectYml).not.toMatch(/- minimax$/m);
     expect(projectYml).not.toContain("_minimax._tcp");
+    expect(projectYml).not.toMatch(/- harness$/m); // retired-name
+    expect(projectYml).toMatch(/- clutch$/m);
     expect(projectYml).not.toContain("ExyteChat");
     expect(projectYml).toContain("ITSAppUsesNonExemptEncryption: false");
   });

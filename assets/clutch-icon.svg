@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Clutch">
+  <!-- Full-bleed 1:1 square, 90 degree corners (no squircle mask).
+       Placeholder identity: a C monogram over the CLUTCH wordmark.
+       Intentionally carries no third-party mark — the MiniMax mark lives only
+       where MiniMax is actually selected (see assets/minimax-mark.svg and the
+       picker injection in src/web/dock-app/ClutchWindow.swift).  Final art
+       replaces this file in a follow-up. -->
+  <rect width="1024" height="1024" fill="#151820"/>
+  <rect y="1012" width="1024" height="12" fill="#1E293B"/>
+
+  <!-- C monogram: a 112 thick ring (outer radius 220) open on the right,
+       centred on x=512. -->
+  <path fill="#F8FAFC" d="M706.5 258.5A220 220 0 1 0 706.5 541.5L620.7 469.4A108 108 0 1 1 620.7 330.6z"/>
+
+  <text x="512" y="800" text-anchor="middle"
+        font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="104" font-weight="600" letter-spacing="12"
+        fill="#94A3B8">CLUTCH</text>
+</svg>

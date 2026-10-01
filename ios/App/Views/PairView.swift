@@ -10,7 +10,7 @@ enum Copy {
         sentences.joined(separator: sentenceGap)
     }
 
-    static let pairCommand = "harness-pair-ios"
+    static let pairCommand = "clutch-pair-ios"
 }
 
 /// Scan / paste / type controls shared by first-run onboarding, Add Host, and
@@ -60,7 +60,7 @@ struct PairingActions: View {
 
             #if targetEnvironment(simulator)
             Button {
-                accept(.success(PairingPayload(name: "This Mac", origin: URL(string: "http://127.0.0.1:3080")!, launchToken: nil)))
+                accept(.success(PairingPayload(name: "This Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: nil)))
             } label: {
                 Label("Use This Mac (Simulator)", systemImage: "laptopcomputer")
                     .frame(maxWidth: .infinity)
@@ -119,10 +119,10 @@ struct PairView: View {
                     AppIconBadge()
                         .padding(.top, 32)
                     VStack(spacing: 8) {
-                        Text("Pair With Harness")
+                        Text("Pair With Clutch")
                             .font(.largeTitle.weight(.bold))
                         Text(Copy.gap(
-                            "Harness runs on your Mac and reaches this device over Tailscale.",
+                            "Clutch runs on your Mac and reaches this device over Tailscale.",
                             "Open Terminal on the Mac and run \(Copy.pairCommand) to show a pairing code, then scan it here."
                         ))
                         .font(.body)

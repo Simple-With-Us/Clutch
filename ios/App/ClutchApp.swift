@@ -1,13 +1,13 @@
 import SwiftUI
 
 @main
-struct HarnessApp: App {
+struct ClutchApp: App {
     /// Light is the first-run default; System and Dark are available in Settings.
-    @AppStorage("harness_theme_preference") private var themePreference: String = "light"
+    @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
 
     init() {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-HarnessResetHosts") {
+        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
             HostStore.resetPersistedHosts()
         }
         #endif

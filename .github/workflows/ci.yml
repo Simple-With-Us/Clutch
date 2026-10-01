@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Build Harness iOS App
+      - name: Build Clutch iOS App
         run: bash scripts/build-ios.sh --simulator
 
   e2e:

@@ -28,7 +28,7 @@ case "$cmd" in
   build-sim)
     if command -v tart >/dev/null 2>&1 && tart list 2>/dev/null | grep -q "$VM_NAME"; then
       echo "==> Running xcodebuild for iOS Simulator inside headless guest VM ($VM_NAME)..."
-      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/harness && bash scripts/build-ios.sh --simulator"
+      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/clutch && bash scripts/build-ios.sh --simulator"
     else
       echo "==> Tart guest VM not active; executing headless on host..."
       (cd "$REPO_ROOT" && bash scripts/build-ios.sh --simulator)
@@ -38,7 +38,7 @@ case "$cmd" in
   build-device)
     if command -v tart >/dev/null 2>&1 && tart list 2>/dev/null | grep -q "$VM_NAME"; then
       echo "==> Running arm64 device build inside headless guest VM ($VM_NAME)..."
-      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/harness && bash scripts/build-ios.sh --device"
+      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/clutch && bash scripts/build-ios.sh --device"
     else
       echo "==> Tart guest VM not active; executing headless on host..."
       (cd "$REPO_ROOT" && bash scripts/build-ios.sh --device)
@@ -48,10 +48,10 @@ case "$cmd" in
   ship-testflight)
     if command -v tart >/dev/null 2>&1 && tart list 2>/dev/null | grep -q "$VM_NAME"; then
       echo "==> Shipping to TestFlight via guest VM ($VM_NAME)..."
-      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/harness && bash scripts/ios-fleet/ship-testflight.sh Harness"
+      tart exec "$VM_NAME" -- bash -c "cd /Volumes/Shared/clutch && bash scripts/ios-fleet/ship-testflight.sh clutch"
     else
       echo "==> Executing TestFlight ship script locally..."
-      (cd "$REPO_ROOT" && bash scripts/ios-fleet/ship-testflight.sh Harness || true)
+      (cd "$REPO_ROOT" && bash scripts/ios-fleet/ship-testflight.sh clutch || true)
     fi
     ;;
 

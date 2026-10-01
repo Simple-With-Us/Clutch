@@ -1,6 +1,6 @@
 /**
- * Pure helpers shared by `start-web` (which hosts harness web trusts) and
- * `harness-pair-ios` (the pairing link the iOS app scans).
+ * Pure helpers shared by `start-web` (which hosts clutch web trusts) and
+ * `clutch-pair-ios` (the pairing link the iOS app scans).
  *
  * dsh web auth in one paragraph: each dsh web process mints a launch token
  * and prints `http://127.0.0.1:<port>/?token=<t>`.  Visiting `/?token=<t>`
@@ -56,20 +56,20 @@ export function launchToken(launchUrl: string): string | null {
 
 /**
  * The link the iOS app pairs from:
- * `harness://pair?url=<origin>/?token=<t>&name=<label>`.
- * `origin` is where the phone reaches harness web, e.g.
- * `https://<magicdns>:3080` over Tailscale or `http://127.0.0.1:3080` for the Simulator.
+ * `clutch://pair?url=<origin>/?token=<t>&name=<label>`.
+ * `origin` is where the phone reaches clutch web, e.g.
+ * `https://<magicdns>:3180` over Tailscale or `http://127.0.0.1:3180` for the Simulator.
  */
 export function pairingLink(options: { launchUrl: string; origin: string; name?: string }): string {
   const token = launchToken(options.launchUrl);
-  if (token === null) throw new Error("launch URL has no token; is harness web running?");
+  if (token === null) throw new Error("launch URL has no token; is clutch web running?");
   const origin = new URL(options.origin);
   if (origin.protocol !== "http:" && origin.protocol !== "https:") {
     throw new Error(`origin must be http(s), got ${origin.protocol}`);
   }
   const target = new URL("/", origin);
   target.searchParams.set("token", token);
-  const link = new URL("harness://pair");
+  const link = new URL("clutch://pair");
   link.searchParams.set("url", target.toString());
   if (options.name) link.searchParams.set("name", options.name);
   return link.toString();

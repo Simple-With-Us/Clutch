@@ -5,7 +5,7 @@ struct HostsSheet: View {
     let store: HostStore
 
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("harness_theme_preference") private var themePreference: String = "light"
+    @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
     @State private var isAddingHost = false
 
     var body: some View {
@@ -54,7 +54,7 @@ struct HostsSheet: View {
                 Section("About") {
                     LabeledContent("Version", value: "\(Bundle.main.shortVersion) (\(Bundle.main.buildNumber))")
                     Text(Copy.gap(
-                        "Harness shows the harness web UI running on your Mac.",
+                        "Clutch shows the clutch web UI running on your Mac.",
                         "Models, sessions, and tools come from that Mac, so DeepSeek and MiniMax work exactly as they do on the desktop."
                     ))
                     .font(.footnote)
@@ -82,7 +82,7 @@ struct HostsSheet: View {
 }
 
 private struct HostRow: View {
-    let host: HarnessHost
+    let host: ClutchHost
     let isActive: Bool
 
     var body: some View {
@@ -115,7 +115,7 @@ private struct HostRow: View {
     private var color: Color {
         switch host.status {
         case .online: return .green
-        case .notHarness: return .orange
+        case .notClutch: return .orange
         case .offline: return .red
         case .unknown: return .secondary
         }

@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
-               BuildableName = "Harness.app"
-               BlueprintName = "Harness"
-               ReferencedContainer = "container:Harness.xcodeproj">
+               BlueprintIdentifier = "699429E887F279DE55CCB707"
+               BuildableName = "Clutch.app"
+               BlueprintName = "Clutch"
+               ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry
@@ -29,10 +29,10 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D3F4CD28060BA8AF31CBC340"
-               BuildableName = "HarnessTests.xctest"
-               BlueprintName = "HarnessTests"
-               ReferencedContainer = "container:Harness.xcodeproj">
+               BlueprintIdentifier = "A25DBA11C6F3F192A355D9DE"
+               BuildableName = "ClutchTests.xctest"
+               BlueprintName = "ClutchTests"
+               ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry
@@ -43,10 +43,10 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D533F13893EB6DD3E8D067C0"
-               BuildableName = "HarnessUITests.xctest"
-               BlueprintName = "HarnessUITests"
-               ReferencedContainer = "container:Harness.xcodeproj">
+               BlueprintIdentifier = "BFDB73766F4043DD10AF91D8"
+               BuildableName = "ClutchUITests.xctest"
+               BlueprintName = "ClutchUITests"
+               ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -60,10 +60,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
-            BuildableName = "Harness.app"
-            BlueprintName = "Harness"
-            ReferencedContainer = "container:Harness.xcodeproj">
+            BlueprintIdentifier = "699429E887F279DE55CCB707"
+            BuildableName = "Clutch.app"
+            BlueprintName = "Clutch"
+            ReferencedContainer = "container:Clutch.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -72,10 +72,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D3F4CD28060BA8AF31CBC340"
-               BuildableName = "HarnessTests.xctest"
-               BlueprintName = "HarnessTests"
-               ReferencedContainer = "container:Harness.xcodeproj">
+               BlueprintIdentifier = "A25DBA11C6F3F192A355D9DE"
+               BuildableName = "ClutchTests.xctest"
+               BlueprintName = "ClutchTests"
+               ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </TestableReference>
          <TestableReference
@@ -83,10 +83,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D533F13893EB6DD3E8D067C0"
-               BuildableName = "HarnessUITests.xctest"
-               BlueprintName = "HarnessUITests"
-               ReferencedContainer = "container:Harness.xcodeproj">
+               BlueprintIdentifier = "BFDB73766F4043DD10AF91D8"
+               BuildableName = "ClutchUITests.xctest"
+               BlueprintName = "ClutchUITests"
+               ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -107,10 +107,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
-            BuildableName = "Harness.app"
-            BlueprintName = "Harness"
-            ReferencedContainer = "container:Harness.xcodeproj">
+            BlueprintIdentifier = "699429E887F279DE55CCB707"
+            BuildableName = "Clutch.app"
+            BlueprintName = "Clutch"
+            ReferencedContainer = "container:Clutch.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -126,10 +126,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "9CAE8F41437D5C28E2B50B85"
-            BuildableName = "Harness.app"
-            BlueprintName = "Harness"
-            ReferencedContainer = "container:Harness.xcodeproj">
+            BlueprintIdentifier = "699429E887F279DE55CCB707"
+            BuildableName = "Clutch.app"
+            BlueprintName = "Clutch"
+            ReferencedContainer = "container:Clutch.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
