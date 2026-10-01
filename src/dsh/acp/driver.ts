@@ -26,11 +26,12 @@ import { basename, join } from "node:path";
 import type { EffortLevel, ModelCatalog, ProviderErrorCode } from "../../shared/contracts.ts";
 import type { AcpSupport } from "../../shared/acp-core.ts";
 import { isDshEngineCli } from "./mcp-patch.ts";
-import { DshModelNotOfferedError, resolveDshModelOption } from "./model-options.ts";
+import { DshModelNotOfferedError, dshCanonicalWireModelId, resolveDshModelOption } from "./model-options.ts";
 
 export { isDshEngineCli } from "./mcp-patch.ts";
 export {
   DshModelNotOfferedError,
+  dshCanonicalWireModelId,
   dshSameModel,
   matchAdvertisedDshModel,
   parseAdvertisedDshModels,
@@ -129,11 +130,17 @@ export function dshProviderForModel(model: string): string {
  * another spelling again.  See `./model-options.ts`.
  *
  * Without `advertised`, or when it lists no model, the value is built from the
- * picker id as before.  A session that offers models but not this one throws
- * {@link DshModelNotOfferedError}, classified as a model-catalog outage. */
+ * preferred stock wire id via {@link dshCanonicalWireModelId} (picker display
+ * ids such as `DeepSeek-V4.1-Flash` become `deepseek-flash`; MiniMax and other
+ * non-DeepSeek models pass through unchanged).  A session that offers models
+ * but not this one throws {@link DshModelNotOfferedError}, classified as a
+ * model-catalog outage. */
 export function dshModelOptionValue(model: string, advertised?: unknown): string {
   const provider = dshProviderForModel(model);
-  return resolveDshModelOption(model, provider, advertised)?.value ?? JSON.stringify([provider, model]);
+  return (
+    resolveDshModelOption(model, provider, advertised)?.value ??
+    JSON.stringify([provider, dshCanonicalWireModelId(model)])
+  );
 }
 
 export function dshModelIdFromOptionValue(value: unknown): string | null {
