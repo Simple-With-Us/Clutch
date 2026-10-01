@@ -19,37 +19,6 @@ targets:
     platform: iOS
     sources:
       - path: App
-        # Retired v0.2 native surfaces (mock chat, tools, sessions, Fleet RAG,
-        # Composio, Bonjour, MiniMax Remote companion routing).  None had a
-        # backend; v0.3 shows the real harness web UI instead.  Kept out of
-        # the build until they are deleted.
-        excludes:
-          - Models/ChatMessage.swift
-          - Models/ComposioModels.swift
-          - Models/FleetRAGModels.swift
-          - Models/HostConnection.swift
-          - Models/ModelProvider.swift
-          - Models/Session.swift
-          - Models/ToolItem.swift
-          - Models/WorkspaceItem.swift
-          - Services/BonjourDiscovery.swift
-          - Services/ComposioClient.swift
-          - Services/FleetRAGClient.swift
-          - Services/HarnessAPIClient.swift
-          - Services/HostConnectionManager.swift
-          - Services/TranscriptionService.swift
-          - Views/ChatView.swift
-          - Views/ComposerView.swift
-          - Views/ComposioView.swift
-          - Views/FleetRAGView.swift
-          - Views/HostManagerSheet.swift
-          - Views/MainTabView.swift
-          - Views/SessionsView.swift
-          - Views/SettingsView.swift
-          - Views/ToolsView.swift
-          - Views/WebParityView.swift
-          - Views/WorkspacesView.swift
-          - Views/Components/**
       - path: Resources
       - path: Assets.xcassets
     settings:
