@@ -1,13 +1,13 @@
 # Package Surface
 
 Clutch is an npm package BotFleet and ai-fleet-coordinator consume.  The
-GitHub repo is `jaywedgeworth22/Clutch`.  Pin it; do not `npx`.
+GitHub repo is `Simple-With-Us/Clutch`.  Pin it; do not `npx`.
 
 ## BotFleet
 
 ```json
 "dependencies": {
-  "clutch": "github:jaywedgeworth22/Clutch#main"
+  "clutch": "github:Simple-With-Us/Clutch#main"
 }
 ```
 

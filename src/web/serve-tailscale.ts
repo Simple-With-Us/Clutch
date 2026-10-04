@@ -11,7 +11,11 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 
 import { clutchWebPort } from "../shared/ports.ts";
+import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { tailnetDnsName } from "./pair-link.ts";
+
+// Infisical is the sole source of truth for app settings (see INFISICAL.md).
+await initClutchSettings();
 
 const PORT = clutchWebPort();
 

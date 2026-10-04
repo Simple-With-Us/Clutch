@@ -14,7 +14,14 @@ import { fileURLToPath } from "node:url";
 
 import { httpStatusIsUp } from "../shared/http-up.ts";
 import { clutchWebPort } from "../shared/ports.ts";
+import { initClutchSettings, reloadSettingsOnSighup } from "../shared/clutchSettings.ts";
 import { tailnetDnsName, trustedHostArgs } from "./pair-link.ts";
+
+// Load app settings from Infisical (sole source of truth) before any
+// managed setting is read below.  Owned keys not already in process.env are
+// backfilled from Infisical; explicitly-set env vars always win.
+const clutchSettings = await initClutchSettings();
+reloadSettingsOnSighup(clutchSettings);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLUTCH_SH = join(ROOT, "scripts", "clutch.sh");

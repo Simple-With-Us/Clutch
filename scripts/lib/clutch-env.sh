@@ -16,6 +16,12 @@ _clutch_env_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 export CLUTCH_RUNTIME_ROOT="${CLUTCH_RUNTIME_ROOT:-$_clutch_env_root}"
 unset _clutch_env_root
 
+# Infisical backfill FIRST: managed app settings come from the Clutch
+# Infisical project (sole source of truth — see INFISICAL.md).  Keys already
+# set in the environment keep winning; the defaults below only fill the rest.
+# shellcheck source=lib/clutch-infisical-env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/clutch-infisical-env.sh"
+
 export CLUTCH_HOME="${CLUTCH_HOME:-$HOME/.clutch}"
 export DSH_HOME="$CLUTCH_HOME/dsh"
 export CLUTCH_WEB_HOST="${CLUTCH_WEB_HOST:-127.0.0.1}"

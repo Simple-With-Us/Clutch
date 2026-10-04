@@ -1,8 +1,18 @@
 # AGENTS.md — Clutch coordination manifest
 
-This file is the **authoritative coordination manifest for AI agents** working on the `jaywedgeworth22/Clutch` repository.  Human contributors should read [`CONTRIBUTING.md`](./CONTRIBUTING.md) instead.  Read this file fully before touching any code.
+This file is the **authoritative coordination manifest for AI agents** working on the `Simple-With-Us/Clutch` repository.  Human contributors should read [`CONTRIBUTING.md`](./CONTRIBUTING.md) instead.  Read this file fully before touching any code.
 
-GitHub: `jaywedgeworth22/Clutch`.  Integration tree on this Mac: `/Users/jay/Code/Clutch` (read-only for every seat; never a working lane).  Seat worktrees: `~/apps/clutch-<seat>[-<lane>]`.  Slack `repo:` name: **`clutch`**.  Acronym: **`CK`**.  Site: <https://clutch.codes>.
+GitHub: `Simple-With-Us/Clutch`.  Integration tree on this Mac: `/Users/jay/Code/Clutch` (read-only for every seat; never a working lane).  Seat worktrees: `~/apps/clutch-<seat>[-<lane>]`.  Slack `repo:` name: **`clutch`**.  Acronym: **`CK`**.  Site: <https://clutch.codes>.
+
+## Infisical Sole Source Of Truth
+
+Infisical is the sole source of truth for Clutch's app settings — secrets, env config, and tunable knobs.  See [`INFISICAL.md`](./INFISICAL.md) for the policy, the key inventory, and the runtime contract.  The short version:
+
+- App settings live in the `Clutch` Infisical project and load at startup into an in-memory cache (`src/shared/clutchSettings.ts`, built on the vendored fleet client `src/shared/infisicalSettings.ts`).  Never fetch per-request; the cache refreshes on an interval and on `SIGHUP`.
+- Managed keys not already in `process.env` are backfilled from Infisical at startup; explicitly-set env vars always win.  The bash launcher layer gets the same backfill from `scripts/lib/clutch-infisical-env.sh`.
+- The local user IS the admin (single-user local tool — documented no-op gate).  Admin edits go through `clutch-settings set` (or the Infisical UI) and write through to Infisical first.
+- Per-user settings (iOS per-host connections) stay in the app's own store — never Infisical.
+- Secret values never appear in code, logs, PR bodies, or chat — names and metadata only.
 
 ## What this repo is
 
@@ -45,7 +55,7 @@ Per-use-case feature depth is the open-ended part: any profile may independently
 
 ## Consumers
 
-This repo is **canonical for the DSH ACP driver** and the **MiniMax ACP bridge**.  BotFleet imports from `jaywedgeworth22/Clutch` via an npm git dependency (`"clutch": "github:jaywedgeworth22/Clutch"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `ClutchWindow.swift`, `install-dock-app.sh`).
+This repo is **canonical for the DSH ACP driver** and the **MiniMax ACP bridge**.  BotFleet imports from `Simple-With-Us/Clutch` via an npm git dependency (`"clutch": "github:Simple-With-Us/Clutch"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `ClutchWindow.swift`, `install-dock-app.sh`).
 
 **Never edit driver or bridge code in BotFleet.**  Edit it here, in `src/dsh/acp/` or `src/minimax/acp/`.  BotFleet and AFC consume via PR.
 
