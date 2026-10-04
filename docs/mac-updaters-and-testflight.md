@@ -41,7 +41,7 @@ For standalone AppKit dock apps (`Clutch.app` compiled from `ClutchWindow.swift`
 1. **Application Menu Integration:**
    - Adds standard macOS menu item `Check for Updates...` (`Cmd+U`) in the main application menu under `About Clutch`.
 2. **Unobtrusive Background Checking:**
-   - 3 seconds after launch, an asynchronous background request queries GitHub Releases (`https://api.github.com/repos/jaywedgeworth22/Clutch/releases/latest`).
+   - 3 seconds after launch, an asynchronous background request queries GitHub Releases (`https://api.github.com/repos/Simple-With-Us/Clutch/releases/latest`).
    - If an update is detected, the menu item silently updates to `Check for Updates... (vX.Y Available)`.  It does not throw modal popups mid-work.
 3. **Interactive Update Check:**
    - When clicked:

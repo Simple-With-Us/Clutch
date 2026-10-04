@@ -16,6 +16,11 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { initClutchSettings } from "../src/shared/clutchSettings.ts";
+
+// Infisical is the sole source of truth for app settings (see INFISICAL.md).
+await initClutchSettings();
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const SRC_PROFILES = join(ROOT, "src", "profiles");

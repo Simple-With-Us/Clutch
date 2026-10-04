@@ -2,7 +2,7 @@
 
 Clutch provides a web interface, coding profiles, and ACP bridges around the upstream `@deepseek-ai/dsh` package.  It includes configurations for DeepSeek and MiniMax; available tools and behavior depend on the selected profile, model, and provider.
 
-[Clutch.Codes](https://clutch.codes) · [Source](https://github.com/jaywedgeworth22/Clutch) · [Setup](#install) · [Package integration](docs/package.md)
+[Clutch.Codes](https://clutch.codes) · [Source](https://github.com/Simple-With-Us/Clutch) · [Setup](#install) · [Package integration](docs/package.md)
 
 ## License
 
@@ -43,7 +43,7 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 Requires Node.js 22 or later and credentials for the provider you intend to use.
 
 ```bash
-git clone https://github.com/jaywedgeworth22/Clutch.git
+git clone https://github.com/Simple-With-Us/Clutch.git
 cd Clutch
 npm install
 npm run sync      # copy tracked profiles to ~/.clutch/dsh/profiles/
@@ -64,7 +64,7 @@ BotFleet and other TypeScript consumers install this repo as an npm git
 dependency.  Full export table: [`docs/package.md`](./docs/package.md).
 
 ```json
-"clutch": "github:jaywedgeworth22/Clutch#main"
+"clutch": "github:Simple-With-Us/Clutch#main"
 ```
 
 ```ts
@@ -79,7 +79,7 @@ This repository maintains the DSH ACP driver and MiniMax ACP bridge consumed by 
 
 ## Product Page
 
-The product site is [clutch.codes](https://clutch.codes), and the source lives at [github.com/jaywedgeworth22/Clutch](https://github.com/jaywedgeworth22/Clutch).
+The product site is [clutch.codes](https://clutch.codes), and the source lives at [github.com/Simple-With-Us/Clutch](https://github.com/Simple-With-Us/Clutch).
 
 Driver and bridge changes belong in this repository.  BotFleet and other consumers import the package exports listed above.
 

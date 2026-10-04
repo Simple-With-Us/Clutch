@@ -7,11 +7,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jaywedgeworth22/Clutch.git"
+    "url": "git+https://github.com/Simple-With-Us/Clutch.git"
   },
   "homepage": "https://clutch.codes",
   "bugs": {
-    "url": "https://github.com/jaywedgeworth22/Clutch/issues"
+    "url": "https://github.com/Simple-With-Us/Clutch/issues"
   },
   "files": [
     "src",
@@ -47,7 +47,8 @@
     "clutch-ensure": "./src/web/ensure-web.ts",
     "clutch-install-dock": "./src/web/install-dock-app.ts",
     "clutch-sync-profiles": "./scripts/sync-profiles.ts",
-    "clutch-pair-ios": "./src/web/pair-ios.ts"
+    "clutch-pair-ios": "./src/web/pair-ios.ts",
+    "clutch-settings": "./src/web/clutch-settings.ts"
   },
   "scripts": {
     "sync": "tsx scripts/sync-profiles.ts",
