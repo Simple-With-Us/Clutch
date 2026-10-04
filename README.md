@@ -22,7 +22,7 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
   Specific files derived from prior work that wrapped DSH are listed in
   `NOTICE` § "Derived Work — DeepSeek Harness".
 - **BotFleet** — the prior host of the DSH ACP driver work.  Files in
-  `src/dsh/acp/` were ported from `jaywedgeworth22/BotFleet` on
+  `src/dsh/acp/` were ported from `Simple-With-Us/BotFleet` on
   2026-09-19; the cross-repo relationship is canonicalization, not
   forking.
 - **MiniMax** — provides models and the API at <https://platform.minimax.io>

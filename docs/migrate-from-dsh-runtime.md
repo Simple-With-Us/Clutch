@@ -1,6 +1,6 @@
 # Migration: dsh-runtime → Harness
 
-> **Forward Note (2026-09-30):**  This product is now named Clutch.  The repo is `jaywedgeworth22/Clutch`, the live install is the standalone clone `~/apps/clutch-runtime`, and engine state lives in `~/.clutch/dsh`.  See `docs/decisions/0005-rename-harness-to-clutch.md`.  The record below is kept as written.
+> **Forward Note (2026-09-30):**  This product is now named Clutch.  The repo is `Simple-With-Us/Clutch`, the live install is the standalone clone `~/apps/clutch-runtime`, and engine state lives in `~/.clutch/dsh`.  See `docs/decisions/0005-rename-harness-to-clutch.md`.  The record below is kept as written.
 
 The `~/apps/dsh-runtime/` install was the live DeepSeek Harness web UI on
 this Mac.  On 2026-09-19 it was renamed to `~/apps/harness-runtime/` and

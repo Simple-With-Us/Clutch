@@ -2,7 +2,7 @@ Clutch
 Copyright 2026 Jay Wedgeworth
 
 This product includes software developed at
-Jay Wedgeworth (https://github.com/jaywedgeworth22/Clutch).
+Jay Wedgeworth (https://github.com/Simple-With-Us/Clutch).
 
 ================================================================================
 DERIVED WORK — DeepSeek Harness
@@ -74,7 +74,7 @@ author; the cross-repo relationship is one of canonicalization rather than
 forking:
 
     BotFleet
-    https://github.com/jaywedgeworth22/BotFleet
+    https://github.com/Simple-With-Us/BotFleet
     Copyright 2026 Jay Wedgeworth
     Licensed under the terms published by the BotFleet repository.
 

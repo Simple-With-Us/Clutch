@@ -253,7 +253,7 @@ final class DeepSeekModelsMessageHandler: NSObject, WKScriptMessageHandler {
 final class ClutchAppUpdater: NSObject {
     static let shared = ClutchAppUpdater()
 
-    private let repoOwner = "jaywedgeworth22"
+    private let repoOwner = "Simple-With-Us"
     private let repoName = "Clutch"
     private(set) var latestVersionFound: String?
     private(set) var isChecking: Bool = false
