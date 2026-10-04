@@ -26,7 +26,7 @@ Clutch provides a web interface, coding profiles, and ACP bridges around the ups
 
 ## Seat Identity And Branches
 
-Post and claim as your own seat tag — `[HARNESS]`, `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]` — never a hardcoded one.  Branch prefixes follow the seat (`harness/*`, `claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`).  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/AGENT-SYNC.md` § Overview and § Message Structure.
+Post and claim as your own seat tag — `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]`, `[MINIMAX]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`, `minimax/*`).  This app is Clutch, acronym `CK`, Slack `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced.  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/AGENT-SYNC.md` § Overview and § Message Structure.
 
 ## THE BOARD Comes First
 
