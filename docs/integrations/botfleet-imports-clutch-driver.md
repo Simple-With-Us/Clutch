@@ -2,12 +2,12 @@
 
 **Lane:** `grok/clutch-package` (any seat; this doc is the contract)
 
-**Status:** Ready once `jaywedgeworth22/Clutch` is on GitHub and BotFleet
+**Status:** Ready once `Simple-With-Us/Clutch` is on GitHub and BotFleet
 adds the git dependency.
 
 ## Goal
 
-Make `jaywedgeworth22/BotFleet`'s `server/drivers/acp/dsh.ts` a thin
+Make `Simple-With-Us/BotFleet`'s `server/drivers/acp/dsh.ts` a thin
 re-export of this package's `src/dsh/acp/driver.ts`.  BotFleet keeps the
 ACP runtime (`acp/core.ts`, `acp/dsh-mcp.ts` glue, the Node stdio bridge
 `server/drivers/dsh-acp-bridge.ts`) and composes the Clutch support
@@ -26,7 +26,7 @@ division of labor:
 
 ## Changes (BotFleet side)
 
-1. `package.json`: add `"clutch": "github:jaywedgeworth22/Clutch#main"`.
+1. `package.json`: add `"clutch": "github:Simple-With-Us/Clutch#main"`.
 2. `server/drivers/acp/dsh.ts`: re-export the pure functions from
    `clutch/dsh/acp` and compose `wrapSpawn` locally:
 
