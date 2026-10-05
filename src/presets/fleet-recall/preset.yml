@@ -1,0 +1,3 @@
+name: Fleet Recall
+description: DSH / MiniMax preset that exposes fleet recall as three Tools (recall_search, recall_stats, recall_contribute). Mounts the standard coding agent plus the fleet-recall row, so any DSH or MiniMax-via-DSH session searches and contributes to the fleet-agents knowledge corpus the same way Claude / Cursor / Codex / Grok do. Wrap of the existing `recall` stdlib CLI; no credentials in the preset.
+order: 100

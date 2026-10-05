@@ -26,6 +26,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>clutch</string>
+				<string>minimax</string>
 			</array>
 		</dict>
 	</array>
@@ -40,10 +41,19 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_clutch._tcp</string>
+		<string>_minimax._tcp</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Clutch uses the camera to scan the pairing code shown on your Mac.</string>
+	<string>Clutch uses the camera to scan host pairing QR codes.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clutch connects to the clutch server running on a Mac on your local network.</string>
+	<string>Clutch connects to the Clutch server or MiniMax Code on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Clutch records audio while you hold to talk to dictate coding directives.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Clutch transcribes speech into coding directives and prompts.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

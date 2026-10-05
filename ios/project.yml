@@ -13,6 +13,10 @@ settings:
     DEVELOPMENT_TEAM: CC8UTF7ATG
     ASSETCATALOG_FILTER_FOR_THINNING: false
     ENABLE_ASSET_THINNING: false
+packages:
+  ExyteChat:
+    url: https://github.com/exyte/Chat.git
+    from: 3.3.5
 targets:
   Clutch:
     type: application
@@ -21,6 +25,9 @@ targets:
       - path: App
       - path: Resources
       - path: Assets.xcassets
+    dependencies:
+      - package: ExyteChat
+        product: ExyteChat
     settings:
       base:
         PRODUCT_NAME: Clutch
@@ -50,6 +57,7 @@ targets:
           - CFBundleURLName: codes.clutch.pairing
             CFBundleURLSchemes:
               - clutch
+              - minimax
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -60,8 +68,13 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        NSLocalNetworkUsageDescription: Clutch connects to the clutch server running on a Mac on your local network.
-        NSCameraUsageDescription: Clutch uses the camera to scan the pairing code shown on your Mac.
+        NSLocalNetworkUsageDescription: Clutch connects to the Clutch server or MiniMax Code on your local network.
+        NSCameraUsageDescription: Clutch uses the camera to scan host pairing QR codes.
+        NSMicrophoneUsageDescription: Clutch records audio while you hold to talk to dictate coding directives.
+        NSSpeechRecognitionUsageDescription: Clutch transcribes speech into coding directives and prompts.
+        NSBonjourServices:
+          - _clutch._tcp
+          - _minimax._tcp
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
   ClutchTests:

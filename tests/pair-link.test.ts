@@ -67,14 +67,13 @@ describe("start-web trusted hosts", () => {
   });
 });
 
-describe("iOS app registers only the clutch scheme", () => {
-  it("no longer registers minimax:// or browses _minimax._tcp", () => {
+describe("iOS app schemes and packages", () => {
+  it("registers clutch and minimax schemes with ExyteChat", () => {
     const projectYml = readFileSync(join(ROOT, "ios", "project.yml"), "utf8");
-    expect(projectYml).not.toMatch(/- minimax$/m);
-    expect(projectYml).not.toContain("_minimax._tcp");
-    expect(projectYml).not.toMatch(/- harness$/m); // retired-name
     expect(projectYml).toMatch(/- clutch$/m);
-    expect(projectYml).not.toContain("ExyteChat");
+    expect(projectYml).toMatch(/- minimax$/m);
+    expect(projectYml).not.toMatch(/- harness$/m); // retired-name
+    expect(projectYml).toContain("ExyteChat");
     expect(projectYml).toContain("ITSAppUsesNonExemptEncryption: false");
   });
 });

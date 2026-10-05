@@ -47,7 +47,7 @@ public enum PairingLink {
         if let schemeEnd = trimmed.range(of: "://") {
             let scheme = trimmed[..<schemeEnd.lowerBound].lowercased()
             switch scheme {
-            case "clutch":
+            case "clutch", "minimax":
                 return parseClutchLink(trimmed)
             case "http", "https":
                 return parseWebURL(trimmed, name: nil)
@@ -65,6 +65,7 @@ public enum PairingLink {
         guard let comps = URLComponents(string: raw), comps.host?.lowercased() == "pair" else {
             return .failure(.invalidURL)
         }
+        let isMiniMax = comps.scheme?.lowercased() == "minimax"
         let items = comps.queryItems ?? []
         func value(_ keys: String...) -> String? {
             for key in keys {
@@ -72,14 +73,15 @@ public enum PairingLink {
             }
             return nil
         }
-        let name = value("name")
+        let name = value("name") ?? (isMiniMax ? "MiniMax Remote" : nil)
 
         if let inner = value("url") {
             return parseWebURL(inner, name: name)
         }
 
         guard let host = value("host", "h") else { return .failure(.missingHost) }
-        let port = value("port", "p").flatMap(Int.init) ?? defaultPort
+        let fallbackPort = isMiniMax ? 7842 : defaultPort
+        let port = value("port", "p").flatMap(Int.init) ?? fallbackPort
         let tlsRaw = (value("tls") ?? "0").lowercased()
         let useTLS = tlsRaw == "1" || tlsRaw == "true"
         var origin = URLComponents()

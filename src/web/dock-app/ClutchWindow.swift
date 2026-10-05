@@ -26,6 +26,10 @@ private func clutchHomePath() -> String {
 }
 
 private var clutchURLString: String {
+    if let saved = UserDefaults.standard.string(forKey: "codes.clutch.active_host_url"),
+       !saved.isEmpty {
+        return saved
+    }
     if let envURL = ProcessInfo.processInfo.environment["CLUTCH_WEB_URL"],
        !envURL.isEmpty {
         return envURL
@@ -87,6 +91,10 @@ private func pingClutch() async -> Bool {
 }
 
 private func ensureServer() async {
+    if let saved = UserDefaults.standard.string(forKey: "codes.clutch.active_host_url"),
+       let url = URL(string: saved), let host = url.host, host != "127.0.0.1" && host != "localhost" {
+        return
+    }
     if await pingClutch() { return }
     let script = NSHomeDirectory() + "/apps/clutch-runtime/scripts/ensure-web.sh"
     guard FileManager.default.isExecutableFile(atPath: script) else { return }
@@ -441,6 +449,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         ClutchAppUpdater.shared.promptUserForUpdateCheck(window: window)
     }
 
+    @objc func connectLocalClutch(_ sender: Any?) {
+        UserDefaults.standard.removeObject(forKey: "codes.clutch.active_host_url")
+        loadClutch()
+    }
+
+    @objc func connectMiniMaxRemote(_ sender: Any?) {
+        let mmURL = "http://127.0.0.1:7842/"
+        UserDefaults.standard.set(mmURL, forKey: "codes.clutch.active_host_url")
+        loadHost(urlString: mmURL)
+    }
+
+    @objc func connectCustomHost(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Connect to Remote Host"
+        alert.informativeText = "Enter the URL of the remote Clutch or MiniMax Code host:"
+        alert.addButton(withTitle: "Connect")
+        alert.addButton(withTitle: "Cancel")
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        input.stringValue = UserDefaults.standard.string(forKey: "codes.clutch.active_host_url") ?? "http://127.0.0.1:7842/"
+        alert.accessoryView = input
+        if alert.runModal() == .alertFirstButtonReturn {
+            let entered = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !entered.isEmpty {
+                UserDefaults.standard.set(entered, forKey: "codes.clutch.active_host_url")
+                loadHost(urlString: entered)
+            }
+        }
+    }
+
+    @objc func reloadCurrentHost(_ sender: Any?) {
+        webView?.reload()
+    }
+
+    func loadHost(urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        loadFailed = false
+        webView?.load(URLRequest(url: url))
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            handleOpenURL(url)
+        }
+    }
+
+    private func handleOpenURL(_ url: URL) {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return }
+        if comps.host == "pair" {
+            if let targetURL = comps.queryItems?.first(where: { $0.name == "url" })?.value {
+                UserDefaults.standard.set(targetURL, forKey: "codes.clutch.active_host_url")
+                loadHost(urlString: targetURL)
+                return
+            }
+            if let h = comps.queryItems?.first(where: { $0.name == "h" || $0.name == "host" })?.value {
+                let p = comps.queryItems?.first(where: { $0.name == "p" || $0.name == "port" })?.value ?? (url.scheme == "minimax" ? "7842" : "3180")
+                let tls = comps.queryItems?.first(where: { $0.name == "tls" })?.value == "1"
+                let scheme = tls ? "https" : "http"
+                let target = "\(scheme)://\(h):\(p)/"
+                UserDefaults.standard.set(target, forKey: "codes.clutch.active_host_url")
+                loadHost(urlString: target)
+            }
+        }
+    }
+
     private func setupMainMenu() {
         let mainMenu = NSMenu()
 
@@ -474,6 +546,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
+
+        // Host Menu (Local Clutch vs Remote / MiniMax Code)
+        let hostMenuItem = NSMenuItem()
+        let hostMenu = NSMenu(title: "Host")
+        let localItem = hostMenu.addItem(withTitle: "Local Clutch (3180)", action: #selector(connectLocalClutch(_:)), keyEquivalent: "1")
+        localItem.target = self
+        let mmItem = hostMenu.addItem(withTitle: "MiniMax Code Remote (7842)", action: #selector(connectMiniMaxRemote(_:)), keyEquivalent: "2")
+        mmItem.target = self
+        hostMenu.addItem(NSMenuItem.separator())
+        let customItem = hostMenu.addItem(withTitle: "Connect to Custom Host...", action: #selector(connectCustomHost(_:)), keyEquivalent: "k")
+        customItem.target = self
+        let reloadItem = hostMenu.addItem(withTitle: "Reload Page", action: #selector(reloadCurrentHost(_:)), keyEquivalent: "r")
+        reloadItem.target = self
+        hostMenuItem.submenu = hostMenu
+        mainMenu.addItem(hostMenuItem)
 
         // Window Menu
         let windowMenuItem = NSMenuItem()
