@@ -15,6 +15,9 @@ describe("package exports", () => {
     expect(pkg.exports["./dsh/acp"]).toBe("./src/dsh/acp/driver.ts");
     expect(pkg.exports["./dsh/acp/driver"]).toBe("./src/dsh/acp/driver.ts");
     expect(pkg.exports["./dsh/mcp-patch"]).toBe("./src/dsh/acp/mcp-patch.ts");
+    expect(pkg.exports["./deepseek/acp"]).toBe("./src/deepseek/acp/driver.ts");
+    expect(pkg.exports["./deepseek/acp/driver"]).toBe("./src/deepseek/acp/driver.ts");
+    expect(pkg.exports["./deepseek/mcp-patch"]).toBe("./src/deepseek/acp/mcp-patch.ts");
     expect(pkg.exports["./minimax/acp"]).toBe("./src/minimax/acp/driver.ts");
     expect(pkg.exports["./shared/cordis-patch"]).toBeUndefined();
     // Retired aliases are gone, not kept as shims.

@@ -24,10 +24,12 @@ await initClutchSettings();
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const SRC_PROFILES = join(ROOT, "src", "profiles");
+const SRC_PRESETS = join(ROOT, "src", "presets");
 const CLUTCH_HOME = process.env.CLUTCH_HOME || join(homedir(), ".clutch");
 /** Clutch's engine home.  Always $CLUTCH_HOME/dsh, never an inherited DSH_HOME. */
 const ENGINE_HOME = join(CLUTCH_HOME, "dsh");
 const DST_PROFILES = join(ENGINE_HOME, "profiles");
+const DST_PRESETS = join(ENGINE_HOME, ".agent-presets");
 const DST_SETTINGS = ENGINE_HOME;
 /** Placeholder the tracked patch files use for the engine home. */
 const DSH_HOME_PLACEHOLDER = "__DSH_HOME__";
@@ -103,20 +105,67 @@ function syncOne(name: string): SyncResult {
   };
 }
 
+function copyDirRecursive(srcDir: string, dstDir: string): string[] {
+  mkdirSync(dstDir, { recursive: true });
+  const copied: string[] = [];
+  for (const entry of readdirSync(srcDir)) {
+    const srcPath = join(srcDir, entry);
+    const dstPath = join(dstDir, entry);
+    const stat = statSync(srcPath);
+    if (stat.isDirectory()) {
+      const nested = copyDirRecursive(srcPath, dstPath);
+      copied.push(...nested.map((p) => join(entry, p)));
+    } else if (stat.isFile()) {
+      if (entry.endsWith(".yml") || entry.endsWith(".yaml")) {
+        const text = readFileSync(srcPath, "utf8");
+        writeFileSync(dstPath, text.split(DSH_HOME_PLACEHOLDER).join(ENGINE_HOME));
+      } else {
+        copyFileSync(srcPath, dstPath);
+      }
+      copied.push(entry);
+    }
+  }
+  return copied;
+}
+
+function listPresets(): readonly string[] {
+  if (!existsSync(SRC_PRESETS)) return [];
+  return readdirSync(SRC_PRESETS).filter((entry) => {
+    const full = join(SRC_PRESETS, entry);
+    return statSync(full).isDirectory();
+  });
+}
+
+function syncPresets(): void {
+  const presets = listPresets();
+  if (presets.length === 0) return;
+  mkdirSync(DST_PRESETS, { recursive: true, mode: 0o700 });
+  log(`syncing ${presets.length} agent preset(s) to ${DST_PRESETS}`);
+  for (const name of presets) {
+    const srcDir = join(SRC_PRESETS, name);
+    const dstDir = join(DST_PRESETS, name);
+    if (existsSync(dstDir)) {
+      rmSync(dstDir, { recursive: true, force: true });
+    }
+    const copied = copyDirRecursive(srcDir, dstDir);
+    log(`  preset ${name}: ${copied.join(", ") || "(empty)"}`);
+  }
+}
+
 async function main(): Promise<void> {
   const profiles = listProfiles();
   if (profiles.length === 0) {
     log(`no profiles in ${SRC_PROFILES}`);
-    return;
+  } else {
+    mkdirSync(DST_PROFILES, { recursive: true, mode: 0o700 });
+    log(`syncing ${profiles.length} profile(s) to ${DST_PROFILES}`);
+    for (const name of profiles) {
+      const result = syncOne(name);
+      const overrideNote = result.localOverride ? " (local.patch.yml preserved)" : "";
+      log(`  ${name}: ${result.filesCopied.join(", ") || "(empty)"}${overrideNote}`);
+    }
   }
-  mkdirSync(DST_PROFILES, { recursive: true, mode: 0o700 });
-  log(`syncing ${profiles.length} profile(s) to ${DST_PROFILES}`);
-  for (const name of profiles) {
-    const result = syncOne(name);
-    const overrideNote = result.localOverride ? " (local.patch.yml preserved)" : "";
-    log(`  ${name}: ${result.filesCopied.join(", ") || "(empty)"}${overrideNote}`);
-  }
+  syncPresets();
   log(`done. restart any pm2 job that uses a synced profile to pick up changes.`);
 }
-
 await main();

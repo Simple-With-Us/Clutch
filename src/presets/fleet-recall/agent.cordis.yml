@@ -1,0 +1,20 @@
+# The `fleet-recall` agent preset — thin composition.
+#
+# Contributes ONLY the three fleet recall Tools (recall_search,
+# recall_stats, recall_contribute).  Everything a preset must not own
+# (the registries, sandbox/approval stack, persistence, model route, and
+# the rest of the standard agent composition) stays on `@deepseek-ai/dsh-base`
+# via the standard profile.  This avoids root-realm collisions.
+#
+# The plug-in mount is wrapped in a `cordis:group` with an `isolate:` realm
+# so the host's `tools.register()` call sites in apply(ctx) layer into an
+# entry-local ToolLayer, never into the global layer.
+
+- id: fleet-recall-tools-host
+  name: cordis:group
+  group: true
+  isolate:
+    fleetRecallTools: true
+  config:
+    - id: fleet-recall-tools
+      name: ./plugins/fleet-recall-tools.mjs

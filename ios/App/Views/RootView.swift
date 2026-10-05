@@ -1,13 +1,32 @@
 import SwiftUI
 
-/// First run shows pairing; after that the active host's clutch web UI.
 struct RootView: View {
     @State private var store = HostStore.shared
+    @State private var selectedTab: Int = 0
 
     var body: some View {
         Group {
             if let host = store.activeHost {
-                ClutchScreen(host: host, store: store)
+                TabView(selection: $selectedTab) {
+                    ChatView(activeHost: host)
+                        .tabItem {
+                            Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                        }
+                        .tag(0)
+
+                    ClutchScreen(host: host, store: store)
+                        .tabItem {
+                            Label("Web Canvas", systemImage: "macwindow")
+                        }
+                        .tag(1)
+
+                    FleetRecallView()
+                        .tabItem {
+                            Label("Fleet Recall", systemImage: "sparkles.rectangle.stack.fill")
+                        }
+                        .tag(2)
+                }
+                .tint(.accentColor)
             } else {
                 PairView { payload in
                     store.pair(payload)

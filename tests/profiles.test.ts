@@ -26,3 +26,21 @@ describe("tracked profiles", () => {
     }
   });
 });
+
+const PRESETS = join(__dirname, "..", "src", "presets");
+
+describe("tracked presets", () => {
+  it("tracks the fleet-recall agent preset with cordis composition and tools", () => {
+    expect(existsSync(join(PRESETS, "fleet-recall", "preset.yml"))).toBe(true);
+    expect(existsSync(join(PRESETS, "fleet-recall", "agent.cordis.yml"))).toBe(true);
+    expect(existsSync(join(PRESETS, "fleet-recall", "plugins", "fleet-recall-tools.mjs"))).toBe(true);
+
+    const presetYaml = readFileSync(join(PRESETS, "fleet-recall", "preset.yml"), "utf8");
+    expect(presetYaml).toContain("name: Fleet Recall");
+
+    const toolsMjs = readFileSync(join(PRESETS, "fleet-recall", "plugins", "fleet-recall-tools.mjs"), "utf8");
+    expect(toolsMjs).toContain("recall_search");
+    expect(toolsMjs).toContain("recall_stats");
+    expect(toolsMjs).toContain("recall_contribute");
+  });
+});

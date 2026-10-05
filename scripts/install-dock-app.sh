@@ -71,6 +71,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>NSAllowsLocalNetworking</key><true/>
     <key>NSAllowsArbitraryLoads</key><true/>
   </dict>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>codes.clutch.macos</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>clutch</string>
+        <string>minimax</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST

@@ -7,6 +7,7 @@
  *   import { minimaxSupport } from "clutch/minimax/acp";
  */
 export * from "./dsh/acp/index.ts";
+export { clutchSupport, deepseekSupport } from "./deepseek/acp/index.ts";
 export {
   DSH_MCP_PATCH_PREFIX,
   dshMcpPatchYaml,
