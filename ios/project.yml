@@ -16,7 +16,7 @@ settings:
 packages:
   ExyteChat:
     url: https://github.com/exyte/Chat.git
-    from: 3.3.5
+    from: 3.3.7
 targets:
   Clutch:
     type: application
