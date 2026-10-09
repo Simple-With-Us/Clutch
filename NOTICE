@@ -94,5 +94,30 @@ plugin system.  No code from any third-party MiniMax project is included.
     (Not affiliated; the relationship is consumer-only.)
 
 ================================================================================
+INDEPENDENT COMPONENT — Clutch Muse Code Plugin
+================================================================================
+
+The Muse Code engine plugin (engines/muse-code.engine.json and
+scripts/muse-code-acp.sh) is original work by the Clutch author.  It depends
+on a third-party, unofficial community adapter:
+
+    @bex-co/muse-code-acp
+    npm package, Apache License 2.0
+    Copyright its own authors; licensed under the terms published by
+    that project.
+    (Unofficial and community-maintained.  Meta does not endorse,
+    sponsor, or support it.)
+
+Muse Code is not itself an ACP agent: `muse serve` speaks MSP (Muse Session
+Protocol), and the adapter above translates MSP to ACP on stdio.  No code from
+the adapter is vendored into this repository; it is installed with
+`npm install -g @bex-co/muse-code-acp` and exec'd at runtime.
+
+    Muse Code / Muse Spark
+    https://dev.meta.ai/docs/muse-code/
+    Meta products.  Clutch is not affiliated with, endorsed by, or supported
+    by Meta.
+
+================================================================================
 END OF NOTICE
 ================================================================================

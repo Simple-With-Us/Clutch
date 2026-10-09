@@ -29,8 +29,9 @@ ACP runtime (`createAcpDriver`, spawn, MCP mount assembly, the Node
 `dshSupport` to `createAcpDriver` without composing `wrapSpawn` — stock
 `dsh` rejects a non-empty `session/new.mcpServers` list.
 
-Edit engine shape here (`src/dsh/acp/`, `src/minimax/acp/`).  Do not edit
-it in BotFleet.
+Edit engine shape here (`src/dsh/acp/`, `src/minimax/acp/`), or as a drop-in
+plugin in the `engines/` directory, loaded by `src/shared/engines/`.  Do not
+edit it in BotFleet.
 
 ## ai-fleet-coordinator
 
@@ -56,6 +57,26 @@ scripts.  Canonical scripts live here.
 | `clutch/shared/ports` | `src/shared/ports.ts` |
 | `clutch/shared/sanitize-context` | `src/shared/sanitize-context.ts` |
 | `clutch/shared/subagent-tool-profiles` | `src/shared/subagent-tool-profiles.ts` |
+| `clutch/engines` | `src/shared/engines/index.ts` |
+| `clutch/shared/engines` | same |
 
 Python bridges are not TypeScript exports.  Invoke them through
 `dsh-acp.sh` / `minimax-acp.sh`.
+
+## Engine Plugins
+
+An engine is a file, not a code change.  Clutch discovers engine plugins at
+runtime in two tiers:
+
+- `engines/<id>.engine.json` — declarative.  Maps onto the shared
+  `AcpSupport` shape and executes nothing.
+- `engines/<id>.engine.mjs` — programmatic.  Exports an `AcpSupport` directly.
+
+Search order, lowest precedence first: `engines/` in the package root (plugins
+Clutch ships), then `$CLUTCH_HOME/engines` (per-machine drop-ins, normally
+`~/.clutch/engines`).  A later directory overrides an earlier one by `id`; two
+files with the same `id` inside the *same* directory are a conflict, not an
+override.
+
+`clutch-engines` (`list`, `list --json`, `list --dir DIR`, `paths`) reports what
+was discovered.  It exits 1 when any plugin failed to load.
