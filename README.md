@@ -1,6 +1,6 @@
 # Clutch
 
-Clutch provides a web interface, coding profiles, and ACP bridges around the upstream `@deepseek-ai/dsh` package.  It includes configurations for DeepSeek and MiniMax; available tools and behavior depend on the selected profile, model, and provider.
+Clutch provides a web interface, coding profiles, and ACP bridges around the upstream `@deepseek-ai/dsh` package.  It includes configurations for DeepSeek, MiniMax, and Muse Code; available tools and behavior depend on the selected profile, model, and provider.  Engines beyond those can be dropped in as files under [`engines/`](./engines).
 
 [Clutch.Codes](https://clutch.codes) · [Source](https://github.com/Simple-With-Us/Clutch) · [Setup](#install) · [Package integration](docs/package.md)
 
@@ -28,6 +28,14 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 - **MiniMax** — provides models and the API at <https://platform.minimax.io>
   used by the MiniMax profiles and HTTP client exports.  No third-party
   MiniMax code is included.
+- **Muse Code and Muse Spark** — Meta products, documented at
+  <https://dev.meta.ai/docs/muse-code/>.  Clutch is not affiliated with,
+  endorsed by, or supported by Meta.
+- **`@bex-co/muse-code-acp`** — the unofficial community adapter the Muse Code
+  engine plugin depends on, Apache 2.0 and maintained outside Meta.  Muse Code
+  is not itself an ACP agent: `muse serve` speaks MSP (Muse Session Protocol)
+  and this adapter translates MSP to ACP on stdio.  Clutch installs it at
+  runtime and vendors none of its code.
 
 ## What You Get
 
@@ -37,6 +45,7 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 - **`ios/`** — Native iOS companion app (SwiftUI, iOS 17.0+): multi-host computer connections (local Mac, Tailscale, Hetzner, AWS), full-parity embedded web experience, Composio tools, Fleet RAG integration, and model selection for DeepSeek and MiniMax.  See [`docs/ios-companion.md`](docs/ios-companion.md).
 - **`src/profiles/`** — Tracked cordis profile defaults.  Each profile is an independent cordis tree (bundles + empty entry list + patch layer).  Two profiles ship in this repo, one per Shellular agent id: `deepseek-headless` and `minimax-headless`.  Profiles configure plugins, tool permissions, thinking effort, turn budgets, and model selection.
 - **`bridges/`** — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay Python intentionally — see `docs/decisions/0001-bridges-stay-python.md`.
+- **`engines/`** — Drop-in engine plugins, discovered at runtime: adding an engine is a file, not a code change.  Two tiers — `engines/<id>.engine.json` (declarative; maps onto the shared ACP support shape and executes nothing) and `engines/<id>.engine.mjs` (programmatic; exports the support shape directly).  Clutch searches the package `engines/` directory first, then `$CLUTCH_HOME/engines` (`~/.clutch/engines`), so a per-machine file can override a shipped one by `id`; two files claiming the same `id` in the same directory are a conflict, not an override.  `clutch-engines list` shows what loaded and what failed.  Muse Code ships as the first engine plugin.
 
 ## Install
 
@@ -71,6 +80,7 @@ dependency.  Full export table: [`docs/package.md`](./docs/package.md).
 import { dshSupport } from "clutch/dsh/acp";
 import { writeDshMcpPatch } from "clutch/dsh/mcp-patch";
 import { minimaxSupport } from "clutch/minimax/acp";
+import { loadEnginePlugins } from "clutch/engines";
 ```
 
 ## Consumers
@@ -87,9 +97,16 @@ Driver and bridge changes belong in this repository.  BotFleet and other consume
 
 The MiniMax headless bridge launches `dsh --profile minimax-headless`, using MiniMax as the model provider within the upstream coding stack.  DeepSeek and MiniMax profiles share parts of that stack, but model responses, provider features, and tool support can differ.
 
+Muse Code is a different shape of engine.  It is a Meta coding agent that is not part of the DeepSeek stack, and it has no Python bridge: `scripts/muse-code-acp.sh` execs the community `@bex-co/muse-code-acp` adapter directly, making it the first engine in this repo with zero bridge code.  It needs a Meta account — `muse login`, or `META_API_KEY` for headless use.
+
+Two honest limits on the Muse Code plugin, both visible in `engines/muse-code.engine.json`:
+
+- **The model catalog is a floor, not the truth.**  Muse Code serves its real catalog over ACP, so the static catalog in the manifest is a fallback.  The machine it was captured on had no Meta account, so only one model was reachable; that option carries an "Unverified" badge and should not be read as the complete list.
+- **Effort tiers are the intersection, not the full Muse range.**  Muse offers `minimal` and `ultra` tiers that have no equivalent in Clutch's shared effort levels, so the plugin advertises only the tiers both sides have: `none`, `low`, `medium`, `high`, `xhigh`.
+
 ## Why Python for the Bridges
 
-The Python bridges handle stdio JSON-RPC, subprocess cleanup, and progress heartbeats.  Keeping those implementations together avoids maintaining a second translation of their process-handling behavior.  See `docs/decisions/0001-bridges-stay-python.md`.
+The Python bridges handle stdio JSON-RPC, subprocess cleanup, and progress heartbeats.  Keeping those implementations together avoids maintaining a second translation of their process-handling behavior.  See `docs/decisions/0001-bridges-stay-python.md`.  Not every engine needs one: Muse Code ships as an engine plugin with no bridge code at all.
 
 ## Per-Profile Feature Depth
 

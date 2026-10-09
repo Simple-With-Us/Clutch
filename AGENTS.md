@@ -16,13 +16,14 @@ Infisical is the sole source of truth for Clutch's app settings — secrets, env
 
 ## What this repo is
 
-Clutch provides a web interface, coding profiles, and ACP bridges around the upstream DeepSeek Harness (`@deepseek-ai/dsh`).  It includes DeepSeek and MiniMax configurations; capabilities depend on the profile, model, and provider.
+Clutch provides a web interface, coding profiles, and ACP bridges around the upstream DeepSeek Harness (`@deepseek-ai/dsh`).  It includes DeepSeek, MiniMax, and Muse Code configurations; capabilities depend on the profile, model, and provider.
 
 - `dsh/` — DSH engine layer: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
 - `minimax/` — The Clutch MiniMax bridge: the headless Python ACP bridge launches `dsh --profile minimax-headless` with MiniMax as its model provider.  The package also includes lower-level HTTP client exports; these are separate from the headless bridge.
 - `web/` — TypeScript web UI scripts (`start-web.ts`, `serve-tailscale.ts`, `open-clutch.ts`, `ensure-web.ts`, `install-dock-app.ts`).
 - `profiles/` — Tracked cordis profile defaults (`deepseek-headless`, `minimax-headless`).  Each profile is independent and customized for its use case; the matrix (per-profile feature depth: plugins enabled, tool allowlist, thinking effort, turn budgets, model selection) is open-ended.
 - `bridges/` — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay in Python intentionally — see "Bridges are Python" below.
+- `engines/` — Drop-in engine plugins: an engine is a file, not a code change.  Two tiers — `engines/<id>.engine.json` (declarative; maps onto the shared `AcpSupport` shape and executes nothing) and `engines/<id>.engine.mjs` (programmatic; exports an `AcpSupport`).  Discovery walks `engines/` in the package root first, then `$CLUTCH_HOME/engines` (`~/.clutch/engines`), so a later directory overrides an earlier one by `id`; two files claiming the same `id` inside one directory are a conflict, not an override.  `clutch-engines list` reports what loaded and what failed.  Muse Code ships as the first engine plugin.
 
 ## Seat Identity And Branches
 
@@ -55,9 +56,9 @@ Per-use-case feature depth is the open-ended part: any profile may independently
 
 ## Consumers
 
-This repo is **canonical for the DSH ACP driver** and the **MiniMax ACP bridge**.  BotFleet imports from `Simple-With-Us/Clutch` via an npm git dependency (`"clutch": "github:Simple-With-Us/Clutch"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `ClutchWindow.swift`, `install-dock-app.sh`).
+This repo is **canonical for the DSH ACP driver**, the **MiniMax ACP bridge**, and the **engine plugin set**.  BotFleet imports from `Simple-With-Us/Clutch` via an npm git dependency (`"clutch": "github:Simple-With-Us/Clutch"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `ClutchWindow.swift`, `install-dock-app.sh`).
 
-**Never edit driver or bridge code in BotFleet.**  Edit it here, in `src/dsh/acp/` or `src/minimax/acp/`.  BotFleet and AFC consume via PR.
+**Never edit driver or bridge code in BotFleet.**  Edit it here, in `src/dsh/acp/` or `src/minimax/acp/`, or as a drop-in plugin under `engines/` loaded by `src/shared/engines/`.  BotFleet and AFC consume via PR.
 
 ## Inter-Agent Coordination
 

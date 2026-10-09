@@ -1,0 +1,61 @@
+{
+  "$schema": "clutch.engine/v1",
+  "id": "muse-code",
+  "driverKind": "museCodeAgent",
+  "displayName": "Muse Code",
+  "defaultCli": "muse-code-acp.sh",
+  "nativeSource": "muse.serve",
+  "loginNote": "Muse Code needs a Meta account — run `muse login`, or set META_API_KEY for headless use.",
+
+  "images": true,
+  "mcpServers": true,
+  "resumeMethod": "session/load",
+
+  "models": {
+    "default": "muse-spark-1.3-contributor",
+    "options": [
+      {
+        "id": "muse-spark-1.3-contributor",
+        "label": "Muse Spark 1.3 (contributor)",
+        "badge": "Unverified",
+        "badgeTitle": "The only model this Mac's adapter advertises without a Meta account. An authenticated Meta account gets a larger catalog; Muse Code serves the real list over ACP (/models), so this static catalog is a floor, not the truth."
+      }
+    ]
+  },
+
+  "effortLevels": ["none", "low", "medium", "high", "xhigh"],
+
+  "selectModel": {
+    "configId": "model",
+    "advertised": true,
+    "values": {
+      "muse-spark-1.3-contributor": "muse-model:%5B%22meta%22%2Cnull%2C%22muse-spark-1.3-contributor%22%5D"
+    }
+  },
+
+  "errorRules": [
+    { "pattern": "not (logged in|authenticated)|login required|unauthoriz|invalid api key|invalid_credentials", "code": "invalid_credentials" },
+    { "pattern": "meta_api_key|META_API_KEY", "code": "invalid_credentials" },
+    { "pattern": "quota|rate.?limit|too many requests|insufficient", "code": "quota_or_region_restriction" },
+    { "pattern": "overloaded|capacity|service unavailable|bad gateway|upstream", "code": "upstream_outage" },
+    { "pattern": "unknown model|model not found|no such model|invalid model", "code": "model_catalog_outage" }
+  ],
+
+  "credentialEnv": ["META_API_KEY", "MUSE_CODE_EXECUTABLE", "MUSE_CODE_ACP_BACKEND", "MUSE_CODE_ACP_ALLOW_YOLO"],
+  "authFailure": "continue",
+  "authenticatedWhen": {
+    "anyEnv": ["META_API_KEY"]
+  },
+
+  "install": {
+    "command": {
+      "darwin": "npm install -g @bex-co/muse-code-acp",
+      "linux": "npm install -g @bex-co/muse-code-acp",
+      "win32": "npm install -g @bex-co/muse-code-acp"
+    },
+    "docsUrl": "https://dev.meta.ai/docs/muse-code/",
+    "needsNode": true
+  },
+
+  "promptText": "system-then-text"
+}

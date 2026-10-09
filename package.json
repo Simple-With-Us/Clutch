@@ -15,6 +15,7 @@
   },
   "files": [
     "src",
+    "engines",
     "bridges",
     "scripts",
     "docs",
@@ -37,6 +38,8 @@
     "./minimax/http-client": "./src/minimax/http-client/index.ts",
     "./shared/contracts": "./src/shared/contracts.ts",
     "./shared/acp-core": "./src/shared/acp-core.ts",
+    "./engines": "./src/shared/engines/index.ts",
+    "./shared/engines": "./src/shared/engines/index.ts",
     "./shared/ports": "./src/shared/ports.ts",
     "./shared/sanitize-context": "./src/shared/sanitize-context.ts",
     "./shared/subagent-tool-profiles": "./src/shared/subagent-tool-profiles.ts",
@@ -51,7 +54,8 @@
     "clutch-install-dock": "./src/web/install-dock-app.ts",
     "clutch-sync-profiles": "./scripts/sync-profiles.ts",
     "clutch-pair-ios": "./src/web/pair-ios.ts",
-    "clutch-settings": "./src/web/clutch-settings.ts"
+    "clutch-settings": "./src/web/clutch-settings.ts",
+    "clutch-engines": "./src/web/list-engines.ts"
   },
   "scripts": {
     "sync": "tsx scripts/sync-profiles.ts",

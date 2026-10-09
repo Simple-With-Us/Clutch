@@ -19,6 +19,9 @@ describe("package exports", () => {
     expect(pkg.exports["./deepseek/acp/driver"]).toBe("./src/deepseek/acp/driver.ts");
     expect(pkg.exports["./deepseek/mcp-patch"]).toBe("./src/deepseek/acp/mcp-patch.ts");
     expect(pkg.exports["./minimax/acp"]).toBe("./src/minimax/acp/driver.ts");
+    // Engine plugins: both specifiers are the same loader module.
+    expect(pkg.exports["./engines"]).toBe("./src/shared/engines/index.ts");
+    expect(pkg.exports["./shared/engines"]).toBe("./src/shared/engines/index.ts");
     expect(pkg.exports["./shared/cordis-patch"]).toBeUndefined();
     // Retired aliases are gone, not kept as shims.
     expect(pkg.exports["./harness/dsh/acp"]).toBeUndefined(); // retired-name
