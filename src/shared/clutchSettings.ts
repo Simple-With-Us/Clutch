@@ -67,6 +67,7 @@ export interface ClutchSettingDef {
 export const CLUTCH_SETTINGS_SCHEMA: ClutchSettingDef[] = [
   { key: "MINIMAX_API_KEY", kind: "secret", defaultValue: "", description: "MiniMax API key (MiniMax provider auth)" },
   { key: "DEEPSEEK_API_KEY", kind: "secret", defaultValue: "", description: "DeepSeek API key (DeepSeek provider auth)" },
+  { key: "META_API_KEY", kind: "secret", defaultValue: "", description: "Meta API key (Muse Code engine auth; the keychain credential is not readable by a spawned host)" },
   { key: "CLUTCH_MINIMAX_API_KEY_NAME", kind: "config", defaultValue: "MINIMAX_API_KEY", description: "Env var name holding the MiniMax key" },
   { key: "CLUTCH_MINIMAX_BASE_URL", kind: "config", defaultValue: "https://api.minimax.io/v1", description: "MiniMax API base URL" },
   { key: "CLUTCH_MINIMAX_MODEL", kind: "config", defaultValue: "MiniMax-M2.7-highspeed", description: "Default MiniMax model" },
