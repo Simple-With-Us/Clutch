@@ -310,16 +310,39 @@ function currentConfigValue(result: unknown, configId: string): unknown {
  *
  * The vision variant is deliberately
  * absent: `images: false` disables image attachment for the whole engine, so
- * shipping a vision model here offered a capability the composer refused. */
+ * shipping a vision model here offered a capability the composer refused.
+ *
+ * Each row's `images` agrees with the modality the route actually declares, so
+ * a consumer that reads the catalog never offers an attachment the model would
+ * refuse.  `deepseek-flash` declares `inputModalities: [text, image]` and the
+ * three MiniMax rows on the `minimax` route are pinned by
+ * {@link DSH_PER_MODEL_IMAGES}; `deepseek-v4-pro` and M2.7 are text-only. */
 export const STATIC_DSH_MODELS: ModelCatalog = {
   default: "DeepSeek-V4.1-Flash",
   options: [
     { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash", images: true },
     { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro", images: false },
     { id: "MiniMax-M3.1-Flash-Preview", label: "MiniMax-M3.1-Flash-Preview", contextWindow: 1_000_000, images: true },
-    { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_000_000, images: true },
-    { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800, images: true },
+    { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_048_576, images: true },
+    { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800, images: false },
   ],
+};
+
+/** Per-model image support, keyed by picker id, for rows whose route-level
+ *  `images` answer would be wrong.
+ *
+ *  These are facts about the provider, not preferences: the installed pi-ai
+ *  catalog declares MiniMax-M3 and the M3.1 Flash preview as text+image and
+ *  the M2.7 family as text-only, and DeepSeek's own catalog declares Flash
+ *  text+image and Pro text-only.  A consumer that resolves one model reads its
+ *  own row here rather than the engine-wide {@link dshSupport.images} gate,
+ *  which stays closed until that consumer lands. */
+export const DSH_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
+  "DeepSeek-V4.1-Flash": true,
+  "DeepSeek-V4.1-Pro": false,
+  "MiniMax-M3.1-Flash-Preview": true,
+  "MiniMax-M3": true,
+  "MiniMax-M2.7-highspeed": false,
 };
 
 /** Which state home a configured engine CLI uses: `clutch` (the Clutch
@@ -396,6 +419,7 @@ export const dshSupport: AcpSupport = {
   images: false,
   models: STATIC_DSH_MODELS,
   resolveModels: () => STATIC_DSH_MODELS,
+  perModelImages: DSH_PER_MODEL_IMAGES,
   effortLevels: DSH_EFFORT_LEVELS,
   perModelEffortLevels: DSH_PER_MODEL_EFFORT_LEVELS,
   mcpServers: true,

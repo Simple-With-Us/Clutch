@@ -11,6 +11,9 @@ describe("context-sanitizer", () => {
     expect(isMultimodalModel("DeepSeek-V4.1-Flash")).toBe(true);
     expect(isMultimodalModel("deepseek-v4.1-flash")).toBe(true);
     expect(isMultimodalModel("MiniMax-M3.1-Flash-Preview")).toBe(true);
+    // The plain M3 is image-capable in the installed pi-ai catalog
+    // (`input: [text, image]`), so it must not be sanitized either.
+    expect(isMultimodalModel("MiniMax-M3")).toBe(true);
     expect(isMultimodalModel("claude-3-5-sonnet")).toBe(true);
     expect(isMultimodalModel("gpt-4o")).toBe(true);
 
@@ -18,7 +21,10 @@ describe("context-sanitizer", () => {
     expect(isMultimodalModel("DeepSeek-V4.1-Pro")).toBe(false);
     expect(isMultimodalModel("deepseek-v3")).toBe(false);
     expect(isMultimodalModel("deepseek-r1")).toBe(false);
-    expect(isMultimodalModel("MiniMax-M3")).toBe(false);
+    // The M2.7 family is `input: [text]` upstream, so an image heading for it
+    // still has to be transmuted into a text stub.
+    expect(isMultimodalModel("MiniMax-M2.7-highspeed")).toBe(false);
+    expect(isMultimodalModel("MiniMax-M2.7")).toBe(false);
   });
 
   it("leaves messages untouched when target model is multimodal", () => {

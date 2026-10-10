@@ -55,6 +55,22 @@ export function minimaxEffortLevelsForModel(modelId: string): readonly EffortLev
   return MINIMAX_PER_MODEL_EFFORT_LEVELS[modelId as keyof typeof MINIMAX_PER_MODEL_EFFORT_LEVELS] ?? MINIMAX_EFFORT_LEVELS;
 }
 
+/** Per-model image support, keyed by catalog id.
+ *
+ *  The installed pi-ai catalog is the authority: it declares MiniMax-M3 as
+ *  `input: [text, image]` and the whole M2.7 family as `input: [text]`.  The
+ *  M3.1 Flash preview is newer than that catalog, so it is absent from the
+ *  installed list and the owner's `settings.yaml` entry is what declares its
+ *  modalities; MiniMax ships it as a frontier multimodal model, so it is
+ *  image-capable.  A row absent here inherits the engine-wide
+ *  {@link minimaxSupport.images} answer. */
+export const MINIMAX_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
+  "MiniMax-M3.1-Flash-Preview": true,
+  "MiniMax-M3": true,
+  "MiniMax-M2.7-highspeed": false,
+  "MiniMax-M2.7": false,
+};
+
 export const STATIC_MINIMAX_MODELS: ModelCatalog = {
   default: MINIMAX_DEFAULT_MODEL,
   options: [
@@ -65,8 +81,9 @@ export const STATIC_MINIMAX_MODELS: ModelCatalog = {
       badge: "Preview",
       badgeTitle:
         "Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.",
+      images: true,
     },
-    { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_000_000 },
+    { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",
       label: "MiniMax M2.7 Highspeed",
@@ -74,8 +91,9 @@ export const STATIC_MINIMAX_MODELS: ModelCatalog = {
       badge: "2x the $",
       badgeTitle:
         "Same 204,800 context as M2.7 at $0.60 / M input and $2.40 / M output — exactly twice MiniMax M3's $0.30 / $1.20.",
+      images: false,
     },
-    { id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800 },
+    { id: "MiniMax-M2.7", label: "MiniMax M2.7", contextWindow: 204_800, images: false },
   ],
 };
 
@@ -109,6 +127,7 @@ export const minimaxSupport: AcpSupport = {
   resolveModels: () => STATIC_MINIMAX_MODELS,
   effortLevels: MINIMAX_EFFORT_LEVELS,
   perModelEffortLevels: MINIMAX_PER_MODEL_EFFORT_LEVELS,
+  perModelImages: MINIMAX_PER_MODEL_IMAGES,
   mcpServers: true,
   defaultCli: "minimax-acp.sh",
   nativeSource: "minimax.http",

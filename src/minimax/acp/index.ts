@@ -1,5 +1,6 @@
 export {
   STATIC_MINIMAX_MODELS,
+  MINIMAX_PER_MODEL_IMAGES,
   classifyMinimaxError,
   minimaxSpawnArgs,
   minimaxSupport,
