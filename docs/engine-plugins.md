@@ -97,6 +97,16 @@ are required.  Every optional key you omit stays *absent* on the resulting
 | `noAuthNegotiation` | `pickAuthMethod()` | Set it when the engine publishes no ACP `authMethods`.  Leave it off when it does, so the consumer can pick. |
 | `promptText` | `buildPromptText()` | `system-then-text` (default) or `text-only`. |
 
+### Write `errorRules` against the shape ACP actually delivers
+
+Errors arrive as plain `{ code, message }` objects far more often than as
+`Error` instances, and `String()` on one of those is `"[object Object]"` — the
+message is silently lost, so a classifier that only unwraps `Error` matches
+nothing and every failure looks unknown.  `classifyError` reads `message` off any
+object that has one.  Worth writing a rule against the exact rejection text you
+have actually seen from the engine; see `engines/README.md` for a worked
+example taken from a live turn.
+
 ## Writing a programmatic plugin
 
 ```js
