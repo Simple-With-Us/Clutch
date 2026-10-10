@@ -103,11 +103,21 @@ describe("the shipped Muse Code plugin", () => {
     expect(ids).toContain(support.models.default);
   });
 
-  it("marks the unauthenticated catalog as unverified rather than pretending", async () => {
+  it("states that the catalog is complete for this adapter, and what is still unproven", async () => {
     const { support } = await loadMuse();
     const [option] = support.models.options;
-    expect(option!.badge).toBe("Unverified");
-    expect(option!.badgeTitle).toMatch(/without a Meta account/);
+    // Observed identical signed-out and authenticated on this Mac, so the
+    // earlier "an account gets a larger catalog" claim was wrong and is gone.
+    expect(option!.badgeTitle).toMatch(/complete catalog this adapter advertises/);
+    expect(option!.badgeTitle).toMatch(/does not grow with a login/);
+    expect(option!.badgeTitle).toMatch(/No model turn has completed/);
+    expect(option!.badgeTitle).not.toMatch(/floor, not the truth/);
+  });
+
+  it("tells the operator that a keychain credential will not reach a spawned host", async () => {
+    const { support } = await loadMuse();
+    expect(support.loginNote).toMatch(/login keychain/);
+    expect(support.loginNote).toMatch(/muse auth set --provider meta --api-key-stdin/);
   });
 
   it("classifies a missing Meta key as invalid credentials", async () => {
@@ -198,5 +208,33 @@ describe("the Muse Code launcher", () => {
     }
     expect(message).toMatch(/muse-code-acp not found/);
     expect(message).toMatch(/npm install -g @bex-co\/muse-code-acp/);
+  });
+});
+describe("the real failure this plugin was verified against", () => {
+  // Captured verbatim from a live turn through scripts/muse-code-acp.sh on
+  // Muse Code 1.4.4 with an OAuth credential in the login keychain: the host
+  // spawns and accepts the prompt, then the provider rejects it.  ACP delivers
+  // that as a plain object, not an Error.
+  const REJECTION =
+    "Muse SDK turn failed: not logged in: run /login to add an API key. Replace the rejected provider credentials or run muse login, then explicitly submit again.";
+
+  it("classifies the rejection from a plain ACP error object", async () => {
+    const { support } = await loadMuse();
+    // String() on a bare { code, message } is "[object Object]", so a
+    // classifier that only unwraps Error instances loses this entirely.
+    expect(support.classifyError!({ code: -32000, message: REJECTION })).toBe("invalid_credentials");
+    expect(support.classifyError!(new Error(REJECTION))).toBe("invalid_credentials");
+    expect(support.classifyError!({ code: -32000, message: REJECTION, data: {} })).toBe("invalid_credentials");
+  });
+
+  it("still declines to classify a string with no credential signal", async () => {
+    const { support } = await loadMuse();
+    expect(support.classifyError!("something unrelated")).toBeUndefined();
+  });
+
+  it("reports unauthenticated when META_API_KEY is absent, which is the case a headless spawn hits", async () => {
+    const { support } = await loadMuse();
+    expect(support.isAuthenticated!({})).toBe(false);
+    expect(support.isAuthenticated!({ MUSE_CODE_EXECUTABLE: "/usr/local/bin/muse" })).toBe(false);
   });
 });

@@ -301,7 +301,16 @@ function manifestClassifyError(
   if (!rules || rules.length === 0) return undefined;
   const compiled = rules.map((rule) => ({ re: new RegExp(rule.pattern, "i"), code: rule.code }));
   return (error: unknown): string | undefined => {
-    const message = error instanceof Error ? error.message : String(error ?? "");
+    // ACP transports reject with a plain `{ code, message }` object rather
+    // than an Error, and String() on one of those yields "[object Object]",
+    // silently losing the only text worth matching.  Read `message` off any
+    // object that has one.
+    const message =
+      error instanceof Error
+        ? error.message
+        : typeof error === "object" && error !== null && typeof (error as { message?: unknown }).message === "string"
+          ? (error as { message: string }).message
+          : String(error ?? "");
     const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
     const blob = `${code ?? ""} ${message}`.toLowerCase();
     return compiled.find((rule) => rule.re.test(blob))?.code;
