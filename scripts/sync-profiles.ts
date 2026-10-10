@@ -88,10 +88,18 @@ function syncOne(name: string): SyncResult {
 
   // Remove tracked files (anything except local.patch.yml) before re-copying,
   // so a deleted tracked file actually disappears at the destination.
+  //
+  // Directories are left alone: the engine creates runtime trees inside a
+  // profile directory (`.dsh-module-fallback/`, `node_modules/`), and a bare
+  // rmSync on one of those throws ERR_FS_EISDIR, which used to abort the whole
+  // sync before any profile or preset was copied.  Tracked profiles ship files
+  // only, so nothing tracked is ever skipped.
   if (existsSync(dstDir)) {
     for (const entry of readdirSync(dstDir)) {
       if (entry === "local.patch.yml") continue;
-      rmSync(join(dstDir, entry), { force: true });
+      const dstEntry = join(dstDir, entry);
+      if (statSync(dstEntry).isDirectory()) continue;
+      rmSync(dstEntry, { force: true });
     }
   }
 
