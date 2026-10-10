@@ -31,6 +31,10 @@ Secrets (placeholders below — Jay fills real values in the Infisical UI; nothi
 |---|---|---|---|
 | `MINIMAX_API_KEY` | secret | — | MiniMax provider auth.  Missing = MiniMax features report "not authenticated", nothing crashes. |
 | `DEEPSEEK_API_KEY` | secret | — | DeepSeek provider auth.  Same graceful degradation. |
+| `META_API_KEY` | secret | — | Meta API key, used by the Muse Code engine plugin (`engines/muse-code.engine.json`).
+  Read by the spawned `muse serve` host, which cannot read a login-keychain OAuth credential, so a
+  browser login alone leaves headless spawns unauthenticated.  Missing = Muse Code turns fail with
+  `not logged in`, classified as `invalid_credentials`; nothing else crashes. |
 
 Env config:
 
