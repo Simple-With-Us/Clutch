@@ -12,14 +12,15 @@ BotFleet's desktop updater used `electron-updater`, which introduced several rec
 2. **Permission Clobbering (TCC):** Naively overwriting the `.app` bundle stripped macOS Accessibility and Device Control permissions unless signed with the exact Developer ID identity and re-registered.
 3. **Disruptive Modal Flow:** Popped up intrusive dialogues that interrupted active agent sessions and forced unexpected restarts.
 
-### The Modern Fleet Standard: Two Seamless Tracks
+### The Modern Fleet Standard: Three Seamless Tracks
 
-To eliminate these issues, all Mac apps in our fleet follow two dedicated tracks:
+To eliminate these issues, all Mac apps in our fleet follow three dedicated tracks:
 
 | App Category | Primary Update Channel | Mechanism | Benefits |
 |---|---|---|---|
 | **App Store / TestFlight Apps** (the Clutch iOS app, bundle `codes.clutch.ios`) | macOS TestFlight | Apple App Store Connect & TestFlight macOS | Zero updater framework, automatic silent background downloads, zero signature errors, preserves all TCC permissions. |
 | **Standalone macOS Apps** (`Clutch.app`, bundle `codes.clutch.macos`) | In-App Seamless Updater | `ClutchAppUpdater` + `update-mac-app.sh` | Non-intrusive background check, `Check for Updates...` menu item, semantic version comparison against GitHub API, atomic re-signing. |
+| **Mac always-on engine** (`~/apps/clutch-runtime`, pm2 `clutch-web`) | Unattended LaunchAgent | `com.jay.clutch-auto-update` + `auto-update-mac.sh` | Fast-forwards `origin/main` every 5 minutes, syncs profiles and presets, smoke-tests the engine, restarts the web, and rolls a broken commit back.  See § 4. |
 
 ---
 
@@ -52,7 +53,48 @@ For standalone AppKit dock apps (`Clutch.app` compiled from `ClutchWindow.swift`
 
 ---
 
-## 4. BotFleet Computer Use & Tool Parity for DeepSeek & MiniMax
+## 4. Unattended Auto-Update (the macOS always-on deployment)
+
+Track B asks the owner to click.  The Mac deployment also updates itself with no prompt:
+LaunchAgent `com.jay.clutch-auto-update` runs `~/apps/clutch-auto-update.sh` every 300 seconds
+and at load, and that script keeps `~/apps/clutch-runtime` on `origin/main`.
+
+Each run, in order:
+
+1. `git fetch origin` under a 60-second cap.  An up-to-date run logs nothing and exits.
+2. Stop early on a pause file, a dirty checkout, an interrupted merge or rebase, or a lock held
+   by a run that is still working (a lock older than 30 minutes is treated as dead).
+3. `git merge --ff-only origin/main`.  A commit remembered in `~/.clutch/auto-update.bad-sha` is
+   not retried until `origin/main` moves again.
+4. `npm ci` only when `package-lock.json` moved or the toolchain is missing.
+5. `npm run sync`, which copies profiles and agent presets into `~/.clutch/dsh`.  This is the step
+   the other tracks never did, and the reason a landed preset fix used to sit unused.
+6. Smoke-test the engine (`node node_modules/.bin/dsh --version`) before anything is restarted.
+7. Restart pm2 `clutch-web` when code the running server loads moved, then poll
+   `http://127.0.0.1:3180/` until it answers.  A docs-only, tests-only, CI, iOS or image-asset
+   advance skips the restart and logs `NO-RESTART`.
+8. Rebuild `~/Applications/Clutch.app` only when `src/web/dock-app/`, `assets/clutch-icon-1024.png`
+   or `install-dock-app.sh` moved.
+
+A failure after the fast-forward rolls the checkout back to the previous commit, re-syncs,
+restarts the web if it had already been restarted, and remembers the bad sha.  A broken `main`
+therefore neither bricks the Mac nor gets retried on every tick.
+
+- Install or reinstall: `scripts/install-clutch-auto-update.sh`
+- Verify: `scripts/install-clutch-auto-update.sh --verify`
+- Pause: `touch ~/.clutch/auto-update.pause` (resume: `rm ~/.clutch/auto-update.pause`)
+- Remove: `scripts/install-clutch-auto-update.sh --uninstall`
+- Log: `~/apps/logs/clutch-auto-update.log`
+
+The live copy is a regular file at `~/apps/clutch-auto-update.sh`, never a symlink into
+`~/apps/clutch-runtime`: the updater moves that checkout, and bash must not read a script the
+checkout rewrites underneath it.  The updater refreshes its own live copy atomically after each
+successful pull.  `scripts/update-mac-app.sh` takes the same lock, so a manual update and an
+automatic one can never run `npm ci` side by side in one checkout.
+
+---
+
+## 5. BotFleet Computer Use & Tool Parity for DeepSeek & MiniMax
 
 BotFleet provides agents with four core computer destinations:
 
