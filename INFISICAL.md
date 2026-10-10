@@ -2,7 +2,7 @@
 
 Owner directive (2026-10-03): Infisical is the sole source of truth for every app — secrets, env variables, and tunable settings knobs.  "Truth" means everything an app's behavior depends on that is not code.
 
-Clutch's Infisical project is **`Clutch`** (ID `077fd6f3-9f9b-438e-9b6f-5c69076cf36c`, envs dev / staging / prod).  The always-on Mac instance uses the **prod** environment; override with `CLUTCH_INFISICAL_ENV` for dev work.
+Clutch's Infisical project is **`Clutch`** (ID `077fd6f3-9f9b-438e-9b6f-5c69076cf36c`).  Every Clutch entry point, the bash launcher layer and the Cursor cloud start script read the **prod** environment, and only prod.  The dev and staging environments are retired (owner, 2026-10-10).  A `CLUTCH_INFISICAL_ENV` set to anything else is ignored with a loud stderr warning and prod is used; it never stops a restart.
 
 ## The policy
 

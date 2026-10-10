@@ -225,6 +225,23 @@ function refreshIntervalMs(): number {
 }
 
 /**
+ * Infisical is read from prod only (owner, 2026-10-10: the dev and staging
+ * environments are retired).  A `CLUTCH_INFISICAL_ENV` set to anything else is
+ * ignored with a loud error and prod is used.  It does not throw, so a stale
+ * variable cannot stop the always-on web server from restarting.
+ */
+function resolveInfisicalEnvironment(): string {
+  const requested = (process.env[CLUTCH_INFISICAL_ENV_VAR] ?? "").trim();
+  if (requested && requested !== CLUTCH_INFISICAL_DEFAULT_ENV) {
+    console.error(
+      `${LOG_PREFIX} ${CLUTCH_INFISICAL_ENV_VAR}="${requested}" ignored — Infisical is read from ` +
+        `"${CLUTCH_INFISICAL_DEFAULT_ENV}" only (dev and staging are retired).`,
+    );
+  }
+  return CLUTCH_INFISICAL_DEFAULT_ENV;
+}
+
+/**
  * Initialize Clutch settings at startup.  Call once (top-level await) before
  * reading any managed setting.  Safe to call in short-lived CLIs: the
  * refresh timer is unref'd and only starts after a successful Infisical
@@ -240,7 +257,7 @@ export async function initClutchSettings(): Promise<ClutchSettings> {
     );
     return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   }
-  const environment = (process.env[CLUTCH_INFISICAL_ENV_VAR] ?? CLUTCH_INFISICAL_DEFAULT_ENV).trim() || CLUTCH_INFISICAL_DEFAULT_ENV;
+  const environment = resolveInfisicalEnvironment();
   const client = createInfisicalSettings({
     projectId: CLUTCH_INFISICAL_PROJECT_ID,
     environment,

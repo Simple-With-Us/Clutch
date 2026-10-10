@@ -6,7 +6,8 @@
 #      process-friendly env file under $HOME/.cursor-cloud-env/
 #    * backfills the Clutch managed-key set so the CLI / tests can read
 #      them through initClutchSettings
-#    * sets CLUTCH_INFISICAL_ENV=dev for this cloud lane
+#    * sets CLUTCH_INFISICAL_ENV=prod for this cloud lane (prod is the only
+#      Infisical environment; dev and staging are retired)
 #  It never prints secret values.  If credentials are missing it prints
 #  the missing secret NAMES and exits 0 so the agent boot still succeeds.
 
@@ -38,12 +39,22 @@ if [[ -f "${INFISICAL_ENV_FILE}" ]]; then
 else
   log "WARN: ${INFISICAL_ENV_FILE} missing — using hard-coded coordinates"
   export INFISICAL_PROJECT_ID="077fd6f3-9f9b-438e-9b6f-5c69076cf36c"
-  export INFISICAL_ENV="dev"
+  export INFISICAL_ENV="prod"
   export INFISICAL_DOMAIN="https://app.infisical.com"
 fi
 
+# 1b.  Prod-only guard (owner, 2026-10-10).  The dev and staging Infisical
+#      environments are retired.  A non-prod INFISICAL_ENV, from the committed
+#      file or from the session, is ignored with a warning and prod is used,
+#      so the boot still succeeds and nothing is exported from another
+#      environment.
+if [[ -n "${INFISICAL_ENV:-}" && "${INFISICAL_ENV}" != "prod" ]]; then
+  log "WARN: INFISICAL_ENV='${INFISICAL_ENV}' ignored; Infisical reads only prod (dev and staging are retired)"
+fi
+export INFISICAL_ENV="prod"
+
 # 2.  Pin the lane the app's settings loader uses.
-export CLUTCH_INFISICAL_ENV="${INFISICAL_ENV:-dev}"
+export CLUTCH_INFISICAL_ENV="prod"
 
 # 3.  If dashboard credentials are missing, print NAMES only and exit 0.
 missing=()
