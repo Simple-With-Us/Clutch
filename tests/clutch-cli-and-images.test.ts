@@ -10,8 +10,10 @@ import {
   dshLoginNote,
   dshSupport,
   dshVersionCompatibilityReason,
+  DSH_PER_MODEL_IMAGES,
   STATIC_DSH_MODELS,
 } from "../src/dsh/acp/driver.ts";
+import { MINIMAX_PER_MODEL_IMAGES, STATIC_MINIMAX_MODELS, minimaxSupport } from "../src/minimax/acp/driver.ts";
 import { isDshEngineCli } from "../src/dsh/acp/mcp-patch.ts";
 
 const ROOT = join(__dirname, "..");
@@ -216,5 +218,29 @@ describe("per-model image support", () => {
     for (const option of STATIC_DSH_MODELS.options) {
       expect(typeof option.images).toBe("boolean");
     }
+  });
+
+  it("publishes the same answer through the per-model map and the catalog row", () => {
+    // A surface may read either, so the two must agree row for row.
+    const byId = new Map(STATIC_DSH_MODELS.options.map((o) => [o.id, o]));
+    for (const [id, images] of Object.entries(DSH_PER_MODEL_IMAGES)) {
+      expect(byId.get(id)?.images, id).toBe(images);
+    }
+    expect(dshSupport.perModelImages).toEqual(DSH_PER_MODEL_IMAGES);
+  });
+
+  it("routes MiniMax image support by the provider's own modality declaration", () => {
+    // The installed pi-ai catalog declares M3 (and the newer M3.1 preview) as
+    // text+image and the M2.7 family as text-only.  Offering an attachment to a
+    // text-only row is what produced the refusal the owner hit.
+    const byId = new Map(STATIC_MINIMAX_MODELS.options.map((o) => [o.id, o]));
+    expect(byId.get("MiniMax-M3.1-Flash-Preview")?.images).toBe(true);
+    expect(byId.get("MiniMax-M3")?.images).toBe(true);
+    expect(byId.get("MiniMax-M2.7-highspeed")?.images).toBe(false);
+    expect(byId.get("MiniMax-M2.7")?.images).toBe(false);
+    for (const option of STATIC_MINIMAX_MODELS.options) {
+      expect(typeof option.images, option.id).toBe("boolean");
+    }
+    expect(minimaxSupport.perModelImages).toEqual(MINIMAX_PER_MODEL_IMAGES);
   });
 });
