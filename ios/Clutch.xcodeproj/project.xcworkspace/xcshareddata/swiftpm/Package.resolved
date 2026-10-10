@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/exyte/Chat.git",
       "state" : {
-        "revision" : "dcb3e5a3eb8210cf03c73e70551e635806925196",
-        "version" : "3.3.5"
+        "revision" : "49bf1f37606e60a44972fa72f2693b62236b7c57",
+        "version" : "3.3.7"
       }
     },
     {
