@@ -136,6 +136,48 @@ describe("clutchSettings", () => {
     }
   });
 
+  it("reads the prod environment by default", async () => {
+    const scenario = makeScenario();
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_CLIENT_ID = "test-id";
+    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+
+    const settings = await initClutchSettings();
+    try {
+      const reads = scenario.calls.filter((c) => c.startsWith("GET") && c.includes("/api/v3/secrets/raw?"));
+      expect(reads.length).toBeGreaterThan(0);
+      expect(reads.every((c) => c.includes("environment=prod"))).toBe(true);
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it.each(["dev", "staging", "production"])(
+    "ignores CLUTCH_INFISICAL_ENV=%s with a loud error and still reads prod",
+    async (requested) => {
+      const scenario = makeScenario();
+      vi.stubGlobal("fetch", scenario.fetchMock);
+      process.env.INFISICAL_CLIENT_ID = "test-id";
+      process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+      process.env.CLUTCH_INFISICAL_ENV = requested;
+
+      const settings = await initClutchSettings();
+      try {
+        expect(settings.source).toBe("infisical");
+        const reads = scenario.calls.filter((c) => c.startsWith("GET") && c.includes("/api/v3/secrets/raw?"));
+        expect(reads.length).toBeGreaterThan(0);
+        expect(reads.every((c) => c.includes("environment=prod"))).toBe(true);
+        expect(scenario.calls.some((c) => c.includes(`environment=${requested}`))).toBe(false);
+        const warned = consoleErrorSpy.mock.calls.some(
+          (c) => String(c[0]).includes("CLUTCH_INFISICAL_ENV") && String(c[0]).includes("ignored"),
+        );
+        expect(warned).toBe(true);
+      } finally {
+        settings.stop();
+      }
+    },
+  );
+
   it("falls back to env seeding when the Infisical load fails", async () => {
     const scenario = makeScenario();
     scenario.failLogin = true;
