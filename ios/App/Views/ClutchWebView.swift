@@ -239,11 +239,17 @@ struct ClutchWebView: UIViewRepresentable {
         }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            // A dismissed picker reports back asynchronously, so a callback can
+            // arrive from the previous panel after the next one is tracked.
+            // Consuming it then would hand WebKit nil for the live request and
+            // silently drop the user's actual selection.
+            guard controller === openPicker else { return }
             openPicker = nil
             openPanel.finish(with: urls)
         }
 
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            guard controller === openPicker else { return }
             openPicker = nil
             openPanel.finish(with: nil)
         }
