@@ -1,6 +1,41 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 import WebKit
+
+/// Keeps at most one WebKit open panel in flight.
+///
+/// Without a `runOpenPanelWith` handler, WebKit falls back to a default that is
+/// a real macOS `NSOpenPanel` on the iOS Simulator, so an activated file input
+/// threw a Finder window over the desktop.  WebKit also does not reliably tear
+/// down a running panel when the page reloads underneath it, so this cancels
+/// the previous request instead of stacking pickers.
+@MainActor
+final class OpenPanelSession {
+    private var completion: (@MainActor ([URL]?) -> Void)?
+
+    /// What the picker should offer.  WebKit tells us only whether the input
+    /// accepts directories, so a `webkitdirectory` request gets folders and
+    /// everything else gets ordinary items.
+    static func contentTypes(allowsDirectories: Bool) -> [UTType] {
+        allowsDirectories ? [.folder] : [.item]
+    }
+
+    /// Records the completion for a new panel, cancelling any panel already open.
+    func begin(_ completion: @escaping @MainActor ([URL]?) -> Void) {
+        self.completion?(nil)
+        self.completion = completion
+    }
+
+    /// Hands the result back to WebKit, at most once per request.
+    func finish(with urls: [URL]?) {
+        let handler = completion
+        completion = nil
+        handler?(urls)
+    }
+
+    var isActive: Bool { completion != nil }
+}
 
 /// What the embedded clutch web page is doing.
 public enum WebSurfaceState: Equatable {
@@ -56,10 +91,12 @@ struct ClutchWebView: UIViewRepresentable {
     // MARK: - Coordinator
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UIDocumentPickerDelegate {
         var parent: ClutchWebView
         var loadedKey: String?
         private var currentHost: ClutchHost?
+        private let openPanel = OpenPanelSession()
+        private weak var openPicker: UIDocumentPickerViewController?
 
         init(parent: ClutchWebView) {
             self.parent = parent
@@ -68,6 +105,7 @@ struct ClutchWebView: UIViewRepresentable {
         func load(host: ClutchHost, key: String, in webView: WKWebView) {
             loadedKey = key
             currentHost = host
+            cancelOpenPanel()
             setState(.loading)
             var request = URLRequest(url: host.launchURL)
             request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -145,7 +183,77 @@ struct ClutchWebView: UIViewRepresentable {
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            cancelOpenPanel()
             webView.reload()
+        }
+
+        // MARK: - File pickers
+        //
+        // clutch web asks for a workspace or an attachment through a file input.
+        // Serving that with an in-app `UIDocumentPicker` keeps the request inside
+        // Clutch: without a handler, the Simulator's default is a real macOS
+        // open panel over the desktop, and the URL it returns is a path on the
+        // Mac rather than anything the page asked for.
+
+        @available(iOS 18.4, *)
+        func webView(
+            _ webView: WKWebView,
+            runOpenPanelWith parameters: WKOpenPanelParameters,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping @MainActor ([URL]?) -> Void
+        ) {
+            let panel = UIDocumentPickerViewController(
+                forOpeningContentTypes: OpenPanelSession.contentTypes(allowsDirectories: parameters.allowsDirectories),
+                asCopy: true
+            )
+            panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+            presentOpenPanel(panel) { urls in completionHandler(urls) }
+        }
+
+        // The pre-18.4 entry point. WebKit deprecated it in favour of
+        // `WKOpenPanelParameters`, but the deployment target is iOS 17, so this
+        // is still the only one that runs on the oldest supported release.
+        func webView(
+            _ webView: WKWebView,
+            runOpenPanelWith panel: UIDocumentPickerViewController,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping ([URL]?) -> Void
+        ) {
+            presentOpenPanel(panel) { urls in completionHandler(urls) }
+        }
+
+        private func presentOpenPanel(
+            _ panel: UIDocumentPickerViewController,
+            completion: @escaping @MainActor ([URL]?) -> Void
+        ) {
+            cancelOpenPanel()
+            openPanel.begin(completion)
+
+            guard let presenter = UIApplication.shared.topViewController else {
+                openPanel.finish(with: nil)
+                return
+            }
+            panel.delegate = self
+            openPicker = panel
+            presenter.present(panel, animated: true)
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            openPicker = nil
+            openPanel.finish(with: urls)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            openPicker = nil
+            openPanel.finish(with: nil)
+        }
+
+        /// Dismisses a panel that is still up and tells WebKit it was cancelled,
+        /// so a reload underneath one cannot leave the request hanging forever.
+        private func cancelOpenPanel() {
+            openPicker?.dismiss(animated: false)
+            openPicker = nil
+            openPanel.finish(with: nil)
         }
 
         // target=_blank and window.open

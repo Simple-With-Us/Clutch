@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
 		218A167CAF93CB70A5F65247 /* ClutchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8350E05ABC320489DC29C0A9 /* ClutchApp.swift */; };
 		55E24ED085686E3D6A023806 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF818C703EEECD904E31711 /* PairingLink.swift */; };
@@ -56,6 +57,7 @@
 		16E7D46B34D86B23A894C85E /* ClutchHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchHost.swift; sourceTree = "<group>"; };
 		247231E22BE670FBB01C6F92 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
 		24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
+		26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanelTests.swift; sourceTree = "<group>"; };
 		370F89587447F8A4277926BD /* FleetRecallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallView.swift; sourceTree = "<group>"; };
 		3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchWebView.swift; sourceTree = "<group>"; };
 		439E15B2D5F4DF1892811FA9 /* Clutch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Clutch.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -93,6 +95,7 @@
 		5612A184DE47308F2B9DE506 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */,
 				C15309992AC78E4D5B956FF9 /* PairingTests.swift */,
 			);
 			path = Tests;
@@ -351,6 +354,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */,
 				8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
