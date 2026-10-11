@@ -1,5 +1,8 @@
 # Clutch Effort Log — cross-agent board
 
+> **ARCHIVED Sun, Oct 11, 2026.**  Linear is the system of record: team CK, https://linear.app/simple-with-us/team/CK.
+> This file is read-only history.  Do not edit it or add rows.  See EFFORT-LOG-PROTOCOL.md.
+
 The source of truth for active work is THE BOARD at
 `https://mac.jays.services/board`, filtered to `--app clutch`. This file
 is a per-repo mirror; every coherent finished unit gets an entry here,
