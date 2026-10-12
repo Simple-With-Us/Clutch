@@ -27,6 +27,7 @@ let ccServer: Server;
 let ccPort = 0;
 let sidecar: ChildProcess | null = null;
 let chatPort = 0;
+let tokenFile = "";
 const CHAT_TOKEN = `loop-test-token-${"x".repeat(48)}`;
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
@@ -85,29 +86,30 @@ beforeAll(async () => {
   ccPort = (ccServer.address() as { port: number }).port;
 
   const dir = mkdtempSync(join(tmpdir(), "chat-loop-"));
-  const tokenFile = join(dir, "chat-token");
+  tokenFile = join(dir, "chat-token");
   writeFileSync(tokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
   chatPort = await freePort();
 
-  sidecar = spawn(TSX, [BRIDGE], {
-    env: {
-      ...process.env,
-      CLUTCH_CHAT_PORT: String(chatPort),
-      CLUTCH_CHAT_TOKEN_FILE: tokenFile,
-      CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
-      CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
-      COMETCHAT_APP_ID: "loop",
-      COMETCHAT_REGION: "us",
-      COMETCHAT_AUTH_KEY: "loop-auth-key",
-      COMETCHAT_REST_API_KEY: "loop-rest-key",
-      COMETCHAT_AGENT_UID: "clutch-agent",
-      COMETCHAT_API_BASE: `http://127.0.0.1:${ccPort}/v3`,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  sidecar = spawn(TSX, [BRIDGE], { env: sidecarEnv(tokenFile), stdio: ["ignore", "pipe", "pipe"] });
   sidecar.stderr?.on("data", () => undefined);
   await waitFor(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { Authorization: `Bearer ${CHAT_TOKEN}` });
 }, 60000);
+
+function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CLUTCH_CHAT_PORT: String(chatPort),
+    CLUTCH_CHAT_TOKEN_FILE: tokenFile,
+    CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
+    CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    COMETCHAT_APP_ID: "loop",
+    COMETCHAT_REGION: "us",
+    COMETCHAT_AUTH_KEY: "loop-auth-key",
+    COMETCHAT_REST_API_KEY: "loop-rest-key",
+    COMETCHAT_AGENT_UID: "clutch-agent",
+    COMETCHAT_API_BASE: `http://127.0.0.1:${ccPort}/v3`,
+  };
+}
 
 afterAll(() => {
   sidecar?.kill("SIGKILL");
@@ -167,8 +169,28 @@ describe("chat sidecar full loop", () => {
     expect(puts[puts.length - 1]?.path).toBe("/v3/messages/101");
   }, 60000);
 
-  it("still completes the turn when the relay backend is down", async () => {
-    ccServer.close();
+  it("a second bridge on the same port yields quietly", async () => {
+    // start-web.sh and start-web.ts both launch the sidecar; the loser of
+    // the bind must exit 0 without disturbing the winner.
+    const twin = spawn(TSX, [BRIDGE], { env: sidecarEnv(tokenFile), stdio: ["ignore", "pipe", "pipe"] });
+    const code = await new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        twin.kill("SIGKILL");
+        resolve(null);
+      }, 20000);
+      twin.on("exit", (c) => {
+        clearTimeout(timer);
+        resolve(c);
+      });
+    });
+    expect(code).toBe(0);
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, {
+      headers: { Authorization: `Bearer ${CHAT_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+  }, 60000);
+
+  it("still completes the turn when the relay backend is down", async () => {    ccServer.close();
     await new Promise((r) => setTimeout(r, 200));
     const { status, text } = await postChat({
       prompt: "say stub",

@@ -415,6 +415,17 @@ async function main(): Promise<void> {
     res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "not found" }));
   });
 
+  server.on("error", (err: Error & { code?: string }) => {
+    // start-web.sh and start-web.ts both launch the sidecar; when both
+    // entry points run, the second bind loses. That is fine — one bridge
+    // serves the port — so yield quietly instead of crashing loudly.
+    if ((err as { code?: string }).code === "EADDRINUSE") {
+      log(`port busy, another bridge holds it`);
+      process.exit(0);
+    }
+    log(`listen failed: ${err.message}`);
+    process.exit(1);
+  });
   server.listen(PORT, HOST, () => {
     log(`listening on ${HOST}:${PORT} (token fp ${tokenFingerprint})`);
   });
