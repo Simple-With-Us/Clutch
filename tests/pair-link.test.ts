@@ -59,11 +59,60 @@ describe("pairingLink", () => {
 describe("start-web trusted hosts", () => {
   it("both launchers trust the detected tailnet name, not only the legacy one", () => {
     const sh = readFileSync(join(ROOT, "scripts", "start-web.sh"), "utf8");
-    expect(sh).toContain("tailscale status --self --json");
+    expect(sh).toContain("clutch_tailnet_host");
     expect(sh).toContain('"${TRUSTED_ARGS[@]}"');
     const ts = readFileSync(join(ROOT, "src", "web", "start-web.ts"), "utf8");
     expect(ts).toContain("detectTailnetHost()");
     expect(ts).toContain("trustedHostArgs(");
+  });
+
+  it("detects the MagicDNS name in exactly one shared place", () => {
+    const lib = readFileSync(join(ROOT, "scripts", "lib", "clutch-tailnet-host.sh"), "utf8");
+    expect(lib).toContain("tailscale status --self --json");
+    expect(lib).toContain("Self.DNSName");
+    // Both launchers source the one implementation rather than re-inlining it.
+    for (const script of ["start-web.sh", "serve-tailscale.sh"]) {
+      const body = readFileSync(join(ROOT, "scripts", script), "utf8");
+      expect(body).toContain("lib/clutch-tailnet-host.sh");
+      expect(body).not.toContain("Self.DNSName");
+    }
+  });
+
+  // Regression: on 2026-10-11 the iOS app got a 403 on /api for nine hours
+  // because pm2 started clutch-web before Tailscale finished starting, the
+  // one-shot read came back empty, and nothing ever corrected the host list.
+  // Both launchers must retry, and the shell launcher must be able to repair
+  // itself after the fact.
+  it("both launchers retry the tailnet read instead of trusting a single cold-start read", () => {
+    const sh = readFileSync(join(ROOT, "scripts", "start-web.sh"), "utf8");
+    expect(sh).toContain("clutch_tailnet_host");
+    expect(sh).not.toContain('tailnet_host="${CLUTCH_TAILNET_HOST:-$(tailscale status');
+
+    const ts = readFileSync(join(ROOT, "src", "web", "start-web.ts"), "utf8");
+    expect(ts).toContain("readTailnetHost()");
+    expect(ts).toMatch(/while|for \(;;\)/);
+    expect(ts).toContain("CLUTCH_TAILNET_WAIT_SECONDS");
+  });
+
+  it("starts the reconciler and says so when the tailnet name is missing at boot", () => {
+    const sh = readFileSync(join(ROOT, "scripts", "start-web.sh"), "utf8");
+    expect(sh).toContain("clutch_reconcile_tailnet_host");
+    expect(sh).toMatch(/403/);
+  });
+
+  it("bounds the reconciler so a Mac that never joins a tailnet cannot loop", () => {
+    const lib = readFileSync(join(ROOT, "scripts", "lib", "clutch-tailnet-host.sh"), "utf8");
+    expect(lib).toContain("CLUTCH_TAILNET_MAX_RESTARTS");
+    expect(lib).toMatch(/restarts < CLUTCH_TAILNET_MAX_RESTARTS/);
+    expect(lib).toContain("CLUTCH_TAILNET_RECONCILE_SECONDS");
+    // Restarts only on a real mismatch, never speculatively.
+    expect(lib).toContain("clutch_running_trusts_host");
+  });
+
+  it("defers Tailscale Serve rather than dropping it when Tailscale is still starting", () => {
+    const serve = readFileSync(join(ROOT, "scripts", "serve-tailscale.sh"), "utf8");
+    expect(serve).toContain("clutch_tailnet_host");
+    expect(serve).not.toContain('HOST="${CLUTCH_TAILNET_HOST:-$(tailscale status');
   });
 });
 
