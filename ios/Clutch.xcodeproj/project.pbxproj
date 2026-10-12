@@ -24,6 +24,7 @@
 		85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E7D46B34D86B23A894C85E /* ClutchHost.swift */; };
 		8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02A9B289B8BED2D4AAE1B82 /* RootView.swift */; };
 		9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
+		A59D345A83DB671C1521BC9B /* ClutchChatTabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */; };
 		AA78155B7698D43FE8EEFB66 /* ReasoningBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FFB9EDC8C959000A3E5DBD6 /* ReasoningBlockView.swift */; };
 		AF2BFF1ABDEF5AA3823510E4 /* FleetRecallClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */; };
 		C98833B27EF97136742BC786 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81457A11AE35E90469E20EF /* ChatView.swift */; };
@@ -64,6 +65,7 @@
 		370F89587447F8A4277926BD /* FleetRecallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallView.swift; sourceTree = "<group>"; };
 		3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchWebView.swift; sourceTree = "<group>"; };
 		439E15B2D5F4DF1892811FA9 /* Clutch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Clutch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchChatTabUITests.swift; sourceTree = "<group>"; };
 		5012BBC94214678DC340E084 /* ClutchUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClutchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FBD64006BA01FD566745EB8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallClient.swift; sourceTree = "<group>"; };
@@ -122,6 +124,7 @@
 		778544268889611F48963986 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
+				487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */,
 				AD8D5DA5717C010FE84631A3 /* ClutchLiveUITests.swift */,
 			);
 			path = UITests;
@@ -358,6 +361,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A59D345A83DB671C1521BC9B /* ClutchChatTabUITests.swift in Sources */,
 				F8CEB50DE839DC101732FD8A /* ClutchLiveUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
