@@ -121,6 +121,24 @@ async function reclaimPort(port: string): Promise<void> {
 async function detectTailnetHost(): Promise<string | null> {
   const override = process.env.CLUTCH_TAILNET_HOST?.trim();
   if (override) return override;
+
+  // macOS routinely starts Tailscale minutes after login, so a single read at
+  // boot can come back empty and leave the server trusting loopback only, which
+  // 403s every /api request from the iOS app until the next restart.  Retry for
+  // a bounded window; scripts/lib/clutch-tailnet-host.sh reconciles the slower
+  // case by restarting once the name actually appears.
+  const waitSeconds = Number(process.env.CLUTCH_TAILNET_WAIT_SECONDS ?? 30);
+  const deadline = Date.now() + (Number.isFinite(waitSeconds) ? waitSeconds : 30) * 1000;
+
+  for (;;) {
+    const host = await readTailnetHost();
+    if (host) return host;
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+function readTailnetHost(): Promise<string | null> {
   return new Promise((resolvePromise) => {
     const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
@@ -158,6 +176,10 @@ async function main(): Promise<void> {
   }
 
   const extraHosts = (process.env.CLUTCH_TRUSTED_HOSTS ?? "").split(",");
+  const tailnetHost = await detectTailnetHost();
+  if (!tailnetHost && !process.env.CLUTCH_TAILNET_HOST?.trim()) {
+    log("Tailscale not ready; /api will reject remote hosts (403) until it is");
+  }
   const args = [
     "web",
     "--no-open",
@@ -165,10 +187,7 @@ async function main(): Promise<void> {
     HOST,
     "--port",
     PORT,
-    ...trustedHostArgs(
-      ["127.0.0.1", "localhost", await detectTailnetHost(), process.env.CLUTCH_TAILNET_IPV4, ...extraHosts],
-      PORT,
-    ),
+    ...trustedHostArgs(["127.0.0.1", "localhost", tailnetHost, process.env.CLUTCH_TAILNET_IPV4, ...extraHosts], PORT),
   ];
 
   log(`exec clutch.sh web on ${HOST}:${PORT}`);

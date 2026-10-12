@@ -9,6 +9,8 @@ set -euo pipefail
 
 # shellcheck source=lib/clutch-env.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/clutch-env.sh"
+# shellcheck source=lib/clutch-tailnet-host.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/clutch-tailnet-host.sh"
 
 ROOT="$CLUTCH_RUNTIME_ROOT"
 HOST="$CLUTCH_WEB_HOST"
@@ -68,10 +70,21 @@ fi
 # MagicDNS name (what the Clutch iOS app uses over Tailscale; override with
 # CLUTCH_TAILNET_HOST), an optional CLUTCH_TAILNET_IPV4, and any
 # comma-separated CLUTCH_TRUSTED_HOSTS.
+#
+# Tailscale can still be starting when pm2 brings this up, so the name may come
+# back empty.  Starting loopback-only is still correct, but it leaves the iOS
+# app on a 403 for the life of the process, so say so plainly and hand the
+# repair to the reconciler rather than booting silently half-configured.
 TRUSTED_HOSTS=(127.0.0.1 localhost)
-tailnet_host="${CLUTCH_TAILNET_HOST:-$(tailscale status --self --json 2>/dev/null \
-  | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{const d=String(JSON.parse(s).Self.DNSName||"").replace(/\.$/,"").toLowerCase();if(/^[a-z0-9.-]+$/.test(d)&&d.includes("."))process.stdout.write(d)}catch{}})' 2>/dev/null || true)}"
-if [[ -n "$tailnet_host" ]]; then TRUSTED_HOSTS+=("$tailnet_host"); fi
+tailnet_host="$(clutch_tailnet_host)"
+if [[ -n "$tailnet_host" ]]; then
+  TRUSTED_HOSTS+=("$tailnet_host")
+elif [[ -z "${CLUTCH_TAILNET_HOST:-}" ]] && command -v tailscale >/dev/null 2>&1; then
+  echo "clutch-web: Tailscale not ready yet; /api will reject remote hosts (403) until it is" >&2
+  echo "clutch-web: starting the tailnet reconciler, which restarts this process once the name is known" >&2
+  ( clutch_reconcile_tailnet_host & ) >/dev/null 2>&1 &
+  disown || true
+fi
 if [[ -n "${CLUTCH_TAILNET_IPV4:-}" ]]; then TRUSTED_HOSTS+=("$CLUTCH_TAILNET_IPV4"); fi
 IFS=',' read -r -a extra_hosts <<< "${CLUTCH_TRUSTED_HOSTS:-}"
 for h in "${extra_hosts[@]:-}"; do
