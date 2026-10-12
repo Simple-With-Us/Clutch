@@ -166,6 +166,9 @@ export function createStreamSink(
   let messageId: string | null = null;
   let lastEdit = 0;
   let failed: Error | null = null;
+  // Serialized tail of per-chunk work. Without this, a fast onDone can run
+  // while the first create is still in flight and send the text twice.
+  let pending: Promise<void> = Promise.resolve();
 
   const fail = (err: unknown): void => {
     if (!failed) failed = err instanceof Error ? err : new Error(String(err));
@@ -175,7 +178,7 @@ export function createStreamSink(
     onUpdate: (_kind, text) => {
       if (failed) return;
       full += text;
-      void (async () => {
+      pending = pending.then(async () => {
         try {
           if (messageId === null) {
             messageId = await relay.sendText(target, full);
@@ -187,9 +190,10 @@ export function createStreamSink(
         } catch (err) {
           fail(err);
         }
-      })();
+      });
     },
     onDone: async () => {
+      await pending;
       if (failed) throw failed;
       if (messageId === null) {
         if (full.length > 0) await relay.sendText(target, full);

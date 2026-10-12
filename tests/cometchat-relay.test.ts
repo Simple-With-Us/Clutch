@@ -94,4 +94,28 @@ describe("createStreamSink", () => {
     expect(puts.length).toBe(2);
     expect((puts[1]?.body as { data: { text: string } }).data.text).toBe("hello there!");
   });
+
+  it("never sends twice when done races the first create", async () => {
+    const calls: { method: string; path: string; body: unknown }[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const slowFetch = vi.fn(async (url: string, init: { method?: string; body?: string }) => {
+      calls.push({ method: init.method ?? "GET", path: new URL(url).pathname, body: JSON.parse(init.body ?? "{}") });
+      await gate;
+      return { ok: true, status: 200, json: async () => ({ id: 5 }) } as Response;
+    });
+    const relay = new CometChatRelay(config, { fetchFn: slowFetch });
+    const sink = createStreamSink(relay, { receiver: "user-1", receiverType: "user" });
+    sink.onUpdate("agent_message_chunk", "hello");
+    sink.onUpdate("agent_message_chunk", " there");
+    const done = sink.onDone();
+    release();
+    await done;
+    expect(calls.filter((c) => c.method === "POST").length).toBe(1);
+    const puts = calls.filter((c) => c.method === "PUT");
+    expect(puts.length).toBe(1);
+    expect((puts[0]?.body as { data: { text: string } }).data.text).toBe("hello there");
+  });
 });
