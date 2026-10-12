@@ -87,56 +87,66 @@ public struct ChatView: View {
                 }
 
                 // Thread surface
-                switch manager.phase {
-                case .idle, .loadingConfig, .signingIn:
-                    Spacer()
-                    ProgressView("Connecting chat…")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary)
-                    Spacer()
-                case .failed(let message):
+                if activeHost == nil {
                     Spacer()
                     ChatSetupCard(
-                        symbol: "bubble.left.and.exclamationmark",
-                        title: "Chat Unavailable",
-                        message: message
+                        symbol: "iphone.and.arrow.forward",
+                        title: "No Host Paired",
+                        message: "Pair with your Mac from the Hosts tab to start chatting."
                     )
                     Spacer()
-                case .ready:
-                    if let agent = manager.agentUser {
-                        AgentThreadView(agent: agent)
-                        if let thought = thoughtLine, !thought.isEmpty {
-                            HStack(spacing: 6) {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                Text(thought)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(2)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                        }
-                        if let error = sendError {
-                            Text(error)
-                                .font(.system(size: 12))
-                                .foregroundColor(.red)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 4)
-                        }
-                        ChatInputBar(
-                            draft: $draft,
-                            sending: sending,
-                            onSend: { send(draft) },
-                            onVoice: { startVoice() }
-                        )
-                    } else {
+                } else {
+                    switch manager.phase {
+                    case .idle, .loadingConfig, .signingIn:
                         Spacer()
-                        ProgressView("Loading agent…")
+                        ProgressView("Connecting chat…")
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                         Spacer()
+                    case .failed(let message):
+                        Spacer()
+                        ChatSetupCard(
+                            symbol: "bubble.left.and.exclamationmark",
+                            title: "Chat Unavailable",
+                            message: message
+                        )
+                        Spacer()
+                    case .ready:
+                        if let agent = manager.agentUser {
+                            AgentThreadView(agent: agent)
+                            if let thought = thoughtLine, !thought.isEmpty {
+                                HStack(spacing: 6) {
+                                    ProgressView()
+                                        .scaleEffect(0.7)
+                                    Text(thought)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(2)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                            }
+                            if let error = sendError {
+                                Text(error)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 4)
+                            }
+                            ChatInputBar(
+                                draft: $draft,
+                                sending: sending,
+                                onSend: { send(draft) },
+                                onVoice: { startVoice() }
+                            )
+                        } else {
+                            Spacer()
+                            ProgressView("Loading agent…")
+                                .font(.system(size: 13))
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
                     }
                 }
             }

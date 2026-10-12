@@ -30,18 +30,34 @@ CometChat over polish-ExyteChat and Stream Chat.
 
 ## Build order
 
-1. **Mac SSE endpoint.** Loopback sidecar next to `dsh web` sharing the
-   trusted-host list and Tailscale mapping: `POST /clutch/v1/chat` as SSE
-   (`agent_message_chunk` / `agent_thought_chunk` / tool events → `done`),
-   backed by the existing Python ACP bridges. Boot-minted Bearer token
-   delivered via the pairing link. UI-agnostic.
-2. **CometChat relay (Mac side).** Translate the ACP stream into CometChat
-   REST as the agent user. Open point: progressive message edits vs
-   local-echo with a persisted final card.
-3. **iOS Chat tab.** SPM `CometChatUIKitSwift` (from 5.2.3), agent-thread
-   VC bound to the agent user, render gated on init → login → render.
-   Keep the model strip and Whisper voice UI. ExyteChat stays until
-   cutover, then is removed.
+1. **Mac SSE endpoint.** DONE and proven with a live DeepSeek turn
+   (`start` → `thought` → `message: bridge-ok` → `done/endTurn`).
+   Loopback sidecar next to `dsh web` sharing the trusted-host list and
+   Tailscale Serve mapping: `POST /clutch/v1/chat` as SSE
+   (`message` / `thought` / `done`), backed by the existing Python ACP
+   bridges. Boot-minted Bearer token delivered via the pairing link
+   (`&chat=`, `&chatPort=`). Engine `[stderr]` diagnostics ride `thought`
+   events instead of answer bubbles. `GET /clutch/v1/health` and
+   `GET /clutch/v1/chat-config` (CometChat app coordinates for the tab).
+2. **CometChat relay (Mac side).** DONE (unit-tested, live app test
+   blocked on dashboard values — see below). SSE stays primary; when the
+   backend is configured and the caller names a target, each turn also
+   streams into CometChat REST as the agent user: create on first chunk,
+   throttled edits (1/s), flush on done, interactive cards for tool calls.
+3. **iOS Chat tab.** DONE (simulator build green, tests pending):
+   SPM `CometChatUIKitSwift` 5.2.3, agent thread (header + live list, no
+   kit composer), native input bar posting to the sidecar, manager
+   (chat-config → init once → device login → agent user), per-host chat
+   token + port with pre-chat archive compat. Card taps surface as an
+   alert. ExyteChat still linked; removal is the cutover commit.
+
+## Owner gates (nothing else needs Jay)
+
+- CometChat dashboard: stored App ID is not the numeric id and no region
+  resolves — verify App ID + region, update the handoff file.
+- Deploy: `COMETCHAT_APP_ID/REGION/REST_API_KEY/AGENT_UID` into Infisical
+  (the sidecar reads env, never handoff files), then live-install update
+  + TestFlight.
 
 ## Verify before merge
 

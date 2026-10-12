@@ -81,10 +81,9 @@ public enum PairingLink {
             return nil
         }
         let name = value("name") ?? (isMiniMax ? "MiniMax Remote" : nil)
-        let chatToken = value("chat")
 
         if let inner = value("url") {
-            return parseWebURL(inner, name: name, chatToken: chatToken)
+            return parseWebURL(inner, name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init))
         }
 
         guard let host = value("host", "h") else { return .failure(.missingHost) }
@@ -100,7 +99,7 @@ public enum PairingLink {
         return build(origin: url, token: value("token", "t"), name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init))
     }
 
-    private static func parseWebURL(_ raw: String, name: String?, chatToken: String? = nil) -> Result<PairingPayload, PairingLinkError> {
+    private static func parseWebURL(_ raw: String, name: String?, chatToken: String? = nil, chatPort: Int? = nil) -> Result<PairingPayload, PairingLinkError> {
         guard let comps = URLComponents(string: raw),
               let scheme = comps.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
@@ -113,7 +112,7 @@ public enum PairingLink {
         origin.port = comps.port
         guard let url = origin.url else { return .failure(.invalidURL) }
         let token = comps.queryItems?.first(where: { $0.name == "token" })?.value
-        return build(origin: url, token: token, name: name)
+        return build(origin: url, token: token, name: name, chatToken: chatToken, chatPort: chatPort)
     }
 
     private static func parseBareAddress(_ raw: String) -> Result<PairingPayload, PairingLinkError> {
