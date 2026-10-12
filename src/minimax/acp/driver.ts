@@ -98,7 +98,16 @@ export const STATIC_MINIMAX_MODELS: ModelCatalog = {
 };
 
 export function classifyMinimaxError(error: unknown): ProviderErrorCode | undefined {
-  const message = error instanceof Error ? error.message : String(error ?? "");
+  // ACP transports reject with a plain `{ code, message }` object more often
+  // than with an `Error`, and String() on one of those is "[object Object]", so
+  // the only text worth matching would be lost.  Read `message` off any object
+  // that carries one, the way the manifest tier's classifyError already does.
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "object" && error !== null && typeof (error as { message?: unknown }).message === "string"
+        ? (error as { message: string }).message
+        : String(error ?? "");
   const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
   const blob = `${code ?? ""} ${message}`.toLowerCase();
   if (/unauthoriz|unauthenticated|invalid api key|invalid_credentials|authentication required|auth.*(fail|missing|required)/.test(blob)) {
@@ -130,7 +139,12 @@ export const minimaxSupport: AcpSupport = {
   perModelImages: MINIMAX_PER_MODEL_IMAGES,
   mcpServers: true,
   defaultCli: "minimax-acp.sh",
-  nativeSource: "minimax.http",
+  // ACP at the edge, HTTP underneath.  The frames Clutch sees are JSON-RPC to
+  // `dsh --profile minimax-headless`; the engine then calls MiniMax's own API
+  // from inside its pi-ai provider route, which is not Clutch's transport.
+  // Labelling these frames `minimax.http` put the wrong protocol in front of
+  // anyone reading a native transcript, so match the fleet's `<id>.acp`.
+  nativeSource: "minimax.acp",
   loginNote: "MiniMax API key missing — set MINIMAX_API_KEY or CLUTCH_MINIMAX_API_KEY_NAME",
 
   install: {
