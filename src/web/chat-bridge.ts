@@ -45,8 +45,11 @@ const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat
 type Engine = "deepseek" | "minimax";
 
 const LAUNCHERS: Record<Engine, string> = {
-  deepseek: join(ROOT, "scripts", "dsh-acp.sh"),
-  minimax: join(ROOT, "scripts", "minimax-acp.sh"),
+  // CLUTCH_CHAT_LAUNCHER_<ENGINE> overrides exist for the full-loop test,
+  // which points the engines at a stub script. Production always uses the
+  // shipped launchers below.
+  deepseek: process.env.CLUTCH_CHAT_LAUNCHER_DEEPSEEK?.trim() || join(ROOT, "scripts", "dsh-acp.sh"),
+  minimax: process.env.CLUTCH_CHAT_LAUNCHER_MINIMAX?.trim() || join(ROOT, "scripts", "minimax-acp.sh"),
 };
 
 function log(line: string): void {

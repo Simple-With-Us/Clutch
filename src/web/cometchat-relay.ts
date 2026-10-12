@@ -33,6 +33,10 @@ export function cometchatConfigFromEnv(
 }
 
 export function cometchatApiBase(config: Pick<CometChatConfig, "appId" | "region">): string {
+  // COMETCHAT_API_BASE exists for the full-loop test, which points the relay
+  // at a local stub. Production always uses the regional endpoint below.
+  const override = process.env.COMETCHAT_API_BASE?.trim().replace(/\/+$/, "");
+  if (override) return override;
   return `https://${config.appId}.api-${config.region}.cometchat.io/v3`;
 }
 
