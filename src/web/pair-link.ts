@@ -89,7 +89,13 @@ export function isTrustedHostHeader(hostHeader: string | null | undefined, allow
  * `chatToken` (the chat-bridge Bearer token) rides along as `&chat=` when the
  * sidecar has minted one; the app stores it for `/clutch/v1/chat` calls.
  */
-export function pairingLink(options: { launchUrl: string; origin: string; name?: string; chatToken?: string | undefined }): string {
+export function pairingLink(options: {
+  launchUrl: string;
+  origin: string;
+  name?: string;
+  chatToken?: string | undefined;
+  chatPort?: string | undefined;
+}): string {
   const token = launchToken(options.launchUrl);
   if (token === null) throw new Error("launch URL has no token; is clutch web running?");
   const origin = new URL(options.origin);
@@ -102,5 +108,6 @@ export function pairingLink(options: { launchUrl: string; origin: string; name?:
   link.searchParams.set("url", target.toString());
   if (options.name) link.searchParams.set("name", options.name);
   if (options.chatToken) link.searchParams.set("chat", options.chatToken);
+  if (options.chatPort) link.searchParams.set("chatPort", options.chatPort);
   return link.toString();
 }

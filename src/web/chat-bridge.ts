@@ -268,6 +268,28 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/clutch/v1/chat-config") {
+      // Everything the native tab needs after pairing: which chat port it
+      // already reached, and the CometChat app coordinates (dev-grade Auth
+      // Key for this try; server-minted user tokens are the follow-up).
+      // Gated by the chat token like everything else here.
+      const appId = process.env.COMETCHAT_APP_ID?.trim() || null;
+      const region = process.env.COMETCHAT_REGION?.trim() || null;
+      const authKey = process.env.COMETCHAT_AUTH_KEY?.trim() || null;
+      const agentUid = process.env.COMETCHAT_AGENT_UID?.trim() || "clutch-agent";
+      res.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          ok: true,
+          chatPort: PORT,
+          cometchat:
+            appId && region && authKey
+              ? { appId, region, authKey, agentUid }
+              : null,
+        }),
+      );
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/clutch/v1/chat") {
       let body: {
         prompt?: unknown;

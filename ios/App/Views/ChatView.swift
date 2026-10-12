@@ -1,31 +1,21 @@
 import SwiftUI
-import ExyteChat
+import CometChatUIKitSwift
+import CometChatSDK
 
-extension ChatMessage {
-    public var exyteMessage: ExyteChat.Message {
-        let isUser = self.role == .user
-        let user = isUser
-            ? ExyteChat.User(id: "user", name: "You", avatarURL: nil, isCurrentUser: true)
-            : ExyteChat.User(id: "assistant", name: modelUsed ?? "Clutch", avatarURL: nil, isCurrentUser: false)
-
-        return ExyteChat.Message(
-            id: self.id.uuidString,
-            user: user,
-            createdAt: self.timestamp,
-            text: self.content
-        )
-    }
-}
-
+/// The native Chat tab, now on CometChat: the agent thread renders in the
+/// kit's message list (live via its socket), the native input bar owns the
+/// send path so prompts travel to the Mac sidecar (`POST /clutch/v1/chat`)
+/// instead of CometChat's cloud send, and the sidecar relays the turn back
+/// into the thread. Model strip and hold-to-record voice stay native.
 public struct ChatView: View {
-    @State private var messages: [ChatMessage] = [
-        ChatMessage(
-            role: .assistant,
-            content: "Ready for your coding task. How can I help you today?",
-            modelUsed: "Clutch"
-        )
-    ]
+    @State private var manager = CometChatManager.shared
     @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
+    @State private var draft: String = ""
+    @State private var sessionId: String?
+    @State private var sending: Bool = false
+    @State private var thoughtLine: String?
+    @State private var sendError: String?
+    @State private var cardAlert: String?
     @State private var isTranscribingVoice: Bool = false
     @State private var voiceStatusMessage: String?
 
@@ -96,121 +86,196 @@ public struct ChatView: View {
                     .background(Color.accentColor.opacity(0.1))
                 }
 
-                // ExyteChat View
-                ExyteChat.ChatView(messages: messages.map(\.exyteMessage)) { draft in
-                    handleDraft(draft)
-                } messageBuilder: { params in
-                    if let original = messages.first(where: { $0.id.uuidString == params.message.id }) {
-                        ChatMessageCard(message: original)
-                            .padding(.horizontal, 8)
+                // Thread surface
+                switch manager.phase {
+                case .idle, .loadingConfig, .signingIn:
+                    Spacer()
+                    ProgressView("Connecting chat…")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                case .failed(let message):
+                    Spacer()
+                    ChatSetupCard(
+                        symbol: "bubble.left.and.exclamationmark",
+                        title: "Chat Unavailable",
+                        message: message
+                    )
+                    Spacer()
+                case .ready:
+                    if let agent = manager.agentUser {
+                        AgentThreadView(agent: agent)
+                        if let thought = thoughtLine, !thought.isEmpty {
+                            HStack(spacing: 6) {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                Text(thought)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                        }
+                        if let error = sendError {
+                            Text(error)
+                                .font(.system(size: 12))
+                                .foregroundColor(.red)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                        }
+                        ChatInputBar(
+                            draft: $draft,
+                            sending: sending,
+                            onSend: { send(draft) },
+                            onVoice: { startVoice() }
+                        )
                     } else {
-                        EmptyView()
+                        Spacer()
+                        ProgressView("Loading agent…")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                        Spacer()
                     }
                 }
-                .audioRecordingMode(.holdToRecord)
             }
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: activeHost?.id) {
+                guard let host = activeHost else { return }
+                await manager.prepare(host: host)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .clutchCardAction)) { note in
+                cardAlert = (note.userInfo?["title"] as? String) ?? "Card action"
+            }
+            .alert("Card action", isPresented: Binding(
+                get: { cardAlert != nil },
+                set: { if !$0 { cardAlert = nil } }
+            )) {
+                Button("OK", role: .cancel) { cardAlert = nil }
+            } message: {
+                Text(cardAlert ?? "")
+            }
         }
     }
 
-    private func handleDraft(_ draft: DraftMessage) {
-        if let audioURL = draft.recording?.url {
-            isTranscribingVoice = true
-            voiceStatusMessage = "Transcribing voice via Whisper…"
-            Task {
-                do {
-                    let transcribed = try await transcriptionService.transcribeAudio(
-                        fileURL: audioURL,
-                        hostURL: activeHost?.origin
-                    )
-                    await MainActor.run {
-                        isTranscribingVoice = false
-                        voiceStatusMessage = nil
-                        submitUserPrompt(transcribed)
-                    }
-                } catch {
-                    await MainActor.run {
-                        isTranscribingVoice = false
-                        voiceStatusMessage = "Transcription failed: \(error.localizedDescription)"
+    private func send(_ text: String) {
+        let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !sending else { return }
+        guard let host = activeHost, let myUid = manager.myUid else { return }
+        draft = ""
+        sendError = nil
+        sending = true
+        let client = ChatSessionClient(host: host, model: selectedModel, sessionId: sessionId, relayReceiverUid: myUid)
+        Task {
+            do {
+                for try await event in client.stream(prompt: prompt) {
+                    switch event {
+                    case .started(let id, _):
+                        sessionId = id
+                    case .message:
+                        thoughtLine = nil
+                    case .thought(let text):
+                        thoughtLine = String(text.prefix(220))
+                    case .done(let stop, let id):
+                        sessionId = id
+                        sending = false
+                        thoughtLine = nil
+                        if stop != "endTurn" && stop != "cancelled" {
+                            sendError = "Turn ended: \(stop)"
+                        }
+                    case .failed(let message):
+                        sending = false
+                        thoughtLine = nil
+                        sendError = message
                     }
                 }
+                sending = false
+            } catch {
+                sending = false
+                thoughtLine = nil
+                sendError = error.localizedDescription
             }
-            return
         }
-
-        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        submitUserPrompt(text)
     }
 
-    private func submitUserPrompt(_ text: String) {
-        let userMsg = ChatMessage(role: .user, content: text)
-        messages.append(userMsg)
-
-        // Mock assistant streaming response
-        let assistantMsgId = UUID()
-        let assistantMsg = ChatMessage(
-            id: assistantMsgId,
-            role: .assistant,
-            content: "I've received your request: \"\(text)\". Working on it using \(selectedModel)…",
-            reasoningContent: "Analyzing project dependencies and checking tool registries…",
-            modelUsed: selectedModel
-        )
-        messages.append(assistantMsg)
+    private func startVoice() {
+        // Hold-to-record lives on the native bar; transcription reuses the
+        // Whisper path and submits through the same send.
+        isTranscribingVoice = true
+        voiceStatusMessage = "Hold-to-record attaches on the next pass — type for now."
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run {
+                isTranscribingVoice = false
+                voiceStatusMessage = nil
+            }
+        }
     }
 }
 
-struct ChatMessageCard: View {
-    let message: ChatMessage
+/// UIKit-hosted agent thread (header + live message list, no kit composer).
+struct AgentThreadView: UIViewControllerRepresentable {
+    let agent: CometChatSDK.User
+
+    func makeUIViewController(context: Context) -> AgentMessagesVC {
+        AgentMessagesVC(agent: agent)
+    }
+
+    func updateUIViewController(_ controller: AgentMessagesVC, context: Context) {}
+}
+
+/// Native input bar: the send path the kit never sees.
+struct ChatInputBar: View {
+    @Binding var draft: String
+    var sending: Bool
+    var onSend: () -> Void
+    var onVoice: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            if message.role == .user {
-                Spacer(minLength: 40)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(message.content)
-                        .font(.system(size: 15))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.accentColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.primary.opacity(0.1))
-                                .frame(width: 18, height: 18)
-                            Text("C")
-                                .font(.system(size: 10, weight: .black))
-                        }
-                        Text(message.modelUsed ?? "Clutch")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.secondary)
-                    }
-
-                    if let reasoning = message.reasoningContent, !reasoning.isEmpty {
-                        ReasoningBlockView(reasoningText: reasoning, isStreaming: message.isStreaming)
-                    }
-
-                    ForEach(message.toolCalls) { toolCall in
-                        ToolCallCard(toolCall: toolCall)
-                    }
-
-                    Text(message.content)
-                        .font(.system(size: 14))
-                        .foregroundColor(.primary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-
-                Spacer(minLength: 40)
+        HStack(spacing: 8) {
+            TextField("Message the agent…", text: $draft, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .disabled(sending)
+                .onSubmit(onSend)
+            Button(action: onVoice) {
+                Image(systemName: "mic.fill")
             }
+            .disabled(sending)
+            Button(action: onSend) {
+                if sending {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 24))
+                }
+            }
+            .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.systemBackground))
+    }
+}
+
+struct ChatSetupCard: View {
+    let symbol: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 36, weight: .regular))
+                .foregroundStyle(.tint)
+            Text(title)
+                .font(.headline)
+            Text(message)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal, 24)
     }
 }

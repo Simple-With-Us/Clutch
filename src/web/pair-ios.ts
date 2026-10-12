@@ -22,7 +22,7 @@ import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { clutchWebPort } from "../shared/ports.ts";
+import { clutchChatPort, clutchWebPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { LEGACY_TAILNET_HOST, pairingLink, tailnetDnsName } from "./pair-link.ts";
 
@@ -102,7 +102,7 @@ function main(): void {
   // picks it up.  Read, never logged.
   const chatTokenFile = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
   const chatToken = existsSync(chatTokenFile) ? readFileSync(chatTokenFile, "utf8").trim() : "";
-  const link = pairingLink({ launchUrl, origin, name, chatToken: chatToken || undefined });
+  const link = pairingLink({ launchUrl, origin, name, chatToken: chatToken || undefined, chatPort: clutchChatPort() });
 
   if (args.has("--print")) {
     process.stdout.write(`${link}\n`);
