@@ -66,6 +66,14 @@ if [[ -x "$ROOT/scripts/serve-tailscale.sh" ]]; then
   "$ROOT/scripts/serve-tailscale.sh" || true
 fi
 
+# Native-chat SSE sidecar (the iOS Chat tab's transport).  Backgrounded: the
+# exec below replaces this shell, so the bridge must already be running.
+# Disable with CLUTCH_CHAT_BRIDGE=0.
+if [[ "${CLUTCH_CHAT_BRIDGE:-1}" != "0" && -x "$ROOT/scripts/chat-bridge.sh" ]]; then
+  "$ROOT/scripts/chat-bridge.sh" >>"$CLUTCH_HOME/chat-bridge.log" 2>&1 &
+  disown || true
+fi
+
 # Every /api request must carry a trusted Host.  Trust loopback, this Mac's
 # MagicDNS name (what the Clutch iOS app uses over Tailscale; override with
 # CLUTCH_TAILNET_HOST), an optional CLUTCH_TAILNET_IPV4, and any

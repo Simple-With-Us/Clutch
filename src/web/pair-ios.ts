@@ -97,7 +97,12 @@ function main(): void {
   const simulator = args.has("--simulator");
   const origin = simulator ? `http://127.0.0.1:${PORT}` : `https://${detectTailnetHost()}:${PORT}`;
   const name = simulator ? "This Mac" : hostname().replace(/\.local$/, "");
-  const link = pairingLink({ launchUrl, origin, name });
+  // The chat-bridge Bearer token rides along when the sidecar has minted one.
+  // Absent on a first pair before the bridge ever booted; the next pairing
+  // picks it up.  Read, never logged.
+  const chatTokenFile = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
+  const chatToken = existsSync(chatTokenFile) ? readFileSync(chatTokenFile, "utf8").trim() : "";
+  const link = pairingLink({ launchUrl, origin, name, chatToken: chatToken || undefined });
 
   if (args.has("--print")) {
     process.stdout.write(`${link}\n`);

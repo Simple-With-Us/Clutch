@@ -55,12 +55,41 @@ export function launchToken(launchUrl: string): string | null {
 }
 
 /**
+ * The authority set a loopback sidecar trusts, mirroring `start-web.sh`:
+ * loopback plus the tailnet names, bare and with the sidecar's own port.
+ * `hosts` are bare names (`tailnetDnsName` output, `CLUTCH_TRUSTED_HOSTS`
+ * entries); callers always prepend `127.0.0.1` and `localhost`.
+ */
+export function trustedAuthoritySet(hosts: readonly (string | null | undefined)[], port: string): Set<string> {
+  const seen = new Set<string>();
+  for (const raw of ["127.0.0.1", "localhost", ...hosts]) {
+    const host = raw?.trim().toLowerCase();
+    if (!host) continue;
+    seen.add(host);
+    seen.add(`${host}:${port}`);
+  }
+  return seen;
+}
+
+/**
+ * True when a request `Host` header names a trusted authority. The header
+ * may carry `host` or `host:port`, in any case; anything else (including a
+ * missing header) is untrusted.
+ */
+export function isTrustedHostHeader(hostHeader: string | null | undefined, allowed: ReadonlySet<string>): boolean {
+  if (!hostHeader) return false;
+  return allowed.has(hostHeader.trim().toLowerCase());
+}
+
+/**
  * The link the iOS app pairs from:
  * `clutch://pair?url=<origin>/?token=<t>&name=<label>`.
  * `origin` is where the phone reaches clutch web, e.g.
  * `https://<magicdns>:3180` over Tailscale or `http://127.0.0.1:3180` for the Simulator.
+ * `chatToken` (the chat-bridge Bearer token) rides along as `&chat=` when the
+ * sidecar has minted one; the app stores it for `/clutch/v1/chat` calls.
  */
-export function pairingLink(options: { launchUrl: string; origin: string; name?: string }): string {
+export function pairingLink(options: { launchUrl: string; origin: string; name?: string; chatToken?: string | undefined }): string {
   const token = launchToken(options.launchUrl);
   if (token === null) throw new Error("launch URL has no token; is clutch web running?");
   const origin = new URL(options.origin);
@@ -72,5 +101,6 @@ export function pairingLink(options: { launchUrl: string; origin: string; name?:
   const link = new URL("clutch://pair");
   link.searchParams.set("url", target.toString());
   if (options.name) link.searchParams.set("name", options.name);
+  if (options.chatToken) link.searchParams.set("chat", options.chatToken);
   return link.toString();
 }

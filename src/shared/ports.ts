@@ -10,3 +10,15 @@ export function clutchWebPort(env: Record<string, string | undefined> = process.
   const raw = env.CLUTCH_WEB_PORT?.trim();
   return raw && raw.length > 0 ? raw : String(CLUTCH_WEB_PORT_DEFAULT);
 }
+
+/**
+ * Default port for the Clutch chat bridge (the native-chat SSE sidecar).
+ * One above web so the two never collide; `CLUTCH_CHAT_PORT` overrides it.
+ */
+export const CLUTCH_CHAT_PORT_DEFAULT = 3181;
+
+/** The configured chat-bridge port as a string, for argv and URLs. */
+export function clutchChatPort(env: Record<string, string | undefined> = process.env): string {
+  const raw = env.CLUTCH_CHAT_PORT?.trim();
+  return raw && raw.length > 0 ? raw : String(CLUTCH_CHAT_PORT_DEFAULT);
+}
