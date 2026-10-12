@@ -11,6 +11,54 @@ anything here that claims the same `id`.  Check what resolved with:
 clutch-engines list
 ```
 
+## minimax
+
+MiniMax reaches Clutch as a coding engine, not as a chat wrapper:
+`scripts/minimax-acp.sh` → `bridges/minimax/minimax-acp.py` → `dsh --profile
+minimax-headless`, which is the same cordis tool loop the DeepSeek phone path
+uses with MiniMax as the model provider.  The bridge's own docstring records why
+that replaced the earlier HTTP-only `chat/completions` adapter: the HTTP path had
+no local tools and dropped image attachments, so it behaved like the MiniMax chat
+web app rather than a coding agent.
+
+Two layers are easy to confuse, so they are worth naming: **Clutch speaks ACP** to
+the engine, and **the engine speaks HTTP** to MiniMax from inside its
+`llm-pi-ai.providers.minimax` route.  That is why `nativeSource` is `minimax.acp` —
+those are the frames on Clutch's side of the pipe.  (It used to read
+`minimax.http`, which named the retired adapter and mislabelled native
+transcripts.)
+
+### Why this one is a module and not a JSON manifest
+
+`minimax.engine.mjs` is the programmatic tier, which `docs/engine-plugins.md`
+reserves for rules that are logic rather than data.  MiniMax has two:
+
+- `CLUTCH_MINIMAX_API_KEY_NAME` is an **indirection** — it names the variable that
+  actually holds the key, so one install can carry several providers' keys side by
+  side.  `transformEnv` and `isAuthenticated` both have to follow it.  A
+  manifest's `spawn.env` sets literal values, and `authenticatedWhen` can only
+  test named variables, so neither can express it.
+- The launcher already sets every `CLUTCH_MINIMAX_*` default before it execs the
+  bridge, so the plugin repeats those defaults only so a *direct* spawn of the
+  bridge gets them too.
+
+### Two surfaces, one engine
+
+`engines/minimax.engine.mjs` is what runtime discovery sees.
+`src/minimax/acp/driver.ts` is the compiled surface BotFleet imports as
+`clutch/minimax/acp/driver`, and it stays that way until it moves.  They describe
+the same engine and must not drift, so `tests/minimax-plugin.test.ts` asserts they
+agree field by field and behave identically on the env, auth and error paths.
+**Change one, change both.**
+
+### What is verified, and what is not
+
+The plugin is a transcription of the compiled driver's behaviour, and the parity
+test is what backs that claim — it is not a new live ACP handshake.  The engine
+behind it is exercised on the real path by the DeepSeek-profile stack that
+`minimax-headless` shares, and a live turn through `scripts/minimax-acp.sh` is
+what a future revision should re-run before claiming more than this.
+
 ## muse-code
 
 Muse Code is Meta's coding agent.  It is **not** an ACP agent: `muse serve`
