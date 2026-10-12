@@ -34,6 +34,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
+import { CometChatRelay, cometchatConfigFromEnv, createStreamSink, type StreamSink } from "./cometchat-relay.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST = "127.0.0.1";
@@ -231,6 +232,12 @@ async function main(): Promise<void> {
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
   const bridgeEnv = { ...process.env, CLUTCH_RUNTIME_ROOT: ROOT, DSH_PERMISSION_MODE: "danger-full-access" };
+  // CometChat relay is additive: SSE stays the primary transport, and the
+  // relay only runs when the backend is configured AND the caller names a
+  // target. Backend-only key; never leaves this process.
+  const ccConfig = cometchatConfigFromEnv();
+  const ccRelay = ccConfig ? new CometChatRelay(ccConfig, { onLog: log }) : null;
+  if (ccRelay) log("cometchat relay armed");
 
   function bridgeFor(engine: Engine): Bridge {
     let b = bridges.get(engine);
@@ -262,7 +269,14 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "POST" && url.pathname === "/clutch/v1/chat") {
-      let body: { prompt?: unknown; model?: unknown; engine?: unknown; sessionId?: unknown; cwd?: unknown };
+      let body: {
+        prompt?: unknown;
+        model?: unknown;
+        engine?: unknown;
+        sessionId?: unknown;
+        cwd?: unknown;
+        relay?: unknown;
+      };
       try {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
@@ -302,9 +316,30 @@ async function main(): Promise<void> {
 
       const active = session;
       active.busy = true;
+      // Engine diagnostics ride the bridge as [stderr]-prefixed message
+      // chunks (the Shellular-visible contract). On a polished surface they
+      // are working detail, not the answer — route them to `thought` without
+      // dropping anything.
+      const route = (u: AcpUpdate): { event: "message" | "thought"; text: string } => {
+        if (u.kind === "agent_thought_chunk" || u.text.startsWith("[stderr] ")) {
+          return { event: "thought", text: u.text };
+        }
+        return { event: "message", text: u.text };
+      };
+      // Optional CometChat fan-out: {receiver, receiverType} names the
+      // 1:1 or group the agent thread mirrors into.
+      let sink: StreamSink | null = null;
+      if (ccRelay && body.relay && typeof body.relay === "object") {
+        const relay = body.relay as { receiver?: unknown; receiverType?: unknown };
+        if (typeof relay.receiver === "string" && (relay.receiverType === "user" || relay.receiverType === "group")) {
+          sink = createStreamSink(ccRelay, { receiver: relay.receiver, receiverType: relay.receiverType });
+          log(`chat relay session=${chatId} receiverType=${relay.receiverType}`);
+        }
+      }
       active.stream = (u) => {
-        if (u.kind === "agent_message_chunk") sseSend(res, "message", { text: u.text });
-        else sseSend(res, "thought", { text: u.text });
+        const r = route(u);
+        sseSend(res, r.event, { text: r.text });
+        sink?.onUpdate(u.kind, r.text);
       };
       let settled = false;
       const finish = (event: string, data: unknown): void => {
@@ -336,6 +371,14 @@ async function main(): Promise<void> {
         }
         const result = await bridge.prompt(active.bridgeSessionId, prompt);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);
+        if (sink) {
+          try {
+            await sink.onDone();
+          } catch (err) {
+            // Relay failures must not break the SSE transport.
+            log(`chat relay flush failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+          }
+        }
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId });
       } catch (err) {
         log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
