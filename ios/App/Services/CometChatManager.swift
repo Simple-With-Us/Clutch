@@ -90,7 +90,9 @@ public final class CometChatManager {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 15
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw CometChatSetupError.configUnavailable }
+        guard let status = (resp as? HTTPURLResponse)?.statusCode else { throw CometChatSetupError.configUnavailable }
+        if status == 401 { throw CometChatSetupError.tokenRejected }
+        guard status == 200 else { throw CometChatSetupError.configUnavailable }
         let decoded = try JSONDecoder().decode(ChatConfigResponse.self, from: data)
         guard let cc = decoded.cometchat else { throw CometChatSetupError.notConfigured }
         return FetchedConfig(appId: cc.appId, region: cc.region, authKey: cc.authKey, agentUid: cc.agentUid ?? "clutch-agent")
@@ -126,6 +128,17 @@ public final class CometChatManager {
         if CometChat.getLoggedInUser()?.uid == uid {
             myUid = uid
             return
+        }
+        // A reinstall changes the vendor id while the SDK may still hold the
+        // previous session: log that user out before logging this device in.
+        if CometChat.getLoggedInUser() != nil {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                CometChat.logout { _ in
+                    cont.resume()
+                } onError: { _ in
+                    cont.resume()
+                }
+            }
         }
         phase = .signingIn
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -167,6 +180,7 @@ public final class CometChatManager {
 public enum CometChatSetupError: Error, LocalizedError {
     case badHost
     case configUnavailable
+    case tokenRejected
     case notConfigured
     case agentMissing
     case loginFailed(String)
@@ -177,6 +191,8 @@ public enum CometChatSetupError: Error, LocalizedError {
             return "This host has no usable chat address."
         case .configUnavailable:
             return "The Mac did not answer chat-config — is the chat bridge running (pm2 clutch-web)?"
+        case .tokenRejected:
+            return "The Mac rejected this chat token — pair again to refresh it."
         case .notConfigured:
             return "CometChat is not configured on the Mac yet."
         case .agentMissing:
