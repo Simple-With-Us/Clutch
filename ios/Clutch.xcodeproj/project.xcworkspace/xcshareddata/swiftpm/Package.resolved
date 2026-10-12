@@ -1,5 +1,5 @@
 {
-  "originHash" : "63c66b7d07a196da0ef53da4a39ea59d7fba4f0690a90b79ac7ec5feaf6dfccc",
+  "originHash" : "300c3b2812a50c04c6e26aae93a657000e952d3cb5fbc0ee1f58f0ff2dd394b0",
   "pins" : [
     {
       "identity" : "activityindicatorview",
@@ -20,12 +20,39 @@
       }
     },
     {
+      "identity" : "cards-sdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cometchat/cards-sdk-ios.git",
+      "state" : {
+        "revision" : "b55bfe5d67dfc41aa4fedc604f866c76ecd78ce4",
+        "version" : "1.2.0"
+      }
+    },
+    {
       "identity" : "chat",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/exyte/Chat.git",
       "state" : {
         "revision" : "49bf1f37606e60a44972fa72f2693b62236b7c57",
         "version" : "3.3.7"
+      }
+    },
+    {
+      "identity" : "chat-sdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cometchat/chat-sdk-ios.git",
+      "state" : {
+        "revision" : "a83dbf73eff84ddfb69d87505bf9e1e12c70e2b8",
+        "version" : "4.1.10"
+      }
+    },
+    {
+      "identity" : "cometchat-uikit-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/cometchat/cometchat-uikit-ios.git",
+      "state" : {
+        "revision" : "eeff8ec54d40cd355092f2e105058973e2aaa2e0",
+        "version" : "5.2.3"
       }
     },
     {

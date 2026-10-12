@@ -117,12 +117,13 @@ describe("start-web trusted hosts", () => {
 });
 
 describe("iOS app schemes and packages", () => {
-  it("registers clutch and minimax schemes with ExyteChat", () => {
+  it("registers clutch and minimax schemes with CometChat", () => {
     const projectYml = readFileSync(join(ROOT, "ios", "project.yml"), "utf8");
     expect(projectYml).toMatch(/- clutch$/m);
     expect(projectYml).toMatch(/- minimax$/m);
     expect(projectYml).not.toMatch(/- harness$/m); // retired-name
-    expect(projectYml).toContain("ExyteChat");
+    expect(projectYml).toContain("CometChatUIKitSwift");
+    expect(projectYml).not.toContain("ExyteChat"); // cut over to the CometChat tab
     expect(projectYml).toContain("ITSAppUsesNonExemptEncryption: false");
   });
 });
