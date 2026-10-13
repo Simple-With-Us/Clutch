@@ -56,6 +56,7 @@ CMD_INSTALL="${CLUTCH_AUTO_UPDATE_INSTALL_CMD:-}"
 CMD_SYNC="${CLUTCH_AUTO_UPDATE_SYNC_CMD:-}"
 CMD_SMOKE="${CLUTCH_AUTO_UPDATE_SMOKE_CMD:-}"
 CMD_DOCK="${CLUTCH_AUTO_UPDATE_DOCK_CMD:-}"
+CMD_FETCH_MAC="${CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD:-}"
 CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 
 # Paths whose change means the running web server must be restarted, and paths
@@ -83,7 +84,17 @@ do_sync() {
 do_smoke() {
   if [ -n "$CMD_SMOKE" ]; then bash -c "$CMD_SMOKE"; else (cd "$RUNTIME" && "$NODE_BIN" node_modules/.bin/dsh --version); fi
 }
+try_fetch_mac_app() {
+  if [ -n "$CMD_FETCH_MAC" ]; then bash -c "$CMD_FETCH_MAC"; return $?; fi
+  if [ -z "$NEW" ]; then return 1; fi
+  if ! bash "$RUNTIME/scripts/fetch-ci-mac-app.sh" "$NEW" "$HOME/Applications/Clutch.app" >/dev/null 2>&1; then
+    return 1
+  fi
+  open -a "$HOME/Applications/Clutch.app" >/dev/null 2>&1 || true
+  return 0
+}
 do_dock() {
+  if try_fetch_mac_app; then return 0; fi
   if [ -n "$CMD_DOCK" ]; then bash -c "$CMD_DOCK"; else (cd "$RUNTIME" && bash scripts/install-dock-app.sh); fi
 }
 do_restart() {
@@ -191,9 +202,19 @@ main() {
   fi
 
   # Tracked changes only; the runtime clone is never reset, cleaned or stashed.
+  # Mode-only drift (npm ci chmod on package.json bin entries) must not block updates.
   if [ -n "$(rgit status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-    log "SKIP-DIRTY  $RUNTIME has tracked changes; not moving ${OLD:0:7} -> ${NEW:0:7}"
-    exit 0
+    if rgit diff 2>/dev/null | grep -qE '^[+-][^+]'; then
+      log "SKIP-DIRTY  $RUNTIME has tracked content changes; not moving ${OLD:0:7} -> ${NEW:0:7}"
+      exit 0
+    fi
+    if rgit diff --cached 2>/dev/null | grep -qE '^[+-][^+]'; then
+      log "SKIP-DIRTY  $RUNTIME has staged content changes; not moving ${OLD:0:7} -> ${NEW:0:7}"
+      exit 0
+    fi
+    log "MODE-NORMALIZE  resetting file-mode-only drift before fast-forward"
+    rgit checkout -- . >/dev/null 2>&1 || true
+    rgit reset --mixed HEAD >/dev/null 2>&1 || true
   fi
 
   CHANGED="$(rgit diff --name-only "$OLD" "$NEW" 2>/dev/null)"
@@ -247,7 +268,7 @@ main() {
     if do_dock; then
       log "DOCK-REBUILT  ~/Applications/Clutch.app relaunched"
     else
-      log "DOCK-FAILED  install-dock-app.sh failed; the Dock app is stale, the web is fine"
+      log "DOCK-FAILED  CI fetch and install-dock-app.sh failed; the Dock app is stale, the web is fine"
     fi
   fi
 

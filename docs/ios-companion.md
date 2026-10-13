@@ -67,6 +67,10 @@ ios/
               HostsSheet.swift, PairingScannerSheet.swift
 ```
 
+## TestFlight Ship (GitHub-hosted)
+
+Merges to `main` that touch `ios/**` trigger `.github/workflows/ios-ship.yml` on the fleet `xcode-27` runner (stable Xcode 27.0).  The workflow loads `APPLE_API_*` and `IOS_CERT_*` from Infisical, installs App Store profiles via the App Store Connect API (`ios/appstore-profiles.json`), archives with manual Release signing, uploads to TestFlight, and publishes mandatory What to Test notes from commit subjects.  Distribution stays internal-testers only.  Bundle `codes.clutch.ios`, Apple ID `6817951255`.
+
 ## Building and Testing
 
 ```bash

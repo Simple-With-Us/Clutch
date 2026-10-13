@@ -63,6 +63,10 @@ npm test
 
 The command above binds the web interface to your own machine.  The managed `npm run web` entry point in `src/web/` also attempts to configure Tailscale Serve for remote access; review its host settings before using it.  Shell wrappers live under `scripts/`.  Clutch keeps its engine state in `~/.clutch/dsh` and serves on port 3180, so vanilla `dsh` (state in `~/.dsh`, web on 3080) runs alongside it untouched.
 
+## Hosted iOS And Mac Builds
+
+GitHub Actions on `xcode-27` runners build the iOS TestFlight ship (`.github/workflows/ios-ship.yml`) and the Dock `Clutch.app` bundle (`.github/workflows/mac-app-build.yml`).  Signing material is loaded from Infisical at run time.  The Mac auto-updater installs `Clutch.app` from the per-commit GitHub release `mac-<sha>` when present, then falls back to a local rebuild.  See [`docs/ios-companion.md`](docs/ios-companion.md) and [`docs/mac-updaters-and-testflight.md`](docs/mac-updaters-and-testflight.md).
+
 ## Icons
 
 The public catalog uses the plain [Clutch wordmark](assets/clutch-wordmark.svg), without a provider logo.  Older MiniMax and DeepSeek variants remain in `assets/` for existing installations; those variants identify provider-specific artwork rather than the public app identity.

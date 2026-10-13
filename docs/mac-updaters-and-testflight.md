@@ -73,8 +73,10 @@ Each run, in order:
 7. Restart pm2 `clutch-web` when code the running server loads moved, then poll
    `http://127.0.0.1:3180/` until it answers.  A docs-only, tests-only, CI, iOS or image-asset
    advance skips the restart and logs `NO-RESTART`.
-8. Rebuild `~/Applications/Clutch.app` only when `src/web/dock-app/`, `assets/clutch-icon-1024.png`
-   or `install-dock-app.sh` moved.
+8. Install `~/Applications/Clutch.app` from the CI GitHub release `mac-<commit>` when
+   `scripts/fetch-ci-mac-app.sh` finds a matching zip and sha256 manifest; otherwise
+   rebuild locally with `scripts/install-dock-app.sh` when `src/web/dock-app/`,
+   `assets/clutch-icon-1024.png`, or `install-dock-app.sh` moved.
 
 A failure after the fast-forward rolls the checkout back to the previous commit, re-syncs,
 restarts the web if it had already been restarted, and remembers the bad sha.  A broken `main`

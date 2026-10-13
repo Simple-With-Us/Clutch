@@ -176,6 +176,28 @@ describe("auto-update-mac.sh", () => {
     expect(logText().match(/UPDATED/g)?.length ?? 0).toBe(0);
   });
 
+  it("normalizes file-mode-only drift instead of skipping the update", () => {
+    const target = commit("src-index.ts", "export const n = 6;\n", "feat: code");
+    execFileSync("chmod", ["+x", join(runtime, "scripts", "auto-update-mac.sh")]);
+    const { status } = run();
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(logText()).toMatch(/MODE-NORMALIZE|UPDATED/);
+    expect(existsSync(join(markers, "restart"))).toBe(true);
+  });
+
+  it("prefers a CI Mac fetch when the fetch command succeeds", () => {
+    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(existsSync(join(markers, "fetch"))).toBe(true);
+    expect(existsSync(join(markers, "dock"))).toBe(false);
+  });
+
   it("stays out of the way while the pause file exists", () => {
     const before = head();
     commit("src-index.ts", "export const n = 5;\n", "feat: code");

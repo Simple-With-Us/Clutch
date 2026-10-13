@@ -37,6 +37,13 @@ Secrets (placeholders below — Jay fills real values in the Infisical UI; nothi
   `not logged in`, classified as `invalid_credentials`; nothing else crashes. |
 | `COMETCHAT_AUTH_KEY` | secret | — | CometChat Auth Key served to the paired phone via chat-config (dev-grade; server-minted user tokens are the follow-up). |
 | `COMETCHAT_REST_API_KEY` | secret | — | CometChat REST key, backend-only.  The sidecar relay authenticates with it; it never ships in the app. |
+| `APPLE_API_KEY_ID` | secret | — | App Store Connect API key id for GitHub-hosted iOS/Mac ships (org-wide GitHub sync or CI fetch). |
+| `APPLE_API_ISSUER_ID` | secret | — | App Store Connect issuer id for CI ships. |
+| `APPLE_API_KEY_P8_BASE64` | secret | — | Base64 App Store Connect API private key (.p8) for CI ships. |
+| `IOS_CERT_P12_BASE64` | secret | — | iOS Distribution identity (.p12, base64) for TestFlight archive signing. |
+| `IOS_CERT_PASSWORD` | secret | — | Password for `IOS_CERT_P12_BASE64`. |
+| `MAC_CERT_P12_BASE64` | secret | — | Optional Developer ID Application identity for signed `Clutch.app` CI builds. |
+| `MAC_CERT_PASSWORD` | secret | — | Password for `MAC_CERT_P12_BASE64`. |
 
 Env config:
 
