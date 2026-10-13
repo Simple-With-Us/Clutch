@@ -109,7 +109,7 @@ PY
   TEAM_ID="$(/usr/bin/python3 - "$root/ios/project.yml" <<'PY'
 import re, sys
 text = open(sys.argv[1], encoding="utf-8").read()
-m = re.search(r"DEVELOPMENT_TEAM:\\s*(\\S+)", text)
+m = re.search(r"DEVELOPMENT_TEAM:\s*(\S+)", text)
 print(m.group(1) if m else "")
 PY
 )"
