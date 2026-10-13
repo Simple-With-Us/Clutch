@@ -1,0 +1,150 @@
+name: Mac Clutch.app build (GitHub-hosted macOS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/web/dock-app/**'
+      - 'assets/clutch-icon-1024.png'
+      - 'scripts/build-mac-app.sh'
+      - 'scripts/install-dock-app.sh'
+      - '.github/workflows/mac-app-build.yml'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/web/dock-app/**'
+      - 'assets/clutch-icon-1024.png'
+      - 'scripts/build-mac-app.sh'
+      - '.github/workflows/mac-app-build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mac-app-build-clutch
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build + publish Clutch.app
+    if: github.event.repository.fork == false && github.event_name != 'pull_request'
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert stable Xcode (never beta)
+        run: bash scripts/ios-assert-xcode.sh 27.0
+
+      - name: Load Mac signing secrets (optional)
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: >-
+            MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD
+            APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64
+          required: ""
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        env:
+          GH_FALLBACK_MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+
+      - name: Import Developer ID certificate (when present)
+        id: mac_sign
+        run: |
+          if [ -z "${MAC_CERT_P12_BASE64:-}" ]; then
+            echo "sign_mode=adhoc" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MAC_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "${MAC_CERT_PASSWORD:-}" -A \
+            -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+          identity="$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          if [ -z "$identity" ]; then
+            echo "::warning::MAC_CERT_* present but no Developer ID identity found; using ad-hoc signing"
+            echo "sign_mode=adhoc" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "sign_mode=developer-id" >> "$GITHUB_OUTPUT"
+          echo "identity=${identity}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Clutch.app
+        env:
+          CLUTCH_RUNTIME_ROOT: ${{ github.workspace }}
+          CLUTCH_MAC_APP_OUT: ${{ runner.temp }}/Clutch.app
+          CLUTCH_MAC_KILL_RUNNING: "0"
+          CLUTCH_MAC_BUILD_COMMIT: ${{ github.sha }}
+          CLUTCH_MAC_MANIFEST_OUT: ${{ runner.temp }}/clutch-mac-build.json
+          CLUTCH_MAC_SIGN: ${{ steps.mac_sign.outputs.sign_mode }}
+          CLUTCH_MAC_CODESIGN_IDENTITY: ${{ steps.mac_sign.outputs.identity }}
+        run: bash scripts/build-mac-app.sh
+
+      - name: Package zip + manifest
+        id: package
+        run: |
+          app="${RUNNER_TEMP}/Clutch.app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" Clutch-mac-arm64.zip
+          sha256="$(shasum -a 256 Clutch-mac-arm64.zip | awk '{print $1}')"
+          python3 - <<PY
+          import json
+          base = json.load(open("${RUNNER_TEMP}/clutch-mac-build.json"))
+          base.update({
+            "artifact": "Clutch-mac-arm64.zip",
+            "sha256": "${sha256}",
+            "bytes": __import__("os").path.getsize("Clutch-mac-arm64.zip"),
+          })
+          json.dump(base, open("clutch-mac-build.json", "w"), indent=2)
+          PY
+          cat clutch-mac-build.json
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@e4c8b0d2a4f9478b1d163ed3eedfacc982d7dd45 # v2.2.2
+        with:
+          tag_name: mac-${{ github.sha }}
+          name: Clutch Mac ${{ github.sha }}
+          body: CI-built Clutch.app for commit ${{ github.sha }}.
+          files: |
+            Clutch-mac-arm64.zip
+            clutch-mac-build.json
+          make_latest: false
+
+      # Delete the Developer ID keychain after Build/Package/Publish.  An EXIT
+      # trap on the Import step would remove the key before codesign runs.
+      - name: Cleanup Developer ID keychain
+        if: always()
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+          security list-keychains -d user -s login.keychain 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+  pr-build-only:
+    name: Mac app compile (PR)
+    if: github.event_name == 'pull_request' && github.event.repository.fork == false
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash scripts/ios-assert-xcode.sh 27.0
+      - name: Ad-hoc build smoke
+        env:
+          CLUTCH_RUNTIME_ROOT: ${{ github.workspace }}
+          CLUTCH_MAC_APP_OUT: ${{ runner.temp }}/Clutch.app
+          CLUTCH_MAC_KILL_RUNNING: "0"
+          CLUTCH_MAC_SIGN: adhoc
+        run: bash scripts/build-mac-app.sh

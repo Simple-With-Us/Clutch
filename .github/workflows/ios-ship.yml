@@ -1,0 +1,134 @@
+name: iOS TestFlight ship (GitHub-hosted macOS)
+
+# Archive + upload on GitHub-hosted xcode-27 runners.  Fork PRs never run here.
+# Signing + ASC keys come from Infisical prod through .github/actions/infisical-secrets.
+# Internal TestFlight testers only; no standing external-beta sync step.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'assets/clutch-icon-1024.png'
+      - 'scripts/ios-fleet/**'
+      - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-appstore-gm-prepare.sh'
+      - 'scripts/ios-install-appstore-profiles.sh'
+      - 'scripts/ios-xcodegen-post.sh'
+      - 'ios/appstore-profiles.json'
+      - '.github/workflows/ios-ship.yml'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'assets/clutch-icon-1024.png'
+      - 'scripts/ios-fleet/**'
+      - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/build-ios.sh'
+      - '.github/workflows/ios-ship.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ship-clutch
+  cancel-in-progress: false
+
+jobs:
+  ship:
+    name: TestFlight archive + upload
+    if: github.event.repository.fork == false && github.event_name != 'pull_request'
+    runs-on: xcode-27
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ios-fleet
+          key: ios-fleet-clutch-${{ github.run_id }}
+          restore-keys: |
+            ios-fleet-clutch-
+
+      - name: Scheduled ship gate (skip unless iOS code changed)
+        id: gate
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ios-fleet/scheduled-ship-gate.sh" \
+            --event "${{ github.event_name }}" \
+            --path-prefix 'ios/' \
+            --repo-root "$GITHUB_WORKSPACE" \
+            clutch
+
+      - name: Assert stable Xcode (never beta)
+        if: steps.gate.outputs.should_ship == '1'
+        run: |
+          bash scripts/ios-assert-xcode.sh 27.0
+          xcodebuild -version
+          case "$DEVELOPER_DIR" in
+            *[Bb]eta*)
+              echo "::error::DEVELOPER_DIR resolves to a beta Xcode: $DEVELOPER_DIR"
+              exit 1
+              ;;
+          esac
+          if xcodebuild -version | grep -qi beta; then
+            echo "::error::xcodebuild reports a beta Xcode toolchain"
+            exit 1
+          fi
+
+      - name: Install xcodegen
+        if: steps.gate.outputs.should_ship == '1'
+        run: bash scripts/ios-install-xcodegen.sh
+
+      - name: Load Infisical signing secrets
+        if: steps.gate.outputs.should_ship == '1'
+        uses: ./.github/actions/infisical-secrets
+        with:
+          names: >-
+            APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64
+            IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD
+          required: >-
+            APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64
+            IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD
+          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
+          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+
+      - name: Import signing + ASC key
+        if: steps.gate.outputs.should_ship == '1'
+        run: |
+          if [ -z "${APPLE_API_KEY_ID:-}" ]; then
+            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Add the five Apple/iOS signing names to Infisical prod for the Clutch project (or org-wide GitHub sync).  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
+            exit 1
+          fi
+          bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
+
+      - name: Ship Clutch to TestFlight
+        if: steps.gate.outputs.should_ship == '1'
+        env:
+          IOS_TF_RELEASE_NOTES: "1"
+          IOS_MANUAL_SIGN: "1"
+        run: bash scripts/ios-ship-testflight.sh
+
+  pr-build-only:
+    name: iOS archive dry-run (PR)
+    if: github.event_name == 'pull_request' && github.event.repository.fork == false
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Assert stable Xcode (never beta)
+        run: bash scripts/ios-assert-xcode.sh 27.0
+      - name: Install xcodegen
+        run: bash scripts/ios-install-xcodegen.sh
+      - name: Simulator Release compile (unsigned)
+        run: bash scripts/build-ios.sh --simulator --release
