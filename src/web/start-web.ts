@@ -175,6 +175,20 @@ async function main(): Promise<void> {
     });
   }
 
+  // Native-chat SSE sidecar (the iOS Chat tab's transport).  Detached: the
+  // exec below replaces this process, so the bridge must outlive it.
+  // Disable with CLUTCH_CHAT_BRIDGE=0.
+  const CHAT_BRIDGE = join(ROOT, "scripts", "chat-bridge.sh");
+  if (process.env.CLUTCH_CHAT_BRIDGE !== "0" && existsSync(CHAT_BRIDGE)) {
+    const bridge = spawn(CHAT_BRIDGE, [], {
+      stdio: "ignore",
+      detached: true,
+      env: { ...process.env, CLUTCH_WEB_PORT: PORT, CLUTCH_RUNTIME_ROOT: ROOT },
+    });
+    bridge.on("error", () => log("chat-bridge failed to start"));
+    bridge.unref();
+  }
+
   const extraHosts = (process.env.CLUTCH_TRUSTED_HOSTS ?? "").split(",");
   const tailnetHost = await detectTailnetHost();
   if (!tailnetHost && !process.env.CLUTCH_TAILNET_HOST?.trim()) {

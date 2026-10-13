@@ -53,6 +53,23 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertEqual(failure("clutch://pair?name=x"), .missingHost)
         XCTAssertEqual(failure("not a link"), .invalidURL)
     }
+
+    func testChatTokenAndPortRideThePairingLink() throws {
+        var comps = URLComponents(string: "clutch://pair")!
+        comps.queryItems = [
+            URLQueryItem(name: "url", value: "https://mac.example.ts.net:3180/?token=abc123"),
+            URLQueryItem(name: "chat", value: "bridge-token-1"),
+            URLQueryItem(name: "chatPort", value: "3911"),
+        ]
+        let p = try payload(comps.url!.absoluteString)
+        XCTAssertEqual(p.launchToken, "abc123")
+        XCTAssertEqual(p.chatToken, "bridge-token-1")
+        XCTAssertEqual(p.chatPort, 3911)
+
+        let plain = try payload("http://127.0.0.1:3180/?token=t0k")
+        XCTAssertNil(plain.chatToken)
+        XCTAssertNil(plain.chatPort)
+    }
 }
 
 final class ClutchHostTests: XCTestCase {
@@ -127,5 +144,39 @@ final class HostStoreTests: XCTestCase {
         XCTAssertEqual(store.activeHost?.id, b.id)
         store.remove(b)
         XCTAssertEqual(store.activeHost?.id, a.id)
+    }
+
+    func testChatTokenPersistsAndRefreshesOnRepair() {
+        let defaults = freshDefaults()
+        let store = HostStore(defaults: defaults)
+        var payload = PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one")
+        payload.chatToken = "chat-one"
+        payload.chatPort = 3911
+        store.pair(payload)
+        XCTAssertEqual(store.activeHost?.chatToken, "chat-one")
+        XCTAssertEqual(store.activeHost?.chatPort, 3911)
+
+        let reloaded = HostStore(defaults: defaults)
+        XCTAssertEqual(reloaded.activeHost?.chatToken, "chat-one")
+        XCTAssertEqual(reloaded.activeHost?.chatPort, 3911)
+
+        var repair = PairingPayload(name: "Other", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "two")
+        repair.chatToken = "chat-two"
+        store.pair(repair)
+        XCTAssertEqual(store.hosts.count, 1)
+        XCTAssertEqual(store.activeHost?.chatToken, "chat-two")
+        // chatPort absent from the repair link: keep what the host has.
+        XCTAssertEqual(store.activeHost?.chatPort, 3911)
+    }
+
+    func testPreChatArchiveDecodesWithNilChatToken() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","name":"Mac","origin":"http://127.0.0.1:3180","status":"online"}
+        """.data(using: .utf8)!
+        let host = try JSONDecoder().decode(ClutchHost.self, from: json)
+        XCTAssertNil(host.chatToken)
+        XCTAssertNil(host.pendingLaunchToken)
+        XCTAssertEqual(host.chatPort, 3181)
+        XCTAssertEqual(host.status, .online)
     }
 }

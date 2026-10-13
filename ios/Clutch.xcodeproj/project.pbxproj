@@ -7,24 +7,29 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0052618044571AFA352AAC9A /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
+		00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
 		218A167CAF93CB70A5F65247 /* ClutchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8350E05ABC320489DC29C0A9 /* ClutchApp.swift */; };
 		55E24ED085686E3D6A023806 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF818C703EEECD904E31711 /* PairingLink.swift */; };
 		628E3D79A9B8F51033F2CB91 /* FleetRecallModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */; };
 		65DECF7B2DB76309C90D681C /* ToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 247231E22BE670FBB01C6F92 /* ToolCallCard.swift */; };
 		751A309BD6DEB2F47A3201E3 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011331E126F79B28AE6B1DCE /* TranscriptionService.swift */; };
-		76AC1AF46032BE331A737E2D /* ExyteChat in Frameworks */ = {isa = PBXBuildFile; productRef = 347FBBEB344B2DD260B726E6 /* ExyteChat */; };
+		76AC1AF46032BE331A737E2D /* CometChatUIKitSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 875C4D75EA892C6C14AD66AE /* CometChatUIKitSwift */; };
 		7B7CE37DB68A99719369B7F0 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938B47BD908994DA59A18C0A /* ChatMessage.swift */; };
 		7EDF428C0E84FDBFAB3169B1 /* PairingScannerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE1DEE0EB576AE69F2FF385 /* PairingScannerSheet.swift */; };
+		7F1FF6945B3A976706D9500F /* CometChatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C182639A35D271331937928A /* CometChatManager.swift */; };
 		8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C15309992AC78E4D5B956FF9 /* PairingTests.swift */; };
 		81F0EDE56AE496487CCA777A /* ClutchWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */; };
 		85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E7D46B34D86B23A894C85E /* ClutchHost.swift */; };
 		8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02A9B289B8BED2D4AAE1B82 /* RootView.swift */; };
 		9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
+		A59D345A83DB671C1521BC9B /* ClutchChatTabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */; };
 		AA78155B7698D43FE8EEFB66 /* ReasoningBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FFB9EDC8C959000A3E5DBD6 /* ReasoningBlockView.swift */; };
 		AF2BFF1ABDEF5AA3823510E4 /* FleetRecallClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */; };
 		C98833B27EF97136742BC786 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81457A11AE35E90469E20EF /* ChatView.swift */; };
 		D35803D4079F3EC28C017679 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
+		D6A5EBB32B06C0592DAC02C0 /* AgentMessagesVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */; };
 		E9F5DFB8FB8CE7F7CA2F35FD /* HostProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC4915BE0E639FD34ED398C /* HostProbe.swift */; };
 		F099CF13CA15891061291F00 /* HostsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */; };
 		F5F6B101BB12D696F5684113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D88017536E50AA8E88A5F36 /* Assets.xcassets */; };
@@ -56,9 +61,11 @@
 		16E7D46B34D86B23A894C85E /* ClutchHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchHost.swift; sourceTree = "<group>"; };
 		247231E22BE670FBB01C6F92 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
 		24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
+		26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanelTests.swift; sourceTree = "<group>"; };
 		370F89587447F8A4277926BD /* FleetRecallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallView.swift; sourceTree = "<group>"; };
 		3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchWebView.swift; sourceTree = "<group>"; };
 		439E15B2D5F4DF1892811FA9 /* Clutch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Clutch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchChatTabUITests.swift; sourceTree = "<group>"; };
 		5012BBC94214678DC340E084 /* ClutchUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClutchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5FBD64006BA01FD566745EB8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallClient.swift; sourceTree = "<group>"; };
@@ -66,11 +73,14 @@
 		7FFB9EDC8C959000A3E5DBD6 /* ReasoningBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningBlockView.swift; sourceTree = "<group>"; };
 		8350E05ABC320489DC29C0A9 /* ClutchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchApp.swift; sourceTree = "<group>"; };
 		8FE1DEE0EB576AE69F2FF385 /* PairingScannerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerSheet.swift; sourceTree = "<group>"; };
+		9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionClient.swift; sourceTree = "<group>"; };
 		938B47BD908994DA59A18C0A /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		963E835EDD8B4295E51E3747 /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
 		9AC4915BE0E639FD34ED398C /* HostProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProbe.swift; sourceTree = "<group>"; };
 		AD8D5DA5717C010FE84631A3 /* ClutchLiveUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchLiveUITests.swift; sourceTree = "<group>"; };
 		C15309992AC78E4D5B956FF9 /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
+		C182639A35D271331937928A /* CometChatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CometChatManager.swift; sourceTree = "<group>"; };
+		D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMessagesVC.swift; sourceTree = "<group>"; };
 		E02A9B289B8BED2D4AAE1B82 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		F4F1BE6B000B196114EDE880 /* ClutchTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClutchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F81457A11AE35E90469E20EF /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -83,7 +93,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				76AC1AF46032BE331A737E2D /* ExyteChat in Frameworks */,
+				76AC1AF46032BE331A737E2D /* CometChatUIKitSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -93,6 +103,7 @@
 		5612A184DE47308F2B9DE506 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */,
 				C15309992AC78E4D5B956FF9 /* PairingTests.swift */,
 			);
 			path = Tests;
@@ -113,6 +124,7 @@
 		778544268889611F48963986 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
+				487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */,
 				AD8D5DA5717C010FE84631A3 /* ClutchLiveUITests.swift */,
 			);
 			path = UITests;
@@ -121,6 +133,8 @@
 		7836463DA2F0A84913D802BF /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */,
+				C182639A35D271331937928A /* CometChatManager.swift */,
 				6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */,
 				9AC4915BE0E639FD34ED398C /* HostProbe.swift */,
 				F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */,
@@ -171,6 +185,7 @@
 			isa = PBXGroup;
 			children = (
 				83D1E3934ED2E7E1ED010A12 /* Components */,
+				D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */,
 				F81457A11AE35E90469E20EF /* ChatView.swift */,
 				3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */,
 				370F89587447F8A4277926BD /* FleetRecallView.swift */,
@@ -211,7 +226,7 @@
 			);
 			name = Clutch;
 			packageProductDependencies = (
-				347FBBEB344B2DD260B726E6 /* ExyteChat */,
+				875C4D75EA892C6C14AD66AE /* CometChatUIKitSwift */,
 			);
 			productName = Clutch;
 			productReference = 439E15B2D5F4DF1892811FA9 /* Clutch.app */;
@@ -287,7 +302,7 @@
 			mainGroup = 64CA0CD56C0F488E9AA6CFD9;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				FD83D70A6378AE5CF3F12FF9 /* XCRemoteSwiftPackageReference "Chat" */,
+				C5F7D3733FC9FCCFECF4593C /* XCRemoteSwiftPackageReference "cometchat-uikit-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A6AFC4D525BCBA262C151018 /* Products */;
@@ -318,11 +333,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D6A5EBB32B06C0592DAC02C0 /* AgentMessagesVC.swift in Sources */,
 				7B7CE37DB68A99719369B7F0 /* ChatMessage.swift in Sources */,
+				0052618044571AFA352AAC9A /* ChatSessionClient.swift in Sources */,
 				C98833B27EF97136742BC786 /* ChatView.swift in Sources */,
 				218A167CAF93CB70A5F65247 /* ClutchApp.swift in Sources */,
 				85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */,
 				81F0EDE56AE496487CCA777A /* ClutchWebView.swift in Sources */,
+				7F1FF6945B3A976706D9500F /* CometChatManager.swift in Sources */,
 				AF2BFF1ABDEF5AA3823510E4 /* FleetRecallClient.swift in Sources */,
 				628E3D79A9B8F51033F2CB91 /* FleetRecallModels.swift in Sources */,
 				9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */,
@@ -343,6 +361,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A59D345A83DB671C1521BC9B /* ClutchChatTabUITests.swift in Sources */,
 				F8CEB50DE839DC101732FD8A /* ClutchLiveUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -351,6 +370,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */,
 				8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -666,21 +686,21 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		FD83D70A6378AE5CF3F12FF9 /* XCRemoteSwiftPackageReference "Chat" */ = {
+		C5F7D3733FC9FCCFECF4593C /* XCRemoteSwiftPackageReference "cometchat-uikit-ios" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/exyte/Chat.git";
+			repositoryURL = "https://github.com/cometchat/cometchat-uikit-ios.git";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 3.3.7;
+				minimumVersion = 5.2.3;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		347FBBEB344B2DD260B726E6 /* ExyteChat */ = {
+		875C4D75EA892C6C14AD66AE /* CometChatUIKitSwift */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = FD83D70A6378AE5CF3F12FF9 /* XCRemoteSwiftPackageReference "Chat" */;
-			productName = ExyteChat;
+			package = C5F7D3733FC9FCCFECF4593C /* XCRemoteSwiftPackageReference "cometchat-uikit-ios" */;
+			productName = CometChatUIKitSwift;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

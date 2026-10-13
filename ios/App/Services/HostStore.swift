@@ -38,6 +38,8 @@ public final class HostStore {
     public func pair(_ payload: PairingPayload) -> ClutchHost {
         if let index = hosts.firstIndex(where: { $0.isSameOrigin(payload.origin) }) {
             if let token = payload.launchToken { hosts[index].pendingLaunchToken = token }
+            if let chat = payload.chatToken { hosts[index].chatToken = chat }
+            if let port = payload.chatPort { hosts[index].chatPort = port }
             activeHostID = hosts[index].id
             loadGeneration += 1
             save()

@@ -14,9 +14,9 @@ settings:
     ASSETCATALOG_FILTER_FOR_THINNING: false
     ENABLE_ASSET_THINNING: false
 packages:
-  ExyteChat:
-    url: https://github.com/exyte/Chat.git
-    from: 3.3.7
+  CometChatUIKitSwift:
+    url: https://github.com/cometchat/cometchat-uikit-ios.git
+    from: 5.2.3
 targets:
   Clutch:
     type: application
@@ -26,8 +26,8 @@ targets:
       - path: Resources
       - path: Assets.xcassets
     dependencies:
-      - package: ExyteChat
-        product: ExyteChat
+      - package: CometChatUIKitSwift
+        product: CometChatUIKitSwift
     settings:
       base:
         PRODUCT_NAME: Clutch

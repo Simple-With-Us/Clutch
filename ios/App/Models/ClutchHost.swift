@@ -39,6 +39,11 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     /// The launch token from the pairing link.  Cleared once clutch web has
     /// exchanged it for its signed cookie, so it is never kept longer than needed.
     public var pendingLaunchToken: String?
+    /// The chat-bridge auth token (`Bearer` on `/clutch/v1/chat`).  Long-lived
+    /// and refreshed on re-pair — unlike the launch token it is kept.
+    public var chatToken: String?
+    /// The sidecar's port on the same host.  3181 is the shipped default.
+    public var chatPort: Int
     public var status: HostStatus
     public var lastChecked: Date?
 
@@ -47,6 +52,8 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         name: String,
         origin: URL,
         pendingLaunchToken: String? = nil,
+        chatToken: String? = nil,
+        chatPort: Int = 3181,
         status: HostStatus = .unknown,
         lastChecked: Date? = nil
     ) {
@@ -54,12 +61,44 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         self.name = name
         self.origin = origin
         self.pendingLaunchToken = pendingLaunchToken
+        self.chatToken = chatToken
+        self.chatPort = chatPort
         self.status = status
         self.lastChecked = lastChecked
     }
 
+    // MARK: - Codable (chatToken/chatPort decode to defaults from pre-chat archives)
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, origin, pendingLaunchToken, chatToken, chatPort, status, lastChecked
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        origin = try c.decode(URL.self, forKey: .origin)
+        pendingLaunchToken = try c.decodeIfPresent(String.self, forKey: .pendingLaunchToken)
+        chatToken = try c.decodeIfPresent(String.self, forKey: .chatToken)
+        chatPort = try c.decodeIfPresent(Int.self, forKey: .chatPort) ?? 3181
+        status = try c.decodeIfPresent(HostStatus.self, forKey: .status) ?? .unknown
+        lastChecked = try c.decodeIfPresent(Date.self, forKey: .lastChecked)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(origin, forKey: .origin)
+        try c.encodeIfPresent(pendingLaunchToken, forKey: .pendingLaunchToken)
+        try c.encodeIfPresent(chatToken, forKey: .chatToken)
+        try c.encode(chatPort, forKey: .chatPort)
+        try c.encode(status, forKey: .status)
+        try c.encodeIfPresent(lastChecked, forKey: .lastChecked)
+    }
+
     public init(pairing: PairingPayload) {
-        self.init(name: pairing.name, origin: pairing.origin, pendingLaunchToken: pairing.launchToken)
+        self.init(name: pairing.name, origin: pairing.origin, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
     }
 
     /// `host[:port]` for display.

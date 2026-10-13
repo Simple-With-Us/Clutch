@@ -9,6 +9,13 @@ public struct PairingPayload: Equatable {
     public var name: String
     public var origin: URL
     public var launchToken: String?
+    /// The chat-bridge auth token (`&chat=`), minted by the SSE sidecar and
+    /// renewed on re-pair. Unlike the launch token it is long-lived: the
+    /// native Chat tab sends it as `Bearer` on every `/clutch/v1/chat` call.
+    public var chatToken: String?
+    /// The sidecar's port (`&chatPort=`). Nil means "keep what the host has"
+    /// (3181 for a fresh pairing).
+    public var chatPort: Int?
 }
 
 public enum PairingLinkError: Error, Equatable {
@@ -76,7 +83,7 @@ public enum PairingLink {
         let name = value("name") ?? (isMiniMax ? "MiniMax Remote" : nil)
 
         if let inner = value("url") {
-            return parseWebURL(inner, name: name)
+            return parseWebURL(inner, name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init))
         }
 
         guard let host = value("host", "h") else { return .failure(.missingHost) }
@@ -89,10 +96,10 @@ public enum PairingLink {
         origin.host = host
         origin.port = port
         guard let url = origin.url else { return .failure(.invalidURL) }
-        return build(origin: url, token: value("token", "t"), name: name)
+        return build(origin: url, token: value("token", "t"), name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init))
     }
 
-    private static func parseWebURL(_ raw: String, name: String?) -> Result<PairingPayload, PairingLinkError> {
+    private static func parseWebURL(_ raw: String, name: String?, chatToken: String? = nil, chatPort: Int? = nil) -> Result<PairingPayload, PairingLinkError> {
         guard let comps = URLComponents(string: raw),
               let scheme = comps.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
@@ -105,7 +112,7 @@ public enum PairingLink {
         origin.port = comps.port
         guard let url = origin.url else { return .failure(.invalidURL) }
         let token = comps.queryItems?.first(where: { $0.name == "token" })?.value
-        return build(origin: url, token: token, name: name)
+        return build(origin: url, token: token, name: name, chatToken: chatToken, chatPort: chatPort)
     }
 
     private static func parseBareAddress(_ raw: String) -> Result<PairingPayload, PairingLinkError> {
@@ -116,12 +123,17 @@ public enum PairingLink {
         return parseWebURL("\(scheme)://\(withPort)", name: nil)
     }
 
-    private static func build(origin: URL, token: String?, name: String?) -> Result<PairingPayload, PairingLinkError> {
-        let cleanedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func build(origin: URL, token: String?, name: String?, chatToken: String? = nil, chatPort: Int? = nil) -> Result<PairingPayload, PairingLinkError> {
+        func cleaned(_ raw: String?) -> String? {
+            let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty == false) ? t : nil
+        }
         return .success(PairingPayload(
             name: (name?.isEmpty == false ? name! : defaultName(for: origin)),
             origin: origin,
-            launchToken: (cleanedToken?.isEmpty == false) ? cleanedToken : nil
+            launchToken: cleaned(token),
+            chatToken: cleaned(chatToken),
+            chatPort: chatPort
         ))
     }
 

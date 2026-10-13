@@ -35,6 +35,8 @@ Secrets (placeholders below — Jay fills real values in the Infisical UI; nothi
   Read by the spawned `muse serve` host, which cannot read a login-keychain OAuth credential, so a
   browser login alone leaves headless spawns unauthenticated.  Missing = Muse Code turns fail with
   `not logged in`, classified as `invalid_credentials`; nothing else crashes. |
+| `COMETCHAT_AUTH_KEY` | secret | — | CometChat Auth Key served to the paired phone via chat-config (dev-grade; server-minted user tokens are the follow-up). |
+| `COMETCHAT_REST_API_KEY` | secret | — | CometChat REST key, backend-only.  The sidecar relay authenticates with it; it never ships in the app. |
 
 Env config:
 
@@ -49,6 +51,9 @@ Env config:
 | `CLUTCH_TAILNET_HOST` | config | — | Override for the detected Tailscale MagicDNS name |
 | `CLUTCH_TAILNET_IPV4` | config | — | Optional Tailscale IPv4 trusted for /api |
 | `CLUTCH_TRUSTED_HOSTS` | config | — | Extra comma-separated trusted Host values for /api |
+| `COMETCHAT_APP_ID` | config | — | CometChat App ID (native chat coordinates) |
+| `COMETCHAT_REGION` | config | — | CometChat region (us, eu, or in) |
+| `COMETCHAT_AGENT_UID` | config | `clutch-agent` | Agent user uid the relay speaks on behalf of |
 
 Knobs:
 

@@ -1,67 +1,31 @@
 {
-  "originHash" : "63c66b7d07a196da0ef53da4a39ea59d7fba4f0690a90b79ac7ec5feaf6dfccc",
+  "originHash" : "84196e4f11c2439893d10e5c1773074e22eb2c59e93dc70480b7b6336a12efc0",
   "pins" : [
     {
-      "identity" : "activityindicatorview",
+      "identity" : "cards-sdk-ios",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/exyte/ActivityIndicatorView.git",
+      "location" : "https://github.com/cometchat/cards-sdk-ios.git",
       "state" : {
-        "revision" : "41f89372c018decaf965e8dddeb6e5347741beb4",
-        "version" : "2.0.2"
+        "revision" : "b55bfe5d67dfc41aa4fedc604f866c76ecd78ce4",
+        "version" : "1.2.0"
       }
     },
     {
-      "identity" : "anchoredpopup",
+      "identity" : "chat-sdk-ios",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/exyte/AnchoredPopup.git",
+      "location" : "https://github.com/cometchat/chat-sdk-ios.git",
       "state" : {
-        "revision" : "38fb24117f24df91bb79f1d63c8992678456c646",
-        "version" : "1.2.3"
+        "revision" : "a83dbf73eff84ddfb69d87505bf9e1e12c70e2b8",
+        "version" : "4.1.10"
       }
     },
     {
-      "identity" : "chat",
+      "identity" : "cometchat-uikit-ios",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/exyte/Chat.git",
+      "location" : "https://github.com/cometchat/cometchat-uikit-ios.git",
       "state" : {
-        "revision" : "49bf1f37606e60a44972fa72f2693b62236b7c57",
-        "version" : "3.3.7"
-      }
-    },
-    {
-      "identity" : "giphy-ios-sdk",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Giphy/giphy-ios-sdk",
-      "state" : {
-        "revision" : "37f5b1ff6cf8bc4a78c0bc5eb1b814381bac9580",
-        "version" : "2.2.16"
-      }
-    },
-    {
-      "identity" : "kingfisher",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/onevcat/Kingfisher",
-      "state" : {
-        "revision" : "8648fe649c5d62be38721110f835821906e9242a",
-        "version" : "8.13.0"
-      }
-    },
-    {
-      "identity" : "libwebp-xcode",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/SDWebImage/libwebp-Xcode",
-      "state" : {
-        "revision" : "2b5256c29ff4e20f2a0d5ee863b62b1a22144434",
-        "version" : "1.6.0"
-      }
-    },
-    {
-      "identity" : "mediapicker",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/exyte/MediaPicker.git",
-      "state" : {
-        "revision" : "96dc0e21adaa9266bbb5698052c7ddfd22f69f0c",
-        "version" : "3.4.6"
+        "revision" : "eeff8ec54d40cd355092f2e105058973e2aaa2e0",
+        "version" : "5.2.3"
       }
     }
   ],

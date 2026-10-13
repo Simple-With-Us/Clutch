@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   initClutchSettings,
   CLUTCH_SETTINGS_SCHEMA,
@@ -93,6 +96,14 @@ describe("clutchSettings", () => {
     expect(isSecretSetting("MINIMAX_API_KEY")).toBe(true);
     expect(isSecretSetting("DEEPSEEK_API_KEY")).toBe(true);
     expect(isSecretSetting("CLUTCH_WEB_PORT")).toBe(false);
+  });
+
+  it("bash backfill list matches the schema exactly", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const sh = readFileSync(join(root, "scripts", "lib", "clutch-infisical-env.sh"), "utf8");
+    const m = /^CLUTCH_MANAGED_KEYS="([^"]*)"/m.exec(sh);
+    expect(m?.[1]).toBeTruthy();
+    expect(new Set(m?.[1]?.split(" "))).toEqual(new Set(MANAGED_KEYS));
   });
 
   it("seeds from process.env with a loud warning when Infisical is unconfigured", async () => {
