@@ -38,7 +38,9 @@ export function cometchatConfigFromEnv(
   const appId = cleanEnvValue(env.COMETCHAT_APP_ID);
   const region = cleanEnvValue(env.COMETCHAT_REGION);
   const restApiKey = cleanEnvValue(env.COMETCHAT_REST_API_KEY);
-  const agentUid = cleanEnvValue(env.COMETCHAT_AGENT_UID);
+  // The agent identity defaults like chat-config: the handoff only carries
+  // dashboard credentials, not the uid the backend speaks on behalf of.
+  const agentUid = cleanEnvValue(env.COMETCHAT_AGENT_UID) || "clutch-agent";
   if (!appId || !region || !restApiKey || !agentUid) return null;
   return { appId, region, restApiKey, agentUid };
 }
@@ -84,11 +86,15 @@ async function rest(
   return (await res.json()) as { id?: unknown } & Record<string, unknown>;
 }
 
-function messageIdOf(result: { id?: unknown }, what: string): string {
-  if (typeof result.id !== "string" && typeof result.id !== "number") {
+function messageIdOf(result: { id?: unknown; data?: unknown }, what: string): string {
+  // Creates return {data: {id}} with no top-level id (probe-verified
+  // against the live API); accept both shapes.
+  const data = (result.data ?? {}) as { id?: unknown };
+  const raw = result.id ?? data.id;
+  if (typeof raw !== "string" && typeof raw !== "number") {
     throw new Error(`cometchat ${what} returned no id`);
   }
-  return String(result.id);
+  return String(raw);
 }
 
 export class CometChatRelay {

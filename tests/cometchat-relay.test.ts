@@ -51,6 +51,13 @@ describe("cometchatConfigFromEnv", () => {
         COMETCHAT_AGENT_UID: '"a"',
       }),
     ).toEqual({ appId: "1", region: "us", restApiKey: "k", agentUid: "a" });
+    expect(
+      cometchatConfigFromEnv({
+        COMETCHAT_APP_ID: '"1"',
+        COMETCHAT_REGION: '"us"',
+        COMETCHAT_REST_API_KEY: '"k"',
+      }),
+    ).toEqual({ appId: "1", region: "us", restApiKey: "k", agentUid: "clutch-agent" });
   });
 });
 
@@ -69,8 +76,14 @@ describe("CometChatRelay", () => {
     expect(calls[1]).toMatchObject({ method: "PUT", path: "/v3/messages/41" });
   });
 
-  it("sends tool cards as interactive payloads", async () => {
-    const calls: { method: string; path: string; body: unknown }[] = [];
+  it("accepts the live create shape with the id under data", async () => {
+    const relay = new CometChatRelay(config, {
+      fetchFn: (async () => ({ ok: true, status: 200, json: async () => ({ data: { id: "abc" } }) })) as typeof fetch,
+    });
+    await expect(relay.sendText({ receiver: "u", receiverType: "user" }, "x")).resolves.toBe("abc");
+  });
+
+  it("sends tool cards as interactive payloads", async () => {    const calls: { method: string; path: string; body: unknown }[] = [];
     const relay = new CometChatRelay(config, { fetchFn: mockFetch(calls, 9) });
     const id = await relay.sendToolCard(
       { receiver: "user-1", receiverType: "user" },
