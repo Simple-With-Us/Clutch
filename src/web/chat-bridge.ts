@@ -7,13 +7,15 @@
  *
  *   POST /clutch/v1/chat    {prompt, model?, sessionId?, cwd?} → SSE stream
  *   GET  /clutch/v1/health  liveness + advertised models
+ *   GET  /clutch/v1/sessions?engine=mcode → MiniMax Code's own threads
+ *   POST /clutch/v1/sessions/load          → replay one mcode thread
  *
  * SSE events: `message` {text}, `thought` {text}, `done`
  * {stopReason, sessionId}.  Each turn runs a real coding session through
  * the existing Python ACP bridges (DeepSeek via `scripts/dsh-acp.sh`,
- * MiniMax via `scripts/minimax-acp.sh`), so the phone gets the same tool
- * loop, workspace files, and sessions as the desktop — never a plain
- * cloud-chat downgrade.
+ * MiniMax via `scripts/minimax-acp.sh`).  The MiniMax Code Remote is a
+ * separate direct `mcode acp` client so its existing native threads remain
+ * visible and resumable.  None of these paths is a plain cloud-chat downgrade.
  *
  * Security, mirroring `start-web.sh`:
  * - Binds 127.0.0.1 only.  Tailnet clients arrive through
@@ -35,6 +37,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { clutchChatPort } from "../shared/ports.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, type StreamSink } from "./cometchat-relay.ts";
+import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST = "127.0.0.1";
@@ -42,14 +45,28 @@ const PORT = Number(clutchChatPort());
 const CLUTCH_HOME = process.env.CLUTCH_HOME ?? join(homedir(), ".clutch");
 const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
 
-type Engine = "deepseek" | "minimax";
+type Engine = "deepseek" | "minimax" | "mcode";
 
-const LAUNCHERS: Record<Engine, string> = {
+interface Launcher {
+  command: string;
+  args: string[];
+}
+
+const defaultMcode = [
+  join(homedir(), ".local", "bin", "mcode"),
+  join(homedir(), ".minimax-code", "bin", "mcode"),
+].find(existsSync) ?? "mcode";
+const mcodeLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MCODE?.trim();
+
+const LAUNCHERS: Record<Engine, Launcher> = {
   // CLUTCH_CHAT_LAUNCHER_<ENGINE> overrides exist for the full-loop test,
   // which points the engines at a stub script. Production always uses the
   // shipped launchers below.
-  deepseek: process.env.CLUTCH_CHAT_LAUNCHER_DEEPSEEK?.trim() || join(ROOT, "scripts", "dsh-acp.sh"),
-  minimax: process.env.CLUTCH_CHAT_LAUNCHER_MINIMAX?.trim() || join(ROOT, "scripts", "minimax-acp.sh"),
+  deepseek: { command: process.env.CLUTCH_CHAT_LAUNCHER_DEEPSEEK?.trim() || join(ROOT, "scripts", "dsh-acp.sh"), args: [] },
+  minimax: { command: process.env.CLUTCH_CHAT_LAUNCHER_MINIMAX?.trim() || join(ROOT, "scripts", "minimax-acp.sh"), args: [] },
+  mcode: mcodeLauncherOverride
+    ? { command: mcodeLauncherOverride, args: [] }
+    : { command: process.env.CLUTCH_MCODE_CLI?.trim() || defaultMcode, args: ["acp"] },
 };
 
 function log(line: string): void {
@@ -58,7 +75,7 @@ function log(line: string): void {
 
 /** Route a model id to its engine. Unknown prefixes default to DeepSeek. */
 export function routeForModel(model: string | undefined, engine: string | undefined): Engine {
-  if (engine === "minimax" || engine === "deepseek") return engine;
+  if (engine === "minimax" || engine === "deepseek" || engine === "mcode") return engine;
   if (typeof model === "string" && /^minimax/i.test(model.trim())) return "minimax";
   return "deepseek";
 }
@@ -108,16 +125,32 @@ function bearerOk(req: IncomingMessage, token: string): boolean {
 
 interface AcpUpdate {
   sessionId: string;
-  kind: "agent_message_chunk" | "agent_thought_chunk";
+  kind: "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk";
   text: string;
+}
+
+interface AcpSessionInfo {
+  sessionId: string;
+  cwd?: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+class BridgeProcessError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeProcessError";
+  }
 }
 
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 class Bridge {
   private child: ChildProcess | null = null;
+  private initialized: Promise<unknown> | null = null;
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private onUpdate: ((u: AcpUpdate) => void) | null = null;
+  private onProcessFailure: (() => void) | null = null;
   private buffer = "";
 
   constructor(
@@ -129,23 +162,47 @@ class Bridge {
     this.onUpdate = fn;
   }
 
+  setProcessFailureHandler(fn: () => void): void {
+    this.onProcessFailure = fn;
+  }
+
   private spawn(): void {
     const launcher = LAUNCHERS[this.engine];
-    if (!existsSync(launcher)) throw new Error(`missing launcher ${launcher}`);
-    this.child = spawn(launcher, [], { stdio: ["pipe", "pipe", "inherit"], env: this.env });
-    this.child.stdout?.setEncoding("utf8");
-    this.child.stdout?.on("data", (chunk: string) => this.feed(chunk));
+    if (launcher.command.includes("/") && !existsSync(launcher.command)) {
+      throw new Error(`missing launcher ${launcher.command}`);
+    }
+    const child = spawn(launcher.command, launcher.args, { stdio: ["pipe", "pipe", "inherit"], env: this.env });
+    this.child = child;
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      if (this.child === child) this.feed(chunk);
+    });
+    child.stdin?.on("error", (err) => {
+      this.resetChild(child, new BridgeProcessError(`bridge stdin failed: ${err.message}`));
+    });
+    child.on("error", (err) => {
+      this.resetChild(child, new BridgeProcessError(`bridge failed: ${err.message}`));
+    });
     // `close` fires only once stdio has drained, so every buffered chunk is fed
     // before the reset below; `exit` would let trailing stdout repopulate the
     // buffer and frame the next spawn onto a fragment of this child.
-    this.child.on("close", () => {
-      this.child = null;
-      // Drop any partial line left by a mid-line crash; the next spawn starts
-      // fresh instead of framing new stdout onto the old fragment.
-      this.buffer = "";
-      for (const [, p] of this.pending) p.reject(new Error("bridge exited"));
-      this.pending.clear();
+    child.on("close", () => {
+      this.resetChild(child, new BridgeProcessError("bridge exited"));
     });
+  }
+
+  private resetChild(child: ChildProcess, error: BridgeProcessError): void {
+    // An `error` event is normally followed by `close`.  Guard by identity so
+    // that delayed cleanup from the failed child cannot tear down its replacement.
+    if (this.child !== child) return;
+    this.child = null;
+    this.initialized = null;
+    // Drop any partial line left by a mid-line crash; the next spawn starts
+    // fresh instead of framing new stdout onto the old fragment.
+    this.buffer = "";
+    this.onProcessFailure?.();
+    for (const [, pending] of this.pending) pending.reject(error);
+    this.pending.clear();
   }
 
   private feed(chunk: string): void {
@@ -155,17 +212,37 @@ class Bridge {
       const line = this.buffer.slice(0, nl).trim();
       this.buffer = this.buffer.slice(nl + 1);
       if (!line) continue;
-      let msg: { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } };
+      let msg: { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } };
       try {
         msg = JSON.parse(line) as typeof msg;
       } catch {
+        continue;
+      }
+      if (msg.method === "session/request_permission" && msg.id !== undefined) {
+        const options = Array.isArray(msg.params?.options)
+          ? msg.params.options as Array<{ optionId?: unknown; kind?: unknown }>
+          : [];
+        const choice = options.find((option) => option?.kind === "allow_once")
+          ?? options.find((option) => option?.kind === "reject_once" || option?.kind === "reject_always");
+        const outcome = typeof choice?.optionId === "string"
+          ? { outcome: "selected", optionId: choice.optionId }
+          : { outcome: "cancelled" };
+        this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { outcome } })}\n`);
+        continue;
+      }
+      if (msg.method && msg.id !== undefined) {
+        this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not supported" } })}\n`);
         continue;
       }
       if (msg.method === "session/update") {
         const params = (msg.params ?? {}) as { sessionId?: unknown; update?: { sessionUpdate?: unknown; content?: { text?: unknown } } };
         const kind = params.update?.sessionUpdate;
         const text = params.update?.content?.text;
-        if ((kind === "agent_message_chunk" || kind === "agent_thought_chunk") && typeof text === "string" && typeof params.sessionId === "string") {
+        if (
+          (kind === "agent_message_chunk" || kind === "agent_thought_chunk" || kind === "user_message_chunk")
+          && typeof text === "string"
+          && typeof params.sessionId === "string"
+        ) {
           this.onUpdate?.({ sessionId: params.sessionId, kind, text });
         }
         continue;
@@ -182,20 +259,33 @@ class Bridge {
 
   private send(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (!this.child) this.spawn();
+    const child = this.child;
+    const stdin = child?.stdin;
+    if (!child || !stdin) return Promise.reject(new BridgeProcessError("bridge stdin unavailable"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
+      stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
         if (err) {
-          this.pending.delete(id);
-          reject(err);
+          this.resetChild(child, new BridgeProcessError(`bridge write failed: ${err.message}`));
         }
       });
     });
   }
 
   initialize(): Promise<unknown> {
-    return this.send("initialize", { protocolVersion: 1 });
+    if (!this.initialized) {
+      const initialization = this.send("initialize", {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+      });
+      const tracked = initialization.catch((error) => {
+        if (this.initialized === tracked) this.initialized = null;
+        throw error;
+      });
+      this.initialized = tracked;
+    }
+    return this.initialized;
   }
 
   async newSession(cwd: string): Promise<string> {
@@ -206,8 +296,39 @@ class Bridge {
     return result.sessionId;
   }
 
+  async listSessions(cwd?: string): Promise<AcpSessionInfo[]> {
+    const sessions: AcpSessionInfo[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page += 1) {
+      const result = (await this.send("session/list", {
+        ...(cwd ? { cwd } : {}),
+        ...(cursor ? { cursor } : {}),
+      })) as { sessions?: unknown; nextCursor?: unknown };
+      if (!Array.isArray(result?.sessions)) break;
+      for (const item of result.sessions) {
+        if (!item || typeof item !== "object") continue;
+        const row = item as Record<string, unknown>;
+        if (typeof row.sessionId !== "string" || row.sessionId.length === 0) continue;
+        sessions.push({
+          sessionId: row.sessionId,
+          ...(typeof row.cwd === "string" ? { cwd: row.cwd } : {}),
+          ...(typeof row.title === "string" ? { title: row.title } : {}),
+          ...(typeof row.updatedAt === "string" ? { updatedAt: row.updatedAt } : {}),
+        });
+      }
+      if (typeof result.nextCursor !== "string" || result.nextCursor.length === 0) break;
+      cursor = result.nextCursor;
+    }
+    return sessions;
+  }
+
+  loadSession(sessionId: string, cwd: string): Promise<unknown> {
+    return this.send("session/load", { sessionId, cwd, mcpServers: [] });
+  }
+
   prompt(sessionId: string, text: string): Promise<{ stopReason: string }> {
-    return this.send("session/prompt", { sessionId, prompt: text }) as Promise<{ stopReason: string }>;
+    const prompt = this.engine === "mcode" ? [{ type: "text", text }] : text;
+    return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;
   }
 
   cancel(sessionId: string): void {
@@ -218,6 +339,8 @@ class Bridge {
 interface ChatSession {
   engine: Engine;
   bridgeSessionId: string;
+  resumeSessionId: string | null;
+  cwd: string;
   busy: boolean;
   stream: ((u: AcpUpdate) => void) | null;
 }
@@ -276,6 +399,11 @@ async function main(): Promise<void> {
         const target = [...sessions.values()].find((s) => s.bridgeSessionId === u.sessionId && s.busy);
         target?.stream?.(u);
       });
+      b.setProcessFailureHandler(() => {
+        for (const session of sessions.values()) {
+          if (session.engine === engine) session.bridgeSessionId = "";
+        }
+      });
       bridges.set(engine, b);
     }
     return b;
@@ -287,13 +415,90 @@ async function main(): Promise<void> {
       res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "untrusted host" }));
       return;
     }
+
+    // The shell itself contains no session data.  It receives the boot token
+    // in the URL, removes it from browser history, and uses it only as the
+    // Bearer credential for the protected API below.
+    if (req.method === "GET" && url.pathname === "/minimax-code/") {
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:",
+      }).end(miniMaxCodeRemoteHtml());
+      return;
+    }
     if (!bearerOk(req, token)) {
       res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/health") {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, engines: ["deepseek", "minimax"] }));
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, engines: ["deepseek", "minimax", "mcode"] }));
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/sessions") {
+      if (url.searchParams.get("engine") !== "mcode") {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "session discovery requires engine=mcode" }));
+        return;
+      }
+      try {
+        const bridge = bridgeFor("mcode");
+        await bridge.initialize();
+        const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
+        const listed = await bridge.listSessions(requestedCwd);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: listed }));
+      } catch (err) {
+        log(`mcode list failed message=${(err as Error).message.slice(0, 120)}`);
+        res.writeHead(502, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
+        );
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/clutch/v1/sessions/load") {
+      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      if (body.engine !== "mcode" || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "engine=mcode and sessionId are required" }));
+        return;
+      }
+      const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
+      const chatId = randomBytes(16).toString("hex");
+      const history: AcpUpdate[] = [];
+      const session: ChatSession = {
+        engine: "mcode",
+        bridgeSessionId: body.sessionId,
+        resumeSessionId: body.sessionId,
+        cwd,
+        busy: true,
+        stream: (update) => {
+          if (history.length < 20_000) history.push(update);
+        },
+      };
+      sessions.set(chatId, session);
+      try {
+        const bridge = bridgeFor("mcode");
+        await bridge.initialize();
+        await bridge.loadSession(body.sessionId, cwd);
+        session.busy = false;
+        session.stream = null;
+        res.writeHead(200, { "content-type": "application/json" }).end(
+          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, history }),
+        );
+      } catch (err) {
+        sessions.delete(chatId);
+        log(`mcode load failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+        res.writeHead(502, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
+        );
+      }
       return;
     }
 
@@ -349,7 +554,7 @@ async function main(): Promise<void> {
       let session = chatId ? sessions.get(chatId) : undefined;
       if (!session || session.engine !== engine) {
         chatId = randomBytes(16).toString("hex");
-        session = { engine, bridgeSessionId: "", busy: false, stream: null };
+        session = { engine, bridgeSessionId: "", resumeSessionId: null, cwd, busy: false, stream: null };
         sessions.set(chatId, session);
       }
       if (session.busy) {
@@ -390,7 +595,7 @@ async function main(): Promise<void> {
       active.stream = (u) => {
         const r = route(u);
         sseSend(res, r.event, { text: r.text });
-        sink?.onUpdate(u.kind, r.text);
+        if (u.kind !== "user_message_chunk") sink?.onUpdate(u.kind, r.text);
       };
       let settled = false;
       const finish = (event: string, data: unknown): void => {
@@ -417,7 +622,13 @@ async function main(): Promise<void> {
         const bridge = bridgeFor(engine);
         await bridge.initialize();
         if (!active.bridgeSessionId) {
-          active.bridgeSessionId = await bridge.newSession(cwd);
+          if (engine === "mcode" && active.resumeSessionId) {
+            await bridge.loadSession(active.resumeSessionId, active.cwd);
+            active.bridgeSessionId = active.resumeSessionId;
+          } else {
+            active.bridgeSessionId = await bridge.newSession(cwd);
+            if (engine === "mcode") active.resumeSessionId = active.bridgeSessionId;
+          }
           log(`chat session=${chatId} bridgeSession=${active.bridgeSessionId} cwdChars=${cwd.length}`);
         }
         const result = await bridge.prompt(active.bridgeSessionId, prompt);
@@ -433,10 +644,10 @@ async function main(): Promise<void> {
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId });
       } catch (err) {
         log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
-        // The bridge child may have exited mid-turn, taking its session with
-        // it.  Forget the id so the next turn mints a fresh one instead of
-        // prompting a respawned child with a session it never knew about.
-        active.bridgeSessionId = "";
+        // Only process loss invalidates the child-local session state.  ACP
+        // application errors (rate limits, provider failures) leave the native
+        // thread attached.  A direct mcode session is reloaded after a respawn.
+        if (err instanceof BridgeProcessError) active.bridgeSessionId = "";
         if (sink) {
           try {
             await sink.onDone();

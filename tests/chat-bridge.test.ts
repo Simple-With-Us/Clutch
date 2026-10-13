@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
 import { loadOrMintToken, routeForModel } from "../src/web/chat-bridge.ts";
+import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -25,6 +26,7 @@ describe("routeForModel", () => {
     expect(routeForModel("DeepSeek-V4.1-Pro", undefined)).toBe("deepseek");
     expect(routeForModel(undefined, undefined)).toBe("deepseek");
     expect(routeForModel("DeepSeek-V4.1-Pro", "minimax")).toBe("minimax");
+    expect(routeForModel(undefined, "mcode")).toBe("mcode");
   });
 });
 
@@ -81,5 +83,20 @@ describe("chat-bridge launch wiring", () => {
     expect(sh).toContain("CLUTCH_CHAT_PORT");
     expect(sh).toContain("tailscale serve");
     expect(sh).toContain("src/web/chat-bridge.ts");
+  });
+
+  it("launches MiniMax Code directly over ACP instead of the DSH MiniMax bridge", () => {
+    const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+    expect(source).toContain('join(homedir(), ".minimax-code", "bin", "mcode")');
+    expect(source).toContain('args: ["acp"]');
+    expect(source).toContain("CLUTCH_MCODE_CLI");
+  });
+});
+
+describe("MiniMax Code remote shell", () => {
+  it("emits syntactically valid browser JavaScript", () => {
+    const script = /<script>([\s\S]*)<\/script>/.exec(miniMaxCodeRemoteHtml())?.[1];
+    expect(script).toBeDefined();
+    expect(() => new Function(script ?? "")).not.toThrow();
   });
 });

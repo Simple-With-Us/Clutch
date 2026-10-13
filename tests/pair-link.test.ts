@@ -52,7 +52,7 @@ describe("pairingLink", () => {
 
   it("refuses a launch URL without a token and non-web origins", () => {
     expect(() => pairingLink({ launchUrl: "http://127.0.0.1:3180/", origin: "http://127.0.0.1:3180" })).toThrow(/no token/);
-    expect(() => pairingLink({ launchUrl: launch, origin: "minimax://127.0.0.1:7842" })).toThrow(/http/);
+    expect(() => pairingLink({ launchUrl: launch, origin: "minimax://127.0.0.1:3180" })).toThrow(/http/);
   });
 });
 

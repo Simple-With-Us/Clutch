@@ -102,6 +102,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     COMETCHAT_APP_ID: "loop",
     COMETCHAT_REGION: "us",
     COMETCHAT_AUTH_KEY: "loop-auth-key",
@@ -130,6 +131,68 @@ async function postChat(body: unknown): Promise<{ status: number; text: string }
 }
 
 describe("chat sidecar full loop", () => {
+  it("serves the MiniMax Code remote shell without exposing its token", async () => {
+    const res = await fetch(`http://127.0.0.1:${chatPort}/minimax-code/?token=${CHAT_TOKEN}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("MiniMax Code Remote");
+    expect(html).toContain("/clutch/v1/sessions?engine=mcode");
+    expect(html).not.toContain(CHAT_TOKEN);
+  });
+
+  it("lists, loads, and continues an existing MiniMax Code ACP thread", async () => {
+    const listed = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=mcode`, { headers: chatHeaders() });
+    expect(listed.status).toBe(200);
+    const listBody = (await listed.json()) as { sessions: Array<{ sessionId: string; title: string; cwd: string }> };
+    expect(listBody.sessions).toEqual([
+      expect.objectContaining({ sessionId: "mcode-existing-1", title: "Existing MiniMax thread", cwd: "/tmp/project" }),
+    ]);
+
+    const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "mcode", sessionId: "mcode-existing-1", cwd: "/tmp/project" }),
+    });
+    expect(loaded.status).toBe(200);
+    const loadBody = (await loaded.json()) as {
+      sessionId: string;
+      remoteSessionId: string;
+      history: Array<{ kind: string; text: string }>;
+    };
+    expect(loadBody.remoteSessionId).toBe("mcode-existing-1");
+    expect(loadBody.history).toEqual([
+      expect.objectContaining({ kind: "user_message_chunk", text: "existing question" }),
+      expect.objectContaining({ kind: "agent_message_chunk", text: "existing answer" }),
+    ]);
+
+    const continued = await postChat({
+      engine: "mcode",
+      sessionId: loadBody.sessionId,
+      prompt: "continue the thread",
+      cwd: "/tmp/project",
+    });
+    expect(continued.status).toBe(200);
+    expect(continued.text).toContain("stub-answer");
+    expect(continued.text).toMatch(/event: done[\s\S]*endTurn/);
+
+    const transient = await postChat({
+      engine: "mcode",
+      sessionId: loadBody.sessionId,
+      prompt: "transient-error",
+      cwd: "/tmp/project",
+    });
+    expect(transient.text).toMatch(/event: error[\s\S]*temporary provider failure/);
+
+    const recovered = await postChat({
+      engine: "mcode",
+      sessionId: loadBody.sessionId,
+      prompt: "after-transient",
+      cwd: "/tmp/project",
+    });
+    expect(recovered.text).toContain("stub-answer");
+    expect(recovered.text).not.toContain("loaded thread was detached");
+  }, 60000);
+
   it("serves chat-config with the relay coordinates", async () => {
     const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat-config`, { headers: chatHeaders() });
     expect(res.status).toBe(200);
@@ -200,5 +263,30 @@ describe("chat sidecar full loop", () => {
     });
     expect(status).toBe(200);
     expect(text).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
+  it("reports a missing mcode executable without crashing the sidecar", async () => {
+    const missingPort = await freePort();
+    const dir = mkdtempSync(join(tmpdir(), "chat-missing-mcode-"));
+    const missingTokenFile = join(dir, "chat-token");
+    writeFileSync(missingTokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
+    const env = sidecarEnv(missingTokenFile);
+    env.CLUTCH_CHAT_PORT = String(missingPort);
+    delete env.CLUTCH_CHAT_LAUNCHER_MCODE;
+    env.CLUTCH_MCODE_CLI = "clutch-test-missing-mcode-executable";
+    const missingSidecar = spawn(TSX, [BRIDGE], { env, stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      await waitFor(`http://127.0.0.1:${missingPort}/clutch/v1/health`, { Authorization: `Bearer ${CHAT_TOKEN}` });
+      const sessions = await fetch(`http://127.0.0.1:${missingPort}/clutch/v1/sessions?engine=mcode`, {
+        headers: { Authorization: `Bearer ${CHAT_TOKEN}` },
+      });
+      expect(sessions.status).toBe(502);
+      const health = await fetch(`http://127.0.0.1:${missingPort}/clutch/v1/health`, {
+        headers: { Authorization: `Bearer ${CHAT_TOKEN}` },
+      });
+      expect(health.status).toBe(200);
+    } finally {
+      missingSidecar.kill("SIGKILL");
+    }
   }, 60000);
 });

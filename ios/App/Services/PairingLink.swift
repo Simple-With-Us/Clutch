@@ -87,8 +87,10 @@ public enum PairingLink {
         }
 
         guard let host = value("host", "h") else { return .failure(.missingHost) }
-        let fallbackPort = isMiniMax ? 7842 : defaultPort
-        let port = value("port", "p").flatMap(Int.init) ?? fallbackPort
+        // `minimax://` remains a compatibility alias for old pairing links,
+        // but the retired MiniMax companion port is gone.  Both schemes now
+        // target the Clutch host unless the link names a port explicitly.
+        let port = value("port", "p").flatMap(Int.init) ?? defaultPort
         let tlsRaw = (value("tls") ?? "0").lowercased()
         let useTLS = tlsRaw == "1" || tlsRaw == "true"
         var origin = URLComponents()
