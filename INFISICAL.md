@@ -91,3 +91,20 @@ Auth: universal auth.  Credentials come from `INFISICAL_CLIENT_ID` / `INFISICAL_
 - To rotate a value, an admin edits the key in the Infisical UI (or runs `clutch-settings set`) — running instances pick it up on the next background refresh (≤ 5 minutes) or immediately via `clutch-settings reload` / `SIGHUP`.
 - Rotating the universal-auth client secret itself: update `INFISICAL_CLIENT_SECRET` in the machine's secret store, then restart instances.
 - If a refresh fails, instances log loudly (`[clutch-settings] ...`) and keep serving last-known-good values; fix Infisical-side access and the next interval recovers automatically.
+
+### GitHub-hosted iOS signing sources
+
+`ios-ship.yml` uses `scripts/ios-signing-fetch.mjs` with two explicit prod sources:
+- Fleet-OPS (`8dae6d03-8f12-48b2-adf3-e5c1b881c8c5`), `/asc`: `ASC_KEY_ID`, `ASC_ISSUER_ID`, raw PEM `ASC_KEY_P8`.
+- Clutch (`077fd6f3-9f9b-438e-9b6f-5c69076cf36c`), `/`: `IOS_CERT_P12_BASE64`, `IOS_CERT_PASSWORD`.
+
+The shared key is mapped to `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, and
+`APPLE_API_KEY_P8_BASE64` for the existing signing preparation script. No Apple
+key is copied into Clutch. The CI machine identity must have read access to both
+sources. Repository Actions secrets must provide `INFISICAL_CLIENT_ID` and
+`INFISICAL_CLIENT_SECRET` (the `INFISICAL_UNIVERSAL_AUTH_*` aliases also work).
+Project IDs are non-secret workflow constants rather than encrypted bindings.
+
+Missing CI inputs, authentication/list errors, or missing signing entries fail
+before export. GitHub signing-secret fallbacks and Infisical imports are not used.
+Local regression test: `node --test scripts/ios-signing-fetch.test.mjs`.
