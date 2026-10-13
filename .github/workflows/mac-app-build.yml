@@ -111,7 +111,7 @@ jobs:
           cat clutch-mac-build.json
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@e4c8b0d2a4f9478b1d163ed3eedfacc982d7dd45 # v2.2.2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: mac-${{ github.sha }}
           name: Clutch Mac ${{ github.sha }}
