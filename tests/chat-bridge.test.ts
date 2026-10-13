@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
 import { loadOrMintToken, routeForModel } from "../src/web/chat-bridge.ts";
+import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -89,5 +90,13 @@ describe("chat-bridge launch wiring", () => {
     expect(source).toContain('join(homedir(), ".minimax-code", "bin", "mcode")');
     expect(source).toContain('args: ["acp"]');
     expect(source).toContain("CLUTCH_MCODE_CLI");
+  });
+});
+
+describe("MiniMax Code remote shell", () => {
+  it("emits syntactically valid browser JavaScript", () => {
+    const script = /<script>([\s\S]*)<\/script>/.exec(miniMaxCodeRemoteHtml())?.[1];
+    expect(script).toBeDefined();
+    expect(() => new Function(script ?? "")).not.toThrow();
   });
 });

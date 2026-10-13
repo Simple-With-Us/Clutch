@@ -136,6 +136,13 @@ interface AcpSessionInfo {
   updatedAt?: string;
 }
 
+class BridgeProcessError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeProcessError";
+  }
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 class Bridge {
   private child: ChildProcess | null = null;
@@ -143,6 +150,7 @@ class Bridge {
   private nextId = 1;
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private onUpdate: ((u: AcpUpdate) => void) | null = null;
+  private onProcessFailure: (() => void) | null = null;
   private buffer = "";
 
   constructor(
@@ -154,26 +162,47 @@ class Bridge {
     this.onUpdate = fn;
   }
 
+  setProcessFailureHandler(fn: () => void): void {
+    this.onProcessFailure = fn;
+  }
+
   private spawn(): void {
     const launcher = LAUNCHERS[this.engine];
     if (launcher.command.includes("/") && !existsSync(launcher.command)) {
       throw new Error(`missing launcher ${launcher.command}`);
     }
-    this.child = spawn(launcher.command, launcher.args, { stdio: ["pipe", "pipe", "inherit"], env: this.env });
-    this.child.stdout?.setEncoding("utf8");
-    this.child.stdout?.on("data", (chunk: string) => this.feed(chunk));
+    const child = spawn(launcher.command, launcher.args, { stdio: ["pipe", "pipe", "inherit"], env: this.env });
+    this.child = child;
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      if (this.child === child) this.feed(chunk);
+    });
+    child.stdin?.on("error", (err) => {
+      this.resetChild(child, new BridgeProcessError(`bridge stdin failed: ${err.message}`));
+    });
+    child.on("error", (err) => {
+      this.resetChild(child, new BridgeProcessError(`bridge failed: ${err.message}`));
+    });
     // `close` fires only once stdio has drained, so every buffered chunk is fed
     // before the reset below; `exit` would let trailing stdout repopulate the
     // buffer and frame the next spawn onto a fragment of this child.
-    this.child.on("close", () => {
-      this.child = null;
-      this.initialized = null;
-      // Drop any partial line left by a mid-line crash; the next spawn starts
-      // fresh instead of framing new stdout onto the old fragment.
-      this.buffer = "";
-      for (const [, p] of this.pending) p.reject(new Error("bridge exited"));
-      this.pending.clear();
+    child.on("close", () => {
+      this.resetChild(child, new BridgeProcessError("bridge exited"));
     });
+  }
+
+  private resetChild(child: ChildProcess, error: BridgeProcessError): void {
+    // An `error` event is normally followed by `close`.  Guard by identity so
+    // that delayed cleanup from the failed child cannot tear down its replacement.
+    if (this.child !== child) return;
+    this.child = null;
+    this.initialized = null;
+    // Drop any partial line left by a mid-line crash; the next spawn starts
+    // fresh instead of framing new stdout onto the old fragment.
+    this.buffer = "";
+    this.onProcessFailure?.();
+    for (const [, pending] of this.pending) pending.reject(error);
+    this.pending.clear();
   }
 
   private feed(chunk: string): void {
@@ -230,13 +259,15 @@ class Bridge {
 
   private send(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (!this.child) this.spawn();
+    const child = this.child;
+    const stdin = child?.stdin;
+    if (!child || !stdin) return Promise.reject(new BridgeProcessError("bridge stdin unavailable"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
+      stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`, (err) => {
         if (err) {
-          this.pending.delete(id);
-          reject(err);
+          this.resetChild(child, new BridgeProcessError(`bridge write failed: ${err.message}`));
         }
       });
     });
@@ -244,13 +275,15 @@ class Bridge {
 
   initialize(): Promise<unknown> {
     if (!this.initialized) {
-      this.initialized = this.send("initialize", {
+      const initialization = this.send("initialize", {
         protocolVersion: 1,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
-      }).catch((error) => {
-        this.initialized = null;
+      });
+      const tracked = initialization.catch((error) => {
+        if (this.initialized === tracked) this.initialized = null;
         throw error;
       });
+      this.initialized = tracked;
     }
     return this.initialized;
   }
@@ -306,6 +339,8 @@ class Bridge {
 interface ChatSession {
   engine: Engine;
   bridgeSessionId: string;
+  resumeSessionId: string | null;
+  cwd: string;
   busy: boolean;
   stream: ((u: AcpUpdate) => void) | null;
 }
@@ -363,6 +398,11 @@ async function main(): Promise<void> {
       b.setUpdateHandler((u) => {
         const target = [...sessions.values()].find((s) => s.bridgeSessionId === u.sessionId && s.busy);
         target?.stream?.(u);
+      });
+      b.setProcessFailureHandler(() => {
+        for (const session of sessions.values()) {
+          if (session.engine === engine) session.bridgeSessionId = "";
+        }
       });
       bridges.set(engine, b);
     }
@@ -435,6 +475,8 @@ async function main(): Promise<void> {
       const session: ChatSession = {
         engine: "mcode",
         bridgeSessionId: body.sessionId,
+        resumeSessionId: body.sessionId,
+        cwd,
         busy: true,
         stream: (update) => {
           if (history.length < 20_000) history.push(update);
@@ -512,7 +554,7 @@ async function main(): Promise<void> {
       let session = chatId ? sessions.get(chatId) : undefined;
       if (!session || session.engine !== engine) {
         chatId = randomBytes(16).toString("hex");
-        session = { engine, bridgeSessionId: "", busy: false, stream: null };
+        session = { engine, bridgeSessionId: "", resumeSessionId: null, cwd, busy: false, stream: null };
         sessions.set(chatId, session);
       }
       if (session.busy) {
@@ -580,7 +622,13 @@ async function main(): Promise<void> {
         const bridge = bridgeFor(engine);
         await bridge.initialize();
         if (!active.bridgeSessionId) {
-          active.bridgeSessionId = await bridge.newSession(cwd);
+          if (engine === "mcode" && active.resumeSessionId) {
+            await bridge.loadSession(active.resumeSessionId, active.cwd);
+            active.bridgeSessionId = active.resumeSessionId;
+          } else {
+            active.bridgeSessionId = await bridge.newSession(cwd);
+            if (engine === "mcode") active.resumeSessionId = active.bridgeSessionId;
+          }
           log(`chat session=${chatId} bridgeSession=${active.bridgeSessionId} cwdChars=${cwd.length}`);
         }
         const result = await bridge.prompt(active.bridgeSessionId, prompt);
@@ -596,10 +644,10 @@ async function main(): Promise<void> {
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId });
       } catch (err) {
         log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
-        // The bridge child may have exited mid-turn, taking its session with
-        // it.  Forget the id so the next turn mints a fresh one instead of
-        // prompting a respawned child with a session it never knew about.
-        active.bridgeSessionId = "";
+        // Only process loss invalidates the child-local session state.  ACP
+        // application errors (rate limits, provider failures) leave the native
+        // thread attached.  A direct mcode session is reloaded after a respawn.
+        if (err instanceof BridgeProcessError) active.bridgeSessionId = "";
         if (sink) {
           try {
             await sink.onDone();

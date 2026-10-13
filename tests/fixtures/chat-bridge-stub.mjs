@@ -66,6 +66,17 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", id, result: {} });
   } else if (method === "session/prompt") {
     const sessionId = params?.sessionId ?? "stub-session-1";
+    const promptText = Array.isArray(params?.prompt)
+      ? params.prompt.map((part) => part?.text ?? "").join("")
+      : String(params?.prompt ?? "");
+    if (promptText.includes("transient-error")) {
+      send({ jsonrpc: "2.0", id, error: { message: "temporary provider failure" } });
+      return;
+    }
+    if (promptText.includes("after-transient") && sessionId !== "mcode-existing-1") {
+      send({ jsonrpc: "2.0", id, error: { message: "loaded thread was detached" } });
+      return;
+    }
     if (Array.isArray(params?.prompt)) {
       pendingPermission = { id, sessionId };
       send({

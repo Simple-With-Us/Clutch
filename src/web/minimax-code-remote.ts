@@ -178,7 +178,7 @@ export function miniMaxCodeRemoteHtml(): string {
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           let boundary;
-          while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+          while ((boundary = buffer.indexOf('\\n\\n')) >= 0) {
             const block = buffer.slice(0, boundary);
             buffer = buffer.slice(boundary + 2);
             const event = /^event: (.+)$/m.exec(block)?.[1] || 'message';

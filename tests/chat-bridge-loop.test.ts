@@ -174,6 +174,23 @@ describe("chat sidecar full loop", () => {
     expect(continued.status).toBe(200);
     expect(continued.text).toContain("stub-answer");
     expect(continued.text).toMatch(/event: done[\s\S]*endTurn/);
+
+    const transient = await postChat({
+      engine: "mcode",
+      sessionId: loadBody.sessionId,
+      prompt: "transient-error",
+      cwd: "/tmp/project",
+    });
+    expect(transient.text).toMatch(/event: error[\s\S]*temporary provider failure/);
+
+    const recovered = await postChat({
+      engine: "mcode",
+      sessionId: loadBody.sessionId,
+      prompt: "after-transient",
+      cwd: "/tmp/project",
+    });
+    expect(recovered.text).toContain("stub-answer");
+    expect(recovered.text).not.toContain("loaded thread was detached");
   }, 60000);
 
   it("serves chat-config with the relay coordinates", async () => {
@@ -246,5 +263,30 @@ describe("chat sidecar full loop", () => {
     });
     expect(status).toBe(200);
     expect(text).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
+  it("reports a missing mcode executable without crashing the sidecar", async () => {
+    const missingPort = await freePort();
+    const dir = mkdtempSync(join(tmpdir(), "chat-missing-mcode-"));
+    const missingTokenFile = join(dir, "chat-token");
+    writeFileSync(missingTokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
+    const env = sidecarEnv(missingTokenFile);
+    env.CLUTCH_CHAT_PORT = String(missingPort);
+    delete env.CLUTCH_CHAT_LAUNCHER_MCODE;
+    env.CLUTCH_MCODE_CLI = "clutch-test-missing-mcode-executable";
+    const missingSidecar = spawn(TSX, [BRIDGE], { env, stdio: ["ignore", "pipe", "pipe"] });
+    try {
+      await waitFor(`http://127.0.0.1:${missingPort}/clutch/v1/health`, { Authorization: `Bearer ${CHAT_TOKEN}` });
+      const sessions = await fetch(`http://127.0.0.1:${missingPort}/clutch/v1/sessions?engine=mcode`, {
+        headers: { Authorization: `Bearer ${CHAT_TOKEN}` },
+      });
+      expect(sessions.status).toBe(502);
+      const health = await fetch(`http://127.0.0.1:${missingPort}/clutch/v1/health`, {
+        headers: { Authorization: `Bearer ${CHAT_TOKEN}` },
+      });
+      expect(health.status).toBe(200);
+    } finally {
+      missingSidecar.kill("SIGKILL");
+    }
   }, 60000);
 });
