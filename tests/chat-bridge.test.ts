@@ -25,6 +25,7 @@ describe("routeForModel", () => {
     expect(routeForModel("DeepSeek-V4.1-Pro", undefined)).toBe("deepseek");
     expect(routeForModel(undefined, undefined)).toBe("deepseek");
     expect(routeForModel("DeepSeek-V4.1-Pro", "minimax")).toBe("minimax");
+    expect(routeForModel(undefined, "mcode")).toBe("mcode");
   });
 });
 
@@ -81,5 +82,12 @@ describe("chat-bridge launch wiring", () => {
     expect(sh).toContain("CLUTCH_CHAT_PORT");
     expect(sh).toContain("tailscale serve");
     expect(sh).toContain("src/web/chat-bridge.ts");
+  });
+
+  it("launches MiniMax Code directly over ACP instead of the DSH MiniMax bridge", () => {
+    const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+    expect(source).toContain('join(homedir(), ".minimax-code", "bin", "mcode")');
+    expect(source).toContain('args: ["acp"]');
+    expect(source).toContain("CLUTCH_MCODE_CLI");
   });
 });

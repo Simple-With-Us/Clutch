@@ -102,6 +102,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     COMETCHAT_APP_ID: "loop",
     COMETCHAT_REGION: "us",
     COMETCHAT_AUTH_KEY: "loop-auth-key",
@@ -130,6 +131,51 @@ async function postChat(body: unknown): Promise<{ status: number; text: string }
 }
 
 describe("chat sidecar full loop", () => {
+  it("serves the MiniMax Code remote shell without exposing its token", async () => {
+    const res = await fetch(`http://127.0.0.1:${chatPort}/minimax-code/?token=${CHAT_TOKEN}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("MiniMax Code Remote");
+    expect(html).toContain("/clutch/v1/sessions?engine=mcode");
+    expect(html).not.toContain(CHAT_TOKEN);
+  });
+
+  it("lists, loads, and continues an existing MiniMax Code ACP thread", async () => {
+    const listed = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=mcode`, { headers: chatHeaders() });
+    expect(listed.status).toBe(200);
+    const listBody = (await listed.json()) as { sessions: Array<{ sessionId: string; title: string; cwd: string }> };
+    expect(listBody.sessions).toEqual([
+      expect.objectContaining({ sessionId: "mcode-existing-1", title: "Existing MiniMax thread", cwd: "/tmp/project" }),
+    ]);
+
+    const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "mcode", sessionId: "mcode-existing-1", cwd: "/tmp/project" }),
+    });
+    expect(loaded.status).toBe(200);
+    const loadBody = (await loaded.json()) as {
+      sessionId: string;
+      remoteSessionId: string;
+      history: Array<{ kind: string; text: string }>;
+    };
+    expect(loadBody.remoteSessionId).toBe("mcode-existing-1");
+    expect(loadBody.history).toEqual([
+      expect.objectContaining({ kind: "user_message_chunk", text: "existing question" }),
+      expect.objectContaining({ kind: "agent_message_chunk", text: "existing answer" }),
+    ]);
+
+    const continued = await postChat({
+      engine: "mcode",
+      sessionId: loadBody.sessionId,
+      prompt: "continue the thread",
+      cwd: "/tmp/project",
+    });
+    expect(continued.status).toBe(200);
+    expect(continued.text).toContain("stub-answer");
+    expect(continued.text).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
   it("serves chat-config with the relay coordinates", async () => {
     const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat-config`, { headers: chatHeaders() });
     expect(res.status).toBe(200);

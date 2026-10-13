@@ -41,7 +41,9 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 
 - **`src/dsh/`** — DSH engine layer: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
 - **`src/minimax/`** — The Clutch MiniMax bridge: Shellular MiniMax rides the same `@deepseek-ai/dsh` coding stack as DSH, with MiniMax as the LLM (`minimax-headless` profile).  `bridges/minimax/minimax-acp.py` spawns `dsh --profile minimax-headless` (not a bare chat/completions HTTP call).
-- **`src/web/`** — TypeScript web UI scripts (the `start-web.sh`, `serve-tailscale.sh`, `open-clutch.sh`, `ensure-web.sh`, `install-dock-app.sh` set, ported from bash to TS).
+- **`src/web/`** — TypeScript web UI scripts (the `start-web.sh`, `serve-tailscale.sh`, `open-clutch.sh`, `ensure-web.sh`, `install-dock-app.sh` set, ported from bash to TS).  The macOS Host menu also includes a direct MiniMax Code remote: it launches `mcode acp`, lists the owner's existing MiniMax Code threads through `session/list`, replays a selected thread through `session/load`, and continues it through `session/prompt`.  This is separate from the DSH-backed MiniMax provider profile.
+
+The remote uses the chat sidecar's owner-only Bearer token.  When MiniMax Code asks for tool permission, Clutch selects `allow_once`; it never selects `allow_always` or changes MiniMax Code's persisted permission setting.
 - **`ios/`** — Native iOS companion app (SwiftUI, iOS 17.0+): multi-host computer connections (local Mac, Tailscale, Hetzner, AWS), full-parity embedded web experience, Composio tools, Fleet RAG integration, and model selection for DeepSeek and MiniMax.  See [`docs/ios-companion.md`](docs/ios-companion.md).
 - **`src/profiles/`** — Tracked cordis profile defaults.  Each profile is an independent cordis tree (bundles + empty entry list + patch layer).  Two profiles ship in this repo, one per Shellular agent id: `deepseek-headless` and `minimax-headless`.  Profiles configure plugins, tool permissions, thinking effort, turn budgets, and model selection.
 - **`bridges/`** — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay Python intentionally — see `docs/decisions/0001-bridges-stay-python.md`.
@@ -50,6 +52,8 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 ## Install
 
 Requires Node.js 22 or later and credentials for the provider you intend to use.
+The optional MiniMax Code remote also requires an existing `mcode` installation
+and login; Clutch uses its normal data directory and never copies its credentials.
 
 ```bash
 git clone https://github.com/Simple-With-Us/Clutch.git

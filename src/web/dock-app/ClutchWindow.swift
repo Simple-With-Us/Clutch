@@ -25,7 +25,30 @@ private func clutchHomePath() -> String {
     return (home as NSString).appendingPathComponent(".clutch")
 }
 
+private let miniMaxRemoteModeKey = "codes.clutch.minimax_code_remote"
+
+/// The direct MiniMax Code remote rides Clutch's authenticated chat sidecar.
+/// Its token stays in the owner-only token file; the page immediately removes
+/// the query from browser history and sends it only as a Bearer credential.
+private func miniMaxRemoteURLString() -> String {
+    let env = ProcessInfo.processInfo.environment
+    let port = env["CLUTCH_CHAT_PORT"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "3181"
+    let tokenPath = (clutchHomePath() as NSString).appendingPathComponent("chat-token")
+    let token = (try? String(contentsOfFile: tokenPath, encoding: .utf8))?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    var parts = URLComponents()
+    parts.scheme = "http"
+    parts.host = "127.0.0.1"
+    parts.port = Int(port) ?? 3181
+    parts.path = "/minimax-code/"
+    if !token.isEmpty { parts.queryItems = [URLQueryItem(name: "token", value: token)] }
+    return parts.url?.absoluteString ?? "http://127.0.0.1:3181/minimax-code/"
+}
+
 private var clutchURLString: String {
+    if UserDefaults.standard.bool(forKey: miniMaxRemoteModeKey) {
+        return miniMaxRemoteURLString()
+    }
     if let saved = UserDefaults.standard.string(forKey: "codes.clutch.active_host_url"),
        !saved.isEmpty {
         return saved
@@ -118,6 +141,33 @@ private func ensureServer() async {
     for _ in 0..<20 {
         if await pingClutch() { return }
         try? await Task.sleep(nanoseconds: 400_000_000)
+    }
+}
+
+/// Start the existing on-demand chat sidecar when the always-on Clutch web
+/// process has not already done so.  This does not create a LaunchAgent or a
+/// new pm2 job; the sidecar exits with the Mac session like its normal launch.
+private func ensureMiniMaxRemote() async {
+    func responds() async -> Bool {
+        guard let url = URL(string: miniMaxRemoteURLString()) else { return false }
+        var req = URLRequest(url: url, timeoutInterval: 3)
+        req.httpMethod = "GET"
+        guard let (_, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse else { return false }
+        return (200..<500).contains(http.statusCode)
+    }
+
+    if await responds() { return }
+    let script = NSHomeDirectory() + "/apps/clutch-runtime/scripts/chat-bridge.sh"
+    guard FileManager.default.isExecutableFile(atPath: script) else { return }
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: script)
+    proc.standardOutput = FileHandle.nullDevice
+    proc.standardError = FileHandle.nullDevice
+    do { try proc.run() } catch { return }
+    for _ in 0..<30 {
+        if await responds() { return }
+        try? await Task.sleep(nanoseconds: 200_000_000)
     }
 }
 
@@ -450,28 +500,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     @objc func connectLocalClutch(_ sender: Any?) {
+        UserDefaults.standard.removeObject(forKey: miniMaxRemoteModeKey)
         UserDefaults.standard.removeObject(forKey: "codes.clutch.active_host_url")
         loadClutch()
     }
 
     @objc func connectMiniMaxRemote(_ sender: Any?) {
-        let mmURL = "http://127.0.0.1:7842/"
-        UserDefaults.standard.set(mmURL, forKey: "codes.clutch.active_host_url")
-        loadHost(urlString: mmURL)
+        UserDefaults.standard.set(true, forKey: miniMaxRemoteModeKey)
+        UserDefaults.standard.removeObject(forKey: "codes.clutch.active_host_url")
+        Task { [weak self] in
+            await ensureMiniMaxRemote()
+            await MainActor.run {
+                self?.loadHost(urlString: miniMaxRemoteURLString())
+            }
+        }
     }
 
     @objc func connectCustomHost(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "Connect to Remote Host"
-        alert.informativeText = "Enter the URL of the remote Clutch or MiniMax Code host:"
+        alert.informativeText = "Enter the URL of the remote Clutch host:"
         alert.addButton(withTitle: "Connect")
         alert.addButton(withTitle: "Cancel")
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        input.stringValue = UserDefaults.standard.string(forKey: "codes.clutch.active_host_url") ?? "http://127.0.0.1:7842/"
+        input.stringValue = UserDefaults.standard.string(forKey: "codes.clutch.active_host_url") ?? "http://127.0.0.1:3180/"
         alert.accessoryView = input
         if alert.runModal() == .alertFirstButtonReturn {
             let entered = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if !entered.isEmpty {
+                UserDefaults.standard.removeObject(forKey: miniMaxRemoteModeKey)
                 UserDefaults.standard.set(entered, forKey: "codes.clutch.active_host_url")
                 loadHost(urlString: entered)
             }
@@ -498,15 +555,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return }
         if comps.host == "pair" {
             if let targetURL = comps.queryItems?.first(where: { $0.name == "url" })?.value {
+                UserDefaults.standard.removeObject(forKey: miniMaxRemoteModeKey)
                 UserDefaults.standard.set(targetURL, forKey: "codes.clutch.active_host_url")
                 loadHost(urlString: targetURL)
                 return
             }
             if let h = comps.queryItems?.first(where: { $0.name == "h" || $0.name == "host" })?.value {
-                let p = comps.queryItems?.first(where: { $0.name == "p" || $0.name == "port" })?.value ?? (url.scheme == "minimax" ? "7842" : "3180")
+                let p = comps.queryItems?.first(where: { $0.name == "p" || $0.name == "port" })?.value ?? "3180"
                 let tls = comps.queryItems?.first(where: { $0.name == "tls" })?.value == "1"
                 let scheme = tls ? "https" : "http"
                 let target = "\(scheme)://\(h):\(p)/"
+                UserDefaults.standard.removeObject(forKey: miniMaxRemoteModeKey)
                 UserDefaults.standard.set(target, forKey: "codes.clutch.active_host_url")
                 loadHost(urlString: target)
             }
@@ -547,12 +606,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
-        // Host Menu (Local Clutch vs Remote / MiniMax Code)
+        // Host Menu (local Clutch, direct MiniMax Code ACP, or custom Clutch)
         let hostMenuItem = NSMenuItem()
         let hostMenu = NSMenu(title: "Host")
         let localItem = hostMenu.addItem(withTitle: "Local Clutch (3180)", action: #selector(connectLocalClutch(_:)), keyEquivalent: "1")
         localItem.target = self
-        let mmItem = hostMenu.addItem(withTitle: "MiniMax Code Remote (7842)", action: #selector(connectMiniMaxRemote(_:)), keyEquivalent: "2")
+        let mmItem = hostMenu.addItem(withTitle: "MiniMax Code Remote", action: #selector(connectMiniMaxRemote(_:)), keyEquivalent: "2")
         mmItem.target = self
         hostMenu.addItem(NSMenuItem.separator())
         let customItem = hostMenu.addItem(withTitle: "Connect to Custom Host...", action: #selector(connectCustomHost(_:)), keyEquivalent: "k")
@@ -584,7 +643,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         // first page load raced a server (re)start and failed, reload
         // once the server answers.
         Task { [weak self] in
-            await ensureServer()
+            if UserDefaults.standard.bool(forKey: miniMaxRemoteModeKey) {
+                await ensureMiniMaxRemote()
+            } else {
+                await ensureServer()
+            }
             await MainActor.run {
                 guard let self, self.loadFailed else { return }
                 self.loadClutch()

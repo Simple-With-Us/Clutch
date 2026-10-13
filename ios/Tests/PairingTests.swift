@@ -40,6 +40,12 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertEqual(p.name, "Studio")
     }
 
+    func testLegacyMiniMaxSchemeUsesClutchPort() throws {
+        let p = try payload("minimax://pair?h=studio.local")
+        XCTAssertEqual(p.origin.absoluteString, "http://studio.local:3180")
+        XCTAssertEqual(p.name, "MiniMax Remote")
+    }
+
     func testBareAddressDefaultsPortAndScheme() throws {
         XCTAssertEqual(try payload("127.0.0.1").origin.absoluteString, "http://127.0.0.1:3180")
         XCTAssertEqual(try payload("jay-macbook.boa-roygbiv.ts.net").origin.absoluteString, "https://jay-macbook.boa-roygbiv.ts.net:3180")
