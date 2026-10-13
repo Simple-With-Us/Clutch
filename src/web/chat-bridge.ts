@@ -27,7 +27,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -83,6 +83,11 @@ export function loadOrMintToken(file: string = TOKEN_FILE): string {
   try {
     renameSync(tmp, file);
   } catch {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* tmp may already be gone */
+    }
     /* another process won the rename; fall through to the re-read */
   }
   try {
@@ -130,7 +135,10 @@ class Bridge {
     this.child = spawn(launcher, [], { stdio: ["pipe", "pipe", "inherit"], env: this.env });
     this.child.stdout?.setEncoding("utf8");
     this.child.stdout?.on("data", (chunk: string) => this.feed(chunk));
-    this.child.on("exit", () => {
+    // `close` fires only once stdio has drained, so every buffered chunk is fed
+    // before the reset below; `exit` would let trailing stdout repopulate the
+    // buffer and frame the next spawn onto a fragment of this child.
+    this.child.on("close", () => {
       this.child = null;
       // Drop any partial line left by a mid-line crash; the next spawn starts
       // fresh instead of framing new stdout onto the old fragment.
