@@ -27,7 +27,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -73,8 +73,28 @@ export function loadOrMintToken(file: string = TOKEN_FILE): string {
   }
   mkdirSync(dirname(file), { recursive: true });
   const token = randomBytes(32).toString("hex");
-  writeFileSync(file, `${token}\n`, { mode: 0o600 });
-  return token;
+  // start-web.sh and start-web.ts both spawn the sidecar, so two processes can
+  // reach this mint concurrently.  Write through a temp file and rename so the
+  // token file is only ever swapped atomically, never left half-written; then
+  // re-read so a loser always serves the winner's token rather than the one it
+  // minted and lost the race to overwrite.
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}`;
+  writeFileSync(tmp, `${token}\n`, { mode: 0o600 });
+  try {
+    renameSync(tmp, file);
+  } catch {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* tmp may already be gone */
+    }
+    /* another process won the rename; fall through to the re-read */
+  }
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch {
+    return token;
+  }
 }
 
 function bearerOk(req: IncomingMessage, token: string): boolean {
@@ -115,8 +135,14 @@ class Bridge {
     this.child = spawn(launcher, [], { stdio: ["pipe", "pipe", "inherit"], env: this.env });
     this.child.stdout?.setEncoding("utf8");
     this.child.stdout?.on("data", (chunk: string) => this.feed(chunk));
-    this.child.on("exit", () => {
+    // `close` fires only once stdio has drained, so every buffered chunk is fed
+    // before the reset below; `exit` would let trailing stdout repopulate the
+    // buffer and frame the next spawn onto a fragment of this child.
+    this.child.on("close", () => {
       this.child = null;
+      // Drop any partial line left by a mid-line crash; the next spawn starts
+      // fresh instead of framing new stdout onto the old fragment.
+      this.buffer = "";
       for (const [, p] of this.pending) p.reject(new Error("bridge exited"));
       this.pending.clear();
     });
@@ -356,7 +382,7 @@ async function main(): Promise<void> {
       let sink: StreamSink | null = null;
       if (ccRelay && body.relay && typeof body.relay === "object") {
         const relay = body.relay as { receiver?: unknown; receiverType?: unknown };
-        if (typeof relay.receiver === "string" && (relay.receiverType === "user" || relay.receiverType === "group")) {
+        if (typeof relay.receiver === "string" && relay.receiver.length > 0 && (relay.receiverType === "user" || relay.receiverType === "group")) {
           sink = createStreamSink(ccRelay, { receiver: relay.receiver, receiverType: relay.receiverType });
           log(`chat relay session=${chatId} receiverType=${relay.receiverType}`);
         }
@@ -407,6 +433,17 @@ async function main(): Promise<void> {
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId });
       } catch (err) {
         log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+        // The bridge child may have exited mid-turn, taking its session with
+        // it.  Forget the id so the next turn mints a fresh one instead of
+        // prompting a respawned child with a session it never knew about.
+        active.bridgeSessionId = "";
+        if (sink) {
+          try {
+            await sink.onDone();
+          } catch {
+            /* relay failures must not change the error surfaced to the client */
+          }
+        }
         finish("error", { message: (err as Error).message.slice(0, 300), sessionId: chatId });
       }
       return;
