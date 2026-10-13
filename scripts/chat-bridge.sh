@@ -20,7 +20,7 @@ fi
 
 TSX="$CLUTCH_RUNTIME_ROOT/node_modules/.bin/tsx"
 if [[ ! -x "$TSX" ]]; then
-  echo "chat-bridge: missing $TSX — run npm ci in $CLUTCH_RUNTIME_ROOT" >&2
+  echo "chat-bridge: missing $TSX - run npm ci in $CLUTCH_RUNTIME_ROOT" >&2
   exit 127
 fi
 
