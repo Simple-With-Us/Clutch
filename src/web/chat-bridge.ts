@@ -34,7 +34,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
-import { CometChatRelay, cometchatConfigFromEnv, createStreamSink, type StreamSink } from "./cometchat-relay.ts";
+import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, type StreamSink } from "./cometchat-relay.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST = "127.0.0.1";
@@ -276,10 +276,10 @@ async function main(): Promise<void> {
       // already reached, and the CometChat app coordinates (dev-grade Auth
       // Key for this try; server-minted user tokens are the follow-up).
       // Gated by the chat token like everything else here.
-      const appId = process.env.COMETCHAT_APP_ID?.trim() || null;
-      const region = process.env.COMETCHAT_REGION?.trim() || null;
-      const authKey = process.env.COMETCHAT_AUTH_KEY?.trim() || null;
-      const agentUid = process.env.COMETCHAT_AGENT_UID?.trim() || "clutch-agent";
+      const appId = cleanEnvValue(process.env.COMETCHAT_APP_ID) || null;
+      const region = cleanEnvValue(process.env.COMETCHAT_REGION) || null;
+      const authKey = cleanEnvValue(process.env.COMETCHAT_AUTH_KEY) || null;
+      const agentUid = cleanEnvValue(process.env.COMETCHAT_AGENT_UID) || "clutch-agent";
       res.writeHead(200, { "content-type": "application/json" }).end(
         JSON.stringify({
           ok: true,

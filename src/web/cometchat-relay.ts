@@ -21,13 +21,24 @@ export interface CometChatConfig {
   agentUid: string;
 }
 
+/**
+ * Handoff files quote every value ("KEY=value"); Infisical does not.
+ * Accept both so the same parser serves tests, handoff-fed shells, and
+ * deployed env without ever caring which source a value came from.
+ */
+export function cleanEnvValue(raw: string | undefined): string {
+  const t = (raw ?? "").trim();
+  if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) return t.slice(1, -1).trim();
+  return t;
+}
+
 export function cometchatConfigFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): CometChatConfig | null {
-  const appId = env.COMETCHAT_APP_ID?.trim();
-  const region = env.COMETCHAT_REGION?.trim();
-  const restApiKey = env.COMETCHAT_REST_API_KEY?.trim();
-  const agentUid = env.COMETCHAT_AGENT_UID?.trim();
+  const appId = cleanEnvValue(env.COMETCHAT_APP_ID);
+  const region = cleanEnvValue(env.COMETCHAT_REGION);
+  const restApiKey = cleanEnvValue(env.COMETCHAT_REST_API_KEY);
+  const agentUid = cleanEnvValue(env.COMETCHAT_AGENT_UID);
   if (!appId || !region || !restApiKey || !agentUid) return null;
   return { appId, region, restApiKey, agentUid };
 }

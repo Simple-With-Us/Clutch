@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CometChatRelay,
+  cleanEnvValue,
   cometchatApiBase,
   cometchatConfigFromEnv,
   createStreamSink,
@@ -35,6 +36,21 @@ describe("cometchatConfigFromEnv", () => {
     ).toEqual({ appId: "1", region: "us", restApiKey: "k", agentUid: "a" });
     expect(cometchatConfigFromEnv({ COMETCHAT_APP_ID: "1", COMETCHAT_REGION: "us" })).toBeNull();
     expect(cometchatConfigFromEnv({})).toBeNull();
+  });
+
+  it("accepts double-quoted handoff values", () => {
+    expect(cleanEnvValue('"abc123"')).toBe("abc123");
+    expect(cleanEnvValue('  "us"  ')).toBe("us");
+    expect(cleanEnvValue("plain")).toBe("plain");
+    expect(cleanEnvValue(undefined)).toBe("");
+    expect(
+      cometchatConfigFromEnv({
+        COMETCHAT_APP_ID: '"1"',
+        COMETCHAT_REGION: '"us"',
+        COMETCHAT_REST_API_KEY: '"k"',
+        COMETCHAT_AGENT_UID: '"a"',
+      }),
+    ).toEqual({ appId: "1", region: "us", restApiKey: "k", agentUid: "a" });
   });
 });
 
