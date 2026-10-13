@@ -94,7 +94,7 @@ security import "$P12_PATH" -k "$KC_PATH" -P "$IOS_DIST_P12_PASSWORD" \
 security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KC_PATH" >/dev/null
 security list-keychain -d user -s "$KC_PATH" login.keychain-db
 
-# Identity names only — never dump the p12.
+# Identity names only -- never dump the p12.
 if ! security find-identity -v -p codesigning "$KC_PATH" | grep -q 'Apple Distribution'; then
   die "imported keychain has no Apple Distribution identity"
 fi

@@ -3,11 +3,9 @@
 // same-named GH_FALLBACK_<NAME> step env var, warning when a name stays
 // empty everywhere, and failing only for a name listed in `required`.
 //
-// Runs unmodified on GitHub-hosted macOS, Windows and Linux runners: no CLI
-// install (ios-ship.yml's `brew install infisical/get-cli/infisical` is
-// macOS-only), no dependency (`@infisical/sdk` is in neither package.json
-// nor pnpm-lock.yaml) -- just global `fetch`, which every GitHub runner's
-// Node ships with.
+// Runs on GitHub-hosted macOS, Windows and Linux runners without the
+// Infisical CLI.  Needs `zod` (installed by the composite action before
+// this script runs) plus global `fetch` from the runner Node.
 //
 // Never prints a secret value except as the payload of an `::add-mask::`
 // workflow command, which is the mechanism GitHub uses to scrub it from the
@@ -18,6 +16,19 @@
 import { appendFileSync, realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { z } from "zod";
+
+const LoginResponseSchema = z.object({ accessToken: z.string().min(1) }).passthrough();
+const SecretsResponseSchema = z
+  .object({
+    secrets: z.array(
+      z.object({
+        secretKey: z.string().min(1),
+        secretValue: z.string(),
+      }).passthrough()
+    ),
+  })
+  .passthrough();
 
 function splitNames(raw) {
   return String(raw ?? "")
@@ -44,12 +55,8 @@ export async function loginUniversalAuth({ siteUrl, clientId, clientSecret, fetc
   if (!res.ok) {
     throw new Error(`Infisical login failed: HTTP ${res.status}`);
   }
-  const body = await res.json();
-  const token = body && body.accessToken;
-  if (!token) {
-    throw new Error("Infisical login response carried no accessToken");
-  }
-  return token;
+  const body = LoginResponseSchema.parse(await res.json());
+  return body.accessToken;
 }
 
 /** GET .../api/v3/secrets/raw for the whole path in one call -- returns a
@@ -73,12 +80,10 @@ export async function listSecretsRaw({ siteUrl, token, projectId, environment, s
   if (!res.ok) {
     throw new Error(`Infisical secrets list failed: HTTP ${res.status}`);
   }
-  const body = await res.json();
+  const body = SecretsResponseSchema.parse(await res.json());
   const values = new Map();
-  for (const s of body?.secrets ?? []) {
-    if (s && s.secretKey && s.secretValue) {
-      values.set(s.secretKey, s.secretValue);
-    }
+  for (const s of body.secrets) {
+    values.set(s.secretKey, s.secretValue);
   }
   return values;
 }

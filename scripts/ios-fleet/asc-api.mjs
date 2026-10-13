@@ -3,13 +3,12 @@
  * Minimal App Store Connect API client. No dependencies beyond Node's
  * built-in crypto (ES256 JWT signing) and fetch (Node 18+).
  *
- * Auth: resolves ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH from the first
- * source that is actually present (never prints values):
- *   1. ASC_KEY_* in the environment (DealDex's ios-ship.yml exports these)
- *   2. ~/.secrets/appstore-connect.env (the local-Mac file)
- *   3. APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64
- *      (the names BotFleet's ios-ship.yml exports from Infisical; the p8 is
- *      base64, so it is decoded into a 0600 temp file and removed on exit)
+ * Auth: resolves credentials from the first source that is present
+ * (never prints values):
+ *   1. ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH in the environment
+ *   2. APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64
+ *      (hosted ios-ship / Infisical; p8 is base64, decoded to a 0600 temp
+ *      file and removed on exit)
  *
  * Usage:
  *   node asc-api.mjs GET /v1/apps
@@ -24,22 +23,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, createSign } from "node:crypto";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-
-function loadEnvFile(path) {
-  const text = readFileSync(path, "utf8");
-  const env = {};
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
-  }
-  return env;
-}
 
 function base64url(input) {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -115,17 +101,14 @@ function resolveCredential() {
     if (got) return got;
   }
 
-  // 2) The local-Mac env file.
-  const envPath = join(homedir(), ".secrets", "appstore-connect.env");
-  if (existsSync(envPath)) {
-    const fileEnv = loadEnvFile(envPath);
-    if (fileEnv.ASC_KEY_ID && fileEnv.ASC_ISSUER_ID && fileEnv.ASC_KEY_PATH && existsSync(fileEnv.ASC_KEY_PATH)) {
-      const got = fromFile(fileEnv.ASC_KEY_ID, fileEnv.ASC_ISSUER_ID, fileEnv.ASC_KEY_PATH, envPath);
-      if (got) return got;
-    }
-  }
+  // ~/.secrets/ is handoff-only and must not be read at runtime (fleet Rule 44).
+  // Local-Mac operators set ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH (or
+  // APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64) in their
+  // shell or Infisical env; ship-testflight.sh may source the handoff file
+  // into the process environment before invoking this module.  The hosted
+  // ios-ship runner only has the APPLE_API_* form in $GITHUB_ENV.
 
-  // 3) The APPLE_API_* trio the ship workflow exports from Infisical.
+  // 2) The APPLE_API_* trio the ship workflow exports from Infisical.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
   const issuerId = String(process.env.APPLE_API_ISSUER_ID || "").trim();
   if (keyId && issuerId && process.env.APPLE_API_KEY_P8_BASE64) {
@@ -640,8 +623,7 @@ async function main() {
     console.error(
       "asc-auth: no App Store Connect credential found. Tried, in order:\n" +
       "  1) ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH in the environment\n" +
-      "  2) ~/.secrets/appstore-connect.env\n" +
-      "  3) APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64 in the environment"
+      "  2) APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64 in the environment"
     );
     process.exit(1);
   }
