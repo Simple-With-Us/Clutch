@@ -78,6 +78,11 @@ export const CLUTCH_SETTINGS_SCHEMA: ClutchSettingDef[] = [
   { key: "CLUTCH_TAILNET_IPV4", kind: "config", defaultValue: "", description: "Optional Tailscale IPv4 to trust for /api" },
   { key: "CLUTCH_TRUSTED_HOSTS", kind: "config", defaultValue: "", description: "Extra comma-separated trusted Host values for /api" },
   { key: "CLUTCH_SETTINGS_REFRESH_MS", kind: "knob", defaultValue: "300000", description: "Background settings refresh interval (ms)" },
+  { key: "COMETCHAT_APP_ID", kind: "config", defaultValue: "", description: "CometChat App ID (native chat coordinates)" },
+  { key: "COMETCHAT_REGION", kind: "config", defaultValue: "", description: "CometChat region (us, eu, or in)" },
+  { key: "COMETCHAT_AUTH_KEY", kind: "secret", defaultValue: "", description: "CometChat Auth Key served to the paired phone (dev-grade; server-minted tokens are the follow-up)" },
+  { key: "COMETCHAT_REST_API_KEY", kind: "secret", defaultValue: "", description: "CometChat REST key, backend-only (sidecar relay auth)" },
+  { key: "COMETCHAT_AGENT_UID", kind: "config", defaultValue: "clutch-agent", description: "Agent user uid the relay speaks on behalf of" },
 ];
 
 const SCHEMA_BY_KEY = new Map(CLUTCH_SETTINGS_SCHEMA.map((d) => [d.key, d]));
