@@ -50,6 +50,7 @@ WEB_PORT="${CLUTCH_WEB_PORT:-3180}"
 HEALTH_URL="${CLUTCH_AUTO_UPDATE_HEALTH_URL:-http://127.0.0.1:$WEB_PORT/}"
 HEALTH_ENABLED="${CLUTCH_AUTO_UPDATE_HEALTH:-1}"
 CURL_BIN="${CLUTCH_AUTO_UPDATE_CURL:-/usr/bin/curl}"
+PKILL_BIN="${CLUTCH_AUTO_UPDATE_PKILL:-pkill}"
 
 # Command seams: set to override the real toolchain (the test suite uses this).
 CMD_INSTALL="${CLUTCH_AUTO_UPDATE_INSTALL_CMD:-}"
@@ -90,6 +91,11 @@ try_fetch_mac_app() {
   if ! bash "$RUNTIME/scripts/fetch-ci-mac-app.sh" "$NEW" "$HOME/Applications/Clutch.app" >/dev/null 2>&1; then
     return 1
   fi
+  # Clutch.app sets LSMultipleInstancesProhibited, so `open -a` against a
+  # still-running older instance only reactivates that stale binary instead of
+  # launching what was just installed.  install-dock-app.sh kills through
+  # build-mac-app.sh's CLUTCH_MAC_KILL_RUNNING; the fetch path has to do it too.
+  "$PKILL_BIN" -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
   open -a "$HOME/Applications/Clutch.app" >/dev/null 2>&1 || true
   return 0
 }

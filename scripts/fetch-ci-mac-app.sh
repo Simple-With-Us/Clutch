@@ -23,7 +23,10 @@ else
   AUTH=()
 fi
 
-json="$(curl -fsSL "${AUTH[@]}" "$API" 2>/dev/null)" || json=""
+# Expand AUTH through the ${arr[@]+...} idiom rather than "${AUTH[@]}" directly:
+# under `set -u`, bash older than 4.4 (including macOS's /bin/bash 3.2) treats an
+# empty array expansion as an unbound variable and aborts before the fallback.
+json="$(curl -fsSL ${AUTH[@]+"${AUTH[@]}"} "$API" 2>/dev/null)" || json=""
 if [[ -z "$json" || "$json" == *"Not Found"* ]]; then
   die "no GitHub release for tag ${TAG}"
 fi
@@ -33,8 +36,8 @@ manifest_url="$(python3 -c 'import json,sys; d=json.load(sys.stdin); assets=d.ge
 [[ -n "$zip_url" ]] || die "release ${TAG} has no Clutch-mac-arm64.zip asset"
 [[ -n "$manifest_url" ]] || die "release ${TAG} has no clutch-mac-build.json asset"
 
-curl -fsSL "${AUTH[@]}" -o "$WORKDIR/clutch-mac-build.json" "$manifest_url"
-curl -fsSL "${AUTH[@]}" -o "$WORKDIR/Clutch-mac-arm64.zip" "$zip_url"
+curl -fsSL ${AUTH[@]+"${AUTH[@]}"} -o "$WORKDIR/clutch-mac-build.json" "$manifest_url"
+curl -fsSL ${AUTH[@]+"${AUTH[@]}"} -o "$WORKDIR/Clutch-mac-arm64.zip" "$zip_url"
 
 expected="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$WORKDIR/clutch-mac-build.json")"
 actual="$(shasum -a 256 "$WORKDIR/Clutch-mac-arm64.zip" | awk '{print $1}')"

@@ -38,6 +38,10 @@ git -C "$LIVE" pull --ff-only
 (cd "$LIVE" && npm ci)
 HEAD_SHA="$(git -C "$LIVE" rev-parse HEAD)"
 if bash "$LIVE/scripts/fetch-ci-mac-app.sh" "$HEAD_SHA" "${HOME}/Applications/Clutch.app"; then
+  # Clutch.app sets LSMultipleInstancesProhibited, so `open -a` against a
+  # still-running older instance only reactivates that stale binary.  The local
+  # rebuild path kills via install-dock-app.sh; the CI-fetch path has to as well.
+  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
   open -a "${HOME}/Applications/Clutch.app" >/dev/null 2>&1 || true
   echo "==> Update complete.  Clutch.app installed from CI build ${HEAD_SHA:0:7}."
 else

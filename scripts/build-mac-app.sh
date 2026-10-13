@@ -38,7 +38,12 @@ swiftc -O \
 chmod 755 "$APP/Contents/MacOS/Clutch"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# The notary API key and the notarization zip are written to $RUNNER_TEMP, not
+# to $TMP, so declare them before the trap and remove them on every exit path
+# (notarytool error, SIGTERM, errexit) or the private key outlives the build.
+KEY_PATH="${RUNNER_TEMP:-/tmp}/clutch-notary-key.p8"
+ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
+trap 'rm -rf "$TMP"; rm -f "$KEY_PATH" "$ZIP"' EXIT
 mkdir -p "$TMP/AppIcon.iconset"
 for s in 16 32 128 256 512; do
   sips -z "$s" "$s" "$PNG" --out "$TMP/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
@@ -96,13 +101,18 @@ case "$SIGN_MODE" in
     codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$APP"
     SIGNED_AS="developer-id"
     if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" && -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
-      KEY_PATH="${RUNNER_TEMP:-/tmp}/clutch-notary-key.p8"
       case "$APPLE_API_KEY_P8_BASE64" in
         *BEGIN*) printf '%s\n' "$APPLE_API_KEY_P8_BASE64" > "$KEY_PATH" ;;
         *) printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH" ;;
       esac
       chmod 600 "$KEY_PATH"
-      ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
+      # Guard the decode the same way ios-appstore-gm-prepare.sh does, so a
+      # truncated or wrong base64 export fails here instead of surfacing as
+      # notarytool's opaque "no AuthKey file readable".
+      if ! grep -q "BEGIN " "$KEY_PATH"; then
+        echo "notary key did not decode to a PEM private key" >&2
+        exit 1
+      fi
       ditto -c -k --keepParent "$APP" "$ZIP"
       xcrun notarytool submit "$ZIP" --wait --key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
       xcrun stapler staple "$APP" || true
