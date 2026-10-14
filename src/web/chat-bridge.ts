@@ -6,6 +6,7 @@
  * protocol), so native clients get this thin loopback server instead:
  *
  *   POST /clutch/v1/chat    {prompt, model?, sessionId?, cwd?} → SSE stream
+ *   GET  /clutch/v1/thread?uid=<deviceUid>&limit=<n> → agent thread bubbles
  *   GET  /clutch/v1/health  liveness + advertised models
  *   GET  /clutch/v1/sessions?engine=mcode → MiniMax Code's own threads
  *   POST /clutch/v1/sessions/load          → replay one mcode thread
@@ -36,7 +37,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
-import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, type StreamSink } from "./cometchat-relay.ts";
+import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -78,6 +79,21 @@ export function routeForModel(model: string | undefined, engine: string | undefi
   if (engine === "minimax" || engine === "deepseek" || engine === "mcode") return engine;
   if (typeof model === "string" && /^minimax/i.test(model.trim())) return "minimax";
   return "deepseek";
+}
+
+/**
+ * Validates `GET /clutch/v1/thread` query: which device thread and how many
+ * bubbles. UIDs stay app-scoped slugs so they cannot escape into paths.
+ */
+export function parseThreadQuery(params: URLSearchParams): { uid: string; limit: number } | { error: string } {
+  const uid = params.get("uid") ?? "";
+  if (!isThreadUid(uid)) return { error: "uid is required" };
+  const rawText = (params.get("limit") ?? "").trim();
+  const rawLimit = rawText === "" ? NaN : Number(rawText);
+  const limit = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(Math.trunc(rawLimit), 1), THREAD_MESSAGE_LIMIT_MAX)
+    : THREAD_MESSAGE_LIMIT_DEFAULT;
+  return { uid, limit };
 }
 
 /** Load the Bearer token, minting and persisting it (mode 600) on first boot. */
@@ -502,8 +518,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/clutch/v1/chat-config") {
-      // Everything the native tab needs after pairing: which chat port it
+    if (req.method === "GET" && url.pathname === "/clutch/v1/chat-config") {      // Everything the native tab needs after pairing: which chat port it
       // already reached, and the CometChat app coordinates (dev-grade Auth
       // Key for this try; server-minted user tokens are the follow-up).
       // Gated by the chat token like everything else here.
@@ -521,6 +536,32 @@ async function main(): Promise<void> {
               : null,
         }),
       );
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/thread") {
+      // Agent side of one device thread for native clients that cannot use
+      // the kit SDK (notably the Mac target). Same chat-token gate as
+      // everything else here; the CometChat key never leaves the server.
+      const parsed = parseThreadQuery(url.searchParams);
+      if ("error" in parsed) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: parsed.error }));
+        return;
+      }
+      if (!ccRelay) {
+        res.writeHead(501, { "content-type": "application/json" }).end(JSON.stringify({ error: "chat relay not configured" }));
+        return;
+      }
+      try {
+        const messages = await ccRelay.fetchThread(parsed.uid, parsed.limit);
+        log(`chat thread uidChars=${parsed.uid.length} messages=${messages.length}`);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ messages }));
+      } catch (err) {
+        log(`chat thread failed message=${(err as Error).message.slice(0, 120)}`);
+        res.writeHead(502, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
+        );
+      }
       return;
     }
 

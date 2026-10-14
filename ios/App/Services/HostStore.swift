@@ -122,7 +122,58 @@ public final class HostStore {
         } else {
             activeHostID = hosts.first?.id
         }
+        #if os(macOS)
+        adoptLocalLaunchURL()
+        backfillLocalChatToken()
+        #endif
     }
+
+    #if os(macOS)
+    private func localClutchHome() -> String {
+        if let override = ProcessInfo.processInfo.environment["CLUTCH_HOME"], !override.isEmpty {
+            return override
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clutch").path
+    }
+
+    /// The sidecar's chat-bridge Bearer token (`$CLUTCH_HOME/chat-token`,
+    /// owner-only). The Dock shell already read this file for its remote
+    /// mode, so this is established behavior, not a new privilege.
+    private func localChatToken() -> String? {
+        let path = (localClutchHome() as NSString).appendingPathComponent("chat-token")
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
+    /// On the Mac the server runs on this machine: adopt its launch-URL file
+    /// (`~/.clutch/web-launch-url`, rewritten on every web start) as the
+    /// initial pairing, so first run connects with no paste step — the same
+    /// zero-config behavior the Dock shell had. Only fills an empty store;
+    /// never touches an existing pairing.
+    private func adoptLocalLaunchURL() {
+        guard hosts.isEmpty else { return }
+        let path = (localClutchHome() as NSString).appendingPathComponent("web-launch-url")
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8),
+              case .success(var payload) = PairingLink.parse(raw) else { return }
+        if payload.chatToken == nil { payload.chatToken = localChatToken() }
+        _ = pair(payload)
+    }
+
+    /// Installs paired before the token file was read: attach it to loopback
+    /// hosts that still lack one. Never touches remote (Tailscale) hosts.
+    private func backfillLocalChatToken() {
+        guard let token = localChatToken() else { return }
+        var changed = false
+        for index in hosts.indices where hosts[index].chatToken?.isEmpty ?? true {
+            let host = (hosts[index].origin.host ?? "").lowercased()
+            guard host == "127.0.0.1" || host == "localhost" else { continue }
+            hosts[index].chatToken = token
+            changed = true
+        }
+        if changed { save() }
+    }
+    #endif
 
     private func save() {
         if let data = try? JSONEncoder().encode(hosts) {

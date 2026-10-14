@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { launchToken, pairingLink, tailnetDnsName, trustedHostArgs } from "../src/web/pair-link.ts";
+import { launchToken, minimaxShellUrl, pairingLink, tailnetDnsName, trustedHostArgs } from "../src/web/pair-link.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -53,6 +53,25 @@ describe("pairingLink", () => {
   it("refuses a launch URL without a token and non-web origins", () => {
     expect(() => pairingLink({ launchUrl: "http://127.0.0.1:3180/", origin: "http://127.0.0.1:3180" })).toThrow(/no token/);
     expect(() => pairingLink({ launchUrl: launch, origin: "minimax://127.0.0.1:3180" })).toThrow(/http/);
+  });
+});
+
+describe("minimaxShellUrl", () => {
+  it("points the shell at the sidecar origin with the chat token", () => {
+    expect(minimaxShellUrl({ origin: "https://jay-macbook.boa-roygbiv.ts.net:3181", chatToken: "sekrit" })).toBe(
+      "https://jay-macbook.boa-roygbiv.ts.net:3181/minimax-code/?token=sekrit",
+    );
+  });
+
+  it("refuses non-web origins and a missing token", () => {
+    expect(() => minimaxShellUrl({ origin: "minimax://mac:3181", chatToken: "sekrit" })).toThrow(/http/);
+    expect(() => minimaxShellUrl({ origin: "https://mac.ts.net:3181", chatToken: "" })).toThrow(/chat token/);
+  });
+
+  it("pair-ios mints the shell link through the helper", () => {
+    const source = readFileSync(join(ROOT, "src", "web", "pair-ios.ts"), "utf8");
+    expect(source).toContain("minimaxShellUrl");
+    expect(source).toContain("--shell");
   });
 });
 

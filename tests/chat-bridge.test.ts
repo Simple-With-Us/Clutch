@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { loadOrMintToken, routeForModel } from "../src/web/chat-bridge.ts";
+import { loadOrMintToken, parseThreadQuery, routeForModel } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,5 +98,31 @@ describe("MiniMax Code remote shell", () => {
     const script = /<script>([\s\S]*)<\/script>/.exec(miniMaxCodeRemoteHtml())?.[1];
     expect(script).toBeDefined();
     expect(() => new Function(script ?? "")).not.toThrow();
+  });
+});
+
+describe("parseThreadQuery", () => {
+  const query = (raw: string) => parseThreadQuery(new URL(raw, "http://127.0.0.1:3181").searchParams);
+
+  it("takes the device uid with a bounded limit", () => {
+    expect(query("/clutch/v1/thread?uid=clutch-mac-abcdef12")).toEqual({ uid: "clutch-mac-abcdef12", limit: 50 });
+    expect(query("/clutch/v1/thread?uid=clutch-mac-abcdef12&limit=10")).toEqual({ uid: "clutch-mac-abcdef12", limit: 10 });
+    expect(query("/clutch/v1/thread?uid=clutch-mac-abcdef12&limit=9999")).toEqual({ uid: "clutch-mac-abcdef12", limit: 100 });
+    expect(query("/clutch/v1/thread?uid=clutch-mac-abcdef12&limit=bogus")).toEqual({ uid: "clutch-mac-abcdef12", limit: 50 });
+  });
+
+  it("rejects missing and path-shaped uids", () => {
+    expect(query("/clutch/v1/thread")).toEqual({ error: "uid is required" });
+    expect(query("/clutch/v1/thread?uid=")).toEqual({ error: "uid is required" });
+    expect(query("/clutch/v1/thread?uid=../../etc")).toEqual({ error: "uid is required" });
+  });
+});
+
+describe("thread endpoint wiring", () => {
+  it("registers the gated thread route beside chat-config", () => {
+    const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+    expect(source).toContain('"/clutch/v1/thread"');
+    expect(source).toContain("parseThreadQuery");
+    expect(source).toContain("fetchThread");
   });
 });

@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// Rendered product copy helpers.  Sentences are joined with U+00A0 + space so
 /// the two-space sentence gap survives SwiftUI text layout.
@@ -18,12 +22,15 @@ enum Copy {
 struct PairingActions: View {
     let onPaired: (PairingPayload) -> Void
 
-    @State private var isScanning = false
     @State private var manualEntry = ""
     @State private var errorMessage: String?
+    #if os(iOS)
+    @State private var isScanning = false
+    #endif
 
     var body: some View {
         VStack(spacing: 12) {
+            #if os(iOS)
             Button {
                 isScanning = true
             } label: {
@@ -32,6 +39,7 @@ struct PairingActions: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            #endif
 
             Button {
                 pasteLink()
@@ -44,26 +52,33 @@ struct PairingActions: View {
 
             HStack(spacing: 8) {
                 TextField("Link or address", text: $manualEntry)
+                    #if os(iOS)
                     .textContentType(.URL)
                     .keyboardType(.URL)
                     .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                     .submitLabel(.go)
+                    #endif
+                    .autocorrectionDisabled()
                     .onSubmit(connectManual)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
                 Button("Connect", action: connectManual)
                     .buttonStyle(.bordered)
                     .disabled(manualEntry.trimmingCharacters(in: .whitespaces).isEmpty)
             }
 
-            #if targetEnvironment(simulator)
+            #if targetEnvironment(simulator) || os(macOS)
             Button {
                 accept(.success(PairingPayload(name: "This Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: nil)))
             } label: {
+                #if os(macOS)
+                Label("Use This Mac", systemImage: "laptopcomputer")
+                    .frame(maxWidth: .infinity)
+                #else
                 Label("Use This Mac (Simulator)", systemImage: "laptopcomputer")
                     .frame(maxWidth: .infinity)
+                #endif
             }
             .buttonStyle(.bordered)
             #endif
@@ -76,15 +91,22 @@ struct PairingActions: View {
                     .accessibilityIdentifier("pairing-error")
             }
         }
+        #if os(iOS)
         .sheet(isPresented: $isScanning) {
             PairingScannerSheet { payload in
                 accept(.success(payload))
             }
         }
+        #endif
     }
 
     private func pasteLink() {
-        guard let text = UIPasteboard.general.string, !text.isEmpty else {
+        #if os(iOS)
+        let pasted = UIPasteboard.general.string
+        #else
+        let pasted = NSPasteboard.general.string(forType: .string)
+        #endif
+        guard let text = pasted, !text.isEmpty else {
             errorMessage = Copy.gap("The clipboard is empty.", "Run \(Copy.pairCommand) on your Mac, then try again.")
             return
         }
@@ -159,10 +181,16 @@ struct AppIconBadge: View {
     var body: some View {
         Group {
             if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
-               let image = UIImage(contentsOfFile: url.path) {
+               let image = PlatformImage(contentsOfFile: url.path) {
+                #if os(macOS)
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                #else
                 Image(uiImage: image)
                     .resizable()
                     .interpolation(.high)
+                #endif
             } else {
                 Image(systemName: "h.square.fill")
                     .resizable()
