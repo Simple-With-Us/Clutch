@@ -50,6 +50,7 @@
 		D35803D4079F3EC28C017679 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
 		D6A5EBB32B06C0592DAC02C0 /* AgentMessagesVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */; };
 		DC3DE8AA219F2C002FEF594B /* WebViewMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A76E368570CE2DF1C66B2 /* WebViewMac.swift */; };
+		E4F48DCCDA562332D42BF1DA /* MacThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 188F1EC3FF62EBA8D1681179 /* MacThreadSidebar.swift */; };
 		E9F5DFB8FB8CE7F7CA2F35FD /* HostProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC4915BE0E639FD34ED398C /* HostProbe.swift */; };
 		F099CF13CA15891061291F00 /* HostsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */; };
 		F3480DF81D27F97BDFD2AF2A /* FleetRecallClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */; };
@@ -82,6 +83,7 @@
 		0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallModels.swift; sourceTree = "<group>"; };
 		16E7D46B34D86B23A894C85E /* ClutchHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchHost.swift; sourceTree = "<group>"; };
 		17E6C247D03A5371BC005295 /* Clutch macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Clutch macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		188F1EC3FF62EBA8D1681179 /* MacThreadSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacThreadSidebar.swift; sourceTree = "<group>"; };
 		247231E22BE670FBB01C6F92 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
 		24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
 		26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanelTests.swift; sourceTree = "<group>"; };
@@ -231,6 +233,7 @@
 			children = (
 				FCFC52CD4695F04BEDCB607E /* ChatViewMac.swift */,
 				551BEEA0C0E6FC71B297BB37 /* Info.plist */,
+				188F1EC3FF62EBA8D1681179 /* MacThreadSidebar.swift */,
 				D16A76E368570CE2DF1C66B2 /* WebViewMac.swift */,
 			);
 			path = Mac;
@@ -445,6 +448,7 @@
 				85C2521AA0F970591C34C400 /* HostProbe.swift in Sources */,
 				43DA4D3EC7B1CB3FA3EA5C2F /* HostStore.swift in Sources */,
 				5187B8140B0C71219BBC980C /* HostsSheet.swift in Sources */,
+				E4F48DCCDA562332D42BF1DA /* MacThreadSidebar.swift in Sources */,
 				B358A3BF898C0600BE5DD604 /* PairView.swift in Sources */,
 				A0CE74C52BAAE38076860EDA /* PairingLink.swift in Sources */,
 				9C6347E7BC1CB7B235423A55 /* Platform.swift in Sources */,

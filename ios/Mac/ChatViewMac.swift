@@ -43,6 +43,18 @@ struct AcpSessionInfo: Decodable, Identifiable {
     var title: String?
     var updatedAt: String?
     var id: String { sessionId }
+
+    /// The sidecar sends ISO-8601 with milliseconds and a `Z` suffix; tolerate
+    /// the plain form too so a thread without them still sorts sensibly.
+    static func updatedDate(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: value)
+    }
 }
 
 /// One replayed update from `POST /clutch/v1/sessions/load`.
@@ -87,14 +99,21 @@ struct McodeSessionsClient {
         return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
     }
 
-    func load(sessionId: String) async throws -> (chatId: String, remoteId: String, history: [AcpHistoryEntry]) {
+    /// `cwd` is effectively required: the sidecar falls back to `$HOME` when it
+    /// is absent, and the ACP bridge then refuses any thread whose persisted
+    /// workspace is elsewhere ("Requested cwd does not match the persisted
+    /// session workspace").  Always pass the cwd the session was listed with,
+    /// or every thread outside `$HOME` fails to resume.
+    func load(sessionId: String, cwd: String? = nil) async throws -> (chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
         var comps = try base()
         comps.path = "/clutch/v1/sessions/load"
         guard let url = comps.url else { throw ChatClientError.badHost }
         var req = try authorized(url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["engine": "mcode", "sessionId": sessionId])
+        var body: [String: String] = ["engine": "mcode", "sessionId": sessionId]
+        if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
             throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
@@ -102,12 +121,15 @@ struct McodeSessionsClient {
         struct Payload: Decodable {
             var sessionId: String
             var remoteSessionId: String?
+            var cwd: String?
             var history: [AcpHistoryEntry]?
         }
         guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
             throw ChatClientError.http(200)
         }
-        return (payload.sessionId, payload.remoteSessionId ?? sessionId, payload.history ?? [])
+        // The sidecar does not echo cwd back, so keep the one we asked for:
+        // the pull-to-refresh path needs it to resume this same thread again.
+        return (payload.sessionId, payload.remoteSessionId ?? sessionId, payload.cwd ?? cwd, payload.history ?? [])
     }
 }
 /// Minimal client for `GET /clutch/v1/thread` (see `chat-bridge.ts`). Same
@@ -175,10 +197,15 @@ public struct ChatView: View {
     @State private var localPrompts: [LocalPrompt] = MacChatStore.loadPrompts()
     @State private var mcodeChatId: String?
     @State private var mcodeRemoteId: String?
+    @State private var mcodeCwd: String?
     @State private var mcodeLoaded: [AcpHistoryEntry] = []
     @State private var mcodePending: [LocalPrompt] = []
     @State private var showingSessions = false
-    @State private var sessionsError: String?
+    @State private var showingSidebar = true
+    @State private var sidebarSessions: [AcpSessionInfo] = []
+    @State private var sidebarLoading = false
+    @State private var sidebarError: String?
+    @State private var sidebarLoadingId: String?
     @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
     @State private var draft: String = ""
     @State private var sessionId: String?
@@ -227,45 +254,74 @@ public struct ChatView: View {
 
     public var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                modelStrip
-                Divider()
-                threadSurface
-                if sending, !streamingText.isEmpty {
-                    liveBubble
+            HStack(spacing: 0) {
+                if engine == .mcode && showingSidebar {
+                    MacThreadSidebar(
+                        sessions: sidebarSessions,
+                        selectedId: mcodeRemoteId,
+                        loading: sidebarLoading,
+                        loadingId: sidebarLoadingId,
+                        errorText: sidebarError,
+                        onSelect: { session in openSession(session, fromSidebar: true) },
+                        onNew: { startMcodeThread() },
+                        onRefresh: { Task { await loadSidebarSessions() } }
+                    )
+                    Divider()
                 }
-                if let thought = thoughtLine, !thought.isEmpty {
-                    thoughtRow(thought)
-                }
-                if let error = sendError {
-                    Text(error)
-                        .font(.system(size: 12))
-                        .foregroundColor(.red)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                }
-                MacChatInputBar(
-                    draft: $draft,
-                    sending: sending,
-                    onSend: { send(draft) }
-                )
+                chatPane
             }
             .navigationTitle("Chat")
+            .toolbar {
+                if engine == .mcode {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) { showingSidebar.toggle() }
+                        } label: {
+                            Image(systemName: "sidebar.leading")
+                        }
+                        .help(showingSidebar ? "Hide threads" : "Show threads")
+                    }
+                }
+            }
         }
         .task(id: activeHost?.id) {
             await prepare()
         }
+        .task(id: engine) {
+            if engine == .mcode { await loadSidebarSessions() }
+        }
         .sheet(isPresented: $showingSessions) {
             if let host = activeHost {
-                MacSessionsSheet(host: host) { chatId, remoteId, history in
-                    engine = .mcode
-                    mcodeChatId = chatId
-                    mcodeRemoteId = remoteId
-                    mcodeLoaded = history
-                    mcodePending = []
-                    phase = .ready
+                MacSessionsSheet(host: host) { _, chatId, remoteId, cwd, history in
+                    adopt(chatId: chatId, remoteId: remoteId, cwd: cwd, history: history)
                 }
             }
+        }
+    }
+
+    private var chatPane: some View {
+        VStack(spacing: 0) {
+            modelStrip
+            Divider()
+            threadSurface
+            if sending, !streamingText.isEmpty {
+                liveBubble
+            }
+            if let thought = thoughtLine, !thought.isEmpty {
+                thoughtRow(thought)
+            }
+            if let error = sendError {
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundColor(.red)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+            }
+            MacChatInputBar(
+                draft: $draft,
+                sending: sending,
+                onSend: { send(draft) }
+            )
         }
     }
 
@@ -447,9 +503,76 @@ public struct ChatView: View {
         sessionId = nil
         mcodeChatId = nil
         mcodeRemoteId = nil
+        mcodeCwd = nil
         mcodeLoaded = []
         mcodePending = []
         phase = .ready
+        if !showingSidebar { showingSidebar = true }
+    }
+
+    /// Adopt a freshly loaded MiniMax Code thread into the chat pane.
+    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
+        engine = .mcode
+        resetTurnState()
+        mcodeChatId = chatId
+        mcodeRemoteId = remoteId
+        mcodeCwd = cwd
+        mcodeLoaded = history
+        mcodePending = []
+        phase = .ready
+    }
+
+    /// Resume one thread.  `cwd` must travel with the session id: the sidecar
+    /// defaults a missing cwd to `$HOME`, and the ACP bridge then refuses any
+    /// thread whose persisted workspace is elsewhere.
+    private func openSession(_ session: AcpSessionInfo, fromSidebar: Bool) {
+        guard let host = activeHost else { return }
+        if fromSidebar {
+            sidebarLoadingId = session.sessionId
+            sidebarError = nil
+        }
+        Task {
+            defer { if fromSidebar { sidebarLoadingId = nil } }
+            do {
+                let loaded = try await McodeSessionsClient(host: host).load(
+                    sessionId: session.sessionId,
+                    cwd: session.cwd
+                )
+                adopt(chatId: loaded.chatId, remoteId: loaded.remoteId, cwd: loaded.cwd, history: loaded.history)
+            } catch {
+                if fromSidebar {
+                    sidebarError = mcodeLoadErrorMessage(error, session: session)
+                } else {
+                    sendError = mcodeLoadErrorMessage(error, session: session)
+                }
+            }
+        }
+    }
+
+    private func loadSidebarSessions() async {
+        guard let host = activeHost, engine == .mcode else { return }
+        sidebarLoading = true
+        defer { sidebarLoading = false }
+        do {
+            sidebarSessions = try await McodeSessionsClient(host: host).list()
+            sidebarError = nil
+        } catch {
+            // Keep whatever list we already have; a retry is one click away.
+            if sidebarSessions.isEmpty {
+                sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// The sidecar answers a failed resume with a bare ACP reason, so name the
+    /// thread and say what to try rather than showing a raw params error.
+    private func mcodeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
+        let detail = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        let name = session.title ?? session.sessionId
+        return Copy.gap(
+            "Could not resume \"\(name)\".",
+            "\(detail) Refresh the list, or start a new thread."
+        )
     }
 
     private func resetTurnState() {
@@ -483,8 +606,12 @@ public struct ChatView: View {
         if engine == .mcode {
             guard let remoteId = mcodeRemoteId else { return }
             do {
-                let loaded = try await McodeSessionsClient(host: host).load(sessionId: remoteId)
+                let loaded = try await McodeSessionsClient(host: host).load(
+                    sessionId: remoteId,
+                    cwd: mcodeCwd
+                )
                 mcodeChatId = loaded.chatId
+                mcodeCwd = loaded.cwd
                 mcodeLoaded = loaded.history
                 mcodePending = []
             } catch {
@@ -598,7 +725,8 @@ public struct ChatView: View {
 /// history back to the Chat tab.
 struct MacSessionsSheet: View {
     var host: ClutchHost
-    var onLoaded: (String, String, [AcpHistoryEntry]) -> Void
+    /// Carries the listed session so the resume can send its own `cwd`.
+    var onLoaded: (AcpSessionInfo, String, String, String?, [AcpHistoryEntry]) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var sessions: [AcpSessionInfo]?
@@ -607,43 +735,81 @@ struct MacSessionsSheet: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let sessions {
-                    if sessions.isEmpty {
-                        Text("No MiniMax Code threads yet — start one from the Chat tab.")
+            VStack(spacing: 0) {
+                // The banner sits above the list rather than replacing it: the
+                // old error lived in an else-if branch that a loaded session
+                // list made unreachable, so a failed resume looked like a
+                // click that did nothing at all.
+                if let error, !error.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .font(.system(size: 12))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Button("Retry") {
+                            self.error = nil
+                            Task { await refresh() }
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.12))
+                    Divider()
+                }
+
+                Group {
+                    if let sessions {
+                        if sessions.isEmpty {
+                            Text("No MiniMax Code threads yet — start one from the Chat tab.")
+                                .font(.body)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding()
+                                .frame(maxHeight: .infinity)
+                        } else {
+                            List(sessions) { session in
+                                Button {
+                                    Task { await load(session) }
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(session.title ?? session.sessionId)
+                                                .font(.body.weight(.semibold))
+                                                .lineLimit(1)
+                                            if let cwd = session.cwd {
+                                                Text(cwd)
+                                                    .font(.caption.monospaced())
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
+                                            }
+                                        }
+                                        if loadingId == session.sessionId {
+                                            // Resuming takes several seconds;
+                                            // without this the row just goes dead.
+                                            ProgressView()
+                                                .controlSize(.small)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(loadingId != nil)
+                            }
+                        }
+                    } else if error == nil {
+                        ProgressView("Loading threads…")
+                            .frame(maxHeight: .infinity)
+                    } else {
+                        Text("No threads loaded.")
                             .font(.body)
                             .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                    } else {
-                        List(sessions) { session in
-                            Button {
-                                Task { await load(session) }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(session.title ?? session.sessionId)
-                                        .font(.body.weight(.semibold))
-                                        .lineLimit(1)
-                                    if let cwd = session.cwd {
-                                        Text(cwd)
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                    }
-                                }
-                            }
-                            .disabled(loadingId != nil)
-                        }
+                            .frame(maxHeight: .infinity)
                     }
-                } else if let error {
-                    Text(error)
-                        .font(.body)
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                        .padding()
-                } else {
-                    ProgressView("Loading threads…")
                 }
             }
             .navigationTitle("MiniMax Code Threads")
@@ -660,6 +826,7 @@ struct MacSessionsSheet: View {
     }
 
     private func refresh() async {
+        error = nil
         do {
             sessions = try await McodeSessionsClient(host: host).list()
         } catch {
@@ -669,10 +836,14 @@ struct MacSessionsSheet: View {
 
     private func load(_ session: AcpSessionInfo) async {
         loadingId = session.sessionId
+        error = nil
         defer { loadingId = nil }
         do {
-            let loaded = try await McodeSessionsClient(host: host).load(sessionId: session.sessionId)
-            onLoaded(loaded.chatId, loaded.remoteId, loaded.history)
+            let loaded = try await McodeSessionsClient(host: host).load(
+                sessionId: session.sessionId,
+                cwd: session.cwd
+            )
+            onLoaded(session, loaded.chatId, loaded.remoteId, loaded.cwd, loaded.history)
             dismiss()
         } catch {
             self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
