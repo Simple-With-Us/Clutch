@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: mac-app-build-clutch
@@ -26,9 +27,12 @@ concurrency:
 
 jobs:
   build:
-    name: Build + publish Clutch.app
+    name: Build Clutch.app
     if: github.event.repository.fork == false && github.event_name != 'pull_request'
     runs-on: xcode-27
+    permissions:
+      contents: read
+      actions: write
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
@@ -110,18 +114,20 @@ jobs:
           PY
           cat clutch-mac-build.json
 
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+      # The zip is already compressed.  Level 0 keeps the artifact hop fast
+      # and leaves the bytes the manifest hashed unchanged.
+      - name: Upload release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          tag_name: mac-${{ github.sha }}
-          name: Clutch Mac ${{ github.sha }}
-          body: CI-built Clutch.app for commit ${{ github.sha }}.
-          files: |
+          name: clutch-mac-release
+          path: |
             Clutch-mac-arm64.zip
             clutch-mac-build.json
-          make_latest: false
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
 
-      # Delete the Developer ID keychain after Build/Package/Publish.  An EXIT
+      # Delete the Developer ID keychain after Build/Package/Upload.  An EXIT
       # trap on the Import step would remove the key before codesign runs.
       - name: Cleanup Developer ID keychain
         if: always()
@@ -131,10 +137,65 @@ jobs:
           security list-keychains -d user -s login.keychain 2>/dev/null || true
           rm -f "$RUNNER_TEMP/cert.p12"
 
+  publish:
+    name: Publish GitHub release
+    # action-gh-release v3 declares runs.using node24 and exits at startup when
+    # that Actions runtime is missing.  Publish on a stock GitHub-hosted Ubuntu
+    # runner, the same class CI already uses, instead of the xcode-27 image.
+    # v3.0.2 and later upload the small clutch-mac-build.json manifest.
+    # fail_on_unmatched_files refuses a release the Mac updater cannot verify.
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download Clutch.app release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: clutch-mac-release
+          path: release-assets
+
+      - name: Verify manifest matches zip
+        working-directory: release-assets
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, sys
+          manifest = json.loads(pathlib.Path("clutch-mac-build.json").read_text())
+          zip_path = pathlib.Path("Clutch-mac-arm64.zip")
+          actual = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+          if manifest.get("sha256") != actual:
+              sys.exit(f"sha256 mismatch: manifest {manifest.get('sha256')} zip {actual}")
+          if manifest.get("bytes") != zip_path.stat().st_size:
+              sys.exit(f"byte size mismatch: manifest {manifest.get('bytes')} zip {zip_path.stat().st_size}")
+          if manifest.get("artifact") != zip_path.name:
+              sys.exit(f"unexpected artifact name: {manifest.get('artifact')}")
+          expected_commit = os.environ["GITHUB_SHA"]
+          if manifest.get("commit") != expected_commit:
+              sys.exit(f"manifest commit {manifest.get('commit')} != {expected_commit}")
+          print(f"release assets ok bytes={zip_path.stat().st_size}")
+          PY
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: mac-${{ github.sha }}
+          name: Clutch Mac ${{ github.sha }}
+          body: CI-built Clutch.app for commit ${{ github.sha }}.
+          files: |
+            release-assets/Clutch-mac-arm64.zip
+            release-assets/clutch-mac-build.json
+          fail_on_unmatched_files: true
+          make_latest: false
+
   pr-build-only:
     name: Mac app compile (PR)
     if: github.event_name == 'pull_request' && github.event.repository.fork == false
     runs-on: xcode-27
+    permissions:
+      contents: read
     timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
