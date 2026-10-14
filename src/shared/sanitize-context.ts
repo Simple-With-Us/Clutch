@@ -42,12 +42,19 @@ export interface SanitizeOptions {
  * Matching is a case-insensitive substring test, so entries are discriminators
  * rather than exact ids.  `minimax-m3` also matches the M3.1 preview, which is
  * multimodal too; it deliberately does not match the M2.7 family, which the
- * installed pi-ai catalog declares text-only.
+ * installed pi-ai catalog declares text-only.  `muse-spark` matches the
+ * contributor and full-price variants (Meta documents native multimodal
+ * perception — video, images and documents — for Muse Spark 1.3); `muse-glimmer`
+ * and `muse-wonder` cover the sibling Muse models the pi-ai catalog likewise
+ * declares `input: [text, image]`.
  */
 export const MULTIMODAL_MODELS: readonly string[] = [
   "deepseek-v4.1-flash",
   "minimax-m3.1-flash-preview",
   "minimax-m3",
+  "muse-spark",
+  "muse-glimmer",
+  "muse-wonder",
   "gpt-4o",
   "gpt-4o-mini",
   "claude-3-5-sonnet",
