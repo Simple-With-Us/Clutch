@@ -63,27 +63,27 @@ struct ClutchScreen: View {
                     onAuthenticated: { store.consumeLaunchToken(for: $0) }
                 )
                 .ignoresSafeArea(.container, edges: .bottom)
+                #if os(iOS)
                 .ignoresSafeArea(.keyboard)
+                #endif
 
                 overlay
             }
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .topBarLeading) { hostMenu }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        store.requestReload()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .accessibilityLabel("Reload")
-                    Button {
-                        isShowingHosts = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Hosts and Settings")
+                    toolbarButtons
                 }
+                #else
+                ToolbarItem(placement: .navigation) { hostMenu }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    toolbarButtons
+                }
+                #endif
             }
             .sheet(isPresented: $isShowingHosts) {
                 HostsSheet(store: store)
@@ -96,7 +96,9 @@ struct ClutchScreen: View {
                     }
                     .padding(.top, 16)
                     .navigationTitle("Add Host")
+                    #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
+                    #endif
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Cancel") { isShowingAddHost = false }
@@ -113,6 +115,22 @@ struct ClutchScreen: View {
         .task(id: host.id) {
             await store.refreshStatuses()
         }
+    }
+
+    @ViewBuilder
+    private var toolbarButtons: some View {
+        Button {
+            store.requestReload()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .accessibilityLabel("Reload")
+        Button {
+            isShowingHosts = true
+        } label: {
+            Image(systemName: "gearshape")
+        }
+        .accessibilityLabel("Hosts and Settings")
     }
 
     private var hostMenu: some View {
@@ -240,6 +258,6 @@ struct StateCard<Actions: View>: View {
             .frame(maxWidth: 520)
             .frame(maxWidth: .infinity)
         }
-        .background(Color(.systemBackground))
+        .background(Color.clutchBackground)
     }
 }

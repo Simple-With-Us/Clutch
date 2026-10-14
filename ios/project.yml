@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: codes.clutch
   deploymentTarget:
     iOS: '17.0'
+    macOS: '14.0'
   createIntermediateGroups: true
   projectFormat: xcode16_3
   xcodeVersion: '27.0'
@@ -112,6 +113,57 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         TEST_TARGET_NAME: Clutch
         SWIFT_VERSION: '5.9'
+  ClutchMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - Services/CometChatManager.swift
+          - Views/ChatView.swift
+          - Views/AgentMessagesVC.swift
+          - Views/PairingScannerSheet.swift
+          - Views/ClutchWebView.swift
+          - Views/Components
+      - path: Mac
+      - path: Resources
+      - path: Assets.xcassets
+    settings:
+      base:
+        PRODUCT_NAME: Clutch
+        PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.macos
+        DEVELOPMENT_TEAM: CC8UTF7ATG
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "202609301500"
+        SWIFT_VERSION: '5.9'
+        MACOSX_DEPLOYMENT_TARGET: '14.0'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS: false
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: false
+    info:
+      path: Mac/Info.plist
+      properties:
+        CFBundleDisplayName: Clutch
+        CFBundleName: Clutch
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        ITSAppUsesNonExemptEncryption: false
+        NSHighResolutionCapable: true
+        CFBundleURLTypes:
+          - CFBundleURLName: codes.clutch.pairing
+            CFBundleURLSchemes:
+              - clutch
+              - minimax
+        NSBonjourServices:
+          - _clutch._tcp
+          - _minimax._tcp
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Clutch connects to the Clutch server or MiniMax Code on your local network.
+        NSMicrophoneUsageDescription: Clutch records audio while you hold to talk to dictate coding directives.
+        NSSpeechRecognitionUsageDescription: Clutch transcribes speech into coding directives and prompts.
 schemes:
   Clutch:
     build:
@@ -126,5 +178,13 @@ schemes:
       targets:
         - ClutchTests
         - ClutchUITests
+    archive:
+      config: Release
+  ClutchMac:
+    build:
+      targets:
+        ClutchMac: all
+    run:
+      config: Debug
     archive:
       config: Release
