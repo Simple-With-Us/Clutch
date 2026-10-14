@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { loadOrMintToken, parseThreadQuery, routeForModel } from "../src/web/chat-bridge.ts";
+import { loadOrMintToken, parseLimitParam, parseThreadQuery, routeForModel, sliceThreadHistory, sortSessionsByUpdated } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -124,5 +124,34 @@ describe("thread endpoint wiring", () => {
     expect(source).toContain('"/clutch/v1/thread"');
     expect(source).toContain("parseThreadQuery");
     expect(source).toContain("fetchThread");
+  });
+});
+
+describe("parseLimitParam", () => {
+  it("bounds integers and falls back on garbage", () => {
+    expect(parseLimitParam("10", 50, 100)).toBe(10);
+    expect(parseLimitParam(null, 50, 100)).toBe(50);
+    expect(parseLimitParam("", 50, 100)).toBe(50);
+    expect(parseLimitParam("bogus", 50, 100)).toBe(50);
+    expect(parseLimitParam("0", 50, 100)).toBe(1);
+    expect(parseLimitParam("9999", 50, 100)).toBe(100);
+  });
+});
+
+describe("sortSessionsByUpdated", () => {
+  it("orders newest first with undated entries last", () => {
+    const rows = [
+      { sessionId: "a", updatedAt: "2026-10-14T01:00:00Z" },
+      { sessionId: "b" },
+      { sessionId: "c", updatedAt: "2026-10-14T03:00:00Z" },
+    ];
+    expect(sortSessionsByUpdated(rows).map((r) => r.sessionId)).toEqual(["c", "a", "b"]);
+  });
+});
+
+describe("sliceThreadHistory", () => {
+  it("keeps the tail when over budget", () => {
+    expect(sliceThreadHistory([1, 2, 3, 4], 2)).toEqual([3, 4]);
+    expect(sliceThreadHistory([1, 2], 5)).toEqual([1, 2]);
   });
 });

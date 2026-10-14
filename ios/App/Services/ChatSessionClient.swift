@@ -7,7 +7,7 @@ public enum ChatStreamEvent: Equatable {
     case started(sessionId: String, engine: String)
     case message(String)
     case thought(String)
-    case done(stopReason: String, sessionId: String)
+    case done(stopReason: String, sessionId: String, remoteSessionId: String?)
     case failed(String)
 }
 
@@ -96,7 +96,11 @@ public struct ChatSessionClient {
             guard let text = json["text"] as? String else { return nil }
             return .thought(text)
         case "done":
-            return .done(stopReason: (json["stopReason"] as? String) ?? "", sessionId: (json["sessionId"] as? String) ?? "")
+            return .done(
+                stopReason: (json["stopReason"] as? String) ?? "",
+                sessionId: (json["sessionId"] as? String) ?? "",
+                remoteSessionId: json["remoteSessionId"] as? String
+            )
         case "error":
             return .failed((json["message"] as? String) ?? "unknown error")
         default:

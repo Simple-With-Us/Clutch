@@ -73,7 +73,9 @@ struct McodeSessionsClient {
         guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 30
+        // Session discovery and full-history replay cross process spawns on
+        // a loaded Mac; the old 30s budget timed out routinely.
+        req.timeoutInterval = 90
         return req
     }
 
@@ -86,10 +88,13 @@ struct McodeSessionsClient {
         return comps
     }
 
-    func list() async throws -> [AcpSessionInfo] {
+    func list(limit: Int = 100) async throws -> [AcpSessionInfo] {
         var comps = try base()
         comps.path = "/clutch/v1/sessions"
-        comps.queryItems = [URLQueryItem(name: "engine", value: "mcode")]
+        comps.queryItems = [
+            URLQueryItem(name: "engine", value: "mcode"),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
         guard let url = comps.url else { throw ChatClientError.badHost }
         let (data, resp) = try await URLSession.shared.data(for: authorized(url))
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -104,14 +109,14 @@ struct McodeSessionsClient {
     /// workspace is elsewhere ("Requested cwd does not match the persisted
     /// session workspace").  Always pass the cwd the session was listed with,
     /// or every thread outside `$HOME` fails to resume.
-    func load(sessionId: String, cwd: String? = nil) async throws -> (chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
+    func load(sessionId: String, cwd: String? = nil, limit: Int = 200) async throws -> (chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
         var comps = try base()
         comps.path = "/clutch/v1/sessions/load"
         guard let url = comps.url else { throw ChatClientError.badHost }
         var req = try authorized(url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: String] = ["engine": "mcode", "sessionId": sessionId]
+        var body: [String: Any] = ["engine": "mcode", "sessionId": sessionId, "limit": limit]
         if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -492,6 +497,7 @@ public struct ChatView: View {
     private func selectModel(_ model: String) {
         selectedModel = model
         engine = model.lowercased().hasPrefix("minimax") ? .minimax : .deepseek
+        MacEngineStore.save(engine)
         resetTurnState()
         sessionId = nil
         Task { await prepare() }
@@ -499,6 +505,7 @@ public struct ChatView: View {
 
     private func startMcodeThread() {
         engine = .mcode
+        MacEngineStore.save(engine)
         resetTurnState()
         sessionId = nil
         mcodeChatId = nil
@@ -507,12 +514,16 @@ public struct ChatView: View {
         mcodeLoaded = []
         mcodePending = []
         phase = .ready
+        if let host = activeHost {
+            MacMcodeStore.clear(for: host)
+        }
         if !showingSidebar { showingSidebar = true }
     }
 
     /// Adopt a freshly loaded MiniMax Code thread into the chat pane.
     private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
         engine = .mcode
+        MacEngineStore.save(engine)
         resetTurnState()
         mcodeChatId = chatId
         mcodeRemoteId = remoteId
@@ -520,6 +531,9 @@ public struct ChatView: View {
         mcodeLoaded = history
         mcodePending = []
         phase = .ready
+        if let host = activeHost {
+            MacMcodeStore.save(remoteId: remoteId, cwd: cwd, for: host)
+        }
     }
 
     /// Resume one thread.  `cwd` must travel with the session id: the sidecar
@@ -584,7 +598,24 @@ public struct ChatView: View {
 
     private func prepare() async {
         guard let host = activeHost else { return }
+        if engine != .mcode, MacEngineStore.load() == .mcode {
+            engine = .mcode
+        }
         if engine == .mcode {
+            // Reopen the last thread for this host when there is one, so a
+            // finished turn survives relaunch instead of going nowhere.
+            if let saved = MacMcodeStore.load(for: host) {
+                do {
+                    let loaded = try await McodeSessionsClient(host: host).load(
+                        sessionId: saved.remoteId,
+                        cwd: saved.cwd
+                    )
+                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteId, cwd: loaded.cwd, history: loaded.history)
+                    return
+                } catch {
+                    MacMcodeStore.clear(for: host)
+                }
+            }
             mcodeChatId = nil
             mcodeRemoteId = nil
             mcodeLoaded = []
@@ -686,9 +717,13 @@ public struct ChatView: View {
                         streamingText += chunk
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
-                    case .done(let stop, let id):
+                    case .done(let stop, let id, let remoteId):
                         if engine == .mcode {
                             mcodeChatId = id
+                            if let remoteId, !remoteId.isEmpty {
+                                mcodeRemoteId = remoteId
+                                MacMcodeStore.save(remoteId: remoteId, cwd: mcodeCwd, for: host)
+                            }
                             if !streamingText.isEmpty {
                                 mcodeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: streamingText))
                             }
@@ -940,6 +975,58 @@ struct MacChatSetupCard: View {
     }
 }
 
+/// Last MiniMax Code thread per host, so a finished turn survives relaunch:
+/// the sidecar only keeps turns in memory, and a fresh turn's only durable
+/// id is the remote session id the `done` event carries.
+enum MacMcodeStore {
+    private static let key = "codes.clutch.mcode-remote.v1"
+
+    struct Saved: Codable {
+        var remoteId: String
+        var cwd: String?
+    }
+
+    private static func map() -> [String: Saved] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([String: Saved].self, from: data) else { return [:] }
+        return decoded
+    }
+
+    static func load(for host: ClutchHost) -> Saved? {
+        map()[host.id.uuidString]
+    }
+
+    static func save(remoteId: String, cwd: String?, for host: ClutchHost) {
+        var current = map()
+        current[host.id.uuidString] = Saved(remoteId: remoteId, cwd: cwd)
+        if let data = try? JSONEncoder().encode(current) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+
+    static func clear(for host: ClutchHost) {
+        var current = map()
+        current.removeValue(forKey: host.id.uuidString)
+        if let data = try? JSONEncoder().encode(current) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
+/// Persisted chat engine, so relaunch returns to MiniMax Code with its
+/// thread instead of dropping back to an empty DeepSeek tab.
+enum MacEngineStore {
+    private static let key = "codes.clutch.mac-engine.v1"
+
+    static func save(_ engine: ChatEngine) {
+        UserDefaults.standard.set(engine.rawValue, forKey: key)
+    }
+
+    static func load() -> ChatEngine? {
+        guard let raw = UserDefaults.standard.string(forKey: key) else { return nil }
+        return ChatEngine(rawValue: raw)
+    }
+}
 /// Local prompt persistence (see `LocalPrompt`).
 enum MacChatStore {
     private static let key = "codes.clutch.mac-prompts.v1"
