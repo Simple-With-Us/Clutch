@@ -165,7 +165,9 @@ struct ContributeRecallSheet: View {
                 }
             }
             .navigationTitle("Contribute to Recall")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

@@ -62,7 +62,9 @@ struct HostsSheet: View {
                 }
             }
             .navigationTitle("Hosts and Settings")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
