@@ -84,25 +84,22 @@ jobs:
         if: steps.gate.outputs.should_ship == '1'
         run: bash scripts/ios-install-xcodegen.sh
 
-      - name: Load Infisical signing secrets
+      - name: Load shared ASC key and Clutch signing certificate
         if: steps.gate.outputs.should_ship == '1'
-        uses: ./.github/actions/infisical-secrets
-        with:
-          names: >-
-            APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64
-            IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD
-          required: >-
-            APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64
-            IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD
-          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
-          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        env:
+          INFISICAL_PROJECT_ID: 077fd6f3-9f9b-438e-9b6f-5c69076cf36c
+          INFISICAL_ASC_PROJECT_ID: 8dae6d03-8f12-48b2-adf3-e5c1b881c8c5
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+        run: |
+          npm install zod@4.4.3 --no-save --no-audit --no-fund
+          node scripts/ios-signing-fetch.mjs
 
       - name: Import signing + ASC key
         if: steps.gate.outputs.should_ship == '1'
         run: |
           if [ -z "${APPLE_API_KEY_ID:-}" ]; then
-            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Add the five Apple/iOS signing names to Infisical prod for the Clutch project (or org-wide GitHub sync).  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
+            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Check Fleet-OPS prod /asc, Clutch prod /, and the CI machine identity read access to both.  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
             exit 1
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
