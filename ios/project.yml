@@ -113,7 +113,7 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         TEST_TARGET_NAME: Clutch
         SWIFT_VERSION: '5.9'
-  ClutchMac:
+  Clutch macOS:
     type: application
     platform: macOS
     sources:
@@ -180,10 +180,10 @@ schemes:
         - ClutchUITests
     archive:
       config: Release
-  ClutchMac:
+  Clutch macOS:
     build:
       targets:
-        ClutchMac: all
+        Clutch macOS: all
     run:
       config: Debug
     archive:

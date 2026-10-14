@@ -26,7 +26,7 @@ struct ClutchWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
-        config.applicationNameForUserAgent = "ClutchMac/\(Bundle.main.shortVersion)"
+        config.applicationNameForUserAgent = "ClutchmacOS/\(Bundle.main.shortVersion)"
         config.userContentController = Self.brandingController()
 
         let webView = WKWebView(frame: .zero, configuration: config)
