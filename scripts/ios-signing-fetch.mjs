@@ -17,8 +17,10 @@ export async function loadSigning({ env = process.env, fetchImpl = fetch, log = 
     const missing = names.filter(name => !values.get(name)?.trim());
     if (missing.length) throw new Error(`${source} missing required signing input(s): ${missing.join(', ')}. Verify project binding and machine identity read access.`);
   }
-  const pem = asc.get('ASC_KEY_P8');
-  if (!pem.includes('-----BEGIN PRIVATE KEY-----') || !pem.includes('-----END PRIVATE KEY-----')) throw new Error('Fleet-OPS ASC_KEY_P8 is not a PEM private key.');
+  const rawPem = asc.get('ASC_KEY_P8');
+  if (!rawPem.includes('-----BEGIN PRIVATE KEY-----') || !rawPem.includes('-----END PRIVATE KEY-----')) throw new Error('Fleet-OPS ASC_KEY_P8 is not a PEM private key.');
+  // OpenSSL PEM parsers reject an END line that has no trailing newline.
+  const pem = rawPem.endsWith('\n') ? rawPem : `${rawPem}\n`;
   const values = {
     APPLE_API_KEY_ID: asc.get('ASC_KEY_ID'),
     APPLE_API_ISSUER_ID: asc.get('ASC_ISSUER_ID'),
