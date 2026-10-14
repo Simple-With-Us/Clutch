@@ -313,6 +313,49 @@ struct ClutchWebView: NSViewRepresentable {
         })();
         """
         controller.addUserScript(WKUserScript(source: monogram, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+
+        // Sidebar expand affordance (mirror of Views/ClutchWebView.swift).
+        // Upstream only reveals the rail toggle's expand icon on hover, so a
+        // collapsed rail has no visible way back.  Keep a persistent button
+        // while the toggle sits inside a collapsed container; clicking it
+        // drives the upstream toggle, so animation and width restore stay theirs.
+        let sidebarToggle = """
+        (function () {
+          const ensureToggle = () => {
+            const toggle = document.querySelector('button[class*="_toggle"]');
+            const collapsed = !!toggle && !!toggle.closest('[class*="_collapsed"]');
+            let btn = document.querySelector('[data-clutch-sidebar-toggle="1"]');
+            if (!collapsed || !toggle) {
+              if (btn) btn.remove();
+              return;
+            }
+            if (btn) return;
+            btn = document.createElement('button');
+            btn.dataset.clutchSidebarToggle = '1';
+            btn.type = 'button';
+            btn.setAttribute('aria-label', 'Open sidebar');
+            btn.title = 'Open sidebar';
+            btn.style.cssText = 'position:fixed;left:10px;top:10px;z-index:2147483647;width:32px;height:32px;border-radius:50%;border:1px solid rgba(128,128,128,0.35);background:rgba(128,128,128,0.12);color:inherit;font-size:15px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;';
+            btn.textContent = '\\u276F';
+            btn.addEventListener('click', () => {
+              const t = document.querySelector('button[class*="_toggle"]');
+              if (t) t.click();
+            });
+            document.documentElement.appendChild(btn);
+          };
+          ensureToggle();
+          const watch = () => {
+            const el = document.documentElement;
+            if (!el) {
+              setTimeout(watch, 50);
+              return;
+            }
+            new MutationObserver(ensureToggle).observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+          };
+          watch();
+        })();
+        """
+        controller.addUserScript(WKUserScript(source: sidebarToggle, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         return controller
     }
 }
