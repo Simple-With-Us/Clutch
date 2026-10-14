@@ -15,9 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "564A40295F1C3A32CD58B69D"
-               BuildableName = "ClutchMac.app"
-               BlueprintName = "ClutchMac"
+               BlueprintIdentifier = "9CB9F3B21C5137B9A46B093B"
+               BuildableName = "Clutch macOS.app"
+               BlueprintName = "Clutch macOS"
                ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -32,9 +32,9 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "564A40295F1C3A32CD58B69D"
-            BuildableName = "ClutchMac.app"
-            BlueprintName = "ClutchMac"
+            BlueprintIdentifier = "9CB9F3B21C5137B9A46B093B"
+            BuildableName = "Clutch macOS.app"
+            BlueprintName = "Clutch macOS"
             ReferencedContainer = "container:Clutch.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -55,9 +55,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "564A40295F1C3A32CD58B69D"
-            BuildableName = "ClutchMac.app"
-            BlueprintName = "ClutchMac"
+            BlueprintIdentifier = "9CB9F3B21C5137B9A46B093B"
+            BuildableName = "Clutch macOS.app"
+            BlueprintName = "Clutch macOS"
             ReferencedContainer = "container:Clutch.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -74,9 +74,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "564A40295F1C3A32CD58B69D"
-            BuildableName = "ClutchMac.app"
-            BlueprintName = "ClutchMac"
+            BlueprintIdentifier = "9CB9F3B21C5137B9A46B093B"
+            BuildableName = "Clutch macOS.app"
+            BlueprintName = "Clutch macOS"
             ReferencedContainer = "container:Clutch.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
