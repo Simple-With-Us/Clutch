@@ -35,6 +35,30 @@ jobs:
       - name: Build Clutch iOS App
         run: bash scripts/build-ios.sh --simulator
 
+  macos:
+    name: macOS Build
+    # The native Mac app is its own Xcode target and its own scheme
+    # ("Clutch macOS"), and no workflow built it.  The ios-ship TestFlight
+    # workflow runs scripts/build-ios.sh, which is hardcoded to -scheme Clutch,
+    # and mac-app-build.yml ships the separate dock shell built from
+    # src/web/dock-app/ClutchWindow.swift.  So every swift change under
+    # ios/Mac/ merged without ever being compiled.  This job closes that gap.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Build Clutch macOS App
+        run: |
+          xcodebuild -project ios/Clutch.xcodeproj \
+            -scheme "Clutch macOS" \
+            -destination "generic/platform=macOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
   e2e:
     runs-on: ubuntu-latest
     steps:
