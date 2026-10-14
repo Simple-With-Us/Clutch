@@ -84,16 +84,36 @@ export function routeForModel(model: string | undefined, engine: string | undefi
 /**
  * Validates `GET /clutch/v1/thread` query: which device thread and how many
  * bubbles. UIDs stay app-scoped slugs so they cannot escape into paths.
- */
-export function parseThreadQuery(params: URLSearchParams): { uid: string; limit: number } | { error: string } {
+ */export function parseThreadQuery(params: URLSearchParams): { uid: string; limit: number } | { error: string } {
   const uid = params.get("uid") ?? "";
   if (!isThreadUid(uid)) return { error: "uid is required" };
-  const rawText = (params.get("limit") ?? "").trim();
-  const rawLimit = rawText === "" ? NaN : Number(rawText);
-  const limit = Number.isFinite(rawLimit)
-    ? Math.min(Math.max(Math.trunc(rawLimit), 1), THREAD_MESSAGE_LIMIT_MAX)
-    : THREAD_MESSAGE_LIMIT_DEFAULT;
-  return { uid, limit };
+  return { uid, limit: parseLimitParam(params.get("limit"), THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX) };
+}
+
+/** Bounded integer query param with a default; garbage means the default. */
+export function parseLimitParam(raw: string | null, def: number, max: number): number {
+  const text = (raw ?? "").trim();
+  if (text === "") return def;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(Math.trunc(n), 1), max);
+}
+
+/** Newest first by `updatedAt`; entries without one sort last. Never mutates. */
+export function sortSessionsByUpdated<T extends { updatedAt?: string }>(sessions: readonly T[]): T[] {
+  return [...sessions].sort((a, b) => {
+    if (!a.updatedAt && !b.updatedAt) return 0;
+    if (!a.updatedAt) return 1;
+    if (!b.updatedAt) return -1;
+    if (a.updatedAt === b.updatedAt) return 0;
+    return a.updatedAt < b.updatedAt ? 1 : -1;
+  });
+}
+
+/** Last `limit` entries; the whole array when it already fits. */
+export function sliceThreadHistory<T>(history: readonly T[], limit: number): T[] {
+  if (history.length <= limit) return [...history];
+  return history.slice(history.length - limit);
 }
 
 /** Load the Bearer token, minting and persisting it (mode 600) on first boot. */
@@ -312,7 +332,8 @@ class Bridge {
     return result.sessionId;
   }
 
-  async listSessions(cwd?: string): Promise<AcpSessionInfo[]> {
+  async listSessions(cwd?: string, limit: number = 100): Promise<AcpSessionInfo[]> {
+    const cap = Math.min(Math.max(Math.trunc(limit) || 100, 1), 500);
     const sessions: AcpSessionInfo[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < 20; page += 1) {
@@ -331,7 +352,9 @@ class Bridge {
           ...(typeof row.title === "string" ? { title: row.title } : {}),
           ...(typeof row.updatedAt === "string" ? { updatedAt: row.updatedAt } : {}),
         });
+        if (sessions.length >= cap) break;
       }
+      if (sessions.length >= cap) break;
       if (typeof result.nextCursor !== "string" || result.nextCursor.length === 0) break;
       cursor = result.nextCursor;
     }
@@ -462,7 +485,8 @@ async function main(): Promise<void> {
         const bridge = bridgeFor("mcode");
         await bridge.initialize();
         const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
-        const listed = await bridge.listSessions(requestedCwd);
+        const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
+        const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, limit));
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: listed }));
       } catch (err) {
         log(`mcode list failed message=${(err as Error).message.slice(0, 120)}`);
@@ -474,7 +498,7 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "POST" && url.pathname === "/clutch/v1/sessions/load") {
-      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown };
+      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown; limit?: unknown };
       try {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
@@ -486,6 +510,10 @@ async function main(): Promise<void> {
         return;
       }
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
+      const historyLimit =
+        typeof body.limit === "number" || typeof body.limit === "string"
+          ? parseLimitParam(String(body.limit), 200, 1000)
+          : 200;
       const chatId = randomBytes(16).toString("hex");
       const history: AcpUpdate[] = [];
       const session: ChatSession = {
@@ -506,7 +534,7 @@ async function main(): Promise<void> {
         session.busy = false;
         session.stream = null;
         res.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, history }),
+          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, history: sliceThreadHistory(history, historyLimit) }),
         );
       } catch (err) {
         sessions.delete(chatId);
@@ -518,7 +546,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/clutch/v1/chat-config") {      // Everything the native tab needs after pairing: which chat port it
+    if (req.method === "GET" && url.pathname === "/clutch/v1/chat-config") {
+      // Everything the native tab needs after pairing: which chat port it
       // already reached, and the CometChat app coordinates (dev-grade Auth
       // Key for this try; server-minted user tokens are the follow-up).
       // Gated by the chat token like everything else here.
@@ -639,6 +668,10 @@ async function main(): Promise<void> {
         if (u.kind !== "user_message_chunk") sink?.onUpdate(u.kind, r.text);
       };
       let settled = false;
+      // The resumable remote id rides every terminal event so a fresh turn
+      // can be reloaded later (mcode threads live in the sidecar map only
+      // until the process exits).
+      const remoteId = (): string | null => active.resumeSessionId ?? (active.bridgeSessionId || null);
       const finish = (event: string, data: unknown): void => {
         if (settled) return;
         settled = true;
@@ -656,7 +689,7 @@ async function main(): Promise<void> {
           }
           log(`chat cancel session=${chatId}`);
         }
-        finish("done", { stopReason: "cancelled", sessionId: chatId });
+        finish("done", { stopReason: "cancelled", sessionId: chatId, remoteSessionId: remoteId() });
       });
 
       try {
@@ -682,7 +715,7 @@ async function main(): Promise<void> {
             log(`chat relay flush failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
           }
         }
-        finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId });
+        finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId, remoteSessionId: remoteId() });
       } catch (err) {
         log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
         // Only process loss invalidates the child-local session state.  ACP
@@ -696,7 +729,7 @@ async function main(): Promise<void> {
             /* relay failures must not change the error surfaced to the client */
           }
         }
-        finish("error", { message: (err as Error).message.slice(0, 300), sessionId: chatId });
+        finish("error", { message: (err as Error).message.slice(0, 300), sessionId: chatId, remoteSessionId: remoteId() });
       }
       return;
     }

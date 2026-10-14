@@ -188,7 +188,7 @@ public struct ChatView: View {
                         thoughtLine = nil
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
-                    case .done(let stop, let id):
+                    case .done(let stop, let id, _):
                         sessionId = id
                         sending = false
                         thoughtLine = nil
