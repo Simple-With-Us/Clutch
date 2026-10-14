@@ -16,12 +16,16 @@ public struct ChatSessionClient {
     public var model: String
     public var sessionId: String?
     public var relayReceiverUid: String
+    /// Engine override (`mcode` for MiniMax Code remote). Nil routes by
+    /// model on the sidecar, preserving the DeepSeek/MiniMax behavior.
+    public var engine: String?
 
-    public init(host: ClutchHost, model: String, sessionId: String? = nil, relayReceiverUid: String) {
+    public init(host: ClutchHost, model: String, sessionId: String? = nil, relayReceiverUid: String, engine: String? = nil) {
         self.host = host
         self.model = model
         self.sessionId = sessionId
         self.relayReceiverUid = relayReceiverUid
+        self.engine = engine
     }
 
     public func chatURL() -> URL? {
@@ -52,6 +56,7 @@ public struct ChatSessionClient {
                         "relay": ["receiver": relayReceiverUid, "receiverType": "user"],
                     ]
                     if let sessionId { body["sessionId"] = sessionId }
+                    if let engine { body["engine"] = engine }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
                     let (bytes, resp) = try await URLSession.shared.bytes(for: req)
                     guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
