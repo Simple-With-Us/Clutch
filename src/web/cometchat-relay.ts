@@ -73,17 +73,90 @@ async function rest(
   const fetchFn = deps.fetchFn ?? fetch;
   const res = await fetchFn(`${cometchatApiBase(config)}${path}`, {
     method,
-    headers: {
-      "content-type": "application/json",
-      apikey: config.restApiKey,
-      onBehalfOf: config.agentUid,
-    },
+    headers: restHeaders(config),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`cometchat ${method} ${path} -> ${res.status}`);
   }
   return (await res.json()) as { id?: unknown } & Record<string, unknown>;
+}
+
+function restHeaders(config: CometChatConfig): Record<string, string> {
+  return {
+    "content-type": "application/json",
+    apikey: config.restApiKey,
+    onBehalfOf: config.agentUid,
+  };
+}
+
+async function restGet(config: CometChatConfig, deps: RestDeps, path: string): Promise<unknown> {
+  const fetchFn = deps.fetchFn ?? fetch;
+  const res = await fetchFn(`${cometchatApiBase(config)}${path}`, {
+    method: "GET",
+    headers: restHeaders(config),
+  });
+  if (!res.ok) {
+    throw new Error(`cometchat GET ${path} -> ${res.status}`);
+  }
+  return await res.json();
+}
+
+/** One agent-side thread bubble, normalized for native clients. */
+export interface ThreadMessage {
+  id: string;
+  senderUid: string;
+  text: string;
+  /** Unix milliseconds. */
+  sentAt: number;
+  kind: "text" | "card";
+}
+
+export const THREAD_MESSAGE_LIMIT_DEFAULT = 50;
+export const THREAD_MESSAGE_LIMIT_MAX = 100;
+
+/** UIDs the thread endpoint accepts: app-scoped slugs, never paths. */
+export function isThreadUid(raw: unknown): raw is string {
+  return typeof raw === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(raw);
+}
+
+function threadSentAtMs(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return 0;
+  return raw < 1_000_000_000_000 ? Math.round(raw * 1000) : Math.round(raw);
+}
+
+/**
+ * Normalizes a CometChat messages list (`{data: [...]}` or a bare array)
+ * into thread bubbles. Text bubbles keep their text; tool cards keep their
+ * persisted summary; anything else is skipped. Never throws on shape drift.
+ */
+export function normalizeThreadMessages(payload: unknown): ThreadMessage[] {
+  const raw = Array.isArray(payload) ? payload : (payload as { data?: unknown } | null)?.data;
+  if (!Array.isArray(raw)) return [];
+  const out: ThreadMessage[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const data = (record.data ?? {}) as Record<string, unknown>;
+    const sender = record.sender;
+    const senderUid = typeof sender === "string" ? sender : (sender as { uid?: unknown } | null)?.uid;
+    let text: string | null = null;
+    let kind: ThreadMessage["kind"] = "text";
+    if (record.category === "message" && record.type === "text" && typeof data.text === "string") {
+      text = data.text;
+    } else if (record.category === "interactive" && record.type === "card") {
+      const interactive = (data.interactiveData ?? {}) as Record<string, unknown>;
+      if (typeof interactive.text === "string") {
+        text = interactive.text;
+        kind = "card";
+      }
+    }
+    if ((typeof record.id !== "string" && typeof record.id !== "number") || typeof senderUid !== "string" || text === null) {
+      continue;
+    }
+    out.push({ id: String(record.id), senderUid, text, sentAt: threadSentAtMs(record.sentAt ?? record.sentOn), kind });
+  }
+  return out;
 }
 
 function messageIdOf(result: { id?: unknown; data?: unknown }, what: string): string {
@@ -162,6 +235,22 @@ export class CometChatRelay {
     const id = messageIdOf(result, "card");
     this.log(`cometchat-relay: sent card message=${id} titleChars=${options.title.length}`);
     return id;
+  }
+
+  /**
+   * GET /users/{deviceUid}/messages — the agent side of one device thread,
+   * newest last, normalized for native clients. The relay only ever posts
+   * agent bubbles, so user prompts stay client-side.
+   */
+  async fetchThread(deviceUid: string, limit: number = THREAD_MESSAGE_LIMIT_DEFAULT): Promise<ThreadMessage[]> {
+    if (!isThreadUid(deviceUid)) throw new Error("cometchat thread rejected bad uid");
+    const capped = Number.isFinite(limit)
+      ? Math.min(Math.max(Math.trunc(limit), 1), THREAD_MESSAGE_LIMIT_MAX)
+      : THREAD_MESSAGE_LIMIT_DEFAULT;
+    const got = await restGet(this.config, this.deps, `/users/${encodeURIComponent(deviceUid)}/messages?limit=${capped}`);
+    const messages = normalizeThreadMessages(got);
+    this.log(`cometchat-relay: fetched thread uidChars=${deviceUid.length} messages=${messages.length}`);
+    return messages;
   }
 }
 
