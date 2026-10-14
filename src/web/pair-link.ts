@@ -82,6 +82,22 @@ export function isTrustedHostHeader(hostHeader: string | null | undefined, allow
 }
 
 /**
+ * The MiniMax Code remote shell URL on the sidecar:
+ * `<origin>/minimax-code/?token=<chatToken>`. The token rides as a query
+ * (then Bearer) because the shell page itself is unauthenticated; the
+ * sidecar API behind it is Bearer-gated like everything else.
+ */
+export function minimaxShellUrl(options: { origin: string; chatToken: string }): string {
+  const origin = new URL(options.origin);
+  if (origin.protocol !== "http:" && origin.protocol !== "https:") {
+    throw new Error(`origin must be http(s), got ${origin.protocol}`);
+  }
+  if (!options.chatToken) throw new Error("chat token is required; is the chat sidecar running?");
+  const target = new URL("/minimax-code/", origin);
+  target.searchParams.set("token", options.chatToken);
+  return target.toString();
+}
+/**
  * The link the iOS app pairs from:
  * `clutch://pair?url=<origin>/?token=<t>&name=<label>`.
  * `origin` is where the phone reaches clutch web, e.g.

@@ -12,6 +12,13 @@
  *   clutch-pair-ios --simulator  open the link in the booted iOS Simulator,
  *                                 pointed at http://127.0.0.1:<port>
  *   clutch-pair-ios --print      print the link (it contains the launch token)
+ *   clutch-pair-ios --shell [--print]
+ *                                 copy/open a QR for the MiniMax Code remote
+ *                                 shell instead: https://<tailnet>:<chatPort>/
+ *                                 minimax-code/?token=<chatToken> (needs the
+ *                                 chat sidecar running; on this Mac use
+ *                                 http://127.0.0.1:<chatPort>/minimax-code/
+ *                                 with the same token)
  *
  * The link stays valid until clutch web restarts; the cookie it mints on the
  * phone lasts 30 days.  The token is never printed unless --print is given.
@@ -24,7 +31,7 @@ import { fileURLToPath } from "node:url";
 
 import { clutchChatPort, clutchWebPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { LEGACY_TAILNET_HOST, pairingLink, tailnetDnsName } from "./pair-link.ts";
+import { LEGACY_TAILNET_HOST, minimaxShellUrl, pairingLink, tailnetDnsName } from "./pair-link.ts";
 
 // Infisical is the sole source of truth for app settings (see INFISICAL.md).
 await initClutchSettings();
@@ -84,13 +91,18 @@ function main(): void {
   if (args.has("-h") || args.has("--help")) {
     process.stdout.write(
       [
-        "usage: clutch-pair-ios [--simulator | --print]",
+        "usage: clutch-pair-ios [--simulator | --print | --shell [--print]]",
         "  (default)    copy the pairing link to the clipboard and open a QR code for the Clutch iOS app",
         "  --simulator  open the pairing link in the booted iOS Simulator (http://127.0.0.1:<port>)",
         "  --print      print the pairing link (contains the launch token)",
+        "  --shell      copy/open a QR for the MiniMax Code remote shell (needs the chat sidecar)",
         "",
       ].join("\n"),
     );
+    return;
+  }
+  if (args.has("--shell")) {
+    pairShell(args);
     return;
   }
   const launchUrl = readLaunchUrl();
@@ -121,6 +133,35 @@ function main(): void {
   }
   showQr(link);
   log(`the app will open ${origin} over Tailscale; the link works until clutch web restarts.`);
+}
+
+/**
+ * Mint the MiniMax Code remote shell link: the sidecar origin on this Mac's
+ * Tailscale name plus the chat-bridge Bearer token. Fails clearly when the
+ * sidecar has never booted (no token file yet) instead of minting a dead link.
+ */
+function pairShell(args: Set<string>): void {
+  const chatTokenFile = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
+  if (!existsSync(chatTokenFile)) {
+    log(`${chatTokenFile} not found — start the chat sidecar first (pm2 clutch-web).`);
+    process.exit(2);
+  }
+  const chatToken = readFileSync(chatTokenFile, "utf8").trim();
+  if (!chatToken) {
+    log(`${chatTokenFile} is empty — restart the chat sidecar (pm2 restart clutch-web).`);
+    process.exit(2);
+  }
+  const chatPort = clutchChatPort();
+  const shellUrl = minimaxShellUrl({ origin: `https://${detectTailnetHost()}:${chatPort}`, chatToken });
+  if (args.has("--print")) {
+    process.stdout.write(`${shellUrl}\n`);
+    return;
+  }
+  if (run("/usr/bin/pbcopy", [], shellUrl)) {
+    log("copied the MiniMax Code shell link to the clipboard.");
+  }
+  showQr(shellUrl);
+  log(`the shell opens over Tailscale; on this Mac use http://127.0.0.1:${chatPort}/minimax-code/ with the same token.`);
 }
 
 main();

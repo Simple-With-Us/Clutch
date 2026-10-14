@@ -36,6 +36,80 @@ struct LocalPrompt: Identifiable, Equatable, Codable {
     var at: Date
 }
 
+/// One MiniMax Code session from `GET /clutch/v1/sessions`.
+struct AcpSessionInfo: Decodable, Identifiable {
+    var sessionId: String
+    var cwd: String?
+    var title: String?
+    var updatedAt: String?
+    var id: String { sessionId }
+}
+
+/// One replayed update from `POST /clutch/v1/sessions/load`.
+struct AcpHistoryEntry: Decodable, Equatable {
+    var sessionId: String
+    var kind: String
+    var text: String
+}
+
+/// Minimal client for the mcode session endpoints (see `chat-bridge.ts`).
+/// Same chat-token gate as everything else on the sidecar.
+struct McodeSessionsClient {
+    var host: ClutchHost
+
+    private func authorized(_ url: URL) throws -> URLRequest {
+        guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 30
+        return req
+    }
+
+    private func base() throws -> URLComponents {
+        var comps = URLComponents()
+        comps.scheme = host.origin.scheme
+        comps.host = host.origin.host
+        comps.port = host.chatPort
+        guard comps.url != nil else { throw ChatClientError.badHost }
+        return comps
+    }
+
+    func list() async throws -> [AcpSessionInfo] {
+        var comps = try base()
+        comps.path = "/clutch/v1/sessions"
+        comps.queryItems = [URLQueryItem(name: "engine", value: "mcode")]
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url))
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        struct Payload: Decodable { var sessions: [AcpSessionInfo] }
+        return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
+    }
+
+    func load(sessionId: String) async throws -> (chatId: String, remoteId: String, history: [AcpHistoryEntry]) {
+        var comps = try base()
+        comps.path = "/clutch/v1/sessions/load"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        var req = try authorized(url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["engine": "mcode", "sessionId": sessionId])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        struct Payload: Decodable {
+            var sessionId: String
+            var remoteSessionId: String?
+            var history: [AcpHistoryEntry]?
+        }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            throw ChatClientError.http(200)
+        }
+        return (payload.sessionId, payload.remoteSessionId ?? sessionId, payload.history ?? [])
+    }
+}
 /// Minimal client for `GET /clutch/v1/thread` (see `chat-bridge.ts`). Same
 /// chat-token gate as the send path; the CometChat key never leaves the
 /// sidecar.
@@ -67,6 +141,14 @@ struct ChatThreadClient {
     }
 }
 
+/// Which backend a Mac chat turn runs through. DeepSeek and MiniMax route
+/// by model on the sidecar; MiniMax Code resumes a direct `mcode` thread.
+enum ChatEngine: String {
+    case deepseek
+    case minimax
+    case mcode
+}
+
 /// The native Chat tab for macOS: the agent thread renders from the sidecar
 /// thread endpoint (the CometChat kit SDK is iOS-only), the native input bar
 /// owns the send path through `ChatSessionClient`, and the turn streams back
@@ -84,11 +166,19 @@ public struct ChatView: View {
         var date: Date
         var fromAgent: Bool
         var isCard: Bool
+        var isThought: Bool = false
     }
 
     @State private var phase: Phase = .loading
+    @State private var engine: ChatEngine = .deepseek
     @State private var agentBubbles: [ThreadBubble] = []
     @State private var localPrompts: [LocalPrompt] = MacChatStore.loadPrompts()
+    @State private var mcodeChatId: String?
+    @State private var mcodeRemoteId: String?
+    @State private var mcodeLoaded: [AcpHistoryEntry] = []
+    @State private var mcodePending: [LocalPrompt] = []
+    @State private var showingSessions = false
+    @State private var sessionsError: String?
     @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
     @State private var draft: String = ""
     @State private var sessionId: String?
@@ -106,6 +196,7 @@ public struct ChatView: View {
     private var deviceUid: String { MacChatIdentity.deviceUid }
 
     private var rows: [Row] {
+        if engine == .mcode { return mcodeRows }
         let promptRows = localPrompts.map {
             Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
         }
@@ -113,6 +204,25 @@ public struct ChatView: View {
             Row(id: $0.id, text: $0.text, date: $0.date, fromAgent: $0.senderUid != deviceUid, isCard: $0.kind == "card")
         }
         return (promptRows + bubbleRows).sorted { $0.date < $1.date }
+    }
+
+    /// MiniMax Code rows keep server order (replayed history is already
+    /// chronological); in-flight prompts and the live bubble append after.
+    private var mcodeRows: [Row] {
+        var out = mcodeLoaded.enumerated().map { index, entry in
+            Row(
+                id: "mcode-\(index)-\(entry.text.hashValue)",
+                text: entry.text,
+                date: Date(),
+                fromAgent: entry.kind != "user_message_chunk",
+                isCard: false,
+                isThought: entry.kind == "agent_thought_chunk"
+            )
+        }
+        out += mcodePending.map {
+            Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
+        }
+        return out
     }
 
     public var body: some View {
@@ -145,6 +255,18 @@ public struct ChatView: View {
         .task(id: activeHost?.id) {
             await prepare()
         }
+        .sheet(isPresented: $showingSessions) {
+            if let host = activeHost {
+                MacSessionsSheet(host: host) { chatId, remoteId, history in
+                    engine = .mcode
+                    mcodeChatId = chatId
+                    mcodeRemoteId = remoteId
+                    mcodeLoaded = history
+                    mcodePending = []
+                    phase = .ready
+                }
+            }
+        }
     }
 
     // MARK: - Header
@@ -152,16 +274,27 @@ public struct ChatView: View {
     private var modelStrip: some View {
         HStack(spacing: 8) {
             Menu {
-                Button("DeepSeek-V4.1-Pro") { selectedModel = "DeepSeek-V4.1-Pro" }
-                Button("DeepSeek-V4.1-Flash") { selectedModel = "DeepSeek-V4.1-Flash" }
-                Button("MiniMax-M3.1-Flash-Preview") { selectedModel = "MiniMax-M3.1-Flash-Preview" }
-                Button("MiniMax-M3") { selectedModel = "MiniMax-M3" }
-                Button("MiniMax-M2.7-highspeed") { selectedModel = "MiniMax-M2.7-highspeed" }
+                Section("DeepSeek") {
+                    Button("DeepSeek-V4.1-Pro") { selectModel("DeepSeek-V4.1-Pro") }
+                    Button("DeepSeek-V4.1-Flash") { selectModel("DeepSeek-V4.1-Flash") }
+                }
+                Section("MiniMax") {
+                    Button("MiniMax-M3.1-Flash-Preview") { selectModel("MiniMax-M3.1-Flash-Preview") }
+                    Button("MiniMax-M3") { selectModel("MiniMax-M3") }
+                    Button("MiniMax-M2.7-highspeed") { selectModel("MiniMax-M2.7-highspeed") }
+                }
+                Section("MiniMax Code") {
+                    Button("Resume thread…") {
+                        engine = .mcode
+                        showingSessions = true
+                    }
+                    Button("New thread") { startMcodeThread() }
+                }
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "cpu")
                         .font(.system(size: 11))
-                    Text(selectedModel)
+                    Text(engine == .mcode ? "MiniMax Code" : selectedModel)
                         .font(.system(size: 12, weight: .semibold))
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .bold))
@@ -222,11 +355,21 @@ public struct ChatView: View {
             case .ready:
                 if rows.isEmpty {
                     Spacer()
-                    MacChatSetupCard(
-                        symbol: "bubble.left.and.bubble.right",
-                        title: "Start the Thread",
-                        message: "Send the first prompt below — the turn streams back live."
-                    )
+                    if engine == .mcode {
+                        MacChatSetupCard(
+                            symbol: "terminal",
+                            title: "MiniMax Code",
+                            message: "Resume an existing thread or type below to start one in this Mac's workspace."
+                        )
+                        Button("Resume Thread…") { showingSessions = true }
+                            .padding(.top, 4)
+                    } else {
+                        MacChatSetupCard(
+                            symbol: "bubble.left.and.bubble.right",
+                            title: "Start the Thread",
+                            message: "Send the first prompt below — the turn streams back live."
+                        )
+                    }
                     Spacer()
                 } else {
                     ScrollViewReader { proxy in
@@ -290,8 +433,42 @@ public struct ChatView: View {
 
     // MARK: - Flow
 
+    private func selectModel(_ model: String) {
+        selectedModel = model
+        engine = model.lowercased().hasPrefix("minimax") ? .minimax : .deepseek
+        resetTurnState()
+        sessionId = nil
+        Task { await prepare() }
+    }
+
+    private func startMcodeThread() {
+        engine = .mcode
+        resetTurnState()
+        sessionId = nil
+        mcodeChatId = nil
+        mcodeRemoteId = nil
+        mcodeLoaded = []
+        mcodePending = []
+        phase = .ready
+    }
+
+    private func resetTurnState() {
+        sending = false
+        streamingText = ""
+        thoughtLine = nil
+        sendError = nil
+    }
+
     private func prepare() async {
         guard let host = activeHost else { return }
+        if engine == .mcode {
+            mcodeChatId = nil
+            mcodeRemoteId = nil
+            mcodeLoaded = []
+            mcodePending = []
+            phase = .ready
+            return
+        }
         phase = .loading
         do {
             agentBubbles = try await ChatThreadClient(host: host).fetch(deviceUid: deviceUid)
@@ -303,6 +480,18 @@ public struct ChatView: View {
 
     private func refreshThread() async {
         guard let host = activeHost, phase == .ready else { return }
+        if engine == .mcode {
+            guard let remoteId = mcodeRemoteId else { return }
+            do {
+                let loaded = try await McodeSessionsClient(host: host).load(sessionId: remoteId)
+                mcodeChatId = loaded.chatId
+                mcodeLoaded = loaded.history
+                mcodePending = []
+            } catch {
+                // Keep the in-view thread; the next send or pull retries.
+            }
+            return
+        }
         do {
             agentBubbles = try await ChatThreadClient(host: host).fetch(deviceUid: deviceUid)
         } catch {
@@ -321,6 +510,8 @@ public struct ChatView: View {
                 )
             case .http(401):
                 return "The sidecar rejected this chat token — reopen Clutch or pair again to refresh it."
+            case .http(501):
+                return "The sidecar has no chat relay configured yet — MiniMax Code threads work now; DeepSeek and MiniMax threads need the relay."
             default:
                 return clientError.localizedDescription
             }
@@ -340,28 +531,49 @@ public struct ChatView: View {
         sendError = nil
         sending = true
         streamingText = ""
-        localPrompts.append(LocalPrompt(text: prompt, at: Date()))
-        MacChatStore.savePrompts(localPrompts)
-        let client = ChatSessionClient(host: host, model: selectedModel, sessionId: sessionId, relayReceiverUid: deviceUid)
+        if engine == .mcode {
+            mcodePending.append(LocalPrompt(text: prompt, at: Date()))
+        } else {
+            localPrompts.append(LocalPrompt(text: prompt, at: Date()))
+            MacChatStore.savePrompts(localPrompts)
+        }
+        let client = ChatSessionClient(
+            host: host,
+            model: selectedModel,
+            sessionId: engine == .mcode ? mcodeChatId : sessionId,
+            relayReceiverUid: deviceUid,
+            engine: engine == .mcode ? "mcode" : nil
+        )
         Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
                     case .started(let id, _):
-                        sessionId = id
+                        if engine == .mcode {
+                            mcodeChatId = id
+                        } else {
+                            sessionId = id
+                        }
                     case .message(let chunk):
                         thoughtLine = nil
                         streamingText += chunk
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
                     case .done(let stop, let id):
-                        sessionId = id
+                        if engine == .mcode {
+                            mcodeChatId = id
+                            if !streamingText.isEmpty {
+                                mcodeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: streamingText))
+                            }
+                        } else {
+                            sessionId = id
+                        }
                         sending = false
                         streamingText = ""
                         thoughtLine = nil
                         if stop != "endTurn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
-                        } else {
+                        } else if engine != .mcode {
                             await refreshThread()
                         }
                     case .failed(let message):
@@ -382,32 +594,128 @@ public struct ChatView: View {
     }
 }
 
+/// MiniMax Code thread browser: list, resume, and hand the replayed
+/// history back to the Chat tab.
+struct MacSessionsSheet: View {
+    var host: ClutchHost
+    var onLoaded: (String, String, [AcpHistoryEntry]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var sessions: [AcpSessionInfo]?
+    @State private var error: String?
+    @State private var loadingId: String?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let sessions {
+                    if sessions.isEmpty {
+                        Text("No MiniMax Code threads yet — start one from the Chat tab.")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding()
+                    } else {
+                        List(sessions) { session in
+                            Button {
+                                Task { await load(session) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(session.title ?? session.sessionId)
+                                        .font(.body.weight(.semibold))
+                                        .lineLimit(1)
+                                    if let cwd = session.cwd {
+                                        Text(cwd)
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                    }
+                                }
+                            }
+                            .disabled(loadingId != nil)
+                        }
+                    }
+                } else if let error {
+                    Text(error)
+                        .font(.body)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding()
+                } else {
+                    ProgressView("Loading threads…")
+                }
+            }
+            .navigationTitle("MiniMax Code Threads")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+        .frame(minWidth: 440, minHeight: 340)
+        .task {
+            await refresh()
+        }
+    }
+
+    private func refresh() async {
+        do {
+            sessions = try await McodeSessionsClient(host: host).list()
+        } catch {
+            self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+
+    private func load(_ session: AcpSessionInfo) async {
+        loadingId = session.sessionId
+        defer { loadingId = nil }
+        do {
+            let loaded = try await McodeSessionsClient(host: host).load(sessionId: session.sessionId)
+            onLoaded(loaded.chatId, loaded.remoteId, loaded.history)
+            dismiss()
+        } catch {
+            self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+}
+
 /// Thread bubble and user prompt rows.
 struct MacChatRow: View {
     var row: ChatView.Row
 
     var body: some View {
-        HStack {
-            if !row.fromAgent { Spacer(minLength: 48) }
-            VStack(alignment: row.fromAgent ? .leading : .trailing, spacing: 4) {
+        if row.isThought {
+            HStack {
                 Text(row.text)
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        row.fromAgent
-                            ? Color.clutchSecondaryBackground
-                            : Color.accentColor.opacity(0.15),
-                        in: RoundedRectangle(cornerRadius: 12)
-                    )
-                if row.isCard {
-                    Text("TOOL SUMMARY")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.secondary)
-                }
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                Spacer(minLength: 48)
             }
-            if row.fromAgent { Spacer(minLength: 48) }
+        } else {
+            HStack {
+                if !row.fromAgent { Spacer(minLength: 48) }
+                VStack(alignment: row.fromAgent ? .leading : .trailing, spacing: 4) {
+                    Text(row.text)
+                        .font(.system(size: 13))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            row.fromAgent
+                                ? Color.clutchSecondaryBackground
+                                : Color.accentColor.opacity(0.15),
+                            in: RoundedRectangle(cornerRadius: 12)
+                        )
+                    if row.isCard {
+                        Text("TOOL SUMMARY")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                if row.fromAgent { Spacer(minLength: 48) }
+            }
         }
     }
 }
