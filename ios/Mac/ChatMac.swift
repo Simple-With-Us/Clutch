@@ -571,7 +571,7 @@ public struct ChatView: View {
                         sending = false
                         streamingText = ""
                         thoughtLine = nil
-                        if stop != "endTurn" && stop != "cancelled" {
+                        if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         } else if engine != .mcode {
                             await refreshThread()
