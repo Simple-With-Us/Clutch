@@ -105,9 +105,10 @@ do_dock() {
 }
 do_restart() {
   if [ -n "$CMD_RESTART" ]; then bash -c "$CMD_RESTART"; return $?; fi
-  "$PM2_BIN" restart "$PM2_JOB" --update-env && return 0
-  log "RESTART-FALLBACK  pm2 restart $PM2_JOB failed; trying pm2 start --only $PM2_JOB"
-  [ -f "$ECOSYSTEM" ] || return 1
+  # pm2 restart by name is unreliable on this fleet (the 7.x daemon reports
+  # live ids as "not found", which rolled back every update for a day), while
+  # delete + start-by-ecosystem always works and leaves no duplicate entries.
+  "$PM2_BIN" delete "$PM2_JOB" >/dev/null 2>&1 || true
   "$PM2_BIN" start "$ECOSYSTEM" --only "$PM2_JOB" --update-env
 }
 
