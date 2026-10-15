@@ -18,16 +18,16 @@ Infisical is the sole source of truth for Clutch's app settings — secrets, env
 
 Clutch provides a web interface, coding profiles, and ACP bridges around the upstream DeepSeek Harness (`@deepseek-ai/dsh`).  It includes DeepSeek, MiniMax, and Muse Code configurations; capabilities depend on the profile, model, and provider.
 
-- `dsh/` — DSH engine layer: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
-- `minimax/` — The Clutch MiniMax bridge: the headless Python ACP bridge launches `dsh --profile minimax-headless` with MiniMax as its model provider.  The package also includes lower-level HTTP client exports; these are separate from the headless bridge.
-- `web/` — TypeScript web UI scripts (`start-web.ts`, `serve-tailscale.ts`, `open-clutch.ts`, `ensure-web.ts`, `install-dock-app.ts`).
-- `profiles/` — Tracked cordis profile defaults (`deepseek-headless`, `minimax-headless`).  Each profile is independent and customized for its use case; the matrix (per-profile feature depth: plugins enabled, tool allowlist, thinking effort, turn budgets, model selection) is open-ended.
+- `src/dsh/` — DSH engine layer: full `@deepseek-ai/dsh` CLI + ACP bridge + cordis patch layer.
+- `src/minimax/` — The Clutch MiniMax bridge: Shellular MiniMax rides the same `@deepseek-ai/dsh` coding stack as DSH, with MiniMax as the LLM (`minimax-headless` profile).  `bridges/minimax/minimax-acp.py` spawns `dsh --profile minimax-headless`.  The package also includes lower-level HTTP client exports; these are separate from the headless bridge.
+- `src/web/` — TypeScript web UI scripts (`start-web.ts`, `serve-tailscale.ts`, `open-clutch.ts`, `ensure-web.ts`, `install-dock-app.ts`).
+- `src/profiles/` — Tracked cordis profile defaults (`deepseek-headless`, `minimax-headless`).  Each profile is independent and customized for its use case; the matrix (per-profile feature depth: plugins enabled, tool allowlist, thinking effort, turn budgets, model selection) is open-ended.
 - `bridges/` — Python stdio JSON-RPC bridges for Shellular, ACP callers, and other agents.  Bridges stay in Python intentionally — see "Bridges are Python" below.
 - `engines/` — Drop-in engine plugins: an engine is a file, not a code change.  Two tiers — `engines/<id>.engine.json` (declarative; maps onto the shared `AcpSupport` shape and executes nothing) and `engines/<id>.engine.mjs` (programmatic; exports an `AcpSupport`).  Discovery walks `engines/` in the package root first, then `$CLUTCH_HOME/engines` (`~/.clutch/engines`), so a later directory overrides an earlier one by `id`; two files claiming the same `id` inside one directory are a conflict, not an override.  `clutch-engines list` reports what loaded and what failed.  Muse Code ships as the first engine plugin.
 
 ## Seat Identity And Branches
 
-Post and claim as your own seat tag — `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]`, `[MINIMAX]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`, `minimax/*`).  This app is Clutch, acronym `CK`, Slack `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced.  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/AGENT-SYNC.md` § Overview and § Message Structure.
+Post and claim as your own seat tag — `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`).  This app is Clutch, acronym `CK`, Slack `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced, and the retired `[MINIMAX]` tag and `minimax/*` prefix must not be reintroduced either.  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/AGENT-SYNC.md` § Overview and § Message Structure.
 
 ## THE BOARD Comes First
 
