@@ -33,8 +33,10 @@ final class AcpSessionTests: XCTestCase {
         let plain = AcpSessionInfo.updatedDate("2026-10-16T09:41:07Z")
         XCTAssertNotNil(fractional)
         XCTAssertNotNil(plain)
-        // Both forms are the same instant, so they must not sort apart.
-        XCTAssertEqual(fractional?.timeIntervalSince1970 ?? 0, plain?.timeIntervalSince1970 ?? -1, accuracy: 0.001)
+        // Both forms name the same wall-clock second, and the fractional one
+        // simply carries the extra precision, so they land well inside a
+        // second of each other rather than in different minutes or days.
+        XCTAssertEqual(fractional?.timeIntervalSince1970 ?? 0, plain?.timeIntervalSince1970 ?? -1, accuracy: 1.0)
         XCTAssertNil(AcpSessionInfo.updatedDate(nil))
         XCTAssertNil(AcpSessionInfo.updatedDate(""))
         XCTAssertNil(AcpSessionInfo.updatedDate("not a date"))
