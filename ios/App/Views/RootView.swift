@@ -52,6 +52,7 @@ struct ClutchScreen: View {
     @State private var webState: WebSurfaceState = .loading
     @State private var isShowingHosts = false
     @State private var isShowingAddHost = false
+    @State private var isShowingSessions = false
 
     var body: some View {
         NavigationStack {
@@ -88,6 +89,11 @@ struct ClutchScreen: View {
             .sheet(isPresented: $isShowingHosts) {
                 HostsSheet(store: store)
             }
+            #if os(iOS)
+            .sheet(isPresented: $isShowingSessions) {
+                SessionsView(host: host)
+            }
+            #endif
             .sheet(isPresented: $isShowingAddHost) {
                 NavigationStack {
                     PairView(showsIntro: false) { payload in
@@ -119,6 +125,16 @@ struct ClutchScreen: View {
 
     @ViewBuilder
     private var toolbarButtons: some View {
+        #if os(iOS)
+        // The Mac app already reaches MiniMax Code threads through its own
+        // sidebar; the phone had no way in without dropping to the web view.
+        Button {
+            isShowingSessions = true
+        } label: {
+            Image(systemName: "list.bullet.rectangle")
+        }
+        .accessibilityLabel("Sessions")
+        #endif
         Button {
             store.requestReload()
         } label: {
