@@ -36,107 +36,6 @@ struct LocalPrompt: Identifiable, Equatable, Codable {
     var at: Date
 }
 
-/// One MiniMax Code session from `GET /clutch/v1/sessions`.
-struct AcpSessionInfo: Decodable, Identifiable {
-    var sessionId: String
-    var cwd: String?
-    var title: String?
-    var updatedAt: String?
-    var id: String { sessionId }
-
-    /// The sidecar sends ISO-8601 with milliseconds and a `Z` suffix; tolerate
-    /// the plain form too so a thread without them still sorts sensibly.
-    static func updatedDate(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: value)
-    }
-}
-
-/// One replayed update from `POST /clutch/v1/sessions/load`.
-struct AcpHistoryEntry: Decodable, Equatable {
-    var sessionId: String
-    var kind: String
-    var text: String
-}
-
-/// Minimal client for the mcode session endpoints (see `chat-bridge.ts`).
-/// Same chat-token gate as everything else on the sidecar.
-struct McodeSessionsClient {
-    var host: ClutchHost
-
-    private func authorized(_ url: URL) throws -> URLRequest {
-        guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        // Session discovery and full-history replay cross process spawns on
-        // a loaded Mac; the old 30s budget timed out routinely.
-        req.timeoutInterval = 90
-        return req
-    }
-
-    private func base() throws -> URLComponents {
-        var comps = URLComponents()
-        comps.scheme = host.origin.scheme
-        comps.host = host.origin.host
-        comps.port = host.chatPort
-        guard comps.url != nil else { throw ChatClientError.badHost }
-        return comps
-    }
-
-    func list(limit: Int = 100) async throws -> [AcpSessionInfo] {
-        var comps = try base()
-        comps.path = "/clutch/v1/sessions"
-        comps.queryItems = [
-            URLQueryItem(name: "engine", value: "mcode"),
-            URLQueryItem(name: "limit", value: String(limit)),
-        ]
-        guard let url = comps.url else { throw ChatClientError.badHost }
-        let (data, resp) = try await URLSession.shared.data(for: authorized(url))
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
-        }
-        struct Payload: Decodable { var sessions: [AcpSessionInfo] }
-        return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
-    }
-
-    /// `cwd` is effectively required: the sidecar falls back to `$HOME` when it
-    /// is absent, and the ACP bridge then refuses any thread whose persisted
-    /// workspace is elsewhere ("Requested cwd does not match the persisted
-    /// session workspace").  Always pass the cwd the session was listed with,
-    /// or every thread outside `$HOME` fails to resume.
-    func load(sessionId: String, cwd: String? = nil, limit: Int = 200) async throws -> (chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
-        var comps = try base()
-        comps.path = "/clutch/v1/sessions/load"
-        guard let url = comps.url else { throw ChatClientError.badHost }
-        var req = try authorized(url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["engine": "mcode", "sessionId": sessionId, "limit": limit]
-        if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
-        }
-        struct Payload: Decodable {
-            var sessionId: String
-            var remoteSessionId: String?
-            var cwd: String?
-            var history: [AcpHistoryEntry]?
-        }
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-            throw ChatClientError.http(200)
-        }
-        // The sidecar does not echo cwd back, so keep the one we asked for:
-        // the pull-to-refresh path needs it to resume this same thread again.
-        return (payload.sessionId, payload.remoteSessionId ?? sessionId, payload.cwd ?? cwd, payload.history ?? [])
-    }
-}
 /// Minimal client for `GET /clutch/v1/thread` (see `chat-bridge.ts`). Same
 /// chat-token gate as the send path; the CometChat key never leaves the
 /// sidecar.
@@ -548,11 +447,11 @@ public struct ChatView: View {
         Task {
             defer { if fromSidebar { sidebarLoadingId = nil } }
             do {
-                let loaded = try await McodeSessionsClient(host: host).load(
+                let loaded = try await SessionsClient(host: host).load(
                     sessionId: session.sessionId,
                     cwd: session.cwd
                 )
-                adopt(chatId: loaded.chatId, remoteId: loaded.remoteId, cwd: loaded.cwd, history: loaded.history)
+                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history)
             } catch {
                 if fromSidebar {
                     sidebarError = mcodeLoadErrorMessage(error, session: session)
@@ -568,7 +467,7 @@ public struct ChatView: View {
         sidebarLoading = true
         defer { sidebarLoading = false }
         do {
-            sidebarSessions = try await McodeSessionsClient(host: host).list()
+            sidebarSessions = try await SessionsClient(host: host).list()
             sidebarError = nil
         } catch {
             // Keep whatever list we already have; a retry is one click away.
@@ -606,11 +505,11 @@ public struct ChatView: View {
             // finished turn survives relaunch instead of going nowhere.
             if let saved = MacMcodeStore.load(for: host) {
                 do {
-                    let loaded = try await McodeSessionsClient(host: host).load(
+                    let loaded = try await SessionsClient(host: host).load(
                         sessionId: saved.remoteId,
                         cwd: saved.cwd
                     )
-                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteId, cwd: loaded.cwd, history: loaded.history)
+                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history)
                     return
                 } catch {
                     MacMcodeStore.clear(for: host)
@@ -637,7 +536,7 @@ public struct ChatView: View {
         if engine == .mcode {
             guard let remoteId = mcodeRemoteId else { return }
             do {
-                let loaded = try await McodeSessionsClient(host: host).load(
+                let loaded = try await SessionsClient(host: host).load(
                     sessionId: remoteId,
                     cwd: mcodeCwd
                 )
@@ -863,7 +762,7 @@ struct MacSessionsSheet: View {
     private func refresh() async {
         error = nil
         do {
-            sessions = try await McodeSessionsClient(host: host).list()
+            sessions = try await SessionsClient(host: host).list()
         } catch {
             self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
         }
@@ -874,11 +773,11 @@ struct MacSessionsSheet: View {
         error = nil
         defer { loadingId = nil }
         do {
-            let loaded = try await McodeSessionsClient(host: host).load(
+            let loaded = try await SessionsClient(host: host).load(
                 sessionId: session.sessionId,
                 cwd: session.cwd
             )
-            onLoaded(session, loaded.chatId, loaded.remoteId, loaded.cwd, loaded.history)
+            onLoaded(session, loaded.chatId, loaded.remoteSessionId, loaded.cwd, loaded.history)
             dismiss()
         } catch {
             self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription

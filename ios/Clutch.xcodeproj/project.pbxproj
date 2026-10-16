@@ -11,17 +11,23 @@
 		0052618044571AFA352AAC9A /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
 		00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */; };
 		05DE5020A9AB44EF70CAA2E1 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
+		148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
 		1A5AE17AB7D512B9DA6660A4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
+		2086F0818B78430A05F98A62 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E37F50A879712AF7F22B092 /* SessionsView.swift */; };
 		218A167CAF93CB70A5F65247 /* ClutchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8350E05ABC320489DC29C0A9 /* ClutchApp.swift */; };
 		3D1E76801CC7CDAA8C557537 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011331E126F79B28AE6B1DCE /* TranscriptionService.swift */; };
+		3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
 		43DA4D3EC7B1CB3FA3EA5C2F /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
 		5187B8140B0C71219BBC980C /* HostsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */; };
 		55E24ED085686E3D6A023806 /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF818C703EEECD904E31711 /* PairingLink.swift */; };
+		5A3BEAC360DD3A5008E60C4B /* AcpSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB42A9547AE68A2227C26B9 /* AcpSession.swift */; };
 		620636170E702B79470DEB71 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D88017536E50AA8E88A5F36 /* Assets.xcassets */; };
 		628E3D79A9B8F51033F2CB91 /* FleetRecallModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */; };
 		65DECF7B2DB76309C90D681C /* ToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 247231E22BE670FBB01C6F92 /* ToolCallCard.swift */; };
+		6837A599633AC57474330540 /* SessionsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C52DEAAF7A31217501C449 /* SessionsClient.swift */; };
 		6C199685D907A332658047E1 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5FBD64006BA01FD566745EB8 /* Info.plist */; };
+		74F9CB381704132CE0FFBE5D /* AcpSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB42A9547AE68A2227C26B9 /* AcpSession.swift */; };
 		74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCFC52CD4695F04BEDCB607E /* ChatViewMac.swift */; };
 		751A309BD6DEB2F47A3201E3 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011331E126F79B28AE6B1DCE /* TranscriptionService.swift */; };
 		76AC1AF46032BE331A737E2D /* CometChatUIKitSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 875C4D75EA892C6C14AD66AE /* CometChatUIKitSwift */; };
@@ -37,6 +43,7 @@
 		9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
 		977EA2945436566209B53B15 /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
 		9C6347E7BC1CB7B235423A55 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
+		9D8A3F2FC3641D362CE8A63A /* SessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */; };
 		A0CE74C52BAAE38076860EDA /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF818C703EEECD904E31711 /* PairingLink.swift */; };
 		A59D345A83DB671C1521BC9B /* ClutchChatTabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */; };
 		AA4AF91B37DD1E8C8CD0A936 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02A9B289B8BED2D4AAE1B82 /* RootView.swift */; };
@@ -46,6 +53,7 @@
 		B358A3BF898C0600BE5DD604 /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 963E835EDD8B4295E51E3747 /* PairView.swift */; };
 		BCF5B6E6848DA3059F9A713C /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
 		C98833B27EF97136742BC786 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81457A11AE35E90469E20EF /* ChatView.swift */; };
+		CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C52DEAAF7A31217501C449 /* SessionsClient.swift */; };
 		D1FF4CA99DEB2E1632575671 /* FleetRecallModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */; };
 		D35803D4079F3EC28C017679 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
 		D6A5EBB32B06C0592DAC02C0 /* AgentMessagesVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */; };
@@ -55,6 +63,7 @@
 		F099CF13CA15891061291F00 /* HostsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */; };
 		F3480DF81D27F97BDFD2AF2A /* FleetRecallClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */; };
 		F5F6B101BB12D696F5684113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D88017536E50AA8E88A5F36 /* Assets.xcassets */; };
+		F6FA743C967C96776991A3E8 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E37F50A879712AF7F22B092 /* SessionsView.swift */; };
 		F8CEB50DE839DC101732FD8A /* ClutchLiveUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD8D5DA5717C010FE84631A3 /* ClutchLiveUITests.swift */; };
 		FAEC962DC8DD35B89069B8AB /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938B47BD908994DA59A18C0A /* ChatMessage.swift */; };
 		FCEA95FFDA024133BEB147D1 /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 963E835EDD8B4295E51E3747 /* PairView.swift */; };
@@ -79,17 +88,20 @@
 
 /* Begin PBXFileReference section */
 		011331E126F79B28AE6B1DCE /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
+		03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
 		0D88017536E50AA8E88A5F36 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallModels.swift; sourceTree = "<group>"; };
 		16E7D46B34D86B23A894C85E /* ClutchHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchHost.swift; sourceTree = "<group>"; };
 		17E6C247D03A5371BC005295 /* Clutch macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Clutch macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		188F1EC3FF62EBA8D1681179 /* MacThreadSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacThreadSidebar.swift; sourceTree = "<group>"; };
+		1E37F50A879712AF7F22B092 /* SessionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsView.swift; sourceTree = "<group>"; };
 		247231E22BE670FBB01C6F92 /* ToolCallCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCallCard.swift; sourceTree = "<group>"; };
 		24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
 		26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenPanelTests.swift; sourceTree = "<group>"; };
 		370F89587447F8A4277926BD /* FleetRecallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallView.swift; sourceTree = "<group>"; };
 		3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchWebView.swift; sourceTree = "<group>"; };
 		439E15B2D5F4DF1892811FA9 /* Clutch.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Clutch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		45C52DEAAF7A31217501C449 /* SessionsClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsClient.swift; sourceTree = "<group>"; };
 		487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchChatTabUITests.swift; sourceTree = "<group>"; };
 		5012BBC94214678DC340E084 /* ClutchUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClutchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		551BEEA0C0E6FC71B297BB37 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -106,6 +118,8 @@
 		AD8D5DA5717C010FE84631A3 /* ClutchLiveUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchLiveUITests.swift; sourceTree = "<group>"; };
 		C15309992AC78E4D5B956FF9 /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
 		C182639A35D271331937928A /* CometChatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CometChatManager.swift; sourceTree = "<group>"; };
+		CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsTests.swift; sourceTree = "<group>"; };
+		CBB42A9547AE68A2227C26B9 /* AcpSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpSession.swift; sourceTree = "<group>"; };
 		D16A76E368570CE2DF1C66B2 /* WebViewMac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewMac.swift; sourceTree = "<group>"; };
 		D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMessagesVC.swift; sourceTree = "<group>"; };
 		E02A9B289B8BED2D4AAE1B82 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
@@ -134,6 +148,7 @@
 			children = (
 				26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */,
 				C15309992AC78E4D5B956FF9 /* PairingTests.swift */,
+				CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -169,6 +184,7 @@
 				9AC4915BE0E639FD34ED398C /* HostProbe.swift */,
 				F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */,
 				6DF818C703EEECD904E31711 /* PairingLink.swift */,
+				45C52DEAAF7A31217501C449 /* SessionsClient.swift */,
 				011331E126F79B28AE6B1DCE /* TranscriptionService.swift */,
 			);
 			path = Services;
@@ -177,6 +193,7 @@
 		79CEDCB4D7EB91EC998E0E5D /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				CBB42A9547AE68A2227C26B9 /* AcpSession.swift */,
 				938B47BD908994DA59A18C0A /* ChatMessage.swift */,
 				16E7D46B34D86B23A894C85E /* ClutchHost.swift */,
 				0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */,
@@ -224,6 +241,8 @@
 				8FE1DEE0EB576AE69F2FF385 /* PairingScannerSheet.swift */,
 				963E835EDD8B4295E51E3747 /* PairView.swift */,
 				E02A9B289B8BED2D4AAE1B82 /* RootView.swift */,
+				1E37F50A879712AF7F22B092 /* SessionsView.swift */,
+				03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -408,6 +427,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				74F9CB381704132CE0FFBE5D /* AcpSession.swift in Sources */,
 				D6A5EBB32B06C0592DAC02C0 /* AgentMessagesVC.swift in Sources */,
 				7B7CE37DB68A99719369B7F0 /* ChatMessage.swift in Sources */,
 				0052618044571AFA352AAC9A /* ChatSessionClient.swift in Sources */,
@@ -428,6 +448,9 @@
 				1A5AE17AB7D512B9DA6660A4 /* Platform.swift in Sources */,
 				AA78155B7698D43FE8EEFB66 /* ReasoningBlockView.swift in Sources */,
 				8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */,
+				148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */,
+				6837A599633AC57474330540 /* SessionsClient.swift in Sources */,
+				F6FA743C967C96776991A3E8 /* SessionsView.swift in Sources */,
 				65DECF7B2DB76309C90D681C /* ToolCallCard.swift in Sources */,
 				751A309BD6DEB2F47A3201E3 /* TranscriptionService.swift in Sources */,
 			);
@@ -437,6 +460,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A3BEAC360DD3A5008E60C4B /* AcpSession.swift in Sources */,
 				FAEC962DC8DD35B89069B8AB /* ChatMessage.swift in Sources */,
 				BCF5B6E6848DA3059F9A713C /* ChatSessionClient.swift in Sources */,
 				74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */,
@@ -453,6 +477,9 @@
 				A0CE74C52BAAE38076860EDA /* PairingLink.swift in Sources */,
 				9C6347E7BC1CB7B235423A55 /* Platform.swift in Sources */,
 				AA4AF91B37DD1E8C8CD0A936 /* RootView.swift in Sources */,
+				3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */,
+				CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */,
+				2086F0818B78430A05F98A62 /* SessionsView.swift in Sources */,
 				3D1E76801CC7CDAA8C557537 /* TranscriptionService.swift in Sources */,
 				DC3DE8AA219F2C002FEF594B /* WebViewMac.swift in Sources */,
 			);
@@ -473,6 +500,7 @@
 			files = (
 				00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */,
 				8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */,
+				9D8A3F2FC3641D362CE8A63A /* SessionsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
