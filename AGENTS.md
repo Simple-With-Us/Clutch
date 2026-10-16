@@ -2,7 +2,7 @@
 
 This file is the **authoritative coordination manifest for AI agents** working on the `Simple-With-Us/Clutch` repository.  Human contributors should read [`CONTRIBUTING.md`](./CONTRIBUTING.md) instead.  Read this file fully before touching any code.
 
-GitHub: `Simple-With-Us/Clutch`.  Integration tree on this Mac: `/Users/jay/Code/Clutch` (read-only for every seat; never a working lane).  Seat worktrees: `~/apps/clutch-<seat>[-<lane>]`.  Zulip `repo:` name: **`clutch`**.  Acronym: **`CK`**.  Site: <https://clutch.codes>.
+GitHub: `Simple-With-Us/Clutch`.  Integration tree on this Mac: `/Users/jay/Code/Clutch` (read-only for every seat; never a working lane).  Seat worktrees: `~/apps/clutch-<seat>[-<lane>]`.  Zulip `repo:` name: **`clutch`**.  Acronym: **`C`**.  Site: <https://clutch.codes>.
 
 ## Infisical Sole Source Of Truth
 
@@ -27,7 +27,7 @@ Clutch provides a web interface, coding profiles, and ACP bridges around the ups
 
 ## Seat Identity And Branches
 
-Post and claim as your own seat tag — `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`).  This app is Clutch, acronym `CK`, Slack `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced.  The retired `[MINIMAX]` tag and `minimax/*` prefix belong to the old MiniMax-only seat and must not be reintroduced.  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/AGENT-SYNC.md` § Overview and § Message Structure.
+Post and claim as your own seat tag — `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`).  This app is Clutch, acronym `C`, Slack `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced.  The retired `[MINIMAX]` tag and `minimax/*` prefix belong to the old MiniMax-only seat and must not be reintroduced.  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/AGENT-SYNC.md` § Overview and § Message Structure.
 
 ## Linear Comes First
 
@@ -35,7 +35,7 @@ Linear (team **C**, issue ids like `C-76`) is the system of record for claims, s
 
 **Never prepend `~/apps/mac-collab` to `PATH`.**  That directory holds a legacy binary also named `board`; putting it first shadows `~/.local/bin/board` and sends writes to the retired mac-collab tracker instead of Linear.  Before trusting output, verify `command -v board` resolves to `~/.local/bin/board`.  Humans may browse the old UI at `https://mac.jays.services/board` as a read-only archive only; per-command rollback is `BOARD_BACKEND=mac-collab` or `board-legacy`, not a PATH change.
 
-**The Clutch team key is `C`, and `board --app` cannot address it unambiguously.**  There is no `CK` team in the workspace; `CK` is only the product acronym.  `--app clutch` fails with "Linear has no team CK visible", and `--app C` collides case-insensitively with AFC's lowercase `c` team and files into the wrong app.  Filter and address work with `--team C` (`board list --team C`), which resolves correctly; to file a new issue, prefer the `agent-sync` MCP `linear_file` with `app: "Clutch"`, which resolves by team name and lands in team C.  Verify where a new issue landed before filing another.
+**The Clutch team key is `C`, and `board --app` cannot address it unambiguously.**  There is no `CK` team in the workspace, and `CK` is not the product acronym either — the acronym is `C`.  `--app clutch` fails with "Linear has no team CK visible", and `--app C` collides case-insensitively with AFC's lowercase `c` team and files into the wrong app.  Filter and address work with `--team C` (`board list --team C`), which resolves correctly; to file a new issue, prefer the `agent-sync` MCP `linear_file` with `app: "Clutch"`, which resolves by team name and lands in team C.  Verify where a new issue landed before filing another.
 
 ```bash
 command -v board   # expect ~/.local/bin/board
@@ -99,7 +99,7 @@ Clutch runs always-on pieces on the Mac: pm2 `clutch-web` (web on `127.0.0.1:318
 
 ## Apple Notes For Owner-Facing Documents
 
-Plans, designs, reviews, handoffs, rollouts, and completion notes also go to Apple Notes (iCloud folder `Coding`) via `/Users/jay/apps/apple-notes-coding.sh "[CK, <Agent>] short topic" "body"` (`--update` to revise in place).  Title shape `[CK, Claude] …`; second body row is the local timestamp (auto-injected).  Canonical: `AGENT-SYNC.md` § Apple Notes.
+Plans, designs, reviews, handoffs, rollouts, and completion notes also go to Apple Notes (iCloud folder `Coding`) via `/Users/jay/apps/apple-notes-coding.sh "[C, <Agent>] short topic" "body"` (`--update` to revise in place).  Title shape `[C, Claude] …`; second body row is the local timestamp (auto-injected).  Canonical: `AGENT-SYNC.md` § Apple Notes.
 
 ## Copy Rules (owner — ALL agents, ALL surfaces)
 
