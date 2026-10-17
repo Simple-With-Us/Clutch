@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  applyAgentProxyToProcessEnv,
   initClutchSettings,
   CLUTCH_SETTINGS_SCHEMA,
   isSecretSetting,
@@ -347,6 +348,149 @@ describe("clutchSettings", () => {
       expect(process.env.INFISICAL_SECRET_PATH).toBe("/scope");
       expect(process.env.SSL_CERT_FILE).toBe("/tmp/ca.crt");
       expect(process.env.NODE_EXTRA_CA_CERTS).toBe("/tmp/ca.crt");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("removes the proxy variables it injected when the agent proxy is disabled, and keeps operator-set ones", async () => {
+    process.env.CLUTCH_AGENT_PROXY_ENABLED = "true";
+    process.env.CLUTCH_AGENT_PROXY_CA_CERT_PATH = "/tmp/ca.crt";
+    process.env.HTTPS_PROXY = "http://operator-proxy.invalid:8080";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.http_proxy).toBe("http://127.0.0.1:17322");
+      expect(process.env.HTTPS_PROXY).toBe("http://operator-proxy.invalid:8080");
+      expect(process.env.https_proxy).toBeUndefined();
+
+      process.env.CLUTCH_AGENT_PROXY_ENABLED = "false";
+      applyAgentProxyToProcessEnv();
+
+      for (const key of PROXY_ENV_KEYS.filter((k) => k !== "HTTPS_PROXY")) {
+        expect(process.env[key], key).toBeUndefined();
+      }
+      expect(process.env.HTTPS_PROXY).toBe("http://operator-proxy.invalid:8080");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("re-points injected proxy variables when the address changes, and leaves operator-set ones alone", async () => {
+    process.env.CLUTCH_AGENT_PROXY_ENABLED = "true";
+    process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:17322";
+    process.env.ALL_PROXY = "socks5://operator-proxy.invalid:1080";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.ALL_PROXY).toBe("socks5://operator-proxy.invalid:1080");
+
+      process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:18000";
+      applyAgentProxyToProcessEnv();
+
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:18000");
+      expect(process.env.https_proxy).toBe("http://127.0.0.1:18000");
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:18000");
+      expect(process.env.ALL_PROXY).toBe("socks5://operator-proxy.invalid:1080");
+      expect(process.env.all_proxy).toBeUndefined();
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("set() on the agent proxy keys applies, re-points, and then tears down the proxy variables", async () => {
+    const scenario = makeScenario();
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_CLIENT_ID = "test-id";
+    process.env.INFISICAL_CLIENT_SECRET = "test-value";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+
+      await settings.set("CLUTCH_AGENT_PROXY_ENABLED", "true");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+
+      await settings.set("CLUTCH_AGENT_PROXY_ADDRESS", "127.0.0.1:18000");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:18000");
+
+      await settings.set("CLUTCH_AGENT_PROXY_ENABLED", "false");
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBeUndefined();
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("refresh() re-points and then removes the proxy variables when Infisical changes, but not an operator-set key", async () => {
+    const scenario = makeScenario();
+    scenario.serverSecrets.push(
+      { secretKey: "CLUTCH_AGENT_PROXY_ENABLED", secretValue: "true" },
+      { secretKey: "CLUTCH_AGENT_PROXY_ADDRESS", secretValue: "127.0.0.1:19001" },
+    );
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_CLIENT_ID = "test-id";
+    process.env.INFISICAL_CLIENT_SECRET = "test-value";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19001");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19001");
+
+      const setServer = (key: string, value: string | undefined) => {
+        const rest = scenario.serverSecrets.filter((s) => s.secretKey !== key);
+        scenario.serverSecrets.length = 0;
+        scenario.serverSecrets.push(...rest);
+        if (value !== undefined) scenario.serverSecrets.push({ secretKey: key, secretValue: value });
+      };
+
+      setServer("CLUTCH_AGENT_PROXY_ADDRESS", "127.0.0.1:19002");
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19002");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19002");
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19002");
+
+      setServer("CLUTCH_AGENT_PROXY_ENABLED", "false");
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ENABLED).toBe("false");
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.https_proxy).toBeUndefined();
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBeUndefined();
+
+      // A key deleted in Infisical drops back to its default.
+      setServer("CLUTCH_AGENT_PROXY_ENABLED", "true");
+      await settings.refresh();
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19002");
+      setServer("CLUTCH_AGENT_PROXY_ADDRESS", undefined);
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBeUndefined();
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("refresh() never overrides an operator-set CLUTCH_AGENT_PROXY_ADDRESS", async () => {
+    const scenario = makeScenario();
+    scenario.serverSecrets.push(
+      { secretKey: "CLUTCH_AGENT_PROXY_ENABLED", secretValue: "true" },
+      { secretKey: "CLUTCH_AGENT_PROXY_ADDRESS", secretValue: "127.0.0.1:19101" },
+    );
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_CLIENT_ID = "test-id";
+    process.env.INFISICAL_CLIENT_SECRET = "test-value";
+    process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:19100";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19100");
+      const address = scenario.serverSecrets.find((s) => s.secretKey === "CLUTCH_AGENT_PROXY_ADDRESS");
+      if (address) address.secretValue = "127.0.0.1:19102";
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19100");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19100");
     } finally {
       settings.stop();
     }

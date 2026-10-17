@@ -101,6 +101,17 @@ function isSecretKey(key: string): boolean {
   return SCHEMA_BY_KEY.get(key)?.kind === "secret";
 }
 
+function isAgentProxyKey(key: string): boolean {
+  return key.startsWith("CLUTCH_AGENT_PROXY_");
+}
+
+/**
+ * Agent proxy setting values Clutch itself wrote into process.env (from
+ * Infisical or from set()), so a refresh can tell them apart from a value the
+ * operator set and keep them current.
+ */
+const backfilledAgentProxySettings = new Map<string, string>();
+
 /** Names only — never log values, especially secrets. */
 function describeKeys(keys: Iterable<string>): string {
   return [...keys].join(", ");
@@ -181,7 +192,8 @@ class ClutchSettingsImpl implements ClutchSettings {
     // the process backfill so child processes inherit the new value.
     await this.client.set(key, value);
     process.env[key] = value;
-    if (key.startsWith("CLUTCH_AGENT_PROXY_")) {
+    if (isAgentProxyKey(key)) {
+      backfilledAgentProxySettings.set(key, value);
       applyAgentProxyToProcessEnv();
     }
   }
@@ -198,12 +210,42 @@ class ClutchSettingsImpl implements ClutchSettings {
 }
 
 /**
- * Injects proxy environment variables into process.env when
- * CLUTCH_AGENT_PROXY_ENABLED is "true".
+ * Proxy variables Clutch itself wrote into process.env (name -> value), so a
+ * later disable or address change can undo exactly those and never touch a
+ * value the operator set.
+ */
+const injectedProxyEnv = new Map<string, string>();
+
+function removeInjectedProxyEnv(): void {
+  for (const [name, value] of injectedProxyEnv) {
+    // Only remove what we wrote: a value changed since then belongs to the operator.
+    if (process.env[name] === value) delete process.env[name];
+  }
+  injectedProxyEnv.clear();
+}
+
+/** Fill `names` with `value` unless the operator already set any of them. */
+function injectProxyEnv(names: readonly string[], value: string): void {
+  if (!value || names.some((name) => process.env[name])) return;
+  for (const name of names) {
+    process.env[name] = value;
+    injectedProxyEnv.set(name, value);
+  }
+}
+
+/**
+ * Reconciles the agent proxy variables in process.env with the current
+ * CLUTCH_AGENT_PROXY_* settings: when CLUTCH_AGENT_PROXY_ENABLED is "true",
+ * "1" or "yes" it injects them (only where unset), and otherwise it removes
+ * the ones it injected earlier.  A changed address, project, environment,
+ * path or CA path re-points the injected values the same way.
  * Downstream child processes (ACP drivers, engines, Python bridges)
  * inherit process.env directly.
  */
 export function applyAgentProxyToProcessEnv(): void {
+  // Undo our earlier injection first, so a disable or an address change never
+  // leaves a stale value behind; operator-set variables are left alone.
+  removeInjectedProxyEnv();
   const rawEnabled = process.env.CLUTCH_AGENT_PROXY_ENABLED ?? SCHEMA_BY_KEY.get("CLUTCH_AGENT_PROXY_ENABLED")?.defaultValue ?? "false";
   const enabled = rawEnabled.trim().toLowerCase();
   if (enabled !== "true" && enabled !== "1" && enabled !== "yes") {
@@ -216,38 +258,16 @@ export function applyAgentProxyToProcessEnv(): void {
   const path = (process.env.CLUTCH_AGENT_PROXY_PATH || SCHEMA_BY_KEY.get("CLUTCH_AGENT_PROXY_PATH")?.defaultValue || "/").trim();
   const caCertPath = (process.env.CLUTCH_AGENT_PROXY_CA_CERT_PATH || "").trim();
 
-  if (!process.env.HTTP_PROXY && !process.env.http_proxy) {
-    process.env.HTTP_PROXY = proxyUrl;
-    process.env.http_proxy = proxyUrl;
-  }
-  if (!process.env.HTTPS_PROXY && !process.env.https_proxy) {
-    process.env.HTTPS_PROXY = proxyUrl;
-    process.env.https_proxy = proxyUrl;
-  }
-  if (!process.env.ALL_PROXY && !process.env.all_proxy) {
-    process.env.ALL_PROXY = proxyUrl;
-    process.env.all_proxy = proxyUrl;
-  }
-  if (!process.env.NO_PROXY && !process.env.no_proxy) {
-    process.env.NO_PROXY = "localhost,127.0.0.1";
-    process.env.no_proxy = "localhost,127.0.0.1";
-  }
-  if (!process.env.INFISICAL_AGENT_PROXY_ADDRESS) {
-    process.env.INFISICAL_AGENT_PROXY_ADDRESS = address;
-  }
-  if (projectId && !process.env.INFISICAL_PROJECT_ID) {
-    process.env.INFISICAL_PROJECT_ID = projectId;
-  }
-  if (env && !process.env.INFISICAL_ENVIRONMENT) {
-    process.env.INFISICAL_ENVIRONMENT = env;
-  }
-  if (path && !process.env.INFISICAL_SECRET_PATH) {
-    process.env.INFISICAL_SECRET_PATH = path;
-  }
-  if (caCertPath) {
-    if (!process.env.SSL_CERT_FILE) process.env.SSL_CERT_FILE = caCertPath;
-    if (!process.env.NODE_EXTRA_CA_CERTS) process.env.NODE_EXTRA_CA_CERTS = caCertPath;
-  }
+  injectProxyEnv(["HTTP_PROXY", "http_proxy"], proxyUrl);
+  injectProxyEnv(["HTTPS_PROXY", "https_proxy"], proxyUrl);
+  injectProxyEnv(["ALL_PROXY", "all_proxy"], proxyUrl);
+  injectProxyEnv(["NO_PROXY", "no_proxy"], "localhost,127.0.0.1");
+  injectProxyEnv(["INFISICAL_AGENT_PROXY_ADDRESS"], address);
+  injectProxyEnv(["INFISICAL_PROJECT_ID"], projectId);
+  injectProxyEnv(["INFISICAL_ENVIRONMENT"], env);
+  injectProxyEnv(["INFISICAL_SECRET_PATH"], path);
+  injectProxyEnv(["SSL_CERT_FILE"], caCertPath);
+  injectProxyEnv(["NODE_EXTRA_CA_CERTS"], caCertPath);
 }
 
 /**
@@ -256,21 +276,42 @@ export function applyAgentProxyToProcessEnv(): void {
  * This is the delivery mechanism: downstream readers — ACP driver env
  * params, Python bridges, spawned child processes — see Infisical values
  * with zero code churn, and nothing fetches per-request.
+ *
+ * The agent proxy keys are the exception to "fill once": a value Clutch
+ * itself wrote follows later Infisical changes (and is removed when the key
+ * is deleted there), so a refresh can re-point or switch off the proxy.  A
+ * value the operator set is still left alone.
  */
 function backfillProcessEnv(client: InfisicalSettings): void {
   const filled: string[] = [];
+  const removed: string[] = [];
   for (const def of CLUTCH_SETTINGS_SCHEMA) {
     const current = process.env[def.key];
-    if (current !== undefined && current.length > 0) continue; // explicit env wins
     const cached = client.get(def.key);
-    if (cached !== undefined && cached.length > 0) {
-      process.env[def.key] = cached;
+    const next = cached !== undefined && cached.length > 0 ? cached : undefined;
+    if (current !== undefined && current.length > 0) {
+      const wroteIt = isAgentProxyKey(def.key) && backfilledAgentProxySettings.get(def.key) === current;
+      if (!wroteIt) continue; // explicit env wins
+      if (next === current) continue;
+      if (next === undefined) {
+        delete process.env[def.key];
+        backfilledAgentProxySettings.delete(def.key);
+        removed.push(def.key);
+        continue;
+      }
+    }
+    if (next !== undefined) {
+      process.env[def.key] = next;
+      if (isAgentProxyKey(def.key)) backfilledAgentProxySettings.set(def.key, next);
       filled.push(def.key);
     }
   }
+  // Names only — never values.
   if (filled.length > 0) {
-    // Names only — never values.
     console.error(`${LOG_PREFIX} backfilled from Infisical: ${describeKeys(filled)}`);
+  }
+  if (removed.length > 0) {
+    console.error(`${LOG_PREFIX} removed from process.env (deleted in Infisical): ${describeKeys(removed)}`);
   }
   applyAgentProxyToProcessEnv();
 }
