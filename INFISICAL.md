@@ -61,12 +61,32 @@ Env config:
 | `COMETCHAT_APP_ID` | config | — | CometChat App ID (native chat coordinates) |
 | `COMETCHAT_REGION` | config | — | CometChat region (us, eu, or in) |
 | `COMETCHAT_AGENT_UID` | config | `clutch-agent` | Agent user uid the relay speaks on behalf of |
+| `CLUTCH_AGENT_PROXY_ADDRESS` | config | `127.0.0.1:17322` | Address of local Infisical Agent Proxy (host:port) |
+| `CLUTCH_AGENT_PROXY_PROJECT_ID` | config | — | Optional Infisical Project ID override for Agent Proxy (defaults to Clutch project) |
+| `CLUTCH_AGENT_PROXY_ENV` | config | `prod` | Infisical environment slug for Agent Proxy |
+| `CLUTCH_AGENT_PROXY_PATH` | config | `/` | Secret path folder scope for Agent Proxy |
+| `CLUTCH_AGENT_PROXY_CA_CERT_PATH` | config | — | Optional CA certificate path for Agent Proxy TLS MITM |
 
 Knobs:
 
 | Key | Kind | Default | Notes |
 |---|---|---|---|
 | `CLUTCH_SETTINGS_REFRESH_MS` | knob | `300000` | Background settings refresh interval (ms); 0 disables the timer |
+| `CLUTCH_AGENT_PROXY_ENABLED` | knob | `false` | Enable routing spawned agent engines through Infisical Agent Proxy |
+
+### Infisical Agent Proxy (optional)
+
+Clutch can optionally route spawned agent engines (ACP drivers, Python bridges, CLI runners) through an Infisical Agent Proxy daemon (`infisical secrets agent-proxy start`).
+When `CLUTCH_AGENT_PROXY_ENABLED` is set to `"true"` (in Infisical or via environment), Clutch backfills standard proxy variables into `process.env`:
+- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`: `http://<address>` (default `http://127.0.0.1:17322`)
+- `NO_PROXY`: `localhost,127.0.0.1`
+- `INFISICAL_AGENT_PROXY_ADDRESS`: `<address>`
+- `INFISICAL_PROJECT_ID`: `CLUTCH_AGENT_PROXY_PROJECT_ID` (defaults to Clutch project `077fd6f3-9f9b-438e-9b6f-5c69076cf36c`)
+- `INFISICAL_ENVIRONMENT`: `CLUTCH_AGENT_PROXY_ENV` (default `prod`)
+- `INFISICAL_SECRET_PATH`: `CLUTCH_AGENT_PROXY_PATH` (default `/`)
+- `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`: `CLUTCH_AGENT_PROXY_CA_CERT_PATH` (when provided)
+
+Because child engines and ACP processes inherit `process.env`, outbound agent calls are transparently brokered by the proxy.  When disabled (`false`, the default), requests proceed directly.
 
 Out of scope (NOT in Infisical): `CLUTCH_HOME` / `CLUTCH_RUNTIME_ROOT` / `DSH_HOME` (bash bootstrap — needed before Node starts), `CLUTCH_LAUNCH_URL_FILE` / `CLUTCH_WEB_URL` (derived at runtime), upstream-read vars (`DSH_HOME`, `DSH_SESSION_ID`, `DSH_PERMISSION_MODE`), per-host iOS connection records (on-device store).
 

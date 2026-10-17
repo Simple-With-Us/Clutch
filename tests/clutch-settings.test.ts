@@ -67,9 +67,26 @@ function makeScenario(): Scenario {
 let savedEnv: Record<string, string | undefined>;
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "INFISICAL_AGENT_PROXY_ADDRESS",
+  "INFISICAL_PROJECT_ID",
+  "INFISICAL_ENVIRONMENT",
+  "INFISICAL_SECRET_PATH",
+  "SSL_CERT_FILE",
+  "NODE_EXTRA_CA_CERTS",
+];
+
 beforeEach(() => {
   savedEnv = {};
-  for (const key of [...MANAGED_KEYS, "INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET", "CLUTCH_INFISICAL_ENV"]) {
+  for (const key of [...MANAGED_KEYS, ...PROXY_ENV_KEYS, "INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET", "CLUTCH_INFISICAL_ENV"]) {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
@@ -307,6 +324,42 @@ describe("clutchSettings", () => {
       expect(client.get("CLUTCH_WEB_PORT")).toBe("3199");
     } finally {
       client.stop();
+    }
+  });
+
+  it("injects proxy environment variables when CLUTCH_AGENT_PROXY_ENABLED is true", async () => {
+    process.env.CLUTCH_AGENT_PROXY_ENABLED = "true";
+    process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:17322";
+    process.env.CLUTCH_AGENT_PROXY_PROJECT_ID = "custom-project";
+    process.env.CLUTCH_AGENT_PROXY_ENV = "prod";
+    process.env.CLUTCH_AGENT_PROXY_PATH = "/scope";
+    process.env.CLUTCH_AGENT_PROXY_CA_CERT_PATH = "/tmp/ca.crt";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.HTTPS_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.ALL_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1");
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:17322");
+      expect(process.env.INFISICAL_PROJECT_ID).toBe("custom-project");
+      expect(process.env.INFISICAL_ENVIRONMENT).toBe("prod");
+      expect(process.env.INFISICAL_SECRET_PATH).toBe("/scope");
+      expect(process.env.SSL_CERT_FILE).toBe("/tmp/ca.crt");
+      expect(process.env.NODE_EXTRA_CA_CERTS).toBe("/tmp/ca.crt");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("leaves proxy environment untouched when agent proxy is disabled", async () => {
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.HTTPS_PROXY).toBeUndefined();
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBeUndefined();
+    } finally {
+      settings.stop();
     }
   });
 });
