@@ -46,11 +46,12 @@ describe("the shipped MiniMax plugin", () => {
     expect(support.models.default).toBe("MiniMax-M2.7-highspeed");
   });
 
-  it("leaves the engine-wide image gate closed and states per-model truth", async () => {
+  it("opens the engine-wide image gate and keeps per-model truth exact", async () => {
     const support = await loadMinimax();
-    // A consumer reading only `images` must not offer an attachment the M2.7
-    // family would refuse; the per-model map is what a mixed catalog uses.
-    expect(support.images).toBe(false);
+    // The gate is only the fallback for a row the catalog does not list, and
+    // M3 and M3.1 Flash really do take images.  The per-model map is what stops
+    // a consumer offering an attachment the M2.7 family would refuse.
+    expect(support.images).toBe(true);
     expect(support.perModelImages).toEqual({
       "MiniMax-M3.1-Flash-Preview": true,
       "MiniMax-M3": true,

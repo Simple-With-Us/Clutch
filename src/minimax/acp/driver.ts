@@ -131,7 +131,12 @@ export function classifyMinimaxError(error: unknown): ProviderErrorCode | undefi
 export const minimaxSupport: AcpSupport = {
   driverKind: "minimaxAgent",
   displayName: "Clutch (MiniMax)",
-  images: false,
+  // Engine-wide fallback, not the per-model answer: every row in the catalog
+  // below carries its own exact `images`, and a consumer that resolves one
+  // model reads that row.  M3 and M3.1 Flash take images, so this matches the
+  // documented AcpSupport default of yes, which is what a row absent from the
+  // catalog would inherit anyway.
+  images: true,
   models: STATIC_MINIMAX_MODELS,
   resolveModels: () => STATIC_MINIMAX_MODELS,
   effortLevels: MINIMAX_EFFORT_LEVELS,

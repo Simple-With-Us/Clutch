@@ -198,10 +198,38 @@ describe("clutch CLI wrapper", () => {
 });
 
 describe("per-model image support", () => {
-  it("keeps the engine gate closed until BotFleet consumes per-model flags", () => {
-    // BotFleet currently gates image intake by engine alone.  Do not offer
-    // attachments on non-vision Pro before the per-model consumer deploys.
-    expect(dshSupport.images).toBe(false);
+  it("opens the engine gate now that consumers read per-model flags", () => {
+    // BotFleet folds the map in as `model?.images ?? capabilities?.images`, so
+    // the engine-wide answer is no longer the only thing a composer can see.
+    // Holding it closed was what told every model on the engine it refused
+    // images, which is how M3 and M3.1 Flash lost their attach button.
+    expect(dshSupport.images).toBe(true);
+  });
+
+  it("resolves every model the way a consumer folds the map, not the gate", () => {
+    // The exact fold a consumer runs: `model?.images ?? (capabilities?.images
+    // === true)`.  This is the bug the owner hit -- the closed engine gate,
+    // not the catalog, is what told the composer M3 and M3.1 Flash could not
+    // take an image.  Guard the fold itself so a future gate flip cannot
+    // silently re-disable every multimodal row at once.
+    const fold = (support: typeof dshSupport, modelId: string) => {
+      const row = support.models.options.find((option) => option.id === modelId);
+      return row?.images ?? (support.images === true);
+    };
+
+    // Multimodal rows resolve to true on every engine that lists them.
+    expect(fold(dshSupport, "MiniMax-M3.1-Flash-Preview")).toBe(true);
+    expect(fold(dshSupport, "MiniMax-M3")).toBe(true);
+    expect(fold(dshSupport, "DeepSeek-V4.1-Flash")).toBe(true);
+    expect(fold(minimaxSupport, "MiniMax-M3.1-Flash-Preview")).toBe(true);
+    expect(fold(minimaxSupport, "MiniMax-M3")).toBe(true);
+
+    // Text-only rows still resolve to false, so opening the gate never turns
+    // into "offer an attachment the provider would refuse".
+    expect(fold(dshSupport, "MiniMax-M2.7-highspeed")).toBe(false);
+    expect(fold(dshSupport, "DeepSeek-V4.1-Pro")).toBe(false);
+    expect(fold(minimaxSupport, "MiniMax-M2.7-highspeed")).toBe(false);
+    expect(fold(minimaxSupport, "MiniMax-M2.7")).toBe(false);
   });
 
   it("marks the multimodal model and not the reasoning one", () => {
