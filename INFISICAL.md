@@ -88,7 +88,7 @@ When `CLUTCH_AGENT_PROXY_ENABLED` is set to `"true"` (in Infisical or via enviro
 
 Because child engines and ACP processes inherit `process.env`, outbound agent calls are transparently brokered by the proxy.  When disabled (`false`, the default), requests proceed directly.
 
-Clutch only fills variables that are unset, so a proxy variable you set yourself always wins and is never removed.  It remembers the ones it injected, so a change to any `CLUTCH_AGENT_PROXY_*` key (on the next refresh, `SIGHUP`, or `clutch-settings reload`) re-points them, and `CLUTCH_AGENT_PROXY_ENABLED` set to `false` removes them.  A `CLUTCH_AGENT_PROXY_*` value you export yourself is never replaced by a later Infisical change; restart to pick that one up.
+Clutch only fills variables that are unset, so a proxy variable you set yourself always wins and is never removed.  It remembers the ones it injected: a change to a `CLUTCH_AGENT_PROXY_*` key that Node loaded from Infisical itself (picked up on the next refresh or `SIGHUP` of the running server) re-points them, and `CLUTCH_AGENT_PROXY_ENABLED` set to `false` removes them.  A `CLUTCH_AGENT_PROXY_*` value already in the environment at launch, including one exported by the bash launcher from Infisical, counts as set and needs a restart to change.  `clutch-settings reload` runs in its own process and does not change a running server.
 
 Out of scope (NOT in Infisical): `CLUTCH_HOME` / `CLUTCH_RUNTIME_ROOT` / `DSH_HOME` (bash bootstrap — needed before Node starts), `CLUTCH_LAUNCH_URL_FILE` / `CLUTCH_WEB_URL` (derived at runtime), upstream-read vars (`DSH_HOME`, `DSH_SESSION_ID`, `DSH_PERMISSION_MODE`), per-host iOS connection records (on-device store).
 
