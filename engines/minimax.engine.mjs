@@ -158,10 +158,11 @@ function classifyError(error) {
 export const support = {
   driverKind: "minimaxAgent",
   displayName: "Clutch (MiniMax)",
-  // Closed at the engine level until a consumer folds perModelImages onto the
-  // catalog: a consumer reading only this flag must not offer an attachment the
-  // M2.7 family would refuse.
-  images: false,
+  // Engine-wide fallback, not the per-model answer: every row in MODELS carries
+  // its own exact `images` and PER_MODEL_IMAGES restates it.  M3 and M3.1 Flash
+  // take images, so this matches the documented AcpSupport default of yes,
+  // which is what a row absent from the catalog would inherit anyway.
+  images: true,
   perModelImages: PER_MODEL_IMAGES,
   models: MODELS,
   resolveModels: () => MODELS,
