@@ -71,6 +71,10 @@ ios/
 
 Merges to `main` that touch `ios/**` trigger `.github/workflows/ios-ship.yml` on the fleet `xcode-27` runner (stable Xcode 27.0).  The workflow loads `APPLE_API_*` and `IOS_CERT_*` from Infisical, installs App Store profiles via the App Store Connect API (`ios/appstore-profiles.json`), archives with manual Release signing, uploads to TestFlight, and publishes mandatory What to Test notes from commit subjects.  Distribution stays internal-testers only.  Bundle `codes.clutch.ios`, Apple ID `6817951255`.
 
+Auto-ship contract (owner 2026-10-17):  a merge to `main` that touches `ios/**` uploads a fresh TestFlight build with no human step.  An hourly scheduled run (`23 * * * *`) is the catch-up for a push ship that failed or never fired (a bot-merged PR dispatches no push run);  it ships only when `scripts/ios-fleet/scheduled-ship-gate.sh` finds `ios/` changed since the last successful ship, and the ship script's 2.5 hour rate gate and same-HEAD skip stay at their defaults.  `workflow_dispatch` is the manual path.  Never set `IOS_TF_MIN_INTERVAL_SEC` or `--force-ship` in the workflow.
+
+Deploy checks that run in CI on every PR (`tests/ios-ship-workflow.test.ts`):  the 1024 AppIcon must have no alpha channel (Apple rejects the upload with altool 90717, and the unsigned PR dry-run cannot see it), and the workflow must keep its push paths, scheduled gate, ship-state cache, What to Test publish and no standing gate override.  The Mac slot of the icon set uses its own transparent `icon-mac-1024.png`.  If the ship fails, read the `altool` error in the run log first:  the script's "no App Store Connect app" hint is only one of several causes.
+
 ## Building and Testing
 
 ```bash

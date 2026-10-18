@@ -3,6 +3,35 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 # Archive + upload on GitHub-hosted xcode-27 runners.  Fork PRs never run here.
 # Signing + ASC keys come from Infisical prod through .github/actions/infisical-secrets.
 # Internal TestFlight testers only; no standing external-beta sync step.
+#
+# AUTO-SHIP CONTRACT (owner 2026-10-17): a merge to main that touches ios/**
+# (the `push:` paths filter below) uploads a fresh TestFlight build with no
+# human step and publishes What to Test (IOS_TF_RELEASE_NOTES=1).
+# `workflow_dispatch` is the manual path.  tests/ios-ship-workflow.test.ts pins
+# these pieces in CI.  The rate gate and the same-HEAD skip are the ship
+# script's defaults: never set IOS_TF_MIN_INTERVAL_SEC or --force-ship in this
+# file (a one-off override belongs on a dispatch input for that run only).
+#
+# WHY THERE IS A `schedule:` TRIGGER (C-84, 2026-10-17)
+# -----------------------------------------------------
+# `push:` alone never retries.  A ship that fails (here: altool 90717, an alpha
+# channel in the 1024 AppIcon after #133, which failed three main pushes in a
+# row) leaves main ahead of TestFlight until the NEXT ios/ merge.  A PR merged by
+# github-actions[bot] under GitHub's recursion guard dispatches no push run at
+# all.  `schedule:` events are exempt from both gaps, so the hourly tick notices
+# an iOS change that no push shipped and ships it.
+#
+# NOT EVERY TICK SHIPS.  A cron carries no `paths:` filter, so the scheduled
+# path is guarded twice:
+#   1. scripts/ios-fleet/scheduled-ship-gate.sh refuses to try unless ios/
+#      actually changed between the last successful ship's sha and HEAD.  It
+#      reads that sha from ~/.cache/ios-fleet, which a hosted runner starts
+#      without, so the cache restore/save steps below carry it between runs.  No
+#      recorded ship means the tick skips; a first ship is a push or a dispatch.
+#   2. ship-testflight.sh rate-limits successful uploads per app and skips when
+#      HEAD already shipped.  Both skips exit 0 and consume no build number.
+# Hourly, not twice an hour: while a ship is persistently broken every tick
+# re-archives on a hosted macOS runner, so the cadence is the cost cap.
 
 on:
   push:
@@ -18,6 +47,11 @@ on:
       - 'ios/appstore-profiles.json'
       - '.github/workflows/ios-ship.yml'
   workflow_dispatch:
+  schedule:
+    # Hourly at :23, offset from Socratic.Trade ('*/30'), Congress.Trade
+    # ('7,37') and Usage-Monitor ('13,43') so the fleet repos do not start
+    # ships on the same minute.
+    - cron: '23 * * * *'
   pull_request:
     paths:
       - 'ios/**'
@@ -48,7 +82,13 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore and save are separate steps because actions/cache only saves in
+      # its post step, which runs on every successful tick (a new run_id entry
+      # per hourly skip) and is skipped when the job fails.  This saves only on
+      # ticks that tried to ship, so the last-ship state advances exactly when a
+      # ship ran and a no-op tick writes nothing.
+      - name: Restore iOS ship state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ios-fleet
           key: ios-fleet-clutch-${{ github.run_id }}
@@ -110,6 +150,15 @@ jobs:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
         run: bash scripts/ios-ship-testflight.sh
+
+      # Saved even when the ship step failed after it recorded the upload, but
+      # only on ticks that tried to ship.
+      - name: Save iOS ship state
+        if: ${{ always() && steps.gate.outputs.should_ship == '1' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ios-fleet
+          key: ios-fleet-clutch-${{ github.run_id }}
 
   pr-build-only:
     name: iOS archive dry-run (PR)
