@@ -5,6 +5,10 @@
  * `dsh --profile minimax-headless`).  These constants remain for direct HTTP
  * callers and BotFleet/AFC imports that need the host, path, and default
  * model without duplicating strings.
+ *
+ * Nothing in this package calls the API, so there is no usage to account for
+ * here.  MiniMax turns run through dsh and are counted from its session logs;
+ * see docs/decisions/0007-usage-accounting-rides-dsh-session-logs.md.
  */
 
 export const MINIMAX_DEFAULT_BASE_URL = "https://api.minimax.io/v1";
