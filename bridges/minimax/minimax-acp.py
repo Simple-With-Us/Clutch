@@ -16,7 +16,7 @@ behaved like the MiniMax chat web app.  Coding parity with DeepSeek means
 spawning the dsh engine with MiniMax as the model.
 
 Auth: process env `MINIMAX_API_KEY`, else `$DSH_HOME/.credentials.yaml`, else
-`~/.secrets/global-api-keys` looked up by CLUTCH_MINIMAX_API_KEY_NAME — never
+`fleet-secrets get` looked up by CLUTCH_MINIMAX_API_KEY_NAME — never
 from agents.json.
 
 Phone clients cannot answer interactive approvals.  Default
@@ -149,7 +149,7 @@ JsonDict = dict[str, Any]
 def _load_minimax_key() -> None:
     """Ensure MINIMAX_API_KEY (or CLUTCH_MINIMAX_API_KEY_NAME) is in the process env.
 
-    Order: already-set env → $DSH_HOME/.credentials.yaml → ~/.secrets/global-api-keys.
+    Order: already-set env → $DSH_HOME/.credentials.yaml → `fleet-secrets get`.
     Never prints or logs the value.
     """
     target = MINIMAX_API_KEY_NAME
@@ -182,21 +182,21 @@ def _load_minimax_key() -> None:
                 os.environ[target] = val
                 return
 
-    secrets = Path.home() / ".secrets" / "global-api-keys"
-    if not secrets.is_file():
-        return
-    try:
-        raw_text = secrets.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    for raw in raw_text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        name, _, val = line.partition("=")
-        if name.strip() not in {target, "MINIMAX_API_KEY"}:
-            continue
-        val = val.strip().strip("'").strip('"')
+    # Last resort on the Mac: `fleet-secrets get NAME` (Infisical Fleet-OPS).
+    # The value is captured, never printed;  a missing binary, a nonzero exit
+    # or an empty answer all mean "absent".
+    for name in dict.fromkeys((target, "MINIMAX_API_KEY")):
+        try:
+            proc = subprocess.run(
+                ["fleet-secrets", "get", name],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return
+        val = proc.stdout.strip() if proc.returncode == 0 else ""
         if val:
             os.environ["MINIMAX_API_KEY"] = val
             os.environ[target] = val

@@ -52,7 +52,7 @@ Bridges never read agent credentials.  Auth comes from:
   for MiniMax).
 - `$DSH_HOME/.credentials.yaml` (Clutch's engine credential store, default
   `~/.clutch/dsh/.credentials.yaml`) for DeepSeek.
-- `$DSH_HOME/.credentials.yaml` / `~/.secrets/global-api-keys` for MiniMax
+- `$DSH_HOME/.credentials.yaml`, then `fleet-secrets get` for MiniMax
   (`MINIMAX_API_KEY`, looked up by `CLUTCH_MINIMAX_API_KEY_NAME`).
 
 The Shellular `agents.json` entry for each agent sets the env vars via the
