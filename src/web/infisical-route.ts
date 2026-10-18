@@ -2,9 +2,9 @@
 // infisical-route — the settings API behind the native Infisical panel
 // =============================================================================
 //
-// Clutch's own web UI is upstream `dsh` code (scripts/clutch.sh execs
-// node_modules/.bin/dsh), so Clutch cannot add a section to the Settings
-// dialog without forking the harness.  It CAN own this route: chat-bridge
+// Clutch's own web UI is upstream `@deepseek-ai/dsh` code (scripts/clutch.sh
+// execs node_modules/.bin/dsh), so Clutch cannot add a section to the Settings
+// dialog without forking deepseek-harness.  It CAN own this route: chat-bridge
 // already runs on the Mac, already authenticates the paired native apps with
 // a bearer token, and is already Clutch-authored.  The iOS and macOS builds
 // of HostsSheet call it, which is how one panel is editable from both.

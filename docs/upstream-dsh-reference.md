@@ -47,7 +47,7 @@ update surface, and it is why Clutch should keep consuming rather than forking:
 |---|---|
 | Consume via npm (today) | Automatic PRs against one line.  Nothing Clutch owns can break. |
 | Adopt the `settings.section` seam | Still npm, but Clutch starts naming dsh's internal bundles in a profile and compiling a client bundle against `dsh-client-ui-slots` — which is **not published**, so a moved slot fails silently. |
-| Vendor / fork the harness | None.  Manual merges across ~130 packages, on an RC line that moved `0.1.5-rc.3` → `0.2.1-rc.2` in a single day. |
+| Vendor / fork deepseek-harness | None.  Manual merges across ~130 packages, on an RC line that moved `0.1.5-rc.3` → `0.2.1-rc.2` in a single day. |
 
 ## The seams that do exist
 
