@@ -37,7 +37,18 @@
 // here: the bash layer (scripts/lib/clutch-env.sh) needs them before Node
 // starts.  See scripts/lib/clutch-infisical-env.sh, which backfills the
 // managed keys from Infisical for the always-on bash path (pm2).
+//
+// The machine identity that unlocks Infisical (project ID, client ID, client
+// secret) is NOT managed here either — it cannot live in Infisical, because it
+// is what authenticates the read.  It lives in one owner-only local file,
+// $CLUTCH_HOME/infisical.json, with an explicitly-set environment variable
+// always winning over the file.  See infisicalIdentity.ts.
 
+import {
+  resolveInfisicalIdentity,
+  summarizeInfisicalIdentity,
+  type InfisicalIdentitySummary,
+} from "./infisicalIdentity.ts";
 import {
   createInfisicalSettings,
   InfisicalWriteError,
@@ -357,19 +368,22 @@ function resolveInfisicalEnvironment(): string {
  * load.
  */
 export async function initClutchSettings(): Promise<ClutchSettings> {
-  const clientId = process.env.INFISICAL_CLIENT_ID;
-  const clientSecret = process.env.INFISICAL_CLIENT_SECRET;
+  // Explicit env wins, then $CLUTCH_HOME/infisical.json, then the canonical
+  // Clutch project ID for the project coordinate only.
+  const identity = resolveInfisicalIdentity({ projectId: CLUTCH_INFISICAL_PROJECT_ID });
+  const { clientId, clientSecret } = identity;
   if (!clientId || !clientSecret) {
     console.error(
-      `${LOG_PREFIX} INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET not set — seeding settings from process.env. ` +
-        `Set the credentials to make Infisical the source of truth (see INFISICAL.md).`,
+      `${LOG_PREFIX} no Infisical machine identity — seeding settings from process.env. ` +
+        `Set INFISICAL_CLIENT_ID and INFISICAL_CLIENT_SECRET, or save them to ` +
+        `$CLUTCH_HOME/infisical.json, to make Infisical the source of truth (see INFISICAL.md).`,
     );
     applyAgentProxyToProcessEnv();
     return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   }
   const environment = resolveInfisicalEnvironment();
   const client = createInfisicalSettings({
-    projectId: CLUTCH_INFISICAL_PROJECT_ID,
+    projectId: identity.projectId,
     environment,
     refreshIntervalMs: refreshIntervalMs(),
     clientId,

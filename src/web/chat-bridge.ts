@@ -36,7 +36,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { clutchChatPort } from "../shared/ports.ts";
+import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
+import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 
@@ -414,6 +416,10 @@ function sseSend(res: ServerResponse, event: string, data: unknown): void {
 
 async function main(): Promise<void> {
   const token = loadOrMintToken();
+  // Clutch's own settings (Infisical is the sole source of truth).  The bridge
+  // is a separate process from start-web.ts, so it initializes its own
+  // instance; this is what backs the native Infisical settings panel.
+  const settings = await initClutchSettings();
   const tokenFingerprint = createHash("sha256").update(token).digest("hex").slice(0, 12);
   const tailnetHost = process.env.CLUTCH_TAILNET_HOST?.trim() || null;
   const extraHosts = (process.env.CLUTCH_TRUSTED_HOSTS ?? "").split(",");
@@ -475,6 +481,10 @@ async function main(): Promise<void> {
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, engines: ["deepseek", "minimax", "mcode"] }));
       return;
     }
+
+    // Clutch-owned settings surface (machine identity + managed key
+    // write-through), consumed by the native Hosts and Settings sheet.
+    if (await handleInfisicalSettingsRequest(req, res, url.pathname, { settings })) return;
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/sessions") {
       if (url.searchParams.get("engine") !== "mcode") {
