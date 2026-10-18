@@ -50,6 +50,18 @@ final class SessionThreadModel {
 
     func load() async {
         guard phase == .idle || isFailed else { return }
+        await fetch()
+    }
+
+    /// Pull-to-refresh on the transcript, matching the Mac chat pane.  Forces a
+    /// reload even when a thread is already open, so a turn that finished on
+    /// the Mac shows up on the phone without leaving the thread.
+    func reload() async {
+        guard !isSending else { return }
+        await fetch()
+    }
+
+    private func fetch() async {
         phase = .loading
         do {
             let loaded = try await client.load(sessionId: remoteSessionId, cwd: session.cwd)
@@ -205,6 +217,7 @@ public struct SessionThreadView: View {
                 .onChange(of: model.thoughtLine) { _, _ in
                     withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
                 }
+                .refreshable { await model.reload() }
             }
         }
     }

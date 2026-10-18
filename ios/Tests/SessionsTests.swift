@@ -53,4 +53,30 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(entry("user_message").isUser)
         XCTAssertFalse(entry("assistant_message").isUser)
     }
+
+    /// The Mac rail and the iOS sidebar share this ordering, so a thread must
+    /// land in the same slot on both platforms.
+    func testNewestFirstOrdersDatedRowsAndSinksUnreadableStamps() {
+        let old = AcpSessionInfo(sessionId: "old", updatedAt: "2026-10-15T09:00:00Z")
+        let new = AcpSessionInfo(sessionId: "new", updatedAt: "2026-10-16T09:00:00Z")
+        let brokenA = AcpSessionInfo(sessionId: "broken-a", updatedAt: "not a date")
+        let brokenB = AcpSessionInfo(sessionId: "broken-b", updatedAt: nil)
+
+        let ordered = AcpSessionInfo.newestFirst([old, brokenA, new, brokenB])
+        XCTAssertEqual(ordered.map(\.sessionId), ["new", "old", "broken-a", "broken-b"])
+    }
+
+    /// Two rows sharing an instant must not swap places between reloads of the
+    /// same payload, or the list flickers under the user's finger.
+    func testNewestFirstIsStableForEqualInstants() {
+        let stamp = "2026-10-16T09:00:00Z"
+        let first = AcpSessionInfo(sessionId: "first", updatedAt: stamp)
+        let second = AcpSessionInfo(sessionId: "second", updatedAt: stamp)
+        let ordered = AcpSessionInfo.newestFirst([first, second])
+        XCTAssertEqual(ordered.map(\.sessionId), ["first", "second"])
+    }
+
+    func testNewestFirstHandlesEmptyInput() {
+        XCTAssertTrue(AcpSessionInfo.newestFirst([]).isEmpty)
+    }
 }

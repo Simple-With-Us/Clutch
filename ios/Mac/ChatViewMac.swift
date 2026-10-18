@@ -160,7 +160,7 @@ public struct ChatView: View {
         NavigationStack {
             HStack(spacing: 0) {
                 if engine == .mcode && showingSidebar {
-                    MacThreadSidebar(
+                    ThreadSidebar(
                         sessions: sidebarSessions,
                         selectedId: mcodeRemoteId,
                         loading: sidebarLoading,
@@ -183,6 +183,7 @@ public struct ChatView: View {
                         } label: {
                             Image(systemName: "sidebar.leading")
                         }
+                        .accessibilityLabel(showingSidebar ? "Hide Threads" : "Show Threads")
                         .help(showingSidebar ? "Hide threads" : "Show threads")
                     }
                 }
@@ -846,6 +847,7 @@ struct MacChatInputBar: View {
                 }
             }
             .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send Message")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
