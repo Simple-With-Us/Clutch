@@ -51,6 +51,8 @@ struct HostsSheet: View {
                     .pickerStyle(.segmented)
                 }
 
+                InfisicalSettingsSection(host: store.activeHost)
+
                 Section("About") {
                     LabeledContent("Version", value: "\(Bundle.main.shortVersion) (\(Bundle.main.buildNumber))")
                     Text(Copy.gap(
