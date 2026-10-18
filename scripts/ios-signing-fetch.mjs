@@ -3,6 +3,8 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loginUniversalAuth, listSecretsRaw, maskValue, writeGithubEnvValue } from './infisical-fetch.mjs';
 
+const UNRESOLVED_REFERENCE = /^\$\{[^}]+\}$/;
+
 export async function loadSigning({ env = process.env, fetchImpl = fetch, log = console.log, write = writeGithubEnvValue } = {}) {
   for (const name of ['INFISICAL_PROJECT_ID', 'INFISICAL_ASC_PROJECT_ID', 'INFISICAL_CLIENT_ID', 'INFISICAL_CLIENT_SECRET', 'GITHUB_ENV']) {
     if (!env[name]?.trim()) throw new Error(`Required CI input ${name} is empty. Configure the Infisical CI machine identity before shipping.`);
@@ -16,6 +18,11 @@ export async function loadSigning({ env = process.env, fetchImpl = fetch, log = 
   for (const [values, names, source] of sources) {
     const missing = names.filter(name => !values.get(name)?.trim());
     if (missing.length) throw new Error(`${source} missing required signing input(s): ${missing.join(', ')}. Verify project binding and machine identity read access.`);
+    // OPS-818: Fleet-OPS values can be bare references such as ${prod.folder.NAME}. The reads ask Infisical to
+    // expand them, so one that survives is unresolved (target missing, or no read access to the referenced
+    // folder). Name the KEY only, never the value, and export nothing.
+    const unresolved = names.filter(name => UNRESOLVED_REFERENCE.test(values.get(name).trim()));
+    if (unresolved.length) throw new Error(`${source} signing input(s) are still unresolved Infisical secret references: ${unresolved.join(', ')}. Check the referenced targets exist and the machine identity can read their folders.`);
   }
   const rawPem = asc.get('ASC_KEY_P8');
   if (!rawPem.includes('-----BEGIN PRIVATE KEY-----') || !rawPem.includes('-----END PRIVATE KEY-----')) throw new Error('Fleet-OPS ASC_KEY_P8 is not a PEM private key.');
