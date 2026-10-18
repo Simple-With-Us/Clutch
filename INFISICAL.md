@@ -19,9 +19,27 @@ Clutch's Infisical project is **`Clutch`** (ID `077fd6f3-9f9b-438e-9b6f-5c69076c
 4. **Background refresh.**  The long-running web server refreshes on an interval (`CLUTCH_SETTINGS_REFRESH_MS`, default 5 minutes, itself tunable via Infisical) and on `SIGHUP`.  Refresh failures log loudly but keep serving the last-known-good cache — settings staleness is safer than an outage.
 5. **Write-through on admin save.**  `clutch-settings set KEY VALUE` (and `ClutchSettings.set()`) writes to Infisical FIRST, then updates the cache and `process.env`.  If the Infisical write fails, the save fails — the cache and Infisical never diverge silently.  In env-seed mode (no credentials) `set()` refuses loudly.
 
+## Machine identity — the one thing NOT in Infisical
+
+Infisical cannot hold the credentials that authenticate access to itself.  Storing the key to the store inside the store is circular: you would need the credential before you could fetch the credential.  So exactly three values live on the machine, in one owner-only file:
+
+**`$CLUTCH_HOME/infisical.json`** (default `~/.clutch/infisical.json`), mode `600`:
+
+| Field | Meaning |
+|---|---|
+| `projectId` | Infisical project (workspace) ID.  Defaults to the canonical Clutch project when absent. |
+| `clientId` | Universal-auth machine identity client ID. |
+| `clientSecret` | Universal-auth machine identity client secret.  Never rendered, never returned over an API, never logged. |
+
+Precedence is the same rule as every managed key: an explicitly-set `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` / `INFISICAL_PROJECT_ID` in the environment always wins over the file, so CI and one-off shells can override without editing anything.
+
+Both layers read it — `src/shared/infisicalIdentity.ts` for Node, and `_clutch_infisical_identity()` in `scripts/lib/clutch-infisical-env.sh` for the bash launchers, which run before Node starts.  A missing, unreadable, or malformed file is not an error: it degrades to the existing env-seed behaviour and never blocks a restart.  Writes are atomic (temp file plus rename) at mode `600`, and a loosened mode produces a loud warning.
+
+**Editing it.**  The native **Hosts and Settings** sheet ("Infisical" section, on both iOS and macOS) reads and writes it over `GET`/`PUT /clutch/v1/infisical` on the chat sidecar, and also exposes a managed-setting write-through field backed by `ClutchSettings.set()`.  The Clutch web Settings dialog cannot be used: it is upstream `dsh` code (see "Consuming the client").  **Saving new credentials requires a Clutch restart** — the running process already holds the old client, and the API refuses a request that would both change the identity and write a setting under it.  The CLI remains a first-class surface too: `clutch-settings set KEY VALUE`.
+
 ## Admin gating
 
-Clutch is a single-user local tool: the web UI binds loopback plus the owner's Tailscale tailnet, and the CLI runs as the machine user.  The local user **is** the admin, so the gate is a documented no-op — there is no multi-user role system to check against, and none is invented.  The admin write surfaces are the `clutch-settings` CLI and the Infisical UI itself.
+Clutch is a single-user local tool: the web UI binds loopback plus the owner's Tailscale tailnet, and the CLI runs as the machine user.  The local user **is** the admin, so the gate is a documented no-op — there is no multi-user role system to check against, and none is invented.  The admin write surfaces are the `clutch-settings` CLI, the native Hosts and Settings sheet, and the Infisical UI itself.
 
 ## Key inventory for THIS app
 
@@ -106,7 +124,13 @@ await settings.refresh();               // on-demand (SIGHUP wired in start-web.
 settings.stop();                        // on shutdown
 ```
 
-Auth: universal auth.  Credentials come from `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` in the machine's secret store (Infisical machine identity), never in code.  Keep those in the machine's secret store, never in code.
+Auth: universal auth.  Credentials come from `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET`, resolved by environment first and then by `$CLUTCH_HOME/infisical.json` (see "Machine identity" above).  Never in code.
+
+### Why Clutch settings cannot be added to the web Settings dialog
+
+The Clutch web UI is **upstream `@deepseek-ai/dsh` code, not this repo's** — `scripts/clutch.sh` execs `node_modules/.bin/dsh`, and the Settings dialog ships inside `@deepseek-ai/dsh-web-frontend`, which npm publishes as compiled `dist` only (`"files": ["dist", "!dist/**/*.map"]`).  So that screen is not editable from here without forking deepseek-harness.
+
+Upstream does expose a supported seam — a `settings.section` runtime slot that its own source documents as "adding a setting never means editing the shell" — but adopting it means Clutch taking over composition of the whole web app (`dsh --profile`, a Clutch profile, and a client bundle built against `dsh-client-ui-slots`, which is *not* published).  That couples Clutch to dsh internals on every upstream bump, which is the opposite of the automatic Renovate updates the exact pin at `package.json:71` buys today.  Until that is deliberately adopted, Clutch's own settings surface is the `clutch-settings` CLI, the `GET`/`PUT /clutch/v1/infisical` sidecar route, and the native Hosts and Settings sheet.
 
 ## Rotation notes
 

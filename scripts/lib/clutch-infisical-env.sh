@@ -27,6 +27,72 @@ fi
 CLUTCH_INFISICAL_ENV="prod"
 CLUTCH_INFISICAL_URL="${CLUTCH_INFISICAL_URL:-https://app.infisical.com}"
 
+# Local machine identity: $CLUTCH_HOME/infisical.json.
+#
+# These three values cannot live in Infisical — they are what authenticate the
+# read of it — so they come from one owner-only local file, beside chat-token.
+# An explicitly-set environment variable always wins, matching the managed-key
+# rule below.  Keeping the bash layer in step with src/shared/clutchSettings.ts
+# matters: this file runs BEFORE Node starts, so without it a credential saved
+# from the settings panel would never reach the pm2-spawned web server.
+# Never prints a value.
+_clutch_infisical_identity() {
+  if [[ -n "${INFISICAL_CLIENT_ID:-}" && -n "${INFISICAL_CLIENT_SECRET:-}" ]]; then
+    return 0
+  fi
+  command -v python3 >/dev/null 2>&1 || return 0
+  local identity_file="${CLUTCH_HOME:-$HOME/.clutch}/infisical.json"
+  [[ -r "$identity_file" ]] || return 0
+
+  # Warn on a loosened mode; the file holds a machine secret.  Ask python3
+  # rather than parsing `ls -l`, so a path with spaces still works.
+  local mode
+  mode="$(python3 -c 'import os,stat,sys
+try:
+    print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])
+except OSError:
+    print("")' "$identity_file" 2>/dev/null)" || mode=""
+  if [[ -n "$mode" && "$mode" != "600" ]]; then
+    echo "clutch-infisical-env: $identity_file holds a machine secret but is mode $mode — run: chmod 600 $identity_file" >&2
+  fi
+
+  local tmp
+  tmp="$(mktemp -t clutch-infisical-identity.XXXXXX)" || return 0
+  if python3 - "$identity_file" >"$tmp" <<'PY'
+import json, shlex, sys
+
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(2)
+if not isinstance(data, dict):
+    sys.exit(2)
+
+client_id = str(data.get("clientId") or "").strip()
+client_secret = str(data.get("clientSecret") or "").strip()
+project_id = str(data.get("projectId") or "").strip()
+# A file with no usable credentials is not an identity: leave the environment
+# untouched so the caller falls back to its existing behaviour.
+if not client_id or not client_secret:
+    sys.exit(2)
+
+for name, value in (
+    ("INFISICAL_CLIENT_ID", client_id),
+    ("INFISICAL_CLIENT_SECRET", client_secret),
+    ("CLUTCH_INFISICAL_PROJECT_ID", project_id),
+):
+    if value:
+        print("export " + shlex.quote(name) + "=" + shlex.quote(value))
+PY
+  then
+    # shellcheck disable=SC1090
+    source "$tmp"
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
 _clutch_infisical_backfill() {
   # Only when universal-auth credentials are present.
   if [[ -z "${INFISICAL_CLIENT_ID:-}" || -z "${INFISICAL_CLIENT_SECRET:-}" ]]; then
@@ -87,5 +153,6 @@ if filled:
   return 0
 }
 
+_clutch_infisical_identity
 _clutch_infisical_backfill
-unset -f _clutch_infisical_backfill
+unset -f _clutch_infisical_identity _clutch_infisical_backfill
