@@ -173,6 +173,9 @@ struct ClutchScreen: View {
                 Circle()
                     .fill(statusColor)
                     .frame(width: 8, height: 8)
+                    // The menu already reads as "Host: <name>"; a bare colour
+                    // swatch would otherwise be announced as an unknown element.
+                    .accessibilityHidden(true)
                 Text(host.name)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)

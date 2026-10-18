@@ -92,7 +92,7 @@ public struct ChatView: View {
                     ChatSetupCard(
                         symbol: "iphone.and.arrow.forward",
                         title: "No Host Paired",
-                        message: "Pair with your Mac from the Hosts tab to start chatting."
+                        message: "Pair with your Mac from Hosts and Settings to start chatting."
                     )
                     Spacer()
                 } else {
@@ -253,6 +253,7 @@ struct ChatInputBar: View {
                 Image(systemName: "mic.fill")
             }
             .disabled(sending)
+            .accessibilityLabel("Hold To Talk")
             Button(action: onSend) {
                 if sending {
                     ProgressView()
@@ -262,6 +263,7 @@ struct ChatInputBar: View {
                 }
             }
             .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityLabel("Send Message")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

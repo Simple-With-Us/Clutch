@@ -1,19 +1,19 @@
 import SwiftUI
 import Foundation
 
-/// Left thread rail for the MiniMax Code engine, shaped like the MiniMax
-/// Code desktop app: every local thread in one list, the open one
-/// highlighted, and a new-thread button at the top.
+/// The thread rail, shared by the Mac chat surface and the iPhone/iPad
+/// dashboard so both platforms show one thread list.
 ///
-/// This is now the only way to resume a thread — the "Resume Thread…" entry
-/// points reveal this rail instead of opening a picker, so both routes run
-/// through one code path (`ChatView.openSession`).
+/// On macOS this is a pinned 232pt rail beside the transcript.  On iOS it is
+/// the sidebar column of a `NavigationSplitView`, where the system sizes the
+/// column and a tap pushes the thread instead of swapping the pane — so
+/// `fixedWidth` is nil there.
 ///
 /// The error banner is rendered above the list rather than in a branch the
 /// loaded-list state can shadow.  That is deliberate: a failed resume used to
 /// be assigned to a branch that was unreachable once the list had loaded, so
 /// tapping a thread looked like it did nothing at all.
-struct MacThreadSidebar: View {
+struct ThreadSidebar: View {
     /// Thread list as handed over; this view sorts it newest-first itself
     /// (see `ordered`), so the caller may pass the sidecar's raw order.
     var sessions: [AcpSessionInfo]
@@ -24,6 +24,9 @@ struct MacThreadSidebar: View {
     var onSelect: (AcpSessionInfo) -> Void
     var onNew: () -> Void
     var onRefresh: () -> Void
+    /// macOS pins the rail width; a split view lets the system choose, so iOS
+    /// passes nil and lets the column breathe.
+    var fixedWidth: CGFloat? = 232
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,7 +36,7 @@ struct MacThreadSidebar: View {
             if let errorText, !errorText.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
+                        .foregroundStyle(.orange)
                     Text(errorText)
                         .font(.system(size: 11))
                         .fixedSize(horizontal: false, vertical: true)
@@ -78,7 +81,8 @@ struct MacThreadSidebar: View {
                 }
             }
         }
-        .frame(width: 232)
+        .frame(width: fixedWidth)
+        .frame(maxHeight: .infinity)
         .background(Color.clutchBackground)
     }
 
@@ -89,11 +93,14 @@ struct MacThreadSidebar: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("New Thread")
+            #if os(macOS)
             .help("New Thread")
+            #endif
 
             Text("Threads")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
 
             Spacer(minLength: 0)
 
@@ -108,8 +115,11 @@ struct MacThreadSidebar: View {
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.plain)
-                .foregroundColor(.secondary)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Refresh Threads")
+                #if os(macOS)
                 .help("Refresh Threads")
+                #endif
             }
         }
         .padding(.horizontal, 10)
@@ -117,26 +127,53 @@ struct MacThreadSidebar: View {
     }
 
     private func row(_ session: AcpSessionInfo) -> some View {
-        let isSelected = session.sessionId == selectedId
-        let isLoading = loadingId == session.sessionId
-        let when = Self.parse(session.updatedAt)
-        return Button {
+        ThreadSidebarRow(
+            session: session,
+            isSelected: session.sessionId == selectedId,
+            isLoading: loadingId == session.sessionId,
+            isDisabled: loadingId != nil && loadingId != session.sessionId,
+            onSelect: onSelect
+        )
+    }
+
+    /// Newest first.  `updatedAt` is a free-form string from the engine, so a
+    /// value we cannot read sinks below the dated rows and keeps its listed
+    /// order — a malformed date can never scramble or trap the list.
+    private var ordered: [AcpSessionInfo] {
+        AcpSessionInfo.newestFirst(sessions)
+    }
+}
+
+/// One thread row, shared by the macOS rail and the iOS/iPad sidebar list so
+/// a thread looks and reads identically on every platform.
+///
+/// `List` already draws a selection highlight and a disclosure indicator on
+/// iOS, so the row only paints its own highlight when asked to (`isSelected`).
+struct ThreadSidebarRow: View {
+    let session: AcpSessionInfo
+    var isSelected: Bool
+    var isLoading: Bool
+    var isDisabled: Bool
+    var onSelect: (AcpSessionInfo) -> Void
+
+    var body: some View {
+        Button {
             onSelect(session)
         } label: {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title ?? "Untitled Thread")
+                    Text(session.displayTitle)
                         .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
                         .lineLimit(1)
                     HStack(spacing: 4) {
-                        if let cwd = session.cwd {
+                        if let cwd = session.cwd, !cwd.isEmpty {
                             Text(cwd)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.head)
                         }
-                        if let when {
+                        if let when = session.updated {
                             Text("·")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.tertiary)
@@ -164,35 +201,36 @@ struct MacThreadSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(loadingId != nil && !isLoading)
+        .disabled(isDisabled)
+        // VoiceOver needs the thread named, not just its working directory.
+        .accessibilityLabel("Thread, \(session.displayTitle)")
+        #if os(macOS)
         .help(session.cwd ?? session.sessionId)
+        #endif
     }
+}
 
-    /// Newest first.  `updatedAt` is a free-form string from the engine, so a
-    /// value we cannot read sinks below the dated rows and keeps its listed
-    /// order — a malformed date can never scramble or trap the list.
-    private var ordered: [AcpSessionInfo] {
+extension AcpSessionInfo {
+    /// Stable newest-first ordering, shared by both thread lists.
+    ///
+    /// Rows whose `updatedAt` cannot be parsed sink below every dated row and
+    /// keep the order they arrived in; two rows with the same instant keep
+    /// their relative order too, so the list never reshuffles between reloads
+    /// of the same data.
+    public static func newestFirst(_ sessions: [AcpSessionInfo]) -> [AcpSessionInfo] {
         sessions.enumerated()
             .sorted { lhs, rhs in
-                switch (Self.parse(lhs.element.updatedAt), Self.parse(rhs.element.updatedAt)) {
-                case let (l?, r?): return l == r ? lhs.offset < rhs.offset : l > r
-                case (_?, nil): return true
-                case (nil, _?): return false
-                case (nil, nil): return lhs.offset < rhs.offset
+                switch (lhs.element.updated, rhs.element.updated) {
+                case let (l?, r?):
+                    return l == r ? lhs.offset < rhs.offset : l > r
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                case (nil, nil):
+                    return lhs.offset < rhs.offset
                 }
             }
             .map { $0.element }
-    }
-
-    /// Sidecar sends ISO-8601, usually with milliseconds and a `Z` suffix.
-    /// Returns nil for anything else so a malformed stamp is simply not shown
-    /// rather than trapping on a bad date.
-    private static func parse(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
     }
 }
