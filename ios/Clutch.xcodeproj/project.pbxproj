@@ -571,7 +571,7 @@
 				CODE_SIGN_ENTITLEMENTS = Clutch.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 202609301500;
+				CURRENT_PROJECT_VERSION = 147;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				ENABLE_ON_DEMAND_RESOURCES = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -579,7 +579,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.147;
 				PRODUCT_BUNDLE_IDENTIFIER = codes.clutch.ios;
 				PRODUCT_NAME = Clutch;
 				PROVISIONING_PROFILE_SPECIFIER = "Clutch iOS App Store (API)";
@@ -598,7 +598,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 202609301500;
+				CURRENT_PROJECT_VERSION = 147;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				INFOPLIST_FILE = Mac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -606,7 +606,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.147;
 				PRODUCT_BUNDLE_IDENTIFIER = codes.clutch.macos;
 				PRODUCT_NAME = Clutch;
 				SDKROOT = macosx;
@@ -707,7 +707,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 202609301500;
+				CURRENT_PROJECT_VERSION = 147;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				INFOPLIST_FILE = Mac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -715,7 +715,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.147;
 				PRODUCT_BUNDLE_IDENTIFIER = codes.clutch.macos;
 				PRODUCT_NAME = Clutch;
 				SDKROOT = macosx;
@@ -828,7 +828,7 @@
 				CODE_SIGN_ENTITLEMENTS = Clutch.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202609301500;
+				CURRENT_PROJECT_VERSION = 147;
 				DEVELOPMENT_TEAM = CC8UTF7ATG;
 				ENABLE_ON_DEMAND_RESOURCES = NO;
 				INFOPLIST_FILE = App/Info.plist;
@@ -836,7 +836,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.147;
 				PRODUCT_BUNDLE_IDENTIFIER = codes.clutch.ios;
 				PRODUCT_NAME = Clutch;
 				SDKROOT = iphoneos;
