@@ -25,12 +25,6 @@ struct RootView: View {
                             Label("Fleet Recall", systemImage: "sparkles.rectangle.stack.fill")
                         }
                         .tag(2)
-
-                    DshHostView(host: host)
-                        .tabItem {
-                            Label("Host", systemImage: "server.rack")
-                        }
-                        .tag(3)
                 }
                 .tint(.accentColor)
             } else {

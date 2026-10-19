@@ -69,39 +69,6 @@ profile plus a client-bundle build), its own settings surfaces are the
 `clutch-settings` CLI, the `GET`/`PUT /clutch/v1/infisical` sidecar route, and
 the native Hosts and Settings sheet.
 
-## The client contract
-
-The dsh host serves a client contract, and that is what makes a native app
-possible without embedding anything.  Two transports:
-
-- **Unary calls** are a `POST` to `/api/<endpoint>` carrying the
-  client-request envelope, answered with the server-response envelope.  The
-  endpoint name is the envelope's `method`, and it must be one or more
-  `/`-separated segments matching `[A-Za-z0-9_$.-]+`.
-- **Streams** ride the WebSocket mux at `/api/remote.mux`.  The cordis event
-  stream is the logical stream `$events`; `$events/result` is the unary
-  endpoint that returns one event outcome.  The mux is not the unary path.
-
-Authentication is a per-process launch token that is exchanged once for a
-signed cookie, and the host binds every request to a trusted authority —
-loopback, the listener's bind IP literal, or a declared `trustedHosts` entry.
-Upstream's own comment says it plainly: *"Non-browser and remote clients pass
-the same fence via loopback, the listener's bind IP literal, or a declared
-`trustedHosts` authority."*
-
-Clutch's copy of the contract is `src/shared/dshHostContract.ts`, mirrored in
-Swift for the native clients, and pinned against the installed build by
-`tests/dsh-host-pinned.test.ts`.  See
-[`dsh-native-clients.md`](./dsh-native-clients.md).
-
-### Layout drift between tags
-
-The upstream tree moves between releases, so a path that is correct at one tag
-may not exist at another.  At `dsh-v0.1.5-rc.3` — the tag Clutch pins — the
-telemetry kill switch lives in `apps/cli/src/profile-boot.ts`, and
-`packages/boot/app-boot/src/profile-context.ts` does not exist yet; it
-arrives later.  Read the pinned tag, not the checkout's working tree.
-
 ## Known trap
 
 `docs/migrate-from-dsh-runtime.md` records a real outage: a headless cordis
