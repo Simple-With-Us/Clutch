@@ -37,8 +37,8 @@ if [[ -z "${IOS_DIST_P12_PASSWORD:-}" && -n "${IOS_CERT_PASSWORD:-}" ]]; then
 fi
 
 # Off a hosted runner (an owner Mac), fall back to Infisical Fleet-OPS through
-# `fleet-secrets get`: /appstore-connect (key id, issuer) and
-# /authkey-<key id>-p8 (the PEM) for App Store Connect, /mac-certs for the
+# `fleet-secrets get`: /asc (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8) for App Store
+# Connect, /authkey-<key id>-p8 for a different key, /mac-certs for the
 # distribution identity.  Environment first;  values are never printed.
 FLEET_SECRETS_BIN="${FLEET_SECRETS_BIN:-${HOME}/.local/bin/fleet-secrets}"
 infisical_fill() {
@@ -47,8 +47,13 @@ infisical_fill() {
   v="$("$FLEET_SECRETS_BIN" get "$name" --path "$folder" 2>/dev/null </dev/null)" || return 0
   printf -v "$name" '%s' "$v"
 }
-infisical_fill ASC_KEY_ID /appstore-connect
-infisical_fill ASC_ISSUER_ID /appstore-connect
+infisical_fill ASC_KEY_ID /asc
+infisical_fill ASC_ISSUER_ID /asc
+if [[ -z "${ASC_KEY_P8:-}" && -z "${APPLE_API_KEY_P8_BASE64:-}" && -n "${ASC_KEY_ID:-}" && -x "$FLEET_SECRETS_BIN" ]]; then
+  if [[ "$ASC_KEY_ID" == "$("$FLEET_SECRETS_BIN" get ASC_KEY_ID --path /asc 2>/dev/null </dev/null || true)" ]]; then
+    ASC_KEY_P8="$("$FLEET_SECRETS_BIN" get ASC_KEY_P8 --path /asc 2>/dev/null </dev/null)" || ASC_KEY_P8=""
+  fi
+fi
 if [[ -z "${ASC_KEY_P8:-}" && -z "${APPLE_API_KEY_P8_BASE64:-}" && -n "${ASC_KEY_ID:-}" ]]; then
   _kid_lower="$(printf '%s' "$ASC_KEY_ID" | tr 'A-Z' 'a-z')"
   if [[ -x "$FLEET_SECRETS_BIN" ]]; then
@@ -58,8 +63,8 @@ fi
 infisical_fill IOS_DIST_P12_BASE64 /mac-certs
 infisical_fill IOS_DIST_P12_PASSWORD /mac-certs
 
-: "${ASC_KEY_ID:?APPLE_API_KEY_ID (or ASC_KEY_ID, or Infisical /appstore-connect) required}"
-: "${ASC_ISSUER_ID:?APPLE_API_ISSUER_ID (or ASC_ISSUER_ID, or Infisical /appstore-connect) required}"
+: "${ASC_KEY_ID:?APPLE_API_KEY_ID (or ASC_KEY_ID, or Infisical /asc) required}"
+: "${ASC_ISSUER_ID:?APPLE_API_ISSUER_ID (or ASC_ISSUER_ID, or Infisical /asc) required}"
 : "${IOS_DIST_P12_BASE64:?IOS_CERT_P12_BASE64 (or IOS_DIST_P12_BASE64, or Infisical /mac-certs) required}"
 : "${IOS_DIST_P12_PASSWORD:?IOS_CERT_PASSWORD (or IOS_DIST_P12_PASSWORD, or Infisical /mac-certs) required}"
 
@@ -85,7 +90,7 @@ elif [[ -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
       ;;
   esac
 else
-  die "APPLE_API_KEY_P8_BASE64 (or ASC_KEY_P8, or Infisical /appstore-connect) required"
+  die "APPLE_API_KEY_P8_BASE64 (or ASC_KEY_P8, or Infisical /asc) required"
 fi
 chmod 600 "$KEY_PATH"
 if ! grep -q "BEGIN " "$KEY_PATH"; then

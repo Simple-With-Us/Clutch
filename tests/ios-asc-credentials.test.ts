@@ -20,9 +20,11 @@ const STUB = `#!/bin/sh
 echo "$@" >> "$STUB_CALLS"
 [ "$1" = "get" ] && [ "$3" = "--path" ] || exit 4
 case "$2:$4" in
-  ASC_KEY_ID:/appstore-connect) printf '%s' TESTKEY123 ;;
-  ASC_ISSUER_ID:/appstore-connect) printf '%s' 00000000-test-issuer ;;
+  ASC_KEY_ID:/asc) printf '%s' TESTKEY123 ;;
+  ASC_ISSUER_ID:/asc) printf '%s' 00000000-test-issuer ;;
+  ASC_KEY_P8:/asc) printf '%s\\n%s\\n%s' '-----BEGIN PRIVATE KEY-----' SHAREDBODY '-----END PRIVATE KEY-----' ;;
   AUTHKEY_TESTKEY123:/authkey-testkey123-p8) printf '%s\\n%s\\n%s' '-----BEGIN PRIVATE KEY-----' DUMMYBODY '-----END PRIVATE KEY-----' ;;
+  AUTHKEY_OTHERKEY:/authkey-otherkey-p8) printf '%s\\n%s\\n%s' '-----BEGIN PRIVATE KEY-----' OTHERBODY '-----END PRIVATE KEY-----' ;;
   *) exit 3 ;;
 esac
 `;
@@ -83,9 +85,25 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.pem).toBe("1");
     expect(existsSync(out.path)).toBe(false);
     const calls = readFileSync(s.calls, "utf8");
-    expect(calls).toMatch(/get ASC_KEY_ID --path \/appstore-connect/);
-    expect(calls).toMatch(/get AUTHKEY_TESTKEY123 --path \/authkey-testkey123-p8/);
+    expect(calls).toMatch(/get ASC_KEY_ID --path \/asc/);
+    expect(calls).toMatch(/get ASC_KEY_P8 --path \/asc/);
+    expect(calls).not.toMatch(/authkey-/);
     expect(existsSync(join(s.dir, OLD_DIR))).toBe(false);
+  });
+
+  it("falls back to the per-key copy when the key id differs from the /asc one", () => {
+    const s = scratch();
+    const r = runBlock(
+      { HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls, ASC_KEY_ID: "OTHERKEY", ASC_ISSUER_ID: "iss" },
+      REPORT,
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const out = parse(r.stdout);
+    expect(out.mode).toBe("api_key");
+    expect(out.path).toMatch(/\/AuthKey_OTHERKEY\.p8$/);
+    const calls = readFileSync(s.calls, "utf8");
+    expect(calls).toMatch(/get AUTHKEY_OTHERKEY --path \/authkey-otherkey-p8/);
+    expect(calls).not.toMatch(/get ASC_KEY_P8/);
   });
 
   it("uses a complete ASC_* environment without calling fleet-secrets", () => {
@@ -123,7 +141,7 @@ describe("ASC credentials in ship-testflight.sh", () => {
     const r = runBlock({ HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: join(s.dir, "absent"), STUB_CALLS: s.calls }, REPORT);
     expect(r.status, r.stderr).toBe(0);
     expect(parse(r.stdout).mode).toBe("none");
-    expect(r.stderr).toMatch(/Infisical \/appstore-connect/);
+    expect(r.stderr).toMatch(/Infisical \/asc/);
   });
 
   it("no ship script reads the old secrets folder", () => {
