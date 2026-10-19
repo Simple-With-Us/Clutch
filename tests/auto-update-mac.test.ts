@@ -73,6 +73,32 @@ function logText(): string {
   return existsSync(log) ? readFileSync(log, "utf8") : "";
 }
 
+/**
+ * A curl stand-in for the health probe.  The real engine answers 401 once it
+ * is up; this one refuses the first `failures` calls and answers 401 after
+ * that, which is what a slow cold boot looks like from the updater's side.
+ */
+function fakeCurl(failures: number): string {
+  const path = join(markers, "fake-curl");
+  const count = join(markers, "fake-curl-count");
+  writeFileSync(
+    path,
+    [
+      "#!/usr/bin/env bash",
+      `count="${count}"`,
+      "n=0",
+      '[ -f "$count" ] && n="$(cat "$count")"',
+      'n=$((n + 1))',
+      'echo "$n" > "$count"',
+      `if [ "$n" -le ${failures} ]; then exit 7; fi`,
+      "printf 401",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+  return path;
+}
+
 function head(): string {
   return git(runtime, "rev-parse", "HEAD").trim();
 }
@@ -175,6 +201,36 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(before);
     expect(logText().match(/UPDATED/g)?.length ?? 0).toBe(0);
   });
+
+  it("keeps waiting for an engine that is still booting instead of rolling back", () => {
+    const target = commit("src-index.ts", "export const n = 7;\n", "feat: code");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_HEALTH: "1",
+      CLUTCH_AUTO_UPDATE_CURL: fakeCurl(2),
+      CLUTCH_AUTO_UPDATE_HEALTH_WAIT_SECONDS: "30",
+      CLUTCH_AUTO_UPDATE_HEALTH_POLL_SECONDS: "0",
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(logText()).toMatch(/RESTARTED {2}clutch-web/);
+    // The engine answered on the third probe, so the update stands.  A short
+    // window used to roll this back and freeze the checkout for hours.
+    expect(logText()).not.toMatch(/ROLLBACK/);
+  }, 30000);
+
+  it("rolls back when the engine never answers inside the wait window", () => {
+    const before = head();
+    commit("src-index.ts", "export const n = 8;\n", "feat: code");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_HEALTH: "1",
+      CLUTCH_AUTO_UPDATE_CURL: fakeCurl(9999),
+      CLUTCH_AUTO_UPDATE_HEALTH_WAIT_SECONDS: "1",
+      CLUTCH_AUTO_UPDATE_HEALTH_POLL_SECONDS: "0",
+    });
+    expect(status).toBe(1);
+    expect(head()).toBe(before);
+    expect(logText()).toMatch(/ROLLBACK/);
+  }, 30000);
 
   it("normalizes file-mode-only drift instead of skipping the update", () => {
     const target = commit("src-index.ts", "export const n = 6;\n", "feat: code");

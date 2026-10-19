@@ -16,7 +16,8 @@
 #   5. npm run sync, which copies profiles and agent presets into ~/.clutch/dsh;
 #   6. smoke-test the engine (node_modules/.bin/dsh --version);
 #   7. restart pm2 clutch-web when code the running server loads moved, then wait
-#      for the port to answer and roll back if it never does;
+#      for the port to answer (up to CLUTCH_AUTO_UPDATE_HEALTH_WAIT_SECONDS,
+#      default 600: a cold dsh boot needs minutes) and roll back if it never does;
 #   8. rebuild the Dock app only when its own sources moved.
 #   A failure after the fast-forward rolls the checkout back to the previous
 #   commit, re-syncs, and remembers the bad sha, so a broken main never bricks
@@ -49,6 +50,13 @@ ECOSYSTEM="${CLUTCH_AUTO_UPDATE_ECOSYSTEM:-$HOME/apps/pm2-ecosystem.config.cjs}"
 WEB_PORT="${CLUTCH_WEB_PORT:-3180}"
 HEALTH_URL="${CLUTCH_AUTO_UPDATE_HEALTH_URL:-http://127.0.0.1:$WEB_PORT/}"
 HEALTH_ENABLED="${CLUTCH_AUTO_UPDATE_HEALTH:-1}"
+# How long the engine gets to answer after a restart, and how often to ask.
+# The dsh engine cold-boots the whole cordis tree before it binds the port.
+# On a memory-pressured Mac that takes minutes, not seconds: a short window
+# rolls back every good update and freezes the deployment (2026-10-19, four
+# advances rolled back and the checkout stuck for hours).
+HEALTH_WAIT_SECONDS="${CLUTCH_AUTO_UPDATE_HEALTH_WAIT_SECONDS:-600}"
+HEALTH_POLL_SECONDS="${CLUTCH_AUTO_UPDATE_HEALTH_POLL_SECONDS:-2}"
 CURL_BIN="${CLUTCH_AUTO_UPDATE_CURL:-/usr/bin/curl}"
 PKILL_BIN="${CLUTCH_AUTO_UPDATE_PKILL:-pkill}"
 
@@ -122,12 +130,17 @@ web_up() {
 }
 
 wait_web_up() {
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  # Keep asking until the engine answers or the window closes.  The window is
+  # generous on purpose: a cold dsh boot under memory pressure needs minutes,
+  # and rolling back a good commit because the engine was still starting is how
+  # the checkout got stuck in the first place.
+  local deadline
+  deadline=$(( $(date +%s) + HEALTH_WAIT_SECONDS ))
+  while :; do
     web_up && return 0
-    sleep 2
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep "$HEALTH_POLL_SECONDS"
   done
-  return 1
 }
 
 code_paths_changed() { printf '%s\n' "$CHANGED" | grep -Ev "$CODE_EXCLUDE_RE" | grep -q .; }
