@@ -195,24 +195,31 @@ describe("provider namespaces stay separate", () => {
 
 describe("a model the session does not offer", () => {
   it("fails before the switch and names what is offered", () => {
+    // BF-2494 (2026-10-18): MiniMax-M3.1-Flash-Preview was retired on the
+    // MiniMax side.  The test now exercises the same "model the session
+    // does not offer" path with a deliberately unknown id, since the
+    // retired id would now be silently mapped onto the engine default
+    // and stop being a useful test of the error path.
     let error: unknown;
     try {
-      dshModelOptionValue("MiniMax-M3.1-Flash-Preview", OWNER_OVERRIDE);
+      dshModelOptionValue("MiniMax-Not-A-Model", OWNER_OVERRIDE);
     } catch (caught) {
       error = caught;
     }
     expect(error).toBeInstanceOf(DshModelNotOfferedError);
     const message = (error as Error).message;
-    expect(message).toContain("MiniMax-M3.1-Flash-Preview");
+    expect(message).toContain("MiniMax-Not-A-Model");
     expect(message).toContain("MiniMax-M3");
     expect(message).toContain("deepseek-v4.1-flash");
+    // OWNER_OVERRIDE advertises two deepseek + three minimax rows (M3.1
+    // was removed in BF-2494 / 2026-10-18), so the offered list is 5.
     expect((error as DshModelNotOfferedError).offered).toHaveLength(5);
   });
 
   it("lists each offered model with its provider route", () => {
     let error: unknown;
     try {
-      dshModelOptionValue("MiniMax-M3.1-Flash-Preview", OWNER_OVERRIDE);
+      dshModelOptionValue("MiniMax-Not-A-Model", OWNER_OVERRIDE);
     } catch (caught) {
       error = caught;
     }
@@ -384,7 +391,7 @@ describe("dshSameModel", () => {
     expect(dshSameModel("deepseek-v4-pro", "deepseek-v4-flash")).toBe(false);
     expect(dshSameModel("deepseek-pro", "deepseek-flash")).toBe(false);
     expect(dshSameModel("DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro")).toBe(false);
-    expect(dshSameModel("MiniMax-M3", "MiniMax-M3.1-Flash-Preview")).toBe(false);
+    expect(dshSameModel("MiniMax-M3", "MiniMax-M2.7-highspeed")).toBe(false);
   });
 });
 

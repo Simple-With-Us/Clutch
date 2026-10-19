@@ -58,14 +58,14 @@ export function minimaxEffortLevelsForModel(modelId: string): readonly EffortLev
 /** Per-model image support, keyed by catalog id.
  *
  *  The installed pi-ai catalog is the authority: it declares MiniMax-M3 as
- *  `input: [text, image]` and the whole M2.7 family as `input: [text]`.  The
- *  M3.1 Flash preview is newer than that catalog, so it is absent from the
- *  installed list and the owner's `settings.yaml` entry is what declares its
- *  modalities; MiniMax ships it as a frontier multimodal model, so it is
- *  image-capable.  A row absent here inherits the engine-wide
- *  {@link minimaxSupport.images} answer. */
+ *  `input: [text, image]` and the whole M2.7 family as `input: [text]`.  A
+ *  row absent here inherits the engine-wide {@link minimaxSupport.images}
+ *  answer.
+ *
+ *  MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
+ *  (BF-2494 / minimax/drop-m31-flash-preview).  It used to live here; do not
+ *  re-add it without a verified stable replacement. */
 export const MINIMAX_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
-  "MiniMax-M3.1-Flash-Preview": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
@@ -74,15 +74,6 @@ export const MINIMAX_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
 export const STATIC_MINIMAX_MODELS: ModelCatalog = {
   default: MINIMAX_DEFAULT_MODEL,
   options: [
-    {
-      id: "MiniMax-M3.1-Flash-Preview",
-      label: "MiniMax M3.1 Flash Preview",
-      contextWindow: 1_000_000,
-      badge: "Preview",
-      badgeTitle:
-        "Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.",
-      images: true,
-    },
     { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",
