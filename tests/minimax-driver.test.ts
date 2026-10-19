@@ -72,6 +72,12 @@ describe("minimaxSupport", () => {
       expect(readFileSync(join(ROOT, picker), "utf8"), picker)
         .not.toContain("MiniMax-M3.1-Flash-Preview");
     }
+    // The native pickers must offer the working replacement, or the M3.1
+    // option the owner asked for exists only in the TypeScript catalog.
+    for (const picker of NATIVE_PICKERS) {
+      expect(readFileSync(join(ROOT, picker), "utf8"), picker)
+        .toContain("MiniMax-M3.1-Flash");
+    }
   });
 });
 
