@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prepare a GitHub-hosted macOS runner to archive BotFleet for TestFlight.
-# Maps the existing BotFleet Actions secret names onto the fleet ASC env
-# file, then imports the iOS Distribution identity.
+# Maps the existing Actions secret names onto the fleet ASC_* names (exported
+# through $GITHUB_ENV for later steps), then imports the iOS Distribution
+# identity.  Staging is runner temp only;  nothing is written to the home dir.
 # Never prints secret values.  Fail closed on a beta macOS host.
 # Canonical siblings: Congress.Trade / DealDex / Socratic.Trade
 # scripts/ios-appstore-gm-prepare.sh
@@ -35,16 +36,41 @@ if [[ -z "${IOS_DIST_P12_PASSWORD:-}" && -n "${IOS_CERT_PASSWORD:-}" ]]; then
   IOS_DIST_P12_PASSWORD="$IOS_CERT_PASSWORD"
 fi
 
-: "${ASC_KEY_ID:?APPLE_API_KEY_ID (or ASC_KEY_ID) required}"
-: "${ASC_ISSUER_ID:?APPLE_API_ISSUER_ID (or ASC_ISSUER_ID) required}"
-: "${IOS_DIST_P12_BASE64:?IOS_CERT_P12_BASE64 (or IOS_DIST_P12_BASE64) required}"
-: "${IOS_DIST_P12_PASSWORD:?IOS_CERT_PASSWORD (or IOS_DIST_P12_PASSWORD) required}"
+# Off a hosted runner (an owner Mac), fall back to Infisical Fleet-OPS through
+# `fleet-secrets get`: /appstore-connect (key id, issuer) and
+# /authkey-<key id>-p8 (the PEM) for App Store Connect, /mac-certs for the
+# distribution identity.  Environment first;  values are never printed.
+FLEET_SECRETS_BIN="${FLEET_SECRETS_BIN:-${HOME}/.local/bin/fleet-secrets}"
+infisical_fill() {
+  local name="$1" folder="$2" v
+  [[ -z "${!name:-}" && -x "$FLEET_SECRETS_BIN" ]] || return 0
+  v="$("$FLEET_SECRETS_BIN" get "$name" --path "$folder" 2>/dev/null </dev/null)" || return 0
+  printf -v "$name" '%s' "$v"
+}
+infisical_fill ASC_KEY_ID /appstore-connect
+infisical_fill ASC_ISSUER_ID /appstore-connect
+if [[ -z "${ASC_KEY_P8:-}" && -z "${APPLE_API_KEY_P8_BASE64:-}" && -n "${ASC_KEY_ID:-}" ]]; then
+  _kid_lower="$(printf '%s' "$ASC_KEY_ID" | tr 'A-Z' 'a-z')"
+  if [[ -x "$FLEET_SECRETS_BIN" ]]; then
+    ASC_KEY_P8="$("$FLEET_SECRETS_BIN" get "AUTHKEY_${ASC_KEY_ID}" --path "/authkey-${_kid_lower}-p8" 2>/dev/null </dev/null)" || ASC_KEY_P8=""
+  fi
+fi
+infisical_fill IOS_DIST_P12_BASE64 /mac-certs
+infisical_fill IOS_DIST_P12_PASSWORD /mac-certs
 
-SECRETS_DIR="${HOME}/.secrets"
-mkdir -p "$SECRETS_DIR"
-chmod 700 "$SECRETS_DIR"
+: "${ASC_KEY_ID:?APPLE_API_KEY_ID (or ASC_KEY_ID, or Infisical /appstore-connect) required}"
+: "${ASC_ISSUER_ID:?APPLE_API_ISSUER_ID (or ASC_ISSUER_ID, or Infisical /appstore-connect) required}"
+: "${IOS_DIST_P12_BASE64:?IOS_CERT_P12_BASE64 (or IOS_DIST_P12_BASE64, or Infisical /mac-certs) required}"
+: "${IOS_DIST_P12_PASSWORD:?IOS_CERT_PASSWORD (or IOS_DIST_P12_PASSWORD, or Infisical /mac-certs) required}"
 
-KEY_PATH="${SECRETS_DIR}/AuthKey.p8"
+umask 077
+# Runner temp (a throwaway VM on hosted CI).  Both files stay for the later
+# ship step;  the runner is discarded after the job.
+STAGE_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ios-signing"
+mkdir -p "$STAGE_DIR"
+chmod 700 "$STAGE_DIR"
+
+KEY_PATH="${STAGE_DIR}/AuthKey_${ASC_KEY_ID}.p8"
 # Write the p8 without echoing.  Command substitution would strip the
 # trailing newline PEM files need, so decode straight to disk.
 if [[ -n "${ASC_KEY_P8:-}" ]]; then
@@ -59,22 +85,24 @@ elif [[ -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
       ;;
   esac
 else
-  die "APPLE_API_KEY_P8_BASE64 (or ASC_KEY_P8) required"
+  die "APPLE_API_KEY_P8_BASE64 (or ASC_KEY_P8, or Infisical /appstore-connect) required"
 fi
 chmod 600 "$KEY_PATH"
 if ! grep -q "BEGIN " "$KEY_PATH"; then
   die "ASC p8 did not decode to a PEM private key"
 fi
 
-ENV_PATH="${SECRETS_DIR}/appstore-connect.env"
-{
-  printf 'ASC_KEY_ID=%s\n' "$ASC_KEY_ID"
-  printf 'ASC_ISSUER_ID=%s\n' "$ASC_ISSUER_ID"
-  printf 'ASC_KEY_PATH=%s\n' "$KEY_PATH"
-} > "$ENV_PATH"
-chmod 600 "$ENV_PATH"
+# Later steps (scripts/ios-ship-testflight.sh) read the ASC_* trio from the
+# environment.
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  {
+    echo "ASC_KEY_ID=${ASC_KEY_ID}"
+    echo "ASC_ISSUER_ID=${ASC_ISSUER_ID}"
+    echo "ASC_KEY_PATH=${KEY_PATH}"
+  } >> "$GITHUB_ENV"
+fi
 
-P12_PATH="${SECRETS_DIR}/ios-distribution.p12"
+P12_PATH="${STAGE_DIR}/ios-distribution.p12"
 printf '%s' "$IOS_DIST_P12_BASE64" | base64 --decode > "$P12_PATH"
 chmod 600 "$P12_PATH"
 
@@ -99,4 +127,4 @@ if ! security find-identity -v -p codesigning "$KC_PATH" | grep -q 'Apple Distri
   die "imported keychain has no Apple Distribution identity"
 fi
 log "Apple Distribution identity imported"
-log "ASC env written (key id length ${#ASC_KEY_ID})"
+log "ASC key staged (key id length ${#ASC_KEY_ID})"

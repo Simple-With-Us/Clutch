@@ -23,7 +23,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, createSign } from "node:crypto";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -34,9 +34,9 @@ function base64url(input) {
 // ---------------------------------------------------------------------------
 // CREDENTIAL RESOLUTION
 // ---------------------------------------------------------------------------
-// WHY THIS IS NOT JUST "~/.secrets/appstore-connect.env" (fixed 2026-10-02):
+// WHY THIS READS THE ENVIRONMENT, NOT A FILE (fixed 2026-10-02, AFC-359):
 // .github/workflows/ios-ship.yml runs on a GitHub-hosted macos-latest runner,
-// which has no ~/.secrets directory at all.  The credential reaches that
+// which has no home-directory secrets folder at all.  The credential reaches that
 // runner as THREE ENVIRONMENT VARIABLES -- APPLE_API_KEY_ID,
 // APPLE_API_ISSUER_ID and APPLE_API_KEY_P8_BASE64 -- exported into $GITHUB_ENV
 // by .github/actions/infisical-secrets.  Reading only the file meant the key
@@ -82,6 +82,21 @@ function materializeP8(pem) {
   return p;
 }
 
+// Infisical Fleet-OPS through `fleet-secrets get` (AFC-359).  "" when absent.
+// FLEET_SECRETS_BIN overrides the binary (tests).  Values stay in memory.
+function fleetSecretsGet(name, folder) {
+  const bin = process.env.FLEET_SECRETS_BIN || join(homedir(), ".local", "bin", "fleet-secrets");
+  try {
+    return execFileSync(bin, ["get", name, "--path", folder], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 30000
+    }).replace(/\n$/, "");
+  } catch {
+    return "";
+  }
+}
+
 function fromFile(keyId, issuerId, keyPath, source) {
   try {
     return { keyId: keyId.trim(), issuerId: issuerId.trim(), privateKeyPem: readFileSync(keyPath, "utf8"), source };
@@ -101,12 +116,11 @@ function resolveCredential() {
     if (got) return got;
   }
 
-  // ~/.secrets/ is handoff-only and must not be read at runtime (fleet Rule 44).
-  // Local-Mac operators set ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH (or
-  // APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64) in their
-  // shell or Infisical env; ship-testflight.sh may source the handoff file
-  // into the process environment before invoking this module.  The hosted
-  // ios-ship runner only has the APPLE_API_* form in $GITHUB_ENV.
+  // No file is read here (AFC-359).  Local-Mac operators set ASC_KEY_ID /
+  // ASC_ISSUER_ID / ASC_KEY_PATH (or the APPLE_API_* names) in their shell, or
+  // let ship-testflight.sh stage the Infisical key and export ASC_* before
+  // it invokes this module (step 3 below also reads Infisical directly).  The hosted ios-ship runner only has the APPLE_API_*
+  // form in $GITHUB_ENV.
 
   // 2) The APPLE_API_* trio the ship workflow exports from Infisical.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
@@ -116,6 +130,19 @@ function resolveCredential() {
     if (!pem) return { error: "APPLE_API_KEY_P8_BASE64 is set but did not decode to a PEM private key" };
     materializeP8(pem);
     return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
+  }
+
+  // 3) Infisical Fleet-OPS: key id and issuer from /appstore-connect (unless the
+  //    environment already has them), the PEM as AUTHKEY_<KEY_ID> in
+  //    /authkey-<key id lower case>-p8.  Kept in memory, never written to disk.
+  const infKeyId = envKeyId || fleetSecretsGet("ASC_KEY_ID", "/appstore-connect").trim();
+  const infIssuer = envIssuer || fleetSecretsGet("ASC_ISSUER_ID", "/appstore-connect").trim();
+  if (/^[A-Za-z0-9]+$/.test(infKeyId) && infIssuer) {
+    let pem = fleetSecretsGet(`AUTHKEY_${infKeyId}`, `/authkey-${infKeyId.toLowerCase()}-p8`);
+    if (pem) {
+      if (!pem.endsWith("\n")) pem += "\n";
+      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: pem, source: "Infisical /appstore-connect" };
+    }
   }
 
   return { error: null };
