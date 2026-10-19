@@ -218,11 +218,13 @@ describe("per-model image support", () => {
     };
 
     // Multimodal rows resolve to true on every engine that lists them.
-    // MiniMax-M3.1-Flash-Preview was retired on 2026-10-18 (BF-2494) and is
-    // not in the catalog anymore; the multimodal coverage check stops at M3.
+    // MiniMax-M3.1-Flash is the stable successor to the retired
+    // MiniMax-M3.1-Flash-Preview (2026-10-18, BF-2494) and is multimodal.
     expect(fold(dshSupport, "MiniMax-M3")).toBe(true);
+    expect(fold(dshSupport, "MiniMax-M3.1-Flash")).toBe(true);
     expect(fold(dshSupport, "DeepSeek-V4.1-Flash")).toBe(true);
     expect(fold(minimaxSupport, "MiniMax-M3")).toBe(true);
+    expect(fold(minimaxSupport, "MiniMax-M3.1-Flash")).toBe(true);
 
     // Text-only rows still resolve to false, so opening the gate never turns
     // into "offer an attachment the provider would refuse".
@@ -260,10 +262,11 @@ describe("per-model image support", () => {
   it("routes MiniMax image support by the provider's own modality declaration", () => {
     // The installed pi-ai catalog declares M3 as text+image and the M2.7
     // family as text-only.  Offering an attachment to a text-only row is
-    // what produced the refusal the owner hit.  MiniMax-M3.1-Flash-Preview
-    // was retired on 2026-10-18 (BF-2494) and is not in the catalog.
+    // what produced the refusal the owner hit.  MiniMax-M3.1-Flash is the
+    // stable successor to the retired Preview id and is multimodal.
     const byId = new Map(STATIC_MINIMAX_MODELS.options.map((o) => [o.id, o]));
     expect(byId.get("MiniMax-M3")?.images).toBe(true);
+    expect(byId.get("MiniMax-M3.1-Flash")?.images).toBe(true);
     expect(byId.get("MiniMax-M2.7-highspeed")?.images).toBe(false);
     expect(byId.get("MiniMax-M2.7")?.images).toBe(false);
     for (const option of STATIC_MINIMAX_MODELS.options) {

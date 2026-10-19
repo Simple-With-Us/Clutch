@@ -899,9 +899,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           //   MiniMax-M2.7-highspeed  2x Cost  same 204,800 context as M2.7 at
           //     exactly twice M3's $0.30 / $1.20.
           //
-          // MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on
-          // 2026-10-18 (BF-2494 / minimax/drop-m31-flash-preview).  Do not
-          // re-add it here without a verified stable replacement.
+          // MiniMax-M3.1-Flash is the stable successor to the retired
+          // MiniMax-M3.1-Flash-Preview (retired on the MiniMax side on
+          // 2026-10-18, BF-2494 / minimax/drop-m31-flash-preview).  The
+          // Preview id must not come back.
           const MODEL_ROWS = [
             {
               ids: ['deepseek-flash', 'deepseek-v4-flash', 'DeepSeek-V41-Flash', 'DeepSeek-V4.1-Flash', 'DeepSeek V4.1 Flash', 'DeepSeek V4 Flash'],
@@ -912,6 +913,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             {
               ids: ['deepseek-v4-pro', 'DeepSeek-V4-Pro', 'DeepSeek-V4.1-Pro', 'DeepSeek V4.1 Pro', 'DeepSeek V4 Pro'],
               label: 'DeepSeek-V4.1-Pro',
+            },
+            {
+              ids: ['MiniMax-M3.1-Flash', 'MiniMax M3.1 Flash'],
+              label: 'MiniMax-M3.1-Flash',
             },
             {
               ids: ['MiniMax-M3', 'MiniMax M3'],

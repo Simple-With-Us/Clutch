@@ -44,10 +44,21 @@ describe("minimaxSupport", () => {
     expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3");
   });
 
+  it("advertises the working MiniMax-M3.1-Flash replacement", () => {
+    // BF-2494 (2026-10-18): MiniMax retired MiniMax-M3.1-Flash-Preview.
+    // MiniMax-M3.1-Flash is its stable successor, live on both the managed
+    // and the direct route, and the M3-class multimodal model the picker
+    // offers in its place.
+    const ids = STATIC_MINIMAX_MODELS.options.map((option) => option.id);
+    expect(ids).toContain("MiniMax-M3.1-Flash");
+    const row = STATIC_MINIMAX_MODELS.options.find((option) => option.id === "MiniMax-M3.1-Flash");
+    expect(row?.images).toBe(true);
+    expect(row?.contextWindow).toBe(1_000_000);
+  });
+
   it("does not advertise the retired MiniMax-M3.1-Flash-Preview model", () => {
-    // BF-2494 (2026-10-18): MiniMax-M3.1-Flash-Preview was retired on the
-    // MiniMax side.  A re-introduction must be a deliberate decision backed
-    // by a verified stable replacement, not a regression.
+    // The Preview id is gone for good: a turn asking for it fails before
+    // the model ever runs.  The replacement is MiniMax-M3.1-Flash.
     expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id))
       .not.toContain("MiniMax-M3.1-Flash-Preview");
   });
@@ -77,6 +88,9 @@ describe("minimaxEffortLevelsForModel", () => {
   it("gives MiniMax-M3 the full effort range and falls back for M2.7", async () => {
     const { minimaxEffortLevelsForModel } = await import("../src/minimax/acp/driver.ts");
     expect(minimaxEffortLevelsForModel("MiniMax-M3")).toEqual(["none", "low", "medium", "high", "max"]);
+    // M3.1 Flash forces thinking on, so its list starts at "low" and runs
+    // through max — there is no "none" level for it.
+    expect(minimaxEffortLevelsForModel("MiniMax-M3.1-Flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(minimaxEffortLevelsForModel("MiniMax-M2.7")).toEqual(["none"]);
     expect(minimaxEffortLevelsForModel("MiniMax-M2.7-highspeed")).toEqual(["none"]);
     expect(minimaxEffortLevelsForModel("unknown-model")).toEqual(["none"]);

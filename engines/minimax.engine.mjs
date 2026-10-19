@@ -42,19 +42,24 @@ const MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7-highspeed";
 const EFFORT_LEVELS = ["none"];
 
 /** Per-model effort overrides.  MiniMax-M3 advertises the full reasoning range;
- *  the M2.7 family stays on `none` by falling back to {@link EFFORT_LEVELS}. */
+ *  MiniMax-M3.1-Flash forces thinking on, so its list starts at `low`; the
+ *  M2.7 family stays on `none` by falling back to {@link EFFORT_LEVELS}. */
 const PER_MODEL_EFFORT_LEVELS = {
   "MiniMax-M3": ["none", "low", "medium", "high", "max"],
+  "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /** Per-model image support.  These are provider facts, not preferences: the
  *  installed pi-ai catalog declares MiniMax-M3 as `input: [text, image]` and the
  *  whole M2.7 family as text-only.
  *
- *  MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
- *  (BF-2494 / minimax/drop-m31-flash-preview) and is intentionally absent
- *  here.  Do not re-add it without a verified stable replacement. */
+ *  MiniMax-M3.1-Flash is the stable successor to the retired
+ *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
+ *  the direct route, and it declares `input: [text, image, video]`.  The
+ *  Preview id was retired on 2026-10-18 (BF-2494 /
+ *  minimax/drop-m31-flash-preview) and must not come back. */
 const PER_MODEL_IMAGES = {
+  "MiniMax-M3.1-Flash": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
@@ -63,6 +68,12 @@ const PER_MODEL_IMAGES = {
 const MODELS = {
   default: MINIMAX_DEFAULT_MODEL,
   options: [
+    {
+      id: "MiniMax-M3.1-Flash",
+      label: "MiniMax M3.1 Flash",
+      contextWindow: 1_000_000,
+      images: true,
+    },
     { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",

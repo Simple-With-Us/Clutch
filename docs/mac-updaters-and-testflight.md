@@ -114,6 +114,6 @@ To ensure MiniMax (`mm`) and DeepSeek (`ds`) have full access to all tools and c
 2. **Cordis `--patch` Dynamic Overlays:**
    - Both `bridges/dsh/dsh-acp.py` and `bridges/minimax/minimax-acp.py` support `--patch <path>` on CLI and dynamically parse `mcpServers` from ACP `session/new` requests, writing a temporary Cordis overlay that configures `@deepseek-ai/dsh-mcp-client` for each server.
 3. **Model Catalog Parity:**
-   - `STATIC_MINIMAX_MODELS` includes `MiniMax-M3`, `MiniMax-M2.7-highspeed` (`2x Cost`) and `MiniMax-M2.7`, matching `STATIC_DSH_MODELS` and `settings-minimax-headless.yaml`.  `MiniMax-M3.1-Flash-Preview` was retired on the MiniMax side on 2026-10-18 (BF-2494) and is no longer in the catalog.
+   - `STATIC_MINIMAX_MODELS` includes `MiniMax-M3.1-Flash`, `MiniMax-M3`, `MiniMax-M2.7-highspeed` (`2x Cost`) and `MiniMax-M2.7`, matching `STATIC_DSH_MODELS` and `settings-minimax-headless.yaml`.  `MiniMax-M3.1-Flash` is the stable successor to `MiniMax-M3.1-Flash-Preview`, which MiniMax retired on 2026-10-18 (BF-2494); the retired id is no longer in the catalog.
 4. **iOS Parity:**
    - The Clutch iOS app shows the clutch web UI, so the same tools and the 4 destination mounts (`local`, `box`, `vps`, `vm`) are available there with no app-specific code.

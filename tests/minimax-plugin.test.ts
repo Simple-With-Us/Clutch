@@ -51,21 +51,24 @@ describe("the shipped MiniMax plugin", () => {
     // The gate is only the fallback for a row the catalog does not list, and
     // M3 really does take images.  The per-model map is what stops a
     // consumer offering an attachment the M2.7 family would refuse.
-    // MiniMax-M3.1-Flash-Preview was retired on 2026-10-18 (BF-2494) and
-    // must not reappear here without a verified stable replacement.
+    // MiniMax-M3.1-Flash is the stable successor to the retired
+    // MiniMax-M3.1-Flash-Preview (2026-10-18, BF-2494) and is multimodal
+    // too, so it carries its own row here.
     expect(support.images).toBe(true);
     expect(support.perModelImages).toEqual({
+      "MiniMax-M3.1-Flash": true,
       "MiniMax-M3": true,
       "MiniMax-M2.7-highspeed": false,
       "MiniMax-M2.7": false,
     });
   });
 
-  it("gives MiniMax-M3 the full effort range and leaves the rest on the default", async () => {
+  it("gives MiniMax-M3 and MiniMax-M3.1-Flash their own effort ranges", async () => {
     const support = await loadMinimax();
     expect(support.effortLevels).toEqual(["none"]);
     expect(support.perModelEffortLevels).toEqual({
       "MiniMax-M3": ["none", "low", "medium", "high", "max"],
+      "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
     });
   });
 

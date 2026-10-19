@@ -74,6 +74,7 @@ const OWNER_OVERRIDE = advertise({
     ["MiniMax-M2.7", "MiniMax-M2.7"],
     ["MiniMax-M2.7-highspeed", "MiniMax-M2.7-Highspeed"],
     ["MiniMax-M3", "MiniMax-M3"],
+    ["MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash"],
   ],
 });
 
@@ -211,9 +212,10 @@ describe("a model the session does not offer", () => {
     expect(message).toContain("MiniMax-Not-A-Model");
     expect(message).toContain("MiniMax-M3");
     expect(message).toContain("deepseek-v4.1-flash");
-    // OWNER_OVERRIDE advertises two deepseek + three minimax rows (M3.1
-    // was removed in BF-2494 / 2026-10-18), so the offered list is 5.
-    expect((error as DshModelNotOfferedError).offered).toHaveLength(5);
+    // OWNER_OVERRIDE advertises two deepseek + four minimax rows (the
+    // retired M3.1 Preview id was removed in BF-2494 / 2026-10-18 and
+    // MiniMax-M3.1-Flash took its place), so the offered list is 6.
+    expect((error as DshModelNotOfferedError).offered).toHaveLength(6);
   });
 
   it("lists each offered model with its provider route", () => {
@@ -228,6 +230,7 @@ describe("a model the session does not offer", () => {
     expect(offered).toContain("minimax/MiniMax-M2.7-highspeed (MiniMax-M2.7-Highspeed)");
     // Id and name agree: no redundant parenthetical.
     expect(offered).toContain("minimax/MiniMax-M3");
+    expect(offered).toContain("minimax/MiniMax-M3.1-Flash");
     // Declared nowhere else, so there is no route hint.
     expect((error as DshModelNotOfferedError).elsewhere).toEqual([]);
     expect((error as Error).message).not.toContain("declared only under");
