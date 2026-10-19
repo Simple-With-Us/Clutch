@@ -32,11 +32,13 @@
 		6837A599633AC57474330540 /* SessionsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C52DEAAF7A31217501C449 /* SessionsClient.swift */; };
 		6C0E664C64460BEAA01504CC /* InfisicalSettingsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5ACD0A4967661CC0576D3C2 /* InfisicalSettingsClient.swift */; };
 		6C199685D907A332658047E1 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5FBD64006BA01FD566745EB8 /* Info.plist */; };
+		7497B0A554613B9A2952644B /* DshHostModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EA87C78C20019E7E676352 /* DshHostModels.swift */; };
 		74F9CB381704132CE0FFBE5D /* AcpSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB42A9547AE68A2227C26B9 /* AcpSession.swift */; };
 		74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCFC52CD4695F04BEDCB607E /* ChatViewMac.swift */; };
 		751A309BD6DEB2F47A3201E3 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 011331E126F79B28AE6B1DCE /* TranscriptionService.swift */; };
 		76AC1AF46032BE331A737E2D /* CometChatUIKitSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 875C4D75EA892C6C14AD66AE /* CometChatUIKitSwift */; };
 		7B7CE37DB68A99719369B7F0 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938B47BD908994DA59A18C0A /* ChatMessage.swift */; };
+		7C579079FD019800EE5BAF81 /* DshHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C751E4317B2017C34E8463DA /* DshHostView.swift */; };
 		7EDF428C0E84FDBFAB3169B1 /* PairingScannerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FE1DEE0EB576AE69F2FF385 /* PairingScannerSheet.swift */; };
 		7F1FF6945B3A976706D9500F /* CometChatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C182639A35D271331937928A /* CometChatManager.swift */; };
 		8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C15309992AC78E4D5B956FF9 /* PairingTests.swift */; };
@@ -44,6 +46,7 @@
 		826F8FA2AA98AF63C81849C3 /* ThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACF4B282838514406995172 /* ThreadSidebar.swift */; };
 		85C2521AA0F970591C34C400 /* HostProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC4915BE0E639FD34ED398C /* HostProbe.swift */; };
 		85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E7D46B34D86B23A894C85E /* ClutchHost.swift */; };
+		8A6AC216ACE253353A7B0337 /* DshHostClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93FA3C641650A7D1F057E290 /* DshHostClient.swift */; };
 		8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02A9B289B8BED2D4AAE1B82 /* RootView.swift */; };
 		8F2E011FE99CABF8C774B69D /* ClutchHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16E7D46B34D86B23A894C85E /* ClutchHost.swift */; };
 		9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
@@ -51,6 +54,7 @@
 		9C6347E7BC1CB7B235423A55 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
 		9D8A3F2FC3641D362CE8A63A /* SessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */; };
 		A0CE74C52BAAE38076860EDA /* PairingLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF818C703EEECD904E31711 /* PairingLink.swift */; };
+		A1F1854063DBD253842EA410 /* DshHostModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EA87C78C20019E7E676352 /* DshHostModels.swift */; };
 		A3EC07AC552CF5719B378649 /* FleetRecallClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F222C5FD52094175AB7B778 /* FleetRecallClientTests.swift */; };
 		A59D345A83DB671C1521BC9B /* ClutchChatTabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487B167888DA469E9827B2FF /* ClutchChatTabUITests.swift */; };
 		AA4AF91B37DD1E8C8CD0A936 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02A9B289B8BED2D4AAE1B82 /* RootView.swift */; };
@@ -61,10 +65,12 @@
 		BCF5B6E6848DA3059F9A713C /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
 		C98833B27EF97136742BC786 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81457A11AE35E90469E20EF /* ChatView.swift */; };
 		CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C52DEAAF7A31217501C449 /* SessionsClient.swift */; };
+		CE06D39056708CCB103C5B65 /* DshHostClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93FA3C641650A7D1F057E290 /* DshHostClient.swift */; };
 		D07E1B217F79E01F079CF475 /* InfisicalSettingsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5ACD0A4967661CC0576D3C2 /* InfisicalSettingsClient.swift */; };
 		D1FF4CA99DEB2E1632575671 /* FleetRecallModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */; };
 		D35803D4079F3EC28C017679 /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
 		D6A5EBB32B06C0592DAC02C0 /* AgentMessagesVC.swift in Sources */ = {isa = PBXBuildFile; fileRef = D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */; };
+		D70F73684B5F296C2F5D3403 /* DshHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C751E4317B2017C34E8463DA /* DshHostView.swift */; };
 		DC3DE8AA219F2C002FEF594B /* WebViewMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = D16A76E368570CE2DF1C66B2 /* WebViewMac.swift */; };
 		E9F5DFB8FB8CE7F7CA2F35FD /* HostProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC4915BE0E639FD34ED398C /* HostProbe.swift */; };
 		ED56A1AB7AD99DBCC2F079DC /* InfisicalSettingsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601066F3077C541FA16667C9 /* InfisicalSettingsModels.swift */; };
@@ -117,12 +123,14 @@
 		601066F3077C541FA16667C9 /* InfisicalSettingsModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfisicalSettingsModels.swift; sourceTree = "<group>"; };
 		6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallClient.swift; sourceTree = "<group>"; };
 		6DF818C703EEECD904E31711 /* PairingLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingLink.swift; sourceTree = "<group>"; };
+		70EA87C78C20019E7E676352 /* DshHostModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshHostModels.swift; sourceTree = "<group>"; };
 		7F222C5FD52094175AB7B778 /* FleetRecallClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallClientTests.swift; sourceTree = "<group>"; };
 		7FFB9EDC8C959000A3E5DBD6 /* ReasoningBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningBlockView.swift; sourceTree = "<group>"; };
 		8350E05ABC320489DC29C0A9 /* ClutchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchApp.swift; sourceTree = "<group>"; };
 		8FE1DEE0EB576AE69F2FF385 /* PairingScannerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerSheet.swift; sourceTree = "<group>"; };
 		9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionClient.swift; sourceTree = "<group>"; };
 		938B47BD908994DA59A18C0A /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
+		93FA3C641650A7D1F057E290 /* DshHostClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshHostClient.swift; sourceTree = "<group>"; };
 		963E835EDD8B4295E51E3747 /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
 		9AC4915BE0E639FD34ED398C /* HostProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProbe.swift; sourceTree = "<group>"; };
 		9ACF4B282838514406995172 /* ThreadSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadSidebar.swift; sourceTree = "<group>"; };
@@ -130,6 +138,7 @@
 		AD8D5DA5717C010FE84631A3 /* ClutchLiveUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchLiveUITests.swift; sourceTree = "<group>"; };
 		C15309992AC78E4D5B956FF9 /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
 		C182639A35D271331937928A /* CometChatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CometChatManager.swift; sourceTree = "<group>"; };
+		C751E4317B2017C34E8463DA /* DshHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DshHostView.swift; sourceTree = "<group>"; };
 		CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsTests.swift; sourceTree = "<group>"; };
 		CBB42A9547AE68A2227C26B9 /* AcpSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcpSession.swift; sourceTree = "<group>"; };
 		D16A76E368570CE2DF1C66B2 /* WebViewMac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewMac.swift; sourceTree = "<group>"; };
@@ -193,6 +202,7 @@
 			children = (
 				9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */,
 				C182639A35D271331937928A /* CometChatManager.swift */,
+				93FA3C641650A7D1F057E290 /* DshHostClient.swift */,
 				6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */,
 				9AC4915BE0E639FD34ED398C /* HostProbe.swift */,
 				F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */,
@@ -210,6 +220,7 @@
 				CBB42A9547AE68A2227C26B9 /* AcpSession.swift */,
 				938B47BD908994DA59A18C0A /* ChatMessage.swift */,
 				16E7D46B34D86B23A894C85E /* ClutchHost.swift */,
+				70EA87C78C20019E7E676352 /* DshHostModels.swift */,
 				0E9D5A52D06E0D08142C4723 /* FleetRecallModels.swift */,
 				601066F3077C541FA16667C9 /* InfisicalSettingsModels.swift */,
 			);
@@ -251,6 +262,7 @@
 				D40390E8BFD8FF42F2E7DF0A /* AgentMessagesVC.swift */,
 				F81457A11AE35E90469E20EF /* ChatView.swift */,
 				3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */,
+				C751E4317B2017C34E8463DA /* DshHostView.swift */,
 				370F89587447F8A4277926BD /* FleetRecallView.swift */,
 				24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */,
 				132E63075DFF396CB0A55FCA /* InfisicalSettingsSection.swift */,
@@ -452,6 +464,9 @@
 				85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */,
 				81F0EDE56AE496487CCA777A /* ClutchWebView.swift in Sources */,
 				7F1FF6945B3A976706D9500F /* CometChatManager.swift in Sources */,
+				8A6AC216ACE253353A7B0337 /* DshHostClient.swift in Sources */,
+				7497B0A554613B9A2952644B /* DshHostModels.swift in Sources */,
+				7C579079FD019800EE5BAF81 /* DshHostView.swift in Sources */,
 				AF2BFF1ABDEF5AA3823510E4 /* FleetRecallClient.swift in Sources */,
 				628E3D79A9B8F51033F2CB91 /* FleetRecallModels.swift in Sources */,
 				9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */,
@@ -486,6 +501,9 @@
 				74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */,
 				B2B00BC850F55C4E250BA2CE /* ClutchApp.swift in Sources */,
 				8F2E011FE99CABF8C774B69D /* ClutchHost.swift in Sources */,
+				CE06D39056708CCB103C5B65 /* DshHostClient.swift in Sources */,
+				A1F1854063DBD253842EA410 /* DshHostModels.swift in Sources */,
+				D70F73684B5F296C2F5D3403 /* DshHostView.swift in Sources */,
 				F3480DF81D27F97BDFD2AF2A /* FleetRecallClient.swift in Sources */,
 				D1FF4CA99DEB2E1632575671 /* FleetRecallModels.swift in Sources */,
 				977EA2945436566209B53B15 /* FleetRecallView.swift in Sources */,
