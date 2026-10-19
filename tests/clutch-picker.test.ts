@@ -105,9 +105,9 @@ describe("ClutchWindow model-picker decoration", () => {
     // inserted a logo child, and markPickerModelRows skips elements that
     // already have children, so no badge ever applied.
     //
-    // MiniMax-M3.1-Flash-Preview was retired on 2026-10-18 (BF-2494) and is
-    // intentionally absent from MODEL_ROWS.  The Preview row used to
-    // occupy the first slot in the assertion below.
+    // MiniMax-M3.1-Flash is the stable successor to the retired
+    // MiniMax-M3.1-Flash-Preview (2026-10-18, BF-2494) and has its own
+    // MODEL_ROWS entry.
     const rows = [
       makeEl("div", "DeepSeek-V4.1-Flash"),
       makeEl("span", "MiniMax-M2.7-highspeed"),
