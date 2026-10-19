@@ -902,23 +902,23 @@ else
   # on its own -- check explicitly rather than leaning on set -e.
   SEQ_FLOOR="$(resolve_seq_floor "$MARKETING_PREFIX" "$PBXPROJ" "$PLATFORM")" || exit 1
   [[ "$SEQ_FLOOR" =~ ^[0-9]+$ ]] || die "could not resolve a build sequence floor (got '${SEQ_FLOOR}')"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    # Dry-run must not consume a sequence number -- peek only.
-    SEQ=$((SEQ_FLOOR + 1))
-  else
-    # The only remaining consumer. A gated run exited above; a dry-run peeks;
-    # an --upload-only run never gets here. So the counter advances only on a
-    # run that is really about to archive, and by exactly 1.
-    SEQ="$(next_build_seq "$SEQ_FLOOR")"
-  fi
-  COMMIT_COUNT="$(git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null || echo "$SEQ")"
+  # The local build-seq counter is deliberately NOT advanced here.  Under the
+  # commit-count scheme it no longer feeds MARKETING or BUILD_NUM, so writing
+  # to it would only drift the floor on every later run and eventually push a
+  # fresh commit's build number higher than the commit count it names.
+  COMMIT_COUNT="$(git -C "$REPO_ROOT" rev-list --count HEAD 2>/dev/null || echo "$((SEQ_FLOOR + 1))")"
   MARKETING="${MARKETING_PREFIX}.${COMMIT_COUNT}"
   BUILD_NUM="${COMMIT_COUNT}"
   # Strictly-increasing guard for a re-ship of the same commit: ASC rejects a
   # repeated (version, build) pair, so never ship at or below the known floor.
+  #
+  # When the guard fires, MARKETING moves with BUILD_NUM.  The invariant is that
+  # the two always describe the same commit count, so leaving MARKETING at the
+  # raw count would record a version whose build does not match it.
   if [[ "$SEQ_FLOOR" -ge "$BUILD_NUM" ]]; then
     BUILD_NUM="$((SEQ_FLOOR + 1))"
-    log "build: commit count ${COMMIT_COUNT} already shipped; using ${BUILD_NUM} instead"
+    MARKETING="${MARKETING_PREFIX}.${BUILD_NUM}"
+    log "build: commit count ${COMMIT_COUNT} already shipped; shipping ${MARKETING} (${BUILD_NUM}) instead"
   fi
 fi
 
