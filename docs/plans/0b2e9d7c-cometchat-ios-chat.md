@@ -25,8 +25,10 @@ CometChat over polish-ExyteChat and Stream Chat.
   + `onBehalfOf` the agent user, or `POST /v3/bots/{uid}/messages`),
   region `us`. Tool-call cards map to `category: interactive, type: card`.
 - Secrets: App ID + Auth Key (client login, dev) and REST API key
-  (backend-only, never ships in the app) live in `~/.secrets/comet-chat.txt`
-  (mode 600). Values never appear in code, logs, or chat.
+  (backend-only, never ships in the app) live in Infisical Fleet-OPS folder
+  `/comet-chat` (`COMETCHAT_APP_ID`, `COMETCHAT_REGION`, `COMETCHAT_AUTH_KEY`,
+  `COMETCHAT_REST_API_KEY`); read them with `fleet-secrets get NAME --path
+  /comet-chat`. Values never appear in code, logs, or chat.
 
 ## Build order
 
@@ -54,9 +56,9 @@ CometChat over polish-ExyteChat and Stream Chat.
 ## Owner gates (nothing else needs Jay)
 
 - CometChat dashboard: stored App ID is not the numeric id and no region
-  resolves — verify App ID + region, update the handoff file.
+  resolves — verify App ID + region, update Infisical `/comet-chat`.
 - Deploy: `COMETCHAT_APP_ID/REGION/REST_API_KEY/AGENT_UID` into Infisical
-  (the sidecar reads env, never handoff files), then live-install update
+  (the sidecar reads env, never files), then live-install update
   + TestFlight.
 
 ## Verify before merge

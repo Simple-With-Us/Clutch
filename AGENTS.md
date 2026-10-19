@@ -122,7 +122,7 @@ Two spaces between sentences in every paragraph a human reads: product UI, App S
 
 ## Secret Handoff (owner -> agent)
 
-When the owner gives you a secret, read it from `chmod 600` files under `/Users/jay/.secrets/` and NEVER print or echo it.  Never grep `KEY=value` lines (names only: `grep -oE '^[A-Z][A-Z0-9_]*' file`).  Never read `~/.clutch/config.json` and `~/.clutch/dsh/.credentials.yaml` values or `.env*` contents into a transcript.  The product server must not read fleet handoff files; runtime secrets come from the app's own config or Infisical.
+Secrets live in Infisical (Fleet-OPS, prod).  Read one with `fleet-secrets get NAME [--path /folder]` (names only: `fleet-secrets names [--path /folder]`) and NEVER print or echo it.  Nothing reads the old home-directory secrets folder any more (Linear AFC-359).  Never grep `KEY=value` lines out of an env file.  Never read `~/.clutch/config.json` and `~/.clutch/dsh/.credentials.yaml` values or `.env*` contents into a transcript.  The product server must not read fleet handoff files; runtime secrets come from the app's own config or Infisical.
 
 ## Observability
 
