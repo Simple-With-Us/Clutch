@@ -37,9 +37,10 @@ llm-pi-ai:
 ```
 
 — is preserved above so an agent that finds a host still shipping it knows
-what to remove.  The current offered set is `MiniMax-M3` and
-`MiniMax-M2.7-highspeed` (in `STATIC_MINIMAX_MODELS`), and the rest of this
-file describes the per-model story in the present tense only for those rows.
+what to remove.  The current offered set is `MiniMax-M3`,
+`MiniMax-M2.7-highspeed` and `MiniMax-M2.7` (in `STATIC_MINIMAX_MODELS`), and
+the rest of this file describes the per-model story in the present tense only
+for those rows.
 
 ## Gate On The Installed Settings
 

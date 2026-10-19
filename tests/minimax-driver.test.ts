@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { classifyMinimaxError, minimaxSpawnArgs, minimaxSupport, STATIC_MINIMAX_MODELS } from "../src/minimax/acp/driver.ts";
@@ -8,6 +11,13 @@ import {
   minimaxIsAuthenticated,
   minimaxTransformEnv,
 } from "../src/minimax/http-client/index.ts";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// The native model pickers advertise their rows by literal string, so a
+// retired id left behind in Swift is selectable and reproduces the API
+// refusal the catalog removal was meant to eliminate.
+const NATIVE_PICKERS = ["ios/App/Views/ChatView.swift", "ios/Mac/ChatViewMac.swift"];
 
 describe("minimax http client", () => {
   it("builds the chat-completions URL", () => {
@@ -40,6 +50,17 @@ describe("minimaxSupport", () => {
     // by a verified stable replacement, not a regression.
     expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id))
       .not.toContain("MiniMax-M3.1-Flash-Preview");
+  });
+
+  it("does not offer the retired model from the native model pickers", () => {
+    // BF-2494 (2026-10-18): the iOS and macOS menus name their rows as
+    // literals, so the catalog guard above does not reach them.  Offering
+    // the retired id there reproduces "model is not available for the
+    // managed_token_plan route" on the next turn.
+    for (const picker of NATIVE_PICKERS) {
+      expect(readFileSync(join(ROOT, picker), "utf8"), picker)
+        .not.toContain("MiniMax-M3.1-Flash-Preview");
+    }
   });
 });
 
