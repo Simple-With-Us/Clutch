@@ -9,7 +9,6 @@ import {
   DSH_PROVIDER_DEFAULT_EFFORT,
   classifyDshError,
   dshEffortLevelsForModel,
-  dshInstalledEffortLevels,
   dshModelIdFromOptionValue,
   dshModelOptionValue,
   dshPerModelEffortLevels,
