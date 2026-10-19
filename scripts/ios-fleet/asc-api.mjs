@@ -122,14 +122,20 @@ function resolveCredential() {
   // it invokes this module (step 3 below also reads Infisical directly).  The hosted ios-ship runner only has the APPLE_API_*
   // form in $GITHUB_ENV.
 
-  // 2) The APPLE_API_* trio the ship workflow exports from Infisical.
+  // 2) The APPLE_API_* trio the ship workflow exports from Infisical.  If the
+  //    base64 p8 does not decode, fall through to step 3 so the Infisical
+  //    fallback can still supply a credential; the decode failure is only
+  //    reported if step 3 has nothing either.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
   const issuerId = String(process.env.APPLE_API_ISSUER_ID || "").trim();
+  let decodeError = null;
   if (keyId && issuerId && process.env.APPLE_API_KEY_P8_BASE64) {
     const pem = decodeP8(process.env.APPLE_API_KEY_P8_BASE64);
-    if (!pem) return { error: "APPLE_API_KEY_P8_BASE64 is set but did not decode to a PEM private key" };
-    materializeP8(pem);
-    return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
+    if (pem) {
+      materializeP8(pem);
+      return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
+    }
+    decodeError = "APPLE_API_KEY_P8_BASE64 is set but did not decode to a PEM private key";
   }
 
   // 3) Infisical Fleet-OPS: key id and issuer from /appstore-connect (unless the
@@ -145,7 +151,7 @@ function resolveCredential() {
     }
   }
 
-  return { error: null };
+  return { error: decodeError };
 }
 
 function signJwt({ keyId, issuerId, privateKeyPem }) {
