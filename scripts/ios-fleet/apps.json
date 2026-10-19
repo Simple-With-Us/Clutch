@@ -11,7 +11,7 @@
       "xcodegenDir": "ios",
       "worktreeHint": "~/apps/clutch-runtime",
       "marketingVersionDefault": "1.0.0",
-      "notes": "Clutch iOS companion (codes.clutch.ios).  AppleId 6817951255 on App Store Connect.  Internal TestFlight testers only today.  Marketing train is 1.0.N; build is UTC YYYYMMDDHHMM.  Hosted ships use APPLE_API_* and IOS_CERT_* with manual App Store profiles (ios/appstore-profiles.json)."
+      "notes": "Clutch iOS companion (codes.clutch.ios).  AppleId 6817951255 on App Store Connect.  Internal TestFlight testers only today.  Marketing and build are both the repo's commit count (1.0.<commit_count> and <commit_count>); UTC build stamps are retired.  Hosted ships use APPLE_API_* and IOS_CERT_* with manual App Store profiles (ios/appstore-profiles.json)."
     }
   }
 }

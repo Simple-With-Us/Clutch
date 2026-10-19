@@ -38,8 +38,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.ios
         DEVELOPMENT_TEAM: CC8UTF7ATG
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "1.0.147"
-        CURRENT_PROJECT_VERSION: "147"  # commit count; ship script overrides per build
+        # RECORD OF WHAT SHIPPED, not the source of truth for what ships next:
+        # the ship script passes both values on the xcodebuild command line, and
+        # reads this one as the build-number FLOOR, so it must stay below the
+        # commit count of any commit that can ship.
+        MARKETING_VERSION: "1.0.148"
+        CURRENT_PROJECT_VERSION: "148"  # commit count; ship script overrides per build
         SWIFT_VERSION: '5.9'
         TARGETED_DEVICE_FAMILY: '1,2'
         SUPPORTS_MACCATALYST: false
@@ -134,8 +138,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.macos
         DEVELOPMENT_TEAM: CC8UTF7ATG
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "1.0.147"
-        CURRENT_PROJECT_VERSION: "147"  # commit count; ship script overrides per build
+        MARKETING_VERSION: "1.0.148"
+        CURRENT_PROJECT_VERSION: "148"  # commit count; ship script overrides per build
         SWIFT_VERSION: '5.9'
         MACOSX_DEPLOYMENT_TARGET: '14.0'
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
