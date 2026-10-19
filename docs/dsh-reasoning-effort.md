@@ -5,23 +5,15 @@
 levels.  A consumer folds the map onto its catalog, so a picker reads one list
 per model.
 
-## MiniMax M3.1 Flash Preview — RETIRED 2026-10-18 (BF-2494)
+## MiniMax M3.1 Flash Preview
 
-MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18 and
-has been removed from the static catalog, the per-model effort map, and
-`settings-minimax-headless.yaml`.  A turn that asks for the id now fails with
-"model is not available for the managed_token_plan route" on the API and a
-`DshModelNotOfferedError` on the Clutch side.
+| Picker id | Levels |
+|---|---|
+| `MiniMax-M3.1-Flash-Preview` | `low`, `medium`, `high`, `xhigh`, `max` |
 
-The per-model effort story that lived on this id (low / medium / high /
-xhigh / max with `compat.forceAdaptiveThinking: true`) is documented here for
-historical reference only.  **Do not re-add the model or the per-model row
-without a verified stable replacement.**  The retired model's effect on the
-engine is captured in `DSH_PER_MODEL_EFFORT_LEVELS` returning `{}` and
-`STATIC_DSH_MODELS` shipping without it.
-
-The settings shape that was required to enable the retired model's effort
-picker —
+M3.1 is newer than the pi-ai catalog that dsh 0.1.5-rc.2 installs, so dsh only
+knows it from the owner's `settings.yaml`.  The levels above work only when
+that entry declares them:
 
 ```yaml
 llm-pi-ai:
@@ -36,10 +28,11 @@ llm-pi-ai:
           compat: { forceAdaptiveThinking: true }
 ```
 
-— is preserved above so an agent that finds a host still shipping it knows
-what to remove.  The current offered set is `MiniMax-M3` and
-`MiniMax-M2.7-highspeed` (in `STATIC_MINIMAX_MODELS`), and the rest of this
-file describes the per-model story in the present tense only for those rows.
+With that entry, pi-ai sends `thinking: {type: "adaptive", display: "summarized"}`
+plus `output_config: {effort: <level>}` to `api.minimax.io/anthropic`, and dsh
+advertises exactly these five `reasoning_effort` ids plus the provider-default
+value `""`.  It advertises no `off`, which is why `none` is not in the list.
+Without the entry, dsh refuses every level here with `unknown reasoning effort`.
 
 ## Gate On The Installed Settings
 

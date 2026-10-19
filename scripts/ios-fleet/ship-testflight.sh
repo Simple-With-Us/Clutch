@@ -24,9 +24,13 @@
 #   CURRENT_PROJECT_VERSION = <commit_count>
 # App Store Connect renders "<marketing> (<build>)", so a ship shows
 # "1.0.148 (148)".  Unified across macOS and iOS; timestamps permanently retired.
-# One exception:  a re-ship of a commit count that App Store Connect already
-# holds raises BOTH numbers to <floor + 1>,  so the pair stays consistent but
-# the build number no longer names that commit.  See the guard below.
+# One exception:  when the floor is at or above the commit count, the guard
+# raises BOTH numbers to <floor + 1>,  so the pair stays consistent but the
+# build number no longer names that commit.  The floor is
+# max(App Store Connect, project.pbxproj).  See the guard below.
+#   That paired bump is the DEFAULT path only.  An operator override of
+# --version without --build moves just the build number, because a pinned
+# version is honoured exactly; that pair can carry two different numbers.
 #
 # ---------------------------------------------------------------------------
 # WHAT IS HOLDING BACK AUTOMATIC SHIPPING: THE MIN-INTERVAL RATE LIMIT
@@ -446,9 +450,9 @@ link_private_key() {
 # MARKETING_VERSION (CFBundleShortVersionString) is 1.0.<commit_count>.
 # CURRENT_PROJECT_VERSION (CFBundleVersion) is the same integer commit count.
 # ASC renders "<marketing> (<build>)", so a ship shows "1.0.259 (259)".
-# One exception, the guard below:  when App Store Connect already holds that
-# commit count, both numbers move up to <floor + 1> together, so the pair
-# still carries one number and that number no longer names a commit.
+# One exception, the guard below:  when the floor is at or above the commit
+# count, both numbers move up to <floor + 1> together, so the pair still
+# carries one number and that number no longer names a commit.
 #
 # The commit count replaces the UTC YYYYMMDDHHMM stamp for CFBundleVersion:
 #   - it names the EXACT commit a build came from, so a TestFlight or Sparkle
@@ -959,7 +963,7 @@ elif [[ -n "$FORCE_BUILD" || -n "$FORCE_VERSION" ]]; then
   # still gets an auto build number from the repo commit count, so an operator
   # picking the marketing version does not have to reason about it.  The commit
   # count is usually higher than anything already uploaded, but not always:  the
-  # floor below raises the build number when it is not.
+  # floor guard in this branch, below, raises the build number when it is not.
   MARKETING="${FORCE_VERSION:-$DEFAULT_MARKETING}"
   if [[ -n "$FORCE_BUILD" ]]; then
     # An explicit --build is honoured exactly.
@@ -990,7 +994,7 @@ elif [[ -n "$FORCE_BUILD" || -n "$FORCE_VERSION" ]]; then
     [[ "$_of_floor" =~ ^[0-9]+$ ]] || die "override floor is not a number: ${_of_floor}"
     if [[ "$_of_floor" -ge "$BUILD_NUM" ]]; then
       BUILD_NUM="$((_of_floor + 1))"
-      log "build: override would repeat an already-shipped build; using ${BUILD_NUM} instead"
+      log "build: floor ${_of_floor} is at or above the commit count; using ${BUILD_NUM} instead"
     fi
   fi
   # The shipped pair must describe one number.  Unless the operator pinned
@@ -1025,8 +1029,12 @@ else
   [[ "$COMMIT_COUNT" =~ ^[0-9]+$ ]] || die "could not read the commit count from ${REPO_ROOT}; the build number is the commit count and UTC timestamps are retired"
   MARKETING="${MARKETING_PREFIX}.${COMMIT_COUNT}"
   BUILD_NUM="${COMMIT_COUNT}"
-  # Strictly-increasing guard for a re-ship of the same commit: ASC rejects a
-  # repeated (version, build) pair, so never ship at or below the known floor.
+  # Strictly-increasing guard: ASC rejects a repeated (version, build) pair,
+  # so never ship at or below the known floor.  The guard fires whenever the
+  # floor is at or above the commit count -- because App Store Connect already
+  # holds it, because project.pbxproj records a higher one, or because a
+  # shallow checkout understates the commit count -- so the log line below
+  # names the floor rather than asserting the commit count was shipped.
   #
   # When the guard fires, MARKETING moves with BUILD_NUM.  The invariant is
   # that the two always carry the same number, so leaving MARKETING at the
@@ -1034,7 +1042,7 @@ else
   if [[ "$SEQ_FLOOR" -ge "$BUILD_NUM" ]]; then
     BUILD_NUM="$((SEQ_FLOOR + 1))"
     MARKETING="${MARKETING_PREFIX}.${BUILD_NUM}"
-    log "build: commit count ${COMMIT_COUNT} already shipped; shipping ${MARKETING} (${BUILD_NUM}) instead"
+    log "build: floor ${SEQ_FLOOR} is at or above the commit count ${COMMIT_COUNT}; shipping ${MARKETING} (${BUILD_NUM}) instead"
   fi
 fi
 

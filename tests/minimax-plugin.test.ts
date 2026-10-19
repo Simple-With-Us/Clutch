@@ -49,12 +49,11 @@ describe("the shipped MiniMax plugin", () => {
   it("opens the engine-wide image gate and keeps per-model truth exact", async () => {
     const support = await loadMinimax();
     // The gate is only the fallback for a row the catalog does not list, and
-    // M3 really does take images.  The per-model map is what stops a
-    // consumer offering an attachment the M2.7 family would refuse.
-    // MiniMax-M3.1-Flash-Preview was retired on 2026-10-18 (BF-2494) and
-    // must not reappear here without a verified stable replacement.
+    // M3 and M3.1 Flash really do take images.  The per-model map is what stops
+    // a consumer offering an attachment the M2.7 family would refuse.
     expect(support.images).toBe(true);
     expect(support.perModelImages).toEqual({
+      "MiniMax-M3.1-Flash-Preview": true,
       "MiniMax-M3": true,
       "MiniMax-M2.7-highspeed": false,
       "MiniMax-M2.7": false,

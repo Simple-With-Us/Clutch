@@ -27,15 +27,5 @@ export DSH_HOME="$CLUTCH_HOME/dsh"
 export CLUTCH_WEB_HOST="${CLUTCH_WEB_HOST:-127.0.0.1}"
 export CLUTCH_WEB_PORT="${CLUTCH_WEB_PORT:-3180}"
 
-# Telemetry off.  The dsh base bundle mounts a session-telemetry-otel row that
-# exports session events to DeepSeek's collector, and the web bundle adds a
-# product-telemetry row on top of it.  Upstream ships a kill switch for the
-# first: apps/cli/src/profile-boot.ts reads DSH_TELEMETRY_DISABLED and
-# resolveTelemetryPatch() turns the row off for ANY non-empty value --
-# including "0" and "false" -- so the row never mounts.  Clutch keeps the
-# engine offline unless the operator sets DSH_TELEMETRY_DISABLED to the empty
-# string on purpose.
-export DSH_TELEMETRY_DISABLED="${DSH_TELEMETRY_DISABLED:-1}"
-
 # Credentials live under DSH_HOME, so both directories are owner-only.
 (umask 077 && mkdir -p "$DSH_HOME")
