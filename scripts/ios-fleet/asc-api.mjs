@@ -132,16 +132,19 @@ function resolveCredential() {
     return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
   }
 
-  // 3) Infisical Fleet-OPS: key id and issuer from /appstore-connect (unless the
-  //    environment already has them), the PEM as AUTHKEY_<KEY_ID> in
-  //    /authkey-<key id lower case>-p8.  Kept in memory, never written to disk.
-  const infKeyId = envKeyId || fleetSecretsGet("ASC_KEY_ID", "/appstore-connect").trim();
-  const infIssuer = envIssuer || fleetSecretsGet("ASC_ISSUER_ID", "/appstore-connect").trim();
+  // 3) Infisical Fleet-OPS /asc: key id and issuer (unless the environment already
+  //    has them) and the PEM as ASC_KEY_P8 when the key id is the /asc one;  another
+  //    key id falls back to AUTHKEY_<KEY_ID> in /authkey-<key id lower case>-p8.
+  //    Kept in memory, never written to disk.
+  const infKeyId = envKeyId || fleetSecretsGet("ASC_KEY_ID", "/asc").trim();
+  const infIssuer = envIssuer || fleetSecretsGet("ASC_ISSUER_ID", "/asc").trim();
   if (/^[A-Za-z0-9]+$/.test(infKeyId) && infIssuer) {
-    let pem = fleetSecretsGet(`AUTHKEY_${infKeyId}`, `/authkey-${infKeyId.toLowerCase()}-p8`);
+    let pem = "";
+    if (infKeyId === fleetSecretsGet("ASC_KEY_ID", "/asc").trim()) pem = fleetSecretsGet("ASC_KEY_P8", "/asc");
+    if (!pem) pem = fleetSecretsGet(`AUTHKEY_${infKeyId}`, `/authkey-${infKeyId.toLowerCase()}-p8`);
     if (pem) {
       if (!pem.endsWith("\n")) pem += "\n";
-      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: pem, source: "Infisical /appstore-connect" };
+      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: pem, source: "Infisical /asc" };
     }
   }
 

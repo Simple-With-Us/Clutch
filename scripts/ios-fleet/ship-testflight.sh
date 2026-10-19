@@ -71,8 +71,8 @@
 #
 # Secrets (never printed):
 #   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH in the environment, or Infisical
-#   Fleet-OPS via `fleet-secrets get`: ASC_KEY_ID and ASC_ISSUER_ID in
-#   /appstore-connect, the .p8 PEM as AUTHKEY_<KEY_ID> in /authkey-<key id>-p8
+#   Fleet-OPS /asc via `fleet-secrets get` (ASC_KEY_ID, ASC_ISSUER_ID,
+#   ASC_KEY_P8), or AUTHKEY_<KEY_ID> in /authkey-<key id>-p8 for another key
 #   or Xcode-signed-in session for destination=upload export
 #   SENTRY_AUTH_TOKEN  (dSYM + Size Analysis upload; env or `fleet-secrets get`)
 #   SENTRY_DSN         (injected into xcodebuild so Cocoa plist $(SENTRY_DSN) is set)
@@ -188,9 +188,10 @@ resolve_project() {
 # Sources, first complete one wins; values are never printed:
 #   1. ASC_KEY_ID + ASC_ISSUER_ID + ASC_KEY_PATH (an existing file) in the
 #      environment: hosted CI exports these, and an operator may too.
-#   2. Infisical Fleet-OPS through `fleet-secrets get`: ASC_KEY_ID and
-#      ASC_ISSUER_ID in /appstore-connect (each only when the environment lacks
-#      it), then the .p8 PEM as AUTHKEY_<KEY_ID> in /authkey-<key id, lower case>-p8.
+#   2. Infisical Fleet-OPS /asc through `fleet-secrets get`: ASC_KEY_ID and
+#      ASC_ISSUER_ID (each only when the environment lacks it), then the PEM as
+#      ASC_KEY_P8 when the key id is the /asc one.  A different key id (named by
+#      the environment) falls back to AUTHKEY_<KEY_ID> in /authkey-<key id, lower case>-p8.
 #      The PEM is written to AuthKey_<KEY_ID>.p8 (mode 0600) inside a 0700 mktemp
 #      directory, exported as ASC_KEY_PATH with API_PRIVATE_KEYS_DIR pointing at
 #      that directory (altool searches it first, so no symlink into
@@ -239,10 +240,10 @@ load_secrets() {
       *) p8="$(printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode 2>/dev/null)" || p8="" ;;
     esac
   fi
-  [[ -n "$kid" ]] || kid="$(fs_get ASC_KEY_ID /appstore-connect)" || kid=""
-  [[ -n "$iss" ]] || iss="$(fs_get ASC_ISSUER_ID /appstore-connect)" || iss=""
+  [[ -n "$kid" ]] || kid="$(fs_get ASC_KEY_ID /asc)" || kid=""
+  [[ -n "$iss" ]] || iss="$(fs_get ASC_ISSUER_ID /asc)" || iss=""
   if [[ -z "$kid" || -z "$iss" ]]; then
-    log "ASC credentials missing: set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH, or add ASC_KEY_ID and ASC_ISSUER_ID to Infisical /appstore-connect"
+    log "ASC credentials missing: set ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH, or add ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 to Infisical /asc"
     return 0
   fi
   if [[ ! "$kid" =~ ^[A-Za-z0-9]+$ ]]; then
@@ -250,8 +251,15 @@ load_secrets() {
     return 0
   fi
   lower="$(printf '%s' "$kid" | tr 'A-Z' 'a-z')"
-  if [[ -z "$p8" ]] && ! p8="$(fs_get "AUTHKEY_${kid}" "/authkey-${lower}-p8")"; then
-    log "missing AUTHKEY_${kid} in Infisical /authkey-${lower}-p8"
+  if [[ -z "$p8" ]]; then
+    # The shared key in /asc when it is the key asked for, else the per-key copy.
+    if [[ "$kid" == "$(fs_get ASC_KEY_ID /asc)" ]]; then
+      p8="$(fs_get ASC_KEY_P8 /asc)" || p8=""
+    fi
+    [[ -n "$p8" ]] || p8="$(fs_get "AUTHKEY_${kid}" "/authkey-${lower}-p8")" || p8=""
+  fi
+  if [[ -z "$p8" ]]; then
+    log "no private key for ${kid} in Infisical /asc (ASC_KEY_P8) or /authkey-${lower}-p8"
     return 0
   fi
   if [[ -z "$ASC_TMP_DIR" ]]; then
@@ -571,7 +579,7 @@ resolve_seq_floor() {
   (${STATE_DIR}/build-seq-${APP_KEY}.txt) and no ${prefix}.N in project.pbxproj.
   Shipping now would very likely reuse a build number and be rejected as a duplicate.
   Fix one of these, then re-run:
-    1) restore ASC access: check the ASC_* environment or Infisical /appstore-connect and that 'node' is on PATH, then
+    1) restore ASC access: check the ASC_* environment or Infisical /asc and that 'node' is on PATH, then
        run: node ${FLEET_DIR}/asc-api.mjs latest-build-seq ${BUNDLE_ID} ${prefix} ${PLATFORM} ${APPLE_ID}
      2) or pass the number explicitly:  --version ${prefix}.<N>   (NOT --build <N>:
         --version picks the marketing version and lets CFBundleVersion stay an
@@ -1050,7 +1058,7 @@ fi
 
 if [[ -n "$UPLOAD_ONLY_IPA" ]]; then
   [[ -f "$UPLOAD_ONLY_IPA" ]] || die "package not found: $UPLOAD_ONLY_IPA"
-  [[ "$AUTH_MODE" == "api_key" ]] || die "upload-only requires an App Store Connect API key (ASC_KEY_* in the environment, or Infisical /appstore-connect)"
+  [[ "$AUTH_MODE" == "api_key" ]] || die "upload-only requires an App Store Connect API key (ASC_KEY_* in the environment, or Infisical /asc)"
   link_private_key "$ASC_KEY_PATH" "$ASC_KEY_ID"
   log "uploading existing package via altool (api key)"
   set +e
@@ -1420,8 +1428,8 @@ if [[ "$AUTH_MODE" != "api_key" ]]; then
   log "Upload blocked: no App Store Connect API key."
   log "Owner handoff:"
   log "  1) Create ASC API key (App Manager+) in App Store Connect"
-  log "  2) Store ASC_KEY_ID and ASC_ISSUER_ID in Infisical Fleet-OPS /appstore-connect and the .p8 PEM"
-  log "     as AUTHKEY_<KEY_ID> in /authkey-<key id, lower case>-p8"
+  log "  2) Store ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 (the .p8 PEM) in Infisical Fleet-OPS /asc"
+  log "     (another key: AUTHKEY_<KEY_ID> in /authkey-<key id, lower case>-p8)"
   log "     (or export ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH for this run)"
   log "  3) Re-run: bash $0 $APP_KEY --upload-only \"$PACKAGE\""
   log "Also ensure App Store Connect has an app record for ${BUNDLE_ID}."
