@@ -26,13 +26,20 @@ describe("minimax http client", () => {
 });
 
 describe("minimaxSupport", () => {
-  it("exposes MCP server mounts and full MiniMax model catalog", () => {
+  it("exposes MCP server mounts and the current MiniMax model catalog", () => {
     expect(minimaxSpawnArgs()).toEqual([]);
     expect(minimaxSupport.driverKind).toBe("minimaxAgent");
     expect(minimaxSupport.mcpServers).toBe(true);
     expect(STATIC_MINIMAX_MODELS.default).toBe("MiniMax-M2.7-highspeed");
     expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3");
-    expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3.1-Flash-Preview");
+  });
+
+  it("does not advertise the retired MiniMax-M3.1-Flash-Preview model", () => {
+    // BF-2494 (2026-10-18): MiniMax-M3.1-Flash-Preview was retired on the
+    // MiniMax side.  A re-introduction must be a deliberate decision backed
+    // by a verified stable replacement, not a regression.
+    expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id))
+      .not.toContain("MiniMax-M3.1-Flash-Preview");
   });
 });
 
