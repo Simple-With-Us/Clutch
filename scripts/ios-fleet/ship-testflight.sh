@@ -631,10 +631,16 @@ next_build_seq() {
   printf '%s' "$n"
 }
 
+# The major.minor train a marketing version belongs to: "2.0.123" -> "2.0",
+# "3" -> "3.0".  The floor is per-train, so the train has to come from the
+# version actually being shipped rather than always from the default.
+version_prefix() {
+  printf '%s' "${1:-1.0}" | awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }'
+}
+
 marketing_prefix() {
   # "1.0" from marketingVersionDefault (1.0 or 1.0.x both yield 1.0).
-  local d="${DEFAULT_MARKETING:-1.0}"
-  printf '%s' "$d" | awk -F. '{ if (NF >= 2) print $1"."$2; else print $1".0" }'
+  version_prefix "${DEFAULT_MARKETING:-1.0}"
 }
 
 ship_state_path() {
@@ -958,12 +964,30 @@ elif [[ -n "$FORCE_BUILD" || -n "$FORCE_VERSION" ]]; then
   # floor: --version against an already-shipped HEAD would otherwise ship a
   # build at or below what App Store Connect already holds for that train.
   if [[ -z "$FORCE_BUILD" ]]; then
-    _of_floor="$(resolve_seq_floor "$MARKETING_PREFIX" "$PBXPROJ" "$PLATFORM" 2>/dev/null || echo 0)"
-    [[ "$_of_floor" =~ ^[0-9]+$ ]] || _of_floor=0
+    # The floor is per-train, so it has to be read from the train this override
+    # is actually shipping to.  MARKETING_PREFIX is the *default* train and is
+    # wrong here whenever --version named another one: reading 1.0's floor for a
+    # 2.0 ship is what produced stale builds like "2.0 (build 202510190002)".
+    _override_prefix="$(version_prefix "$MARKETING")"
+    # Propagate the floor failure.  Coercing it to 0 would let an
+    # unreachable App Store Connect pass as "floor 0", so the build number
+    # would stay at the commit count and could repeat a pair ASC already
+    # holds.  The auto path below already refuses to ship in that case.
+    _of_floor="$(resolve_seq_floor "$_override_prefix" "$PBXPROJ" "$PLATFORM")" \
+      || die "override path could not resolve the build floor; refusing to ship"
+    [[ "$_of_floor" =~ ^[0-9]+$ ]] || die "override floor is not a number: ${_of_floor}"
     if [[ "$_of_floor" -ge "$BUILD_NUM" ]]; then
       BUILD_NUM="$((_of_floor + 1))"
       log "build: override would repeat an already-shipped build; using ${BUILD_NUM} instead"
     fi
+  fi
+  # The shipped pair must describe one number.  Unless the operator pinned
+  # a marketing version, MARKETING follows the build, so the ship is
+  # 1.0.N (N) rather than a version and a build that disagree.  An explicit
+  # --version names a train and is honoured exactly; the floor above still
+  # keeps the build unique inside that train.
+  if [[ -z "$FORCE_VERSION" ]]; then
+    MARKETING="${MARKETING_PREFIX}.${BUILD_NUM}"
   fi
   log "version: operator override (--build/--version); sequence not consulted"
 else
