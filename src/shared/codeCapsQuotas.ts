@@ -30,7 +30,9 @@ export function parseCodeCapsQuotas(value: unknown, now = Date.now()): CodeCapsQ
   const windows: QuotaWindow[] = [];
   for (const raw of payload.windows) {
     const input = record(raw);
-    if (!input || typeof input.id !== "string" || !input.id || input.id.length > 512 || typeof input.provider !== "string" || input.provider.length > 512 || typeof input.label !== "string" || input.label.length > 512) return unavailable("invalid window");
+    // Drop only the offending window: one malformed producer window must not
+    // discard every other valid window in the snapshot.
+    if (!input || typeof input.id !== "string" || !input.id || input.id.length > 512 || typeof input.provider !== "string" || input.provider.length > 512 || typeof input.label !== "string" || input.label.length > 512) continue;
     const output: Record<string, Scalar> = {};
     copyStrings(input, windowStrings, output);
     for (const key of ["remainingUnknown", "isExhausted", "skip"]) if (typeof input[key] === "boolean") output[key] = input[key];
