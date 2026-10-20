@@ -17,7 +17,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function copyStrings(input: Record<string, unknown>, keys: readonly string[], output: Record<string, Scalar>, max = 512): void {
   for (const key of keys) {
     const value = input[key];
-    if (typeof value === "string" && value.length <= max) output[key] = value;
+    if (typeof value === "string" && [...value].length <= max) output[key] = value;
   }
 }
 /** Relay only the versioned public fields, with bounded scalar values. */

@@ -37,6 +37,17 @@ describe("CodeCaps consumption", () => {
     const bad = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, planMetadata: { userPlanName: "x".repeat(257), userCostUsd: {}, hasMismatch: "true" } }] }), now);
     expect(bad.windows[0]?.planMetadata).toEqual({});
   });
+  it("accepts each plan metadata field at its exact limit and drops it one character over", () => {
+    const limits = { detectedPlanName: 256, userPlanName: 256, userCostUsd: 128, userRenewalDateText: 512, userSubtitle: 1024 };
+    for (const [field, limit] of Object.entries(limits)) {
+      const at = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, planMetadata: { [field]: "x".repeat(limit) } }] }), now);
+      expect(at.windows[0]?.planMetadata, field).toEqual({ [field]: "x".repeat(limit) });
+      const over = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, planMetadata: { [field]: "x".repeat(limit + 1) } }] }), now);
+      expect(over.windows[0]?.planMetadata, field).toEqual({});
+    }
+    const astral = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, planMetadata: { userSubtitle: "\u{1F600}".repeat(1024) } }] }), now);
+    expect(astral.windows[0]?.planMetadata?.userSubtitle).toBe("\u{1F600}".repeat(1024));
+  });
   it("rejects malformed, unknown-version, oversized-array, stale and future snapshots", () => {
     for (const input of [null, [], snapshot({ version: 2 }), snapshot({ windows: [null] }), snapshot({ windows: Array(513).fill(window) }), snapshot({ generatedAt: new Date(now - 1_800_001).toISOString() }), snapshot({ generatedAt: new Date(now + 60_001).toISOString() })]) {
       expect(parseCodeCapsQuotas(input, now)).toMatchObject({ available: false, windows: [] });
