@@ -100,40 +100,66 @@ describe("dshModelOptionValue resolves against what the session advertised", () 
     expect(dshModelOptionValue("DeepSeek-V4.1-Pro", STOCK)).toBe(route("deepseek-official", "deepseek-v4-pro"));
   });
 
-  it("sends the declared id on the owner's override catalog", () => {
-    expect(dshModelOptionValue("DeepSeek-V4.1-Flash", OWNER_OVERRIDE)).toBe(
-      route("deepseek-official", "deepseek-v4.1-flash"),
-    );
+  it("refuses a Flash spelling the DeepSeek API does not serve (BOTFLEET-4A)", () => {
+    // The owner's settings.yaml declares `deepseek-v4.1-flash`.  dsh forwards
+    // that id to DeepSeek verbatim, which answers "The supported API model
+    // names are deepseek-flash, deepseek-v4-pro".  Refuse before the switch.
+    let error: unknown;
+    try {
+      dshModelOptionValue("DeepSeek-V4.1-Flash", OWNER_OVERRIDE);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(DshModelNotOfferedError);
+    expect((error as DshModelNotOfferedError).unserved).toBe("deepseek-v4.1-flash");
+    expect((error as Error).message).toContain("declare deepseek-flash in llm-deepseek.models");
+    expect(classifyDshError(error)).toBe("model_catalog_outage");
     // Neither the id nor the name of the override's Pro is the V4.1 spelling.
     expect(dshModelOptionValue("DeepSeek-V4.1-Pro", OWNER_OVERRIDE)).toBe(
       route("deepseek-official", "deepseek-v4-pro"),
     );
   });
 
-  it("keeps saved pre-rename selections working on both catalogs", () => {
+  it("prefers the API name when an install declares both spellings", () => {
+    const catalog = advertise({
+      "deepseek-official": [
+        ["deepseek-v4.1-flash", "Deepseek-v4.1-flash"],
+        ["deepseek-flash", "Flash"],
+      ],
+    });
+    for (const spelling of ["DeepSeek-V4.1-Flash", "deepseek-v4.1-flash", "deepseek-v4-flash"]) {
+      expect(dshModelOptionValue(spelling, catalog), spelling).toBe(route("deepseek-official", "deepseek-flash"));
+    }
+  });
+
+  it("keeps saved pre-rename selections working on the stock catalog", () => {
     // `deepseek-v4-flash` is declared by no current catalog; it must land on
-    // whichever Flash the install declares.  `deepseek-v4-pro` is still a live
-    // id and must not be treated as retired.
+    // the served Flash.  `deepseek-v4-pro` is still a live id and must not be
+    // treated as retired.
     expect(dshModelOptionValue("deepseek-v4-flash", STOCK)).toBe(route("deepseek-official", "deepseek-flash"));
-    expect(dshModelOptionValue("deepseek-v4-flash", OWNER_OVERRIDE)).toBe(
-      route("deepseek-official", "deepseek-v4.1-flash"),
-    );
+    expect(() => dshModelOptionValue("deepseek-v4-flash", OWNER_OVERRIDE)).toThrow(DshModelNotOfferedError);
     expect(dshModelOptionValue("deepseek-v4-pro", STOCK)).toBe(route("deepseek-official", "deepseek-v4-pro"));
     expect(dshModelOptionValue("deepseek-v4-pro", OWNER_OVERRIDE)).toBe(route("deepseek-official", "deepseek-v4-pro"));
   });
 
   it("answers every catalog row that the install serves with a value dsh accepts", () => {
-    const served = ["DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro", "MiniMax-M3", "MiniMax-M2.7-highspeed"];
-    for (const catalog of [STOCK, OWNER_OVERRIDE]) {
-      for (const id of served) {
-        expect(dshAccepts(catalog, dshModelOptionValue(id, catalog)), id).toBe(true);
-      }
+    const stockServed = ["DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro", "MiniMax-M3", "MiniMax-M2.7-highspeed"];
+    for (const id of stockServed) {
+      expect(dshAccepts(STOCK, dshModelOptionValue(id, STOCK)), id).toBe(true);
+    }
+    for (const id of ["DeepSeek-V4.1-Pro", "MiniMax-M3", "MiniMax-M2.7-highspeed"]) {
+      expect(dshAccepts(OWNER_OVERRIDE, dshModelOptionValue(id, OWNER_OVERRIDE)), id).toBe(true);
     }
   });
 
+  // Tier logic is pure matching; whether DeepSeek serves the matched name is
+  // enforced afterwards by resolveDshModelOption.
+  const match = (model: string, catalog: unknown[]) =>
+    matchAdvertisedDshModel(model, "deepseek-official", parseAdvertisedDshModels(catalog) ?? []);
+
   it("matches a declared id ignoring case", () => {
     const catalog = advertise({ "deepseek-official": [["DeepSeek-V4.1-Flash", "Flash"]] });
-    expect(resolveDshModelOption("deepseek-v4.1-flash", "deepseek-official", catalog)?.match).toBe("id");
+    expect(match("deepseek-v4.1-flash", catalog)?.match).toBe("id");
   });
 
   it("prefers the exact declared value over a looser match", () => {
@@ -143,18 +169,18 @@ describe("dshModelOptionValue resolves against what the session advertised", () 
         ["DeepSeek-V4.1-Flash", "Other"],
       ],
     });
-    const resolved = resolveDshModelOption("DeepSeek-V4.1-Flash", "deepseek-official", catalog);
+    const resolved = match("DeepSeek-V4.1-Flash", catalog);
     expect(resolved?.match).toBe("exact");
     expect(resolved?.id).toBe("DeepSeek-V4.1-Flash");
   });
 
   it("reports how each id matched", () => {
-    const how = (model: string, catalog: unknown[]) =>
-      resolveDshModelOption(model, "deepseek-official", catalog)?.match;
+    const how = (model: string, catalog: unknown[]) => match(model, catalog)?.match;
     expect(how("deepseek-v4-pro", STOCK)).toBe("exact");
     expect(how("DeepSeek-V4.1-Flash", OWNER_OVERRIDE)).toBe("id");
     expect(how("DeepSeek-V4.1-Flash", STOCK)).toBe("name");
     expect(how("deepseek-v4-flash", STOCK)).toBe("alias");
+    expect(resolveDshModelOption("DeepSeek-V4.1-Flash", "deepseek-official", STOCK)?.match).toBe("name");
   });
 
   it("accepts an ungrouped option list", () => {
@@ -416,9 +442,8 @@ describe("dshSupport.selectModel", () => {
   it("hands the session's advertised options to the resolver", () => {
     const select = dshSupport.selectModel;
     expect(select?.configId).toBe("model");
-    expect(select?.valueForModel("DeepSeek-V4.1-Flash", OWNER_OVERRIDE)).toBe(
-      route("deepseek-official", "deepseek-v4.1-flash"),
-    );
+    expect(select?.valueForModel("DeepSeek-V4.1-Flash", STOCK)).toBe(route("deepseek-official", "deepseek-flash"));
+    expect(() => select?.valueForModel("DeepSeek-V4.1-Flash", OWNER_OVERRIDE)).toThrow(DshModelNotOfferedError);
     expect(select?.valueForModel("DeepSeek-V4.1-Flash")).toBe(route("deepseek-official", "deepseek-flash"));
   });
 
