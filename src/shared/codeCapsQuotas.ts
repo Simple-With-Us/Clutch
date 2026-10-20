@@ -38,7 +38,7 @@ export function parseCodeCapsQuotas(value: unknown, now = Date.now()): CodeCapsQ
       const n = input[key];
       if (typeof n === "number" && Number.isFinite(n) && n >= 0 && (key !== "remainingPercent" || n <= 100)) output[key] = n;
     }
-    if (output.remainingUnknown === true) delete output.remainingPercent;
+    if (input.remainingUnknown !== undefined && input.remainingUnknown !== false) delete output.remainingPercent;
     const window: QuotaWindow = output;
     const metadata = record(input.planMetadata);
     if (metadata) {
@@ -63,7 +63,7 @@ export async function readCodeCapsQuotas(home = homedir(), now = Date.now()): Pr
     file = await open(join(root, "quota-windows.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > MAX_QUOTA_BYTES) return unavailable("invalid snapshot file");
-    const buffer = Buffer.alloc(MAX_QUOTA_BYTES + 1);
+    const buffer = Buffer.alloc(Math.min(stat.size, MAX_QUOTA_BYTES) + 1);
     let size = 0;
     while (size < buffer.length) {
       const result = await file.read(buffer, size, buffer.length - size, null);
@@ -75,6 +75,6 @@ export async function readCodeCapsQuotas(home = homedir(), now = Date.now()): Pr
   } catch {
     return unavailable("snapshot unavailable");
   } finally {
-    await file?.close();
+    try { await file?.close(); } catch { /* close errors must not reject the read */ }
   }
 }

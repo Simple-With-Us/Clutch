@@ -23,6 +23,8 @@ describe("CodeCaps consumption", () => {
     expect(result.windows[0]).toMatchObject({ planName: "Max", source: "local sign-in", remainingUnknown: true });
     expect(result.windows[0]).not.toHaveProperty("remainingPercent");
     expect(result.windows[0]).not.toHaveProperty("planMetadata");
+    const nonBoolean = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, remainingUnknown: "true" }] }), now);
+    expect(nonBoolean.windows[0]).not.toHaveProperty("remainingPercent");
   });
   it("round trips additive metadata and filters unknown fields and scalar types", () => {
     const planMetadata = { detectedPlanName: "Max", userPlanName: "Pro", userCostUsd: "20", userRenewalDateText: "November 1", userSubtitle: "Work", showCostAndRenewal: false, hasMismatch: true };
