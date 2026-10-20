@@ -17,7 +17,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function copyStrings(input: Record<string, unknown>, keys: readonly string[], output: Record<string, Scalar>, max = 512): void {
   for (const key of keys) {
     const value = input[key];
-    if (typeof value === "string" && [...value].length <= max) output[key] = value;
+    if (typeof value === "string" && (value.length <= max || [...value].length <= max)) output[key] = value;
   }
 }
 /** Relay only the versioned public fields, with bounded scalar values. */
@@ -61,14 +61,23 @@ export async function readCodeCapsQuotas(home = homedir(), now = Date.now()): Pr
     const root = join(await realpath(home), "Library/Application Support/Usage Monitor");
     if (await realpath(root) !== root) return unavailable("invalid snapshot directory");
     file = await open(join(root, "quota-windows.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const stat = await file.stat();
+    const handle = file;
+    const stat = await handle.stat();
     if (!stat.isFile() || stat.size > MAX_QUOTA_BYTES) return unavailable("invalid snapshot file");
-    const buffer = Buffer.alloc(Math.min(stat.size, MAX_QUOTA_BYTES) + 1);
-    let size = 0;
-    while (size < buffer.length) {
-      const result = await file.read(buffer, size, buffer.length - size, null);
-      if (!result.bytesRead) break;
-      size += result.bytesRead;
+    const readAll = async (bytes: number): Promise<{ buffer: Buffer; size: number }> => {
+      const buffer = Buffer.alloc(Math.min(bytes, MAX_QUOTA_BYTES) + 1);
+      let read = 0;
+      while (read < buffer.length) {
+        const result = await handle.read(buffer, read, buffer.length - read, read);
+        if (!result.bytesRead) break;
+        read += result.bytesRead;
+      }
+      return { buffer, size: read };
+    };
+    let { buffer, size } = await readAll(stat.size);
+    if (size === buffer.length) {
+      const grown = await handle.stat();
+      if (grown.size > size) ({ buffer, size } = await readAll(grown.size));
     }
     if (size > MAX_QUOTA_BYTES) return unavailable("snapshot too large");
     return parseCodeCapsQuotas(JSON.parse(buffer.subarray(0, size).toString("utf8")), now);
