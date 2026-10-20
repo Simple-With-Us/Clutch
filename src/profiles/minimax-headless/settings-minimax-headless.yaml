@@ -9,7 +9,7 @@ permission:
 
 agent-default-model:
   provider: minimax
-  model: MiniMax-M3
+  model: MiniMax-M3.1-Flash
   reasoningEffort: low
 
 # MiniMax models ride the llm-pi-ai provider namespace inside @deepseek-ai/dsh.
@@ -20,12 +20,14 @@ agent-default-model:
 # place because it is the same 204,800 context at exactly 2x M3's price; the
 # picker badges it so the cost is visible up front.
 #
-# MiniMax-M3.1-Flash is the stable successor to MiniMax-M3.1-Flash-Preview,
-# which MiniMax retired on 2026-10-18 (BF-2494 / minimax/drop-m31-flash-preview).
-# The replacement is verified live on both routes: the MiniMax API lists it on
-# /v1/models and /anthropic/v1/models, and a real turn on it answers.  The
-# Preview id must not come back — the runtime errors `Invalid params: unknown
-# model option` for retired MiniMax-internal previews.
+# M3.1 Flash is the default (owner ruling 2026-10-20:  all fleet MiniMax use goes
+# to MiniMax-M3.1-Flash).  It forces thinking on, so its effort list runs low
+# through max with no none level, and it needs compat.forceAdaptiveThinking for
+# those levels to reach the wire.
+#
+# MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
+# (BF-2494 / minimax/drop-m31-flash-preview).  Its verified stable replacement is
+# MiniMax-M3.1-Flash, listed above.  Do not re-add the Preview id.
 llm-pi-ai:
   providers:
     {
@@ -34,6 +36,18 @@ llm-pi-ai:
           apiKeyEnv: MINIMAX_API_KEY,
           models:
             [
+              {
+                  id: MiniMax-M3,
+                  name: MiniMax-M3,
+                  contextWindow: 1000000,
+                  maxTokens: 128000,
+                  reasoningEfforts:
+                    {
+                      low: low,
+                      medium: medium,
+                      high: high
+                    }
+                },
               {
                   id: MiniMax-M3.1-Flash,
                   name: MiniMax-M3.1-Flash,
@@ -47,19 +61,11 @@ llm-pi-ai:
                       xhigh: xhigh,
                       max: max
                     },
-                  compat: { forceAdaptiveThinking: true }
-                },
-              {
-                  id: MiniMax-M3,
-                  name: MiniMax-M3,
-                  contextWindow: 1000000,
-                  maxTokens: 128000,
-                  reasoningEfforts:
+                  compat:
                     {
-                      low: low,
-                      medium: medium,
-                      high: high
-                    }
+                      forceAdaptiveThinking: true
+                    },
+                  input: [text, image]
                 },
               {
                   id: MiniMax-M2.7-highspeed,
