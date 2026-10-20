@@ -38,6 +38,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
+import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
@@ -484,6 +485,7 @@ async function main(): Promise<void> {
 
     // Clutch-owned settings surface (machine identity + managed key
     // write-through), consumed by the native Hosts and Settings sheet.
+    if (await handleQuotasRequest(req, res, url.pathname, token)) return;
     if (await handleInfisicalSettingsRequest(req, res, url.pathname, { settings })) return;
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/sessions") {
