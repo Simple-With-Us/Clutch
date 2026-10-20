@@ -53,6 +53,14 @@ describe("CodeCaps consumption", () => {
       expect(parseCodeCapsQuotas(input, now)).toMatchObject({ available: false, windows: [] });
     }
   });
+  it("keeps valid windows beside a malformed one but reports an all-malformed snapshot unavailable", () => {
+    const mixed = parseCodeCapsQuotas(snapshot({ windows: [null, { ...window, id: "" }, window] }), now);
+    expect(mixed).toMatchObject({ available: true });
+    expect(mixed.windows).toHaveLength(1);
+    expect(mixed.windows[0]?.planName).toBe("Max");
+    expect(parseCodeCapsQuotas(snapshot({ windows: [null, { ...window, id: "" }] }), now)).toMatchObject({ available: false, windows: [] });
+    expect(parseCodeCapsQuotas(snapshot({ windows: [] }), now)).toMatchObject({ available: true, windows: [] });
+  });
   it("reads the fixed handoff path and gracefully handles absence, invalid JSON and oversize", async () => {
     const { home, path } = fixture();
     expect((await readCodeCapsQuotas(home, now)).available).toBe(false);

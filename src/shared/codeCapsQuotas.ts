@@ -54,6 +54,9 @@ export function parseCodeCapsQuotas(value: unknown, now = Date.now()): CodeCapsQ
     }
     windows.push(window);
   }
+  // The producer sent windows but none survived validation: report unavailable rather than an
+  // empty snapshot a client would read as a legitimate "no quotas tracked" answer.
+  if (payload.windows.length > 0 && windows.length === 0) return unavailable("invalid window");
   return { available: true, source: "CodeCaps", generatedAt, ...(typeof payload.producer === "string" && payload.producer.length <= 256 ? { producer: payload.producer } : {}), windows };
 }
 /** Read one descriptor so atomic producer replacement cannot change the file mid-read. */
