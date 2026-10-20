@@ -104,8 +104,11 @@ describe("ClutchWindow model-picker decoration", () => {
     // Regression: markPickerHeadings matched 'MiniMax-*'/'DeepSeek-*' rows and
     // inserted a logo child, and markPickerModelRows skips elements that
     // already have children, so no badge ever applied.
+    //
+    // MiniMax-M3.1-Flash-Preview was retired on 2026-10-18 (BF-2494) and is
+    // intentionally absent from MODEL_ROWS.  The Preview row used to
+    // occupy the first slot in the assertion below.
     const rows = [
-      makeEl("div", "MiniMax-M3.1-Flash-Preview"),
       makeEl("div", "DeepSeek-V4.1-Flash"),
       makeEl("span", "MiniMax-M2.7-highspeed"),
     ];
@@ -115,7 +118,7 @@ describe("ClutchWindow model-picker decoration", () => {
     const badges = rows.map(
       (row) => row.children.find((c) => c.dataset.clutchModelBadge === "1")?.textContent,
     );
-    expect(badges).toEqual(["Preview", "Multimodal", "2x Cost"]);
+    expect(badges).toEqual(["Multimodal", "2x Cost"]);
   });
 
   it("leaves model rows untouched in the heading pass", () => {

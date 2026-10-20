@@ -49,11 +49,12 @@ const PER_MODEL_EFFORT_LEVELS = {
 
 /** Per-model image support.  These are provider facts, not preferences: the
  *  installed pi-ai catalog declares MiniMax-M3 as `input: [text, image]` and the
- *  whole M2.7 family as text-only.  M3.1 Flash is newer than that catalog, so it
- *  is absent from it; MiniMax ships it as a frontier multimodal model, so it is
- *  image-capable here. */
+ *  whole M2.7 family as text-only.
+ *
+ *  MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
+ *  (BF-2494 / minimax/drop-m31-flash-preview) and is intentionally absent
+ *  here.  Do not re-add it without a verified stable replacement. */
 const PER_MODEL_IMAGES = {
-  "MiniMax-M3.1-Flash-Preview": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
@@ -62,15 +63,6 @@ const PER_MODEL_IMAGES = {
 const MODELS = {
   default: MINIMAX_DEFAULT_MODEL,
   options: [
-    {
-      id: "MiniMax-M3.1-Flash-Preview",
-      label: "MiniMax M3.1 Flash Preview",
-      contextWindow: 1_000_000,
-      badge: "Preview",
-      badgeTitle:
-        "Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.",
-      images: true,
-    },
     { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",
