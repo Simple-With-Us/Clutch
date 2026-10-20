@@ -240,7 +240,7 @@ public struct ChatView: View {
                     Button("DeepSeek-V4.1-Flash") { selectModel("DeepSeek-V4.1-Flash") }
                 }
                 Section("MiniMax") {
-                    Button("MiniMax-M3.1-Flash-Preview") { selectModel("MiniMax-M3.1-Flash-Preview") }
+                    Button("MiniMax-M3.1-Flash") { selectModel("MiniMax-M3.1-Flash") }
                     Button("MiniMax-M3") { selectModel("MiniMax-M3") }
                     Button("MiniMax-M2.7-highspeed") { selectModel("MiniMax-M2.7-highspeed") }
                 }

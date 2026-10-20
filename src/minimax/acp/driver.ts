@@ -35,12 +35,14 @@ const MINIMAX_EFFORT_LEVELS = ["none"] as const satisfies readonly EffortLevel[]
 
 /**
  * Per-model effort levels for MiniMax models.  MiniMax-M3 advertises the
- * full reasoning-effort range; the M2.7 family stays on the driver default
+ * full reasoning-effort range; MiniMax-M3.1-Flash forces thinking on, so its
+ * list starts at "low"; the M2.7 family stays on the driver default
  * ("none") via fallback.  Adjust the M3 list if the provider documents a
  * different supported set.
  */
 const MINIMAX_PER_MODEL_EFFORT_LEVELS = {
   "MiniMax-M3": ["none", "low", "medium", "high", "max"],
+  "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 } as const satisfies Readonly<Record<string, readonly EffortLevel[]>>;
 
 export function minimaxSpawnArgs(): string[] {
@@ -62,10 +64,13 @@ export function minimaxEffortLevelsForModel(modelId: string): readonly EffortLev
  *  row absent here inherits the engine-wide {@link minimaxSupport.images}
  *  answer.
  *
- *  MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
- *  (BF-2494 / minimax/drop-m31-flash-preview).  It used to live here; do not
- *  re-add it without a verified stable replacement. */
+ *  MiniMax-M3.1-Flash is the stable successor to the retired
+ *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
+ *  the direct route, and it declares `input: [text, image, video]`.  The
+ *  Preview id was retired on 2026-10-18 (BF-2494 /
+ *  minimax/drop-m31-flash-preview) and must not come back. */
 export const MINIMAX_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
+  "MiniMax-M3.1-Flash": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
@@ -74,6 +79,12 @@ export const MINIMAX_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
 export const STATIC_MINIMAX_MODELS: ModelCatalog = {
   default: MINIMAX_DEFAULT_MODEL,
   options: [
+    {
+      id: "MiniMax-M3.1-Flash",
+      label: "MiniMax M3.1 Flash",
+      contextWindow: 1_000_000,
+      images: true,
+    },
     { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",

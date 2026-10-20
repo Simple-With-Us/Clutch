@@ -82,6 +82,7 @@ describe("dshSupport", () => {
     expect(STATIC_DSH_MODELS.options.map((option) => option.id)).toEqual([
       "DeepSeek-V4.1-Flash",
       "DeepSeek-V4.1-Pro",
+      "MiniMax-M3.1-Flash",
       "MiniMax-M3",
       "MiniMax-M2.7-highspeed",
     ]);
@@ -129,11 +130,13 @@ describe("per-model effort levels", () => {
     return { calls, request };
   };
 
-  it("ships an empty per-model map now that the only entry (M3.1) is retired", () => {
-    // BF-2494 (2026-10-18): MiniMax-M3.1-Flash-Preview was retired on the
-    // MiniMax side and is gone from the static catalog.  The per-model
-    // effort map is empty until a future model ships per-model effort.
-    expect(DSH_PER_MODEL_EFFORT_LEVELS).toEqual({});
+  it("gives MiniMax-M3.1-Flash its own effort range", () => {
+    // BF-2494 (2026-10-18): the retired Preview id is gone from the
+    // static catalog.  Its stable successor, MiniMax-M3.1-Flash, is live
+    // on both routes and is the one row that ships per-model effort.
+    expect(DSH_PER_MODEL_EFFORT_LEVELS).toEqual({
+      "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
+    });
     expect(dshSupport.perModelEffortLevels).toBe(DSH_PER_MODEL_EFFORT_LEVELS);
   });
 
@@ -149,14 +152,56 @@ describe("per-model effort levels", () => {
       expect(dshEffortLevelsForModel(id)).toEqual(["none", "high", "max"]);
     }
     expect(dshPerModelEffortLevels(undefined)).toBeUndefined();
+    // MiniMax-M3.1-Flash is the one row that does not take the
+    // engine-wide list: it forces thinking on, so there is no "none".
+    expect(dshEffortLevelsForModel("MiniMax-M3.1-Flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
-  it("returns undefined for the retired M3.1 id (no per-model row to match)", () => {
+  it("returns undefined for the retired M3.1 Preview id (no per-model row to match)", () => {
     // Without a per-model row, the engine-wide list wins for any model id,
     // even one that used to have its own.  The case-insensitive lookup also
-    // misses because the map is empty.
+    // misses because the retired Preview id is not in the map.
     expect(dshPerModelEffortLevels("MiniMax-M3.1-Flash-Preview")).toBeUndefined();
     expect(dshPerModelEffortLevels("minimax-m3.1-flash-preview")).toBeUndefined();
+  });
+
+  it("only offers the installed levels for a row the settings declare", () => {
+    // The static map says what a row offers when it is configured as
+    // documented; the installed settings decide what it really offers.
+    // MiniMax-M3.1-Flash needs the adaptive flag, or pi-ai clamps xhigh
+    // and max to high and sends no output_config.effort at all.
+    const installed = dshInstalledEffortLevels({
+      "llm-pi-ai": {
+        providers: {
+          minimax: {
+            models: [
+              {
+                id: "MiniMax-M3.1-Flash",
+                reasoningEfforts: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+                compat: { forceAdaptiveThinking: true },
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(installed["MiniMax-M3.1-Flash"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // Without the adaptive flag the row loses every level.
+    const withoutFlag = dshInstalledEffortLevels({
+      "llm-pi-ai": {
+        providers: {
+          minimax: {
+            models: [
+              {
+                id: "MiniMax-M3.1-Flash",
+                reasoningEfforts: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(withoutFlag["MiniMax-M3.1-Flash"]).toEqual([]);
   });
 
   it("maps each turn to the reasoning_effort value it sends", () => {

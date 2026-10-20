@@ -34,7 +34,7 @@ public struct ChatView: View {
                     Menu {
                         Button("DeepSeek-V4.1-Pro") { selectedModel = "DeepSeek-V4.1-Pro" }
                         Button("DeepSeek-V4.1-Flash") { selectedModel = "DeepSeek-V4.1-Flash" }
-                        Button("MiniMax-M3.1-Flash-Preview") { selectedModel = "MiniMax-M3.1-Flash-Preview" }
+                        Button("MiniMax-M3.1-Flash") { selectedModel = "MiniMax-M3.1-Flash" }
                         Button("MiniMax-M3") { selectedModel = "MiniMax-M3" }
                         Button("MiniMax-M2.7-highspeed") { selectedModel = "MiniMax-M2.7-highspeed" }
                     } label: {
