@@ -28,6 +28,9 @@ describe("CodeCaps consumption", () => {
     const planMetadata = { detectedPlanName: "Max", userPlanName: "Pro", userCostUsd: "20", userRenewalDateText: "November 1", userSubtitle: "Work", showCostAndRenewal: false, hasMismatch: true };
     const result = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, credential: "never relay", planMetadata: { ...planMetadata, secret: "never relay" } }] }), now);
     expect(result.windows[0]?.planMetadata).toEqual(planMetadata);
+    const longFields = { userSubtitle: "s".repeat(1024), userRenewalDateText: "r".repeat(512) };
+    const longResult = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, planMetadata: longFields }] }), now);
+    expect(longResult.windows[0]?.planMetadata).toEqual(longFields);
     expect(JSON.stringify(result)).not.toContain("never relay");
     const bad = parseCodeCapsQuotas(snapshot({ windows: [{ ...window, planMetadata: { userPlanName: "x".repeat(257), userCostUsd: {}, hasMismatch: "true" } }] }), now);
     expect(bad.windows[0]?.planMetadata).toEqual({});

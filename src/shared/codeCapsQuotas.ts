@@ -43,7 +43,10 @@ export function parseCodeCapsQuotas(value: unknown, now = Date.now()): CodeCapsQ
     const metadata = record(input.planMetadata);
     if (metadata) {
       const plan: Record<string, Scalar> = {};
-      copyStrings(metadata, planStrings, plan, 256);
+      for (const key of planStrings) {
+        const limit = key === "userSubtitle" ? 1024 : key === "userRenewalDateText" ? 512 : key === "userCostUsd" ? 128 : 256;
+        copyStrings(metadata, [key], plan, limit);
+      }
       for (const key of ["showCostAndRenewal", "hasMismatch"]) if (typeof metadata[key] === "boolean") plan[key] = metadata[key];
       window.planMetadata = plan;
     }
