@@ -30,6 +30,17 @@ let markers: string;
 let log: string;
 let selfStable: string;
 
+/**
+ * The fixture builds a real origin/clone pair with a dozen git subprocesses, and
+ * every branch of the script runs more of them.  Those calls are fast on an idle
+ * machine and slow on a loaded one -- a Mac with its swap exhausted takes tens
+ * of seconds for a `git init` and a push -- so the default 5s test and 10s hook
+ * timeouts fail the suite for reasons that have nothing to do with the script.
+ * The script's own per-call cap is 60s (GIT_TIMEOUT), so the budget here is set
+ * above that: a timeout should mean "the script hung", never "the Mac was busy".
+ */
+const FIXTURE_TIMEOUT_MS = 180_000;
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { env: GIT_ENV, encoding: "utf8" });
 }
@@ -133,11 +144,11 @@ beforeEach(() => {
   git(runtime, "push", "-q", "-u", "origin", "main");
   // The stable live copy is where refresh_self writes; keep it inside the fixture.
   writeFileSync(selfStable, "#!/usr/bin/env bash\nexit 0\n");
-});
+}, FIXTURE_TIMEOUT_MS);
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
-});
+}, FIXTURE_TIMEOUT_MS);
 
 describe("auto-update-mac.sh", () => {
   it("does nothing, silently, when the clone already matches origin/main", () => {
@@ -147,7 +158,7 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(before);
     expect(logText()).toBe("");
     expect(existsSync(join(markers, "restart"))).toBe(false);
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("fast-forwards code changes, syncs, smoke-tests and restarts the web", () => {
     const target = commit("src-index.ts", "export const n = 2;\n", "feat: real code");
@@ -162,7 +173,7 @@ describe("auto-update-mac.sh", () => {
     expect(existsSync(join(markers, "restart"))).toBe(true);
     // The stable live copy is refreshed from the tracked one.
     expect(readFileSync(selfStable, "utf8")).toBe(readFileSync(SCRIPT, "utf8"));
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("advances the clone but skips the restart for a docs-only change", () => {
     const target = commit("docs/notes.md", "hello\n", "docs: notes");
@@ -171,7 +182,7 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(target);
     expect(logText()).toMatch(/NO-RESTART/);
     expect(existsSync(join(markers, "restart"))).toBe(false);
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("skips a checkout with tracked changes instead of resetting it", () => {
     const before = head();
@@ -183,7 +194,7 @@ describe("auto-update-mac.sh", () => {
     expect(logText()).toMatch(/SKIP-DIRTY/);
     expect(existsSync(join(markers, "restart"))).toBe(false);
     expect(readFileSync(join(runtime, "src-index.ts"), "utf8")).toBe("// a human was here\n");
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("rolls back and remembers a bad commit when the engine smoke test fails", () => {
     const before = head();
@@ -200,7 +211,7 @@ describe("auto-update-mac.sh", () => {
     expect(again.status).toBe(0);
     expect(head()).toBe(before);
     expect(logText().match(/UPDATED/g)?.length ?? 0).toBe(0);
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("keeps waiting for an engine that is still booting instead of rolling back", () => {
     const target = commit("src-index.ts", "export const n = 7;\n", "feat: code");
@@ -216,7 +227,7 @@ describe("auto-update-mac.sh", () => {
     // The engine answered on the third probe, so the update stands.  A short
     // window used to roll this back and freeze the checkout for hours.
     expect(logText()).not.toMatch(/ROLLBACK/);
-  }, 30000);
+  }, FIXTURE_TIMEOUT_MS);
 
   it("rolls back when the engine never answers inside the wait window", () => {
     const before = head();
@@ -230,7 +241,7 @@ describe("auto-update-mac.sh", () => {
     expect(status).toBe(1);
     expect(head()).toBe(before);
     expect(logText()).toMatch(/ROLLBACK/);
-  }, 30000);
+  }, FIXTURE_TIMEOUT_MS);
 
   it("normalizes file-mode-only drift instead of skipping the update", () => {
     const target = commit("src-index.ts", "export const n = 6;\n", "feat: code");
@@ -240,7 +251,7 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(target);
     expect(logText()).toMatch(/MODE-NORMALIZE|UPDATED/);
     expect(existsSync(join(markers, "restart"))).toBe(true);
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("prefers a CI Mac fetch when the fetch command succeeds", () => {
     const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
@@ -252,7 +263,7 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(target);
     expect(existsSync(join(markers, "fetch"))).toBe(true);
     expect(existsSync(join(markers, "dock"))).toBe(false);
-  });
+  }, FIXTURE_TIMEOUT_MS);
 
   it("stays out of the way while the pause file exists", () => {
     const before = head();
@@ -263,5 +274,5 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(before);
     expect(logText()).toBe("");
     expect(existsSync(join(markers, "restart"))).toBe(false);
-  });
+  }, FIXTURE_TIMEOUT_MS);
 });
