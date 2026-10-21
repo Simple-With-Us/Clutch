@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,4 +67,20 @@ describe("update-mac-app.sh", () => {
     expect(code).not.toBe(0); // the fixture checkout is not a git repo
     expect(existsSync(lock)).toBe(false);
   }, 30000);
+
+  it("leaves a native app in place without touching the checkout (C-78)", () => {
+    const app = join(home, "Applications", "Clutch.app");
+    mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+    writeFileSync(
+      join(app, "Contents", "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
+        `<key>CFBundleIdentifier</key><string>codes.clutch.macos</string>` +
+        `</dict></plist>\n`,
+    );
+    writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary\n");
+    // The fixture checkout is not a git repo, so reaching git pull would
+    // throw; the native guard exits 0 before that.
+    expect(() => runUpdate()).not.toThrow();
+    expect(existsSync(join(home, ".clutch", "auto-update.lock"))).toBe(false);
+  });
 });
