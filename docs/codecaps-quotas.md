@@ -1,0 +1,9 @@
+# CodeCaps Quotas
+
+The Clutch chat-bridge sidecar exposes `GET /clutch/v1/quotas` to paired clients using its existing bearer credential and trusted-host boundary.  This is a Clutch-owned consumption endpoint; it does not change the upstream dsh host contract or require a new service.
+
+The endpoint reads `~/Library/Application Support/Usage Monitor/quota-windows.json` on demand, using the sidecar user's home.  The caller cannot choose a path.  It accepts only `usage-monitor-local-quotas`, version `1`, with at most 512 windows and a 1 MiB file limit.  Snapshots older than 30 minutes, or more than one minute ahead of the local clock, return `available: false` with an empty `windows` array; malformed or missing files do likewise.  Clients must show unavailable status rather than infer full or exhausted quota.  Responses use `Cache-Control: no-store`.
+
+An available response contains `source: "CodeCaps"`, `generatedAt`, optional `producer`, and allowlisted quota windows.  Window identity, provider, source/provenance, detected `planName`, quota values and unknown-state flags retain their producer meanings.  Unknown remaining percentages are omitted.  Arbitrary producer fields and credential fields are never forwarded.
+
+Each window can include optional `planMetadata` with string fields `detectedPlanName` and `userPlanName` (up to 256 characters each), `userCostUsd` (up to 128), `userRenewalDateText` (up to 512), `userSubtitle` (up to 1024), and booleans `showCostAndRenewal` and `hasMismatch`.  Legacy snapshots without metadata continue working.  Clients should keep detected and user-entered names distinct, respect `showCostAndRenewal: false`, and present mismatches without replacing the detected plan.  Cost and renewal text are display information, not provider-verified billing facts.  This route makes that data available to paired clients; it does not add a native quota panel.
