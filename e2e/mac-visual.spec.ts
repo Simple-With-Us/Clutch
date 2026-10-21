@@ -62,8 +62,10 @@ test.describe("Clutch web model picker (Mac capture)", () => {
     const trigger = page.getByRole("button", { name: /Select model/ }).first();
     await expect(trigger).toBeVisible({ timeout: 30_000 });
     // Composer strip with the default model and effort in the trigger.  The
-    // model and effort labels are server-driven, so they are masked and
-    // asserted as text instead (see the `toContainText` check below).
+    // model and effort labels are server-driven, so they stay masked in the
+    // screenshot and the active model is asserted as text here; the offered
+    // branch below has its own `toContainText` for the selected model.
+    await expect(trigger).toContainText(/MiniMax|DeepSeek/);
     await expect(trigger).toHaveScreenshot("model-trigger-default.png", {
       animations: "disabled",
       mask: [trigger.getByText(/.+/)],
