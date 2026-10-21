@@ -280,7 +280,7 @@ describe("auto-update-mac.sh", () => {
   }, FIXTURE_TIMEOUT_MS);
 
   it("prefers a CI Mac fetch when the fetch command succeeds", () => {
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
@@ -303,7 +303,7 @@ describe("auto-update-mac.sh", () => {
     // would have misread it as a shell.
     const app = installApp("codes.clutch.macos", true);
     writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary WKWebView linked\n");
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
@@ -326,7 +326,7 @@ describe("auto-update-mac.sh", () => {
     // the fallback has to say so or it refuses the app it exists to refresh and
     // the commit is never retried.
     installApp("codes.clutch.macos", true);
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `printf %s "$CLUTCH_DOCK_OVERWRITE_NATIVE" > ${markers}/dock-override`,
@@ -343,7 +343,7 @@ describe("auto-update-mac.sh", () => {
     // hand-rolled plist has no Xcode DT keys, so the guard must not mistake
     // it for the native app.
     installApp("codes.clutch.macos", false);
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
@@ -356,7 +356,7 @@ describe("auto-update-mac.sh", () => {
 
   it("C-78: still serves a renamed .dock shell install", () => {
     installApp("codes.clutch.macos.dock", false);
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,

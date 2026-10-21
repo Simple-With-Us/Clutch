@@ -180,15 +180,24 @@ describe("the auto-updater can see the native Mac sources", () => {
     }
   });
 
-  it("still rebuilds for the legacy dock inputs", () => {
+  it("rebuilds for the scripts that build the bundle", () => {
+    const re = dockRe();
+    for (const p of ["scripts/install-dock-app.sh", "scripts/build-mac-app.sh"]) {
+      expect(re.test(p), `DOCK_RE must match ${p}`).toBe(true);
+    }
+  });
+
+  it("does not react to paths CI publishes no Mac build for", () => {
+    // do_dock tries the CI artifact first.  A path outside the release
+    // workflow's filter never has one, so matching it would force a local
+    // native build and app swap for a file that is in no bundle.
     const re = dockRe();
     for (const p of [
       "src/web/dock-app/ClutchWindow.swift",
       "assets/clutch-icon-1024.png",
-      "scripts/install-dock-app.sh",
-      "scripts/build-mac-app.sh",
+      "scripts/update-mac-app.sh",
     ]) {
-      expect(re.test(p), `DOCK_RE must match ${p}`).toBe(true);
+      expect(re.test(p), `DOCK_RE must not match ${p}`).toBe(false);
     }
   });
 

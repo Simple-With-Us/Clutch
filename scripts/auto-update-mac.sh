@@ -77,8 +77,13 @@ CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 # ios/App, ios/Resources and ios/Assets.xcassets, so a change to any of those
 # does have to refresh it.  C-86 widened this from the old dock-only scope,
 # which could not see the native target at all and so never shipped one.
+# Every path here is also in mac-app-build.yml's filter, so a change that
+# triggers a refresh has a CI-built app to fetch;  the retired shell's inputs
+# (src/web/dock-app/, the icon PNG) and update-mac-app.sh are in no bundle and
+# publish nothing, so matching them would force a local native build for
+# nothing.  tests/mac-release-pipeline.test.ts pins this.
 CODE_EXCLUDE_RE='^(docs/|tests/|e2e/|ios/|assets/|\.github/|[^/]+\.md$)'
-DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|src/web/dock-app/|assets/clutch-icon-1024\.png$|scripts/(install-dock-app|build-mac-app|update-mac-app)\.sh$)'
+DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|scripts/(install-dock-app|build-mac-app)\.sh$)'
 
 # C-78: the deprecated WKWebView shell and the native app install to the same
 # path.  The native app keeps codes.clutch.macos; the shell is
