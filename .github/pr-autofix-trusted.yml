@@ -23,7 +23,10 @@
 # rewritten from one route's evidence.  The fleet recall contribution
 # contrib/MM/2026-10-19/f11f7046 records that lesson; it is a recall id and
 # not a path in this repository.  This policy is read only from the default
-# branch and sends the id to https://api.minimax.io/anthropic, so it is pinned
+# branch and sends the id to https://api.minimax.io/anthropic, unless the
+# org or repo variables SWU_AUTOFIX_MODEL_BASE_URL and SWU_AUTOFIX_MODEL
+# retarget the route and the effective model; check those variables too
+# when this policy changes.  The id is pinned
 # to the stable id the owner chose rather than to the preview spelling.
 model: MiniMax-M3.1-Flash
 max_turns: 60
