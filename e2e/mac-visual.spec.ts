@@ -94,7 +94,7 @@ test.describe("Clutch web model picker (Mac capture)", () => {
 
     // Effort pane: reasoning-effort choices for the active model.
     await menu.getByRole("menuitem", { name: /^Effort / }).click();
-    await page.waitForTimeout(1_000);
+    await expect(page.getByRole("menuitemradio").first()).toBeVisible();
     await expect(page).toHaveScreenshot(offered ? "effort-pane-minimax.png" : "effort-pane-default.png", {
       animations: "disabled",
       maxDiffPixelRatio: 0.02,

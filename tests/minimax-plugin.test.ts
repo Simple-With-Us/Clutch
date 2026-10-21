@@ -43,7 +43,7 @@ describe("the shipped MiniMax plugin", () => {
     const support = await loadMinimax();
     const ids = support.models.options.map((option) => option.id);
     expect(ids).toContain(support.models.default);
-    expect(support.models.default).toBe("MiniMax-M2.7-highspeed");
+    expect(support.models.default).toBe("MiniMax-M3.1-Flash");
   });
 
   it("opens the engine-wide image gate and keeps per-model truth exact", async () => {
@@ -96,7 +96,7 @@ describe("the shipped MiniMax plugin", () => {
     const fresh: Record<string, string | undefined> = {};
     support.transformEnv!(fresh);
     expect(fresh.CLUTCH_MINIMAX_BASE_URL).toBe("https://api.minimax.io/v1");
-    expect(fresh.CLUTCH_MINIMAX_MODEL).toBe("MiniMax-M2.7-highspeed");
+    expect(fresh.CLUTCH_MINIMAX_MODEL).toBe("MiniMax-M3.1-Flash");
     expect(fresh.CLUTCH_MINIMAX_API_KEY_NAME).toBe("MINIMAX_API_KEY");
 
     const chosen: Record<string, string | undefined> = {
