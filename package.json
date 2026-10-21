@@ -63,7 +63,8 @@
     "build:ios": "bash scripts/build-ios.sh",
     "update:mac": "bash scripts/update-mac-app.sh",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:infisical-fetch",
+    "test:infisical-fetch": "node --test scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs",
     "test:ci-scope": "vitest run --typecheck",
     "test:e2e": "playwright test"
   },
@@ -75,7 +76,8 @@
     "@types/node": "^24.0.0",
     "tsx": "^4.19.0",
     "typescript": "^7.0.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "zod": "4.4.3"
   },
   "engines": {
     "node": ">=22.0.0"
