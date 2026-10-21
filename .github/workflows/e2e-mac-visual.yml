@@ -23,6 +23,12 @@ jobs:
           node-version: "24"
       - run: npm install --no-audit --no-fund
       - run: npx playwright install chromium
+      - name: Shim osascript so the workspace picker uses the in-page browser
+        run: |
+          mkdir -p "$PWD/.e2e-shims"
+          printf '#!/bin/sh\necho "osascript unavailable in headless e2e" >&2\nexit 2\n' > "$PWD/.e2e-shims/osascript"
+          chmod +x "$PWD/.e2e-shims/osascript"
+          echo "$PWD/.e2e-shims" >> "$GITHUB_PATH"
       - name: Run Playwright on macOS and refresh darwin baselines
         run: npx playwright test --config=playwright.mac.config.ts --update-snapshots
       - uses: actions/upload-artifact@v7
