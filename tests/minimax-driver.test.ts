@@ -40,7 +40,7 @@ describe("minimaxSupport", () => {
     expect(minimaxSpawnArgs()).toEqual([]);
     expect(minimaxSupport.driverKind).toBe("minimaxAgent");
     expect(minimaxSupport.mcpServers).toBe(true);
-    expect(STATIC_MINIMAX_MODELS.default).toBe("MiniMax-M2.7-highspeed");
+    expect(STATIC_MINIMAX_MODELS.default).toBe("MiniMax-M3.1-Flash");
     expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3");
   });
 

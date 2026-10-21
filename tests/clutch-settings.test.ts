@@ -159,7 +159,7 @@ describe("clutchSettings", () => {
       // Secret from Infisical is readable via get() but backfilled into env.
       expect(settings.get("MINIMAX_API_KEY")).toBe("test-key-value");
       // Schema default for a key present nowhere.
-      expect(settings.get("CLUTCH_MINIMAX_MODEL")).toBe("MiniMax-M2.7-highspeed");
+      expect(settings.get("CLUTCH_MINIMAX_MODEL")).toBe("MiniMax-M3.1-Flash");
     } finally {
       settings.stop();
     }

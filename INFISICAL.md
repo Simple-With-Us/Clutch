@@ -69,7 +69,7 @@ Env config:
 |---|---|---|---|
 | `CLUTCH_MINIMAX_API_KEY_NAME` | config | `MINIMAX_API_KEY` | Which env var holds the MiniMax key |
 | `CLUTCH_MINIMAX_BASE_URL` | config | `https://api.minimax.io/v1` | MiniMax API base URL |
-| `CLUTCH_MINIMAX_MODEL` | config | `MiniMax-M2.7-highspeed` | Default MiniMax model |
+| `CLUTCH_MINIMAX_MODEL` | config | `MiniMax-M3.1-Flash` | Default MiniMax model |
 | `CLUTCH_MINIMAX_PROFILE` | config | `minimax-headless` | Default MiniMax cordis profile |
 | `CLUTCH_WEB_HOST` | config | `127.0.0.1` | Clutch web bind host |
 | `CLUTCH_WEB_PORT` | config | `3180` | Clutch web port (vanilla dsh keeps 3080) |
