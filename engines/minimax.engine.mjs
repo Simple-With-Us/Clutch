@@ -33,7 +33,7 @@
 const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
 const MINIMAX_API_KEY_NAME_ENV = "CLUTCH_MINIMAX_API_KEY_NAME";
 const MINIMAX_DEFAULT_BASE_URL = "https://api.minimax.io/v1";
-const MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7-highspeed";
+const MINIMAX_DEFAULT_MODEL = "MiniMax-M3.1-Flash";
 
 /** Engine-wide effort levels.  M3 overrides this with its own list; every other
  *  row keeps the driver default of `none` because the provider takes the level
