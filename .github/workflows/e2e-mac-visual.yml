@@ -1,0 +1,36 @@
+name: e2e-mac-visual
+
+# Manual Mac-runner Playwright capture (owner request 2026-10-20): renders
+# the web UI on macOS, refreshes the *-chromium-darwin.png baselines, and
+# uploads the screenshots as an artifact for review.  This is not a PR CI
+# signal; the required e2e job stays Linux-based in ci.yml.  The push
+# trigger is scoped to the branch that introduced this workflow so the
+# first capture runs without a dispatch; workflow_dispatch covers reruns
+# once it lands on main.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/cc-plan-metadata
+
+jobs:
+  mac-visual:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - run: npm install --no-audit --no-fund
+      - run: npx playwright install chromium
+      - name: Run Playwright on macOS and refresh darwin baselines
+        run: npx playwright test --config=playwright.mac.config.ts --update-snapshots
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mac-visual-screenshots
+          path: |
+            e2e/web-visual.spec.ts-snapshots/
+            e2e/mac-visual.spec.ts-snapshots/
+            test-results/
+          if-no-files-found: warn
