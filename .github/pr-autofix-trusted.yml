@@ -4,16 +4,27 @@
 
 # Owner ruling 2026-10-20: all fleet MiniMax use goes to MiniMax-M3.1-Flash.
 #
+# The id below is duplicated in .github/workflows/claude-code-autofix.yml, whose
+# pinned reusable cannot read this file, so the two copies must be changed
+# together; grep for the id when this policy changes.  The kody route
+# (.github/workflows/kody-fleet-autofix.yml) targets the OpenAI-compatible base
+# URL (https://api.minimax.io/v1) and now names the same id.  That route sends
+# reasoning_split instead of thinking:disabled, and a live probe on 2026-10-20
+# returned HTTP 200 with a well-formed edits object for MiniMax-M3.1-Flash on
+# that route, so the id answers there too.
+#
 # Two spellings of the M3.1 Flash row exist in the wild and they are not
 # interchangeable across routes.  MiniMax-M3.1-Flash-Preview was dropped from
 # the MiniMax Code runtime catalog and from dsh's llm-pi-ai catalog on
-# 2026-10-18 (BF-2494), while api.minimax.io still served it for a while
-# afterwards.  A model id absent from the runtime catalog can still answer over
-# the public API, so an id must never be rewritten from one route's evidence;
-# see contrib/MM/2026-10-19/f11f7046.  This policy is read only from the default
+# 2026-10-18 (BF-2494), while api.minimax.io still serves it.  A live probe on
+# 2026-10-20 returned HTTP 200 for that spelling on both the chat-completions
+# route and the anthropic-messages route.  A model id absent from the runtime
+# catalog can still answer over the public API, so an id must never be
+# rewritten from one route's evidence.  The fleet recall contribution
+# contrib/MM/2026-10-19/f11f7046 records that lesson; it is a recall id and
+# not a path in this repository.  This policy is read only from the default
 # branch and sends the id to https://api.minimax.io/anthropic, so it is pinned
-# to the stable id the owner chose rather than to a preview spelling the vendor
-# has already begun removing.
+# to the stable id the owner chose rather than to the preview spelling.
 model: MiniMax-M3.1-Flash
 max_turns: 60
 max_iterations: 5
