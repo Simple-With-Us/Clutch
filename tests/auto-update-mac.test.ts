@@ -319,6 +319,25 @@ describe("auto-update-mac.sh", () => {
     expect(existsSync(join(markers, "dock"))).toBe(false);
   }, FIXTURE_TIMEOUT_MS);
 
+  it("C-86: the local rebuild fallback may replace an installed native app", () => {
+    // The updater usually runs minutes after a merge, before CI has published
+    // the release, so the CI fetch fails and the local rebuild is what runs.
+    // install-dock-app.sh refuses to pave a native install unless told to, so
+    // the fallback has to say so or it refuses the app it exists to refresh and
+    // the commit is never retried.
+    installApp("codes.clutch.macos", true);
+    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: `printf %s "$CLUTCH_DOCK_OVERWRITE_NATIVE" > ${markers}/dock-override`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(readFileSync(join(markers, "dock-override"), "utf8")).toBe("1");
+    expect(logText()).toMatch(/DOCK-REBUILT {2}native Clutch\.app refreshed/);
+    expect(logText()).not.toMatch(/DOCK-FAILED/);
+  }, FIXTURE_TIMEOUT_MS);
+
   it("C-78: still serves a pre-fix shell that reports the native id", () => {
     // A shell built before the .dock rename claims codes.clutch.macos but its
     // hand-rolled plist has no Xcode DT keys, so the guard must not mistake

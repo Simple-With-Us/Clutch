@@ -76,6 +76,10 @@ if bash "$LIVE/scripts/fetch-ci-mac-app.sh" "$HEAD_SHA" "${HOME}/Applications/Cl
   echo "==> Update complete.  Clutch.app installed from CI build ${HEAD_SHA:0:7}."
 else
   echo "==> No CI Mac build for ${HEAD_SHA:0:7}; rebuilding locally..." >&2
-  bash "$LIVE/scripts/install-dock-app.sh"
+  # install-dock-app.sh refuses to replace an installed native app unless told
+  # to, as an operator-safety seam.  This command exists to refresh that app and
+  # the script now builds the native target, so say so rather than have the
+  # fallback refuse the app it is updating.
+  CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash "$LIVE/scripts/install-dock-app.sh"
   echo "==> Update complete.  Clutch.app is ready."
 fi

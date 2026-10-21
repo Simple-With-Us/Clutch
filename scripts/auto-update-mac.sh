@@ -125,7 +125,18 @@ try_fetch_mac_app() {
 }
 do_dock() {
   if try_fetch_mac_app; then return 0; fi
-  if [ -n "$CMD_DOCK" ]; then bash -c "$CMD_DOCK"; else (cd "$RUNTIME" && bash scripts/install-dock-app.sh); fi
+  # The local rebuild is the fallback for a commit whose CI build does not exist
+  # yet (the updater usually runs minutes after a merge, well before the release
+  # is published).  C-86 made it build the native target, so replacing an
+  # installed native app is exactly its job here;  install-dock-app.sh keeps its
+  # refuse-to-pave guard for an operator running it by hand, and without this
+  # override the fallback would refuse the very app it exists to refresh and
+  # then never retry that commit.
+  if [ -n "$CMD_DOCK" ]; then
+    CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash -c "$CMD_DOCK"
+  else
+    (cd "$RUNTIME" && CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash scripts/install-dock-app.sh)
+  fi
 }
 do_restart() {
   if [ -n "$CMD_RESTART" ]; then bash -c "$CMD_RESTART"; return $?; fi

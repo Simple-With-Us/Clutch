@@ -16,6 +16,19 @@
 # bundleId is now READ BACK from the built Info.plist rather than written here,
 # so the manifest cannot claim an identity the binary does not carry.
 #
+# Local fallback, not the primary route:  scripts/fetch-ci-mac-app.sh installs the
+# CI-built app first, and this script only runs when no CI build exists for the
+# commit.  A local build needs a full Xcode (see the preflight below).
+#
+# Seams, all optional:
+#   CLUTCH_MAC_REGENERATE_PROJECT=1  run `xcodegen generate` first so the build
+#                                    comes from ios/project.yml, not the committed
+#                                    pbxproj (the release workflow sets this)
+#   CLUTCH_MAC_DERIVED_DATA          DerivedData directory; default is stable, so
+#                                    dependency and incremental state survive
+#   CLUTCH_MAC_BUILD_NUMBER          CFBundleVersion; default is the commit count
+#   CLUTCH_MAC_MARKETING_VERSION     CFBundleShortVersionString; default 1.0.<count>
+#
 # Never prints secret values.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -33,12 +46,27 @@ if [[ ! -d "$IOS_DIR" ]]; then
   echo "missing ${IOS_DIR}" >&2
   exit 1
 fi
-if [[ ! -d "$PROJECT" ]]; then
-  # ios/Clutch.xcodeproj is generated from ios/project.yml by XcodeGen.  CI
-  # carries the generated project, but a clone that does not gets one here
-  # rather than failing with a bare "cannot find scheme".
+
+# A local build needs a full Xcode.  With only the Command Line Tools selected,
+# `xcodebuild` is a stub that dies with an opaque "requires Xcode" error partway
+# through an update, so say what is wrong and what to do before touching
+# anything.  The CI-built app is the primary route and needs none of this.
+if ! xcodebuild -version >/dev/null 2>&1; then
+  echo "a local Mac build needs a full Xcode install, and xcodebuild is not usable here" >&2
+  echo "install Xcode and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+  echo "or wait for the CI-built app (scripts/fetch-ci-mac-app.sh installs it when it exists)" >&2
+  exit 1
+fi
+
+# ios/Clutch.xcodeproj is generated from ios/project.yml by XcodeGen.  The
+# committed copy is fine for a local rebuild, but the release path must ship what
+# project.yml says, the way ci.yml and build-ios.sh do: a Swift file added or a
+# setting changed in project.yml without a regenerated pbxproj would otherwise
+# silently miss the shipped app.  A clone with no project at all gets one too,
+# rather than failing with a bare "cannot find scheme".
+if [[ "${CLUTCH_MAC_REGENERATE_PROJECT:-0}" == "1" || ! -d "$PROJECT" ]]; then
   if ! command -v xcodegen >/dev/null 2>&1; then
-    echo "missing ${PROJECT} and xcodegen is not installed" >&2
+    echo "xcodegen is needed to generate ${PROJECT} and is not installed" >&2
     echo "install it with: bash ${LIVE}/scripts/ios-install-xcodegen.sh" >&2
     exit 1
   fi
@@ -46,19 +74,37 @@ if [[ ! -d "$PROJECT" ]]; then
   (cd "$IOS_DIR" && xcodegen generate)
 fi
 
-if [[ "${CLUTCH_MAC_KILL_RUNNING:-1}" == "1" ]]; then
-  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
-fi
-
-TMP="$(mktemp -d)"
-# The notary API key and the notarization zip are written to $RUNNER_TEMP, not
-# to $TMP, so declare them before the trap and remove them on every exit path
-# (notarytool error, SIGTERM, errexit) or the private key outlives the build.
+# The notary API key and the notarization zip are written to $RUNNER_TEMP, so
+# declare them before the trap and remove them on every exit path (notarytool
+# error, SIGTERM, errexit) or the private key outlives the build.
 KEY_PATH="${RUNNER_TEMP:-/tmp}/clutch-notary-key.p8"
 ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
-trap 'rm -rf "$TMP"; rm -f "$KEY_PATH" "$ZIP"' EXIT
+trap 'rm -f "$KEY_PATH" "$ZIP"' EXIT
 
-DD="$TMP/dd"
+# DerivedData lives OUTSIDE anything the exit trap removes.  A throwaway one
+# re-resolves CometChatUIKitSwift and recompiles the whole app on every install,
+# which is most of the build time on the Mac that rebuilds on each update.
+DD="${CLUTCH_MAC_DERIVED_DATA:-${CLUTCH_HOME:-${HOME}/.clutch}/derived-data/mac}"
+mkdir -p "$DD"
+
+# Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise follow the
+# iOS ship scheme (scripts/ios-fleet/ship-testflight.sh): CFBundleVersion is the
+# commit count and CFBundleShortVersionString is 1.0.<commit count>, so a Mac
+# bundle says which commit it came from instead of the target's checked-in
+# record forever.  A shallow clone under-counts and would stamp a LOWER number
+# than an earlier full build, so there the target's own values stay; the release
+# workflow checks out with fetch-depth 0 for this reason.
+COMMIT_COUNT=""
+if [[ "$(git -C "$LIVE" rev-parse --is-shallow-repository 2>/dev/null || true)" == "false" ]]; then
+  COMMIT_COUNT="$(git -C "$LIVE" rev-list --count HEAD 2>/dev/null || true)"
+  [[ "$COMMIT_COUNT" =~ ^[0-9]+$ ]] || COMMIT_COUNT=""
+fi
+BUILD_NUMBER="${CLUTCH_MAC_BUILD_NUMBER:-$COMMIT_COUNT}"
+MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-}"
+if [[ -z "$MARKETING_VERSION_VALUE" && -n "$COMMIT_COUNT" ]]; then
+  MARKETING_VERSION_VALUE="1.0.${COMMIT_COUNT}"
+fi
+
 # Build unsigned and sign below.  The target declares CODE_SIGN_STYLE
 # Automatic with a development team, which cannot resolve on a runner with no
 # signing identity; signing here keeps one code path for both CI modes and
@@ -73,16 +119,32 @@ XCODE_ARGS=(
   CODE_SIGNING_REQUIRED=NO
   CODE_SIGN_IDENTITY=""
 )
-[[ -n "${CLUTCH_MAC_BUILD_NUMBER:-}" ]] && XCODE_ARGS+=("CURRENT_PROJECT_VERSION=${CLUTCH_MAC_BUILD_NUMBER}")
-[[ -n "${CLUTCH_MAC_MARKETING_VERSION:-}" ]] && XCODE_ARGS+=("MARKETING_VERSION=${CLUTCH_MAC_MARKETING_VERSION}")
+if [[ -n "$BUILD_NUMBER" ]]; then
+  XCODE_ARGS+=("CURRENT_PROJECT_VERSION=${BUILD_NUMBER}")
+fi
+if [[ -n "$MARKETING_VERSION_VALUE" ]]; then
+  XCODE_ARGS+=("MARKETING_VERSION=${MARKETING_VERSION_VALUE}")
+fi
+
+BUILT="$DD/Build/Products/${CONFIGURATION}/Clutch.app"
+# DerivedData persists now, so remove the previous product first: a build that
+# fails or does nothing must never leave an old Clutch.app that passes the check
+# below and gets shipped as this commit.
+rm -rf "$BUILT"
 
 echo "==> building scheme ${SCHEME} (${CONFIGURATION})"
 xcodebuild "${XCODE_ARGS[@]}" build
 
-BUILT="$DD/Build/Products/${CONFIGURATION}/Clutch.app"
 if [[ ! -d "$BUILT" ]]; then
   echo "xcodebuild produced no ${BUILT}" >&2
   exit 1
+fi
+
+# Stop the running app only now that there is a built replacement.  Killing it
+# before the build meant a failed build left the Mac with no app, and the
+# auto-updater does not retry a commit it has already attempted.
+if [[ "${CLUTCH_MAC_KILL_RUNNING:-1}" == "1" ]]; then
+  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
 fi
 
 mkdir -p "$(dirname "$APP")"

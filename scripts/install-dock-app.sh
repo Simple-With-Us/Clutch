@@ -10,11 +10,15 @@
 # shell-install path left — but it KEEPS the guard as an operator-safety
 # seam for the manual install flow:  if a stale native-clobbering install
 # reached the disk by another route, the operator can still recover it
-# explicitly with CLUTCH_DOCK_OVERWRITE_NATIVE=1.  PR #180 (C-78 follow-up)
-# replaced the WebKit-content check with an Xcode DT* build key check,
-# because the native target itself compiles Mac/WebViewMac.swift and would
-# have falsely tripped the older guard.  The same DT-key discriminator
-# lives on in auto-update-mac.sh and update-mac-app.sh.
+# explicitly with CLUTCH_DOCK_OVERWRITE_NATIVE=1.  The two updaters
+# (auto-update-mac.sh, update-mac-app.sh) set it themselves on their local
+# rebuild fallback, because refreshing the installed native app is their job.
+#
+# PR #180 (C-78 follow-up) replaced the WebKit-content check with an Xcode DT*
+# build key check, because the native target itself compiles
+# Mac/WebViewMac.swift and would have falsely tripped the older guard.  The
+# same DT-key discriminator lives on in auto-update-mac.sh and
+# update-mac-app.sh.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
