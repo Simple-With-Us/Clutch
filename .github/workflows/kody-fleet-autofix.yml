@@ -1,5 +1,5 @@
 # Enabled fleet wide by the owner on 2026-10-11 (boards 04b963b7 and 99e559ea).
-# MiniMax M3 direct API, paid; at most 5 attempts per UTC day in this repository.
+# MiniMax M3.1 Flash direct API, paid; at most 5 attempts per UTC day in this repository.
 name: Kody MiniMax M3.1 Flash Fix Proposals
 
 # Generated offline.  Missing SWU_KODY_AUTOFIX_ENABLED means disabled.
