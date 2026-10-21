@@ -291,11 +291,17 @@ describe("auto-update-mac.sh", () => {
     expect(existsSync(join(markers, "dock"))).toBe(false);
   }, FIXTURE_TIMEOUT_MS);
 
-  it("C-78: skips the shell rebuild when a native app is installed", () => {
+  it("C-86: refreshes an installed native app instead of skipping it", () => {
+    // C-78 logged DOCK-SKIPPED here, because this path could only build the
+    // deprecated shell and refreshing would have paved the native app with it.
+    // C-86 makes this path build the native `Clutch macOS` target, so a native
+    // install is now exactly what should be refreshed.  PR #180 replaced the
+    // WebKit-content discriminator with an Xcode DT* build key check because
+    // the native target itself compiles Mac/WebViewMac.swift; the fixture
+    // installs a real DT-keyed native bundle, and we deliberately do NOT
+    // overwrite the binary with WebKit content here, since the old guard
+    // would have misread it as a shell.
     const app = installApp("codes.clutch.macos", true);
-    // The real native target links WebKit (its own WebViewMac.swift), so the
-    // guard must not treat WebKit content as a shell marker.  This exact
-    // misread shipped in the first version of the guard.
     writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary WKWebView linked\n");
     const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
     const { status } = run({
@@ -304,9 +310,12 @@ describe("auto-update-mac.sh", () => {
     });
     expect(status).toBe(0);
     expect(head()).toBe(target);
-    expect(logText()).toMatch(/DOCK-SKIPPED/);
-    expect(logText()).not.toMatch(/DOCK-REBUILT/);
-    expect(existsSync(join(markers, "fetch"))).toBe(false);
+    expect(logText()).toMatch(/DOCK-REBUILT/);
+    expect(logText()).toMatch(/native Clutch\.app refreshed/);
+    expect(logText()).not.toMatch(/DOCK-SKIPPED/);
+    // try_fetch_mac_app runs the fetch seam first and returns its status, so a
+    // successful fetch is what proves the native app was replaced.
+    expect(existsSync(join(markers, "fetch"))).toBe(true);
     expect(existsSync(join(markers, "dock"))).toBe(false);
   }, FIXTURE_TIMEOUT_MS);
 

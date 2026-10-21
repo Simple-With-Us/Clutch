@@ -48,13 +48,18 @@ while [ "$LOCK_HELD" = "0" ]; do
 done
 trap '[ "$LOCK_HELD" = "1" ] && rmdir "$LOCK" 2>/dev/null || true' EXIT
 
-if installed_is_native; then
-  echo "==> Native Clutch.app installed; leaving it in place (C-78)." >&2
-  echo "==> Native updates ship with the C-86 release pipeline; this command only serves the Dock shell." >&2
-  exit 0
-fi
+# C-78 short-circuited here when a native Clutch.app was installed, because this
+# command only knew how to serve the deprecated shell and would otherwise have
+# paved the native app with it.  C-86 is that release pipeline: install-dock-app.sh
+# now builds the native `Clutch macOS` target, so this command refreshes a native
+# install correctly instead of skipping it.  The installed_is_native()
+# discriminator above is still what tells the two apart on disk.
 
-echo "==> Updating Clutch Mac app from ${LIVE}..."
+if installed_is_native; then
+  echo "==> Updating the installed native Clutch.app from ${LIVE}..."
+else
+  echo "==> Updating Clutch Mac app from ${LIVE}..."
+fi
 # Separate statements, not one `&&` chain: under `set -e` a command inside an
 # AND-list is exempt from the errexit check unless it is the last one, so the
 # old one-liner ran on after a failed `git pull` and still printed "Update

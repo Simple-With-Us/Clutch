@@ -71,8 +71,14 @@ CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 # Paths whose change means the running web server must be restarted, and paths
 # that mean the Dock app bundle must be rebuilt.  Docs, tests, CI config, the
 # iOS app and image assets are none of the running Mac engine's business.
+# The two filters are deliberately different.  CODE_EXCLUDE_RE keeps ios/ out of
+# the *web server* restart decision: an iOS view tweak must not bounce the
+# engine.  DOCK_RE is about the Mac app bundle, which is BUILT from ios/Mac,
+# ios/App, ios/Resources and ios/Assets.xcassets, so a change to any of those
+# does have to refresh it.  C-86 widened this from the old dock-only scope,
+# which could not see the native target at all and so never shipped one.
 CODE_EXCLUDE_RE='^(docs/|tests/|e2e/|ios/|assets/|\.github/|[^/]+\.md$)'
-DOCK_RE='^(src/web/dock-app/|assets/clutch-icon-1024\.png$|scripts/install-dock-app\.sh$)'
+DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|src/web/dock-app/|assets/clutch-icon-1024\.png$|scripts/(install-dock-app|build-mac-app|update-mac-app)\.sh$)'
 
 # C-78: the deprecated WKWebView shell and the native app install to the same
 # path.  The native app keeps codes.clutch.macos; the shell is
@@ -310,10 +316,20 @@ main() {
   fi
 
   if dock_paths_changed; then
-    if installed_is_native; then
-      log "DOCK-SKIPPED  native Clutch.app installed; shell rebuild skipped"
-    elif do_dock; then
-      log "DOCK-REBUILT  ~/Applications/Clutch.app relaunched"
+    # C-78 skipped this whole block when a native Clutch.app was installed,
+    # because the only thing this path could build was the deprecated shell and
+    # refreshing would have paved the native app with it.  C-86 makes this path
+    # build the native `Clutch macOS` target, so a native install is now exactly
+    # what should be refreshed here rather than protected from it.  The
+    # discriminator decides the log line, not the action.
+    was_native=false
+    installed_is_native && was_native=true
+    if do_dock; then
+      if [ "$was_native" = true ]; then
+        log "DOCK-REBUILT  native Clutch.app refreshed and relaunched"
+      else
+        log "DOCK-REBUILT  ~/Applications/Clutch.app relaunched"
+      fi
     else
       log "DOCK-FAILED  CI fetch and install-dock-app.sh failed; the Dock app is stale, the web is fine"
     fi

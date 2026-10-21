@@ -68,7 +68,7 @@ describe("update-mac-app.sh", () => {
     expect(existsSync(lock)).toBe(false);
   }, 30000);
 
-  it("leaves a native app in place without touching the checkout (C-78)", () => {
+  it("proceeds past an installed native app instead of skipping it (C-86)", () => {
     const app = join(home, "Applications", "Clutch.app");
     mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
     writeFileSync(
@@ -79,9 +79,11 @@ describe("update-mac-app.sh", () => {
         `</dict></plist>\n`,
     );
     writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary\n");
-    // The fixture checkout is not a git repo, so reaching git pull would
-    // throw; the native guard exits 0 before that.
-    expect(() => runUpdate()).not.toThrow();
+    // C-78 exited 0 here, refusing to touch an install it could not rebuild
+    // correctly.  C-86 is that pipeline, so the run continues and fails later,
+    // on the fixture checkout not being a git repo.  What matters is that the
+    // failure is the checkout and not a guard, and that the lock is released.
+    expect(() => runUpdate()).toThrow();
     expect(existsSync(join(home, ".clutch", "auto-update.lock"))).toBe(false);
   });
 });

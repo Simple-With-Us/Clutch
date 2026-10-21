@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
-# Build ~/Applications/Clutch.app and pin it to the Dock.  Sources come from
-# the runtime clone ($CLUTCH_RUNTIME_ROOT, default ~/apps/clutch-runtime).
+# Build ~/Applications/Clutch.app from the native `Clutch macOS` target and pin
+# it to the Dock.  Sources come from the runtime clone ($CLUTCH_RUNTIME_ROOT,
+# default ~/apps/clutch-runtime).
+#
+# C-78 added a refuse-to-pave guard here, because at the time this script
+# built and installed the deprecated webkit-embed shell, and that shell and
+# the native app shared a path and a bundle id.  C-86 supersedes that by
+# making this script build the native `Clutch macOS` target — there is no
+# shell-install path left — but it KEEPS the guard as an operator-safety
+# seam for the manual install flow:  if a stale native-clobbering install
+# reached the disk by another route, the operator can still recover it
+# explicitly with CLUTCH_DOCK_OVERWRITE_NATIVE=1.  PR #180 (C-78 follow-up)
+# replaced the WebKit-content check with an Xcode DT* build key check,
+# because the native target itself compiles Mac/WebViewMac.swift and would
+# have falsely tripped the older guard.  The same DT-key discriminator
+# lives on in auto-update-mac.sh and update-mac-app.sh.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -8,11 +22,9 @@ LIVE="${CLUTCH_RUNTIME_ROOT:-${HOME}/apps/clutch-runtime}"
 APP="${CLUTCH_MAC_APP:-${HOME}/Applications/Clutch.app}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# C-78: this script installs the deprecated WKWebView shell to the same path
-# the native app uses.  A pre-fix shell still reports the native
-# codes.clutch.macos id, and both link WebKit, so the test is the Xcode DT*
-# build keys the hand-rolled shell plist never has.  Refuse to pave a native
-# install unless the operator says so explicitly.
+# C-78 + PR #180: refuse to pave an existing native install unless the
+# operator opts in.  The DT* build keys are what tell a hand-rolled shell
+# plist apart from an Xcode-built native one.
 if [ "${CLUTCH_DOCK_OVERWRITE_NATIVE:-0}" != "1" ] && [ -d "$APP" ]; then
   if python3 -c '
 import plistlib, sys
@@ -23,7 +35,7 @@ except Exception:
 ok = d.get("CFBundleIdentifier") == "codes.clutch.macos" and "DTXcodeBuild" in d
 sys.exit(0 if ok else 1)
 ' "$APP/Contents/Info.plist" 2>/dev/null; then
-    echo "refusing to install the Dock shell over the native Clutch.app at $APP (C-78)" >&2
+    echo "refusing to install over the native Clutch.app at $APP (C-78 + PR #180)" >&2
     echo "set CLUTCH_DOCK_OVERWRITE_NATIVE=1 to proceed anyway" >&2
     exit 1
   fi
@@ -60,5 +72,5 @@ else
 fi
 
 echo "installed $APP"
-echo "WKWebView shell; Dock running-dot; second click focuses the same window"
+echo "native macOS app; Dock running-dot; second click focuses the same window"
 open -a "$APP"
