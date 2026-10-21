@@ -57,8 +57,8 @@ function commit(file: string, body: string, message: string): string {
   return git(runtime, "rev-parse", "origin/main").trim();
 }
 
-function run(overrides: Record<string, string> = {}): { status: number } {
-  const env = {
+function updaterEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return {
     ...process.env,
     CLUTCH_RUNTIME_ROOT: runtime,
     CLUTCH_HOME: state,
@@ -75,6 +75,10 @@ function run(overrides: Record<string, string> = {}): { status: number } {
     CLUTCH_AUTO_UPDATE_RESTART_CMD: `touch ${markers}/restart`,
     ...overrides,
   };
+}
+
+function run(overrides: Record<string, string> = {}): { status: number } {
+  const env = updaterEnv(overrides);
   try {
     execFileSync("bash", [SCRIPT], { env, encoding: "utf8", stdio: "pipe" });
     return { status: 0 };
@@ -280,7 +284,7 @@ describe("auto-update-mac.sh", () => {
   }, FIXTURE_TIMEOUT_MS);
 
   it("prefers a CI Mac fetch when the fetch command succeeds", () => {
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
@@ -291,23 +295,99 @@ describe("auto-update-mac.sh", () => {
     expect(existsSync(join(markers, "dock"))).toBe(false);
   }, FIXTURE_TIMEOUT_MS);
 
-  it("C-78: skips the shell rebuild when a native app is installed", () => {
+  it("C-86: refreshes an installed native app instead of skipping it", () => {
+    // C-78 logged DOCK-SKIPPED here, because this path could only build the
+    // deprecated shell and refreshing would have paved the native app with it.
+    // C-86 makes this path build the native `Clutch macOS` target, so a native
+    // install is now exactly what should be refreshed.  PR #180 replaced the
+    // WebKit-content discriminator with an Xcode DT* build key check because
+    // the native target itself compiles Mac/WebViewMac.swift; the fixture
+    // installs a real DT-keyed native bundle, and we deliberately do NOT
+    // overwrite the binary with WebKit content here, since the old guard
+    // would have misread it as a shell.
     const app = installApp("codes.clutch.macos", true);
-    // The real native target links WebKit (its own WebViewMac.swift), so the
-    // guard must not treat WebKit content as a shell marker.  This exact
-    // misread shipped in the first version of the guard.
     writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary WKWebView linked\n");
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
     });
     expect(status).toBe(0);
     expect(head()).toBe(target);
-    expect(logText()).toMatch(/DOCK-SKIPPED/);
-    expect(logText()).not.toMatch(/DOCK-REBUILT/);
-    expect(existsSync(join(markers, "fetch"))).toBe(false);
+    expect(logText()).toMatch(/DOCK-REBUILT/);
+    expect(logText()).toMatch(/native Clutch\.app refreshed/);
+    expect(logText()).not.toMatch(/DOCK-SKIPPED/);
+    // try_fetch_mac_app runs the fetch seam first and returns its status, so a
+    // successful fetch is what proves the native app was replaced.
+    expect(existsSync(join(markers, "fetch"))).toBe(true);
     expect(existsSync(join(markers, "dock"))).toBe(false);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-86: the local rebuild fallback may replace an installed native app", () => {
+    // The updater usually runs minutes after a merge, before CI has published
+    // the release, so the CI fetch fails and the local rebuild is what runs.
+    // install-dock-app.sh refuses to pave a native install unless told to, so
+    // the fallback has to say so or it refuses the app it exists to refresh and
+    // the commit is never retried.
+    installApp("codes.clutch.macos", true);
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: `printf %s "$CLUTCH_DOCK_OVERWRITE_NATIVE" > ${markers}/dock-override`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(readFileSync(join(markers, "dock-override"), "utf8")).toBe("1");
+    expect(logText()).toMatch(/DOCK-REBUILT {2}native Clutch\.app refreshed/);
+    expect(logText()).not.toMatch(/DOCK-FAILED/);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-86: keeps the run lock fresh while the local rebuild runs", () => {
+    // The local rebuild is a full xcodebuild, and a lock older than 30 minutes is
+    // taken for a dead run.  Backdate the lock from inside the rebuild and see
+    // whether the heartbeat has refreshed it by the time the rebuild ends.
+    const lock = join(state, "auto-update.lock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
+      CLUTCH_AUTO_UPDATE_LOCK_BEAT_SECONDS: "1",
+      CLUTCH_AUTO_UPDATE_DOCK_CMD:
+        `touch -t 200001010000 "${lock}"; sleep 3; ` +
+        `if [ -n "$(find "${lock}" -maxdepth 0 -mmin -1)" ]; then touch ${markers}/lock-fresh; fi`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(existsSync(join(markers, "lock-fresh"))).toBe(true);
+    // The heartbeat must not leave a plain file or a stray lock behind.
+    expect(existsSync(lock)).toBe(false);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-86: the lock heartbeat ends with the updater instead of outliving it", async () => {
+    // An updater killed without a chance to clean up (SIGKILL, a launchd timeout)
+    // leaves its lock behind.  A heartbeat that kept running would refresh that
+    // lock forever, so it would never age past the dead-run threshold and every
+    // later tick would refuse to run.  The rebuild stand-in kills the updater
+    // outright, then the test backdates the lock and checks nothing refreshes it.
+    const lock = join(state, "auto-update.lock");
+    commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
+    const env = updaterEnv({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
+      CLUTCH_AUTO_UPDATE_LOCK_BEAT_SECONDS: "1",
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: "kill -9 $PPID",
+    });
+    try {
+      // stdio is ignored so an orphaned heartbeat cannot hold a pipe open.
+      execFileSync("bash", [SCRIPT], { env, stdio: "ignore" });
+    } catch {
+      // Expected: the updater was killed.
+    }
+    // SIGKILL skips the EXIT trap, so the lock is still there.
+    expect(existsSync(lock)).toBe(true);
+    // Let a surviving heartbeat run its last beat, then backdate the lock.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    execFileSync("touch", ["-t", "200001010000", lock]);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(execFileSync("find", [lock, "-maxdepth", "0", "-mmin", "-1"], { encoding: "utf8" })).toBe("");
   }, FIXTURE_TIMEOUT_MS);
 
   it("C-78: still serves a pre-fix shell that reports the native id", () => {
@@ -315,7 +395,7 @@ describe("auto-update-mac.sh", () => {
     // hand-rolled plist has no Xcode DT keys, so the guard must not mistake
     // it for the native app.
     installApp("codes.clutch.macos", false);
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
@@ -328,7 +408,7 @@ describe("auto-update-mac.sh", () => {
 
   it("C-78: still serves a renamed .dock shell install", () => {
     installApp("codes.clutch.macos.dock", false);
-    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
     const { status } = run({
       CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
       CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,

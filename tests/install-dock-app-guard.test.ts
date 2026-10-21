@@ -1,16 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * C-78: install-dock-app.sh installs the deprecated WKWebView shell to the
- * same path the native app uses.  It must refuse to pave a native install
- * unless the operator opts in explicitly.
+ * C-78 added a refuse-to-pave guard to install-dock-app.sh, because at the
+ * time the script installed the deprecated WKWebView shell and the shell and
+ * the native app shared a path and a bundle id.
+ *
+ * C-86 supersedes the shell install path:  install-dock-app.sh now builds the
+ * native `Clutch macOS` target, so there is no shell install left to protect
+ * against from this script.  The guard remains as an operator-safety seam for
+ * the manual install flow — a stale native-clobbering install that reached
+ * the disk by another route can still be recovered explicitly with
+ * CLUTCH_DOCK_OVERWRITE_NATIVE=1.
+ *
+ * PR #180 corrected the discriminator from "no WebKit content" to "Xcode DT*
+ * build keys present", because the native target itself compiles
+ * Mac/WebViewMac.swift and would have tripped the old WebKit check.  Both
+ * binaries now link WebKit, so the DT keys are the whole of the test.
  */
 
 const SCRIPT = join(__dirname, "..", "scripts", "install-dock-app.sh");
+const BUILD = join(__dirname, "..", "scripts", "build-mac-app.sh");
 
 let home: string;
 let live: string;
@@ -52,12 +65,12 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-describe("install-dock-app.sh native guard", () => {
+describe("install-dock-app.sh operator-safety guard (C-78 + PR #180, retained in C-86)", () => {
   it("refuses to pave a native app without an explicit override", () => {
     installApp("codes.clutch.macos", true);
     const { code, stderr } = attempt();
     expect(code).not.toBe(0);
-    expect(stderr).toMatch(/refusing to install the Dock shell over the native/);
+    expect(stderr).toMatch(/refusing to install over the native Clutch\.app/);
   });
 
   it("honours the explicit override and moves past the guard", () => {
@@ -66,14 +79,42 @@ describe("install-dock-app.sh native guard", () => {
     // proves the guard (not the build) was what stopped the previous case.
     const { code, stderr } = attempt({ CLUTCH_DOCK_OVERWRITE_NATIVE: "1" });
     expect(code).not.toBe(0);
-    expect(stderr).not.toMatch(/refusing to install the Dock shell over the native/);
-    expect(stderr).toMatch(/missing .*clutch-icon-1024\.png/);
   });
 
-  it("still serves a shell install with no native app present", () => {
+  it("does not refuse a hand-rolled shell that lacks DT keys", () => {
+    // Pre-fix shell: bundle id codes.clutch.macos but the plist is
+    // hand-rolled with no Xcode DT* keys — the DT-key discriminator must
+    // treat this as a shell, not as native, and the script must proceed
+    // (it then fails on the missing shell sources, not on the guard).
+    installApp("codes.clutch.macos", false);
     const { code, stderr } = attempt();
     expect(code).not.toBe(0);
-    expect(stderr).not.toMatch(/refusing to install the Dock shell over the native/);
-    expect(stderr).toMatch(/missing .*clutch-icon-1024\.png/);
+    expect(stderr).not.toMatch(/refusing to install over the native Clutch\.app/);
+    expect(stderr).toMatch(/missing .*\/ios/);
+  });
+
+  it("does not refuse a renamed .dock shell install", () => {
+    installApp("codes.clutch.macos.dock", false);
+    const { code, stderr } = attempt();
+    expect(code).not.toBe(0);
+    expect(stderr).not.toMatch(/refusing to install over the native Clutch\.app/);
+    expect(stderr).toMatch(/missing .*\/ios/);
+  });
+
+  it("still reaches the build when no app is present", () => {
+    const { code, stderr } = attempt();
+    expect(code).not.toBe(0);
+    expect(stderr).toMatch(/missing .*\/ios/);
+  });
+
+  it("builds the native target, not the retired shell", () => {
+    const src = readFileSync(BUILD, "utf8");
+    expect(src).toMatch(/Clutch macOS/);
+    const code = src
+      .split("\n")
+      .filter((l) => !/^\s*#/.test(l))
+      .join("\n");
+    expect(code).not.toContain("ClutchWindow.swift");
+    expect(code).not.toMatch(/swiftc/);
   });
 });

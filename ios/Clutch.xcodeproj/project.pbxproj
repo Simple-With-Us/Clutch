@@ -31,7 +31,6 @@
 		65DECF7B2DB76309C90D681C /* ToolCallCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 247231E22BE670FBB01C6F92 /* ToolCallCard.swift */; };
 		6837A599633AC57474330540 /* SessionsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C52DEAAF7A31217501C449 /* SessionsClient.swift */; };
 		6C0E664C64460BEAA01504CC /* InfisicalSettingsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5ACD0A4967661CC0576D3C2 /* InfisicalSettingsClient.swift */; };
-		6C199685D907A332658047E1 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 5FBD64006BA01FD566745EB8 /* Info.plist */; };
 		7497B0A554613B9A2952644B /* DshHostModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EA87C78C20019E7E676352 /* DshHostModels.swift */; };
 		74F9CB381704132CE0FFBE5D /* AcpSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBB42A9547AE68A2227C26B9 /* AcpSession.swift */; };
 		74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCFC52CD4695F04BEDCB607E /* ChatViewMac.swift */; };
@@ -444,7 +443,6 @@
 			files = (
 				05DE5020A9AB44EF70CAA2E1 /* AppIcon.png in Resources */,
 				620636170E702B79470DEB71 /* Assets.xcassets in Resources */,
-				6C199685D907A332658047E1 /* Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

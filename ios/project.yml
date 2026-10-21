@@ -123,6 +123,11 @@ targets:
     sources:
       - path: App
         excludes:
+          # App/Info.plist is the iOS target's plist.  Left in, XcodeGen puts it
+          # in this target's Copy Bundle Resources phase and every Mac release
+          # carries a foreign Contents/Resources/Info.plist with iOS-only keys.
+          # This target's own plist is Mac/Info.plist (info.path below).
+          - Info.plist
           - Services/CometChatManager.swift
           - Views/ChatView.swift
           - Views/AgentMessagesVC.swift
