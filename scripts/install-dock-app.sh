@@ -9,13 +9,20 @@ APP="${CLUTCH_MAC_APP:-${HOME}/Applications/Clutch.app}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # C-78: this script installs the deprecated WKWebView shell to the same path
-# the native app uses.  Refuse to pave a native install unless the operator
-# says so explicitly with CLUTCH_DOCK_OVERWRITE_NATIVE=1.
+# the native app uses.  A pre-fix shell still reports the native
+# codes.clutch.macos id, and both link WebKit, so the test is the Xcode DT*
+# build keys the hand-rolled shell plist never has.  Refuse to pave a native
+# install unless the operator says so explicitly.
 if [ "${CLUTCH_DOCK_OVERWRITE_NATIVE:-0}" != "1" ] && [ -d "$APP" ]; then
-  bundle_id="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleIdentifier",""))' \
-    "$APP/Contents/Info.plist" 2>/dev/null || true)"
-  if [ "$bundle_id" = "codes.clutch.macos" ] \
-    && ! grep -q "WKWebView" "$APP/Contents/MacOS/Clutch" 2>/dev/null; then
+  if python3 -c '
+import plistlib, sys
+try:
+    d = plistlib.load(open(sys.argv[1], "rb"))
+except Exception:
+    sys.exit(1)
+ok = d.get("CFBundleIdentifier") == "codes.clutch.macos" and "DTXcodeBuild" in d
+sys.exit(0 if ok else 1)
+' "$APP/Contents/Info.plist" 2>/dev/null; then
     echo "refusing to install the Dock shell over the native Clutch.app at $APP (C-78)" >&2
     echo "set CLUTCH_DOCK_OVERWRITE_NATIVE=1 to proceed anyway" >&2
     exit 1

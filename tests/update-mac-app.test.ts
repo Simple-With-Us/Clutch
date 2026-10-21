@@ -75,6 +75,7 @@ describe("update-mac-app.sh", () => {
       join(app, "Contents", "Info.plist"),
       `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
         `<key>CFBundleIdentifier</key><string>codes.clutch.macos</string>` +
+        `<key>DTXcodeBuild</key><string>27A9275</string>` +
         `</dict></plist>\n`,
     );
     writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary\n");
