@@ -971,12 +971,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           };
 
           // Enforce reasoning effort level only for models where it is applicable:
-          // Applicable: DeepSeek-V4.1-Pro, MiniMax-M3.
+          // Applicable: DeepSeek-V4.1-Pro, MiniMax-M3, MiniMax-M3.1-Flash.
           // Not applicable: DeepSeek-V4.1-Flash, MiniMax-M2.7-highspeed.
           const fixEffortOption = () => {
             const triggerLabel = document.querySelector('[class*="triggerLabel"]');
             const activeModel = text(triggerLabel?.textContent || '').trim();
-            const isReasoning = /(pro|reasoner)/i.test(activeModel) || activeModel === 'MiniMax-M3';
+            const isReasoning = /(pro|reasoner)/i.test(activeModel) || activeModel === 'MiniMax-M3' || activeModel === 'MiniMax-M3.1-Flash';
 
             const triggerEffort = document.querySelector('[class*="triggerEffort"]');
             if (triggerEffort) {
