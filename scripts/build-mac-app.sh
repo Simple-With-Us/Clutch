@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Build Clutch.app (WKWebView shell).  Used by install-dock-app.sh locally and
 # by GitHub-hosted macOS runners.  Never prints secret values.
+#
+# C-78: this shell is deprecated in favour of the native `Clutch macOS` target,
+# and it installs to the same path the native app uses.  It therefore carries
+# the distinct bundle id codes.clutch.macos.dock so the two builds can never
+# silently replace each other under one identity again.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
@@ -60,7 +65,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Clutch</string>
   <key>CFBundleExecutable</key><string>Clutch</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>codes.clutch.macos</string>
+  <key>CFBundleIdentifier</key><string>codes.clutch.macos.dock</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Clutch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -78,7 +83,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
-      <key>CFBundleURLName</key><string>codes.clutch.macos</string>
+      <key>CFBundleURLName</key><string>codes.clutch.macos.dock</string>
       <key>CFBundleURLSchemes</key>
       <array>
         <string>clutch</string>
@@ -133,7 +138,7 @@ if [[ -n "$MANIFEST_OUT" ]]; then
   python3 - "$MANIFEST_OUT" "$COMMIT" "$SIGNED_AS" <<'PY'
 import json, sys
 path, commit, signed = sys.argv[1], sys.argv[2], sys.argv[3]
-json.dump({"schemaVersion": 1, "commit": commit, "signedAs": signed, "bundleId": "codes.clutch.macos"}, open(path, "w"), indent=2)
+json.dump({"schemaVersion": 1, "commit": commit, "signedAs": signed, "bundleId": "codes.clutch.macos.dock"}, open(path, "w"), indent=2)
 PY
 fi
 

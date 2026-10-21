@@ -40,7 +40,8 @@ jobs:
       source_prefixes: '["src/"]'
       daily_attempt_limit: 5
       budget_policy_id: 'approved-owner-2026-10-11'
-      model: 'MiniMax-M3'
+      # Owner ruling 2026-10-20: all fleet MiniMax use goes to MiniMax-M3.1-Flash.
+      model: 'MiniMax-M3.1-Flash'
       model_base_url: 'https://api.minimax.io/v1'
     secrets:
       MODEL_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
