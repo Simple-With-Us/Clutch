@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import { join } from "node:path";
-import base from "./playwright.config";
+import base from "./playwright.config.ts";
 
 /**
  * Mac-runner Playwright variant (owner request 2026-10-20).

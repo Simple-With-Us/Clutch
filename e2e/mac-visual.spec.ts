@@ -61,9 +61,12 @@ test.describe("Clutch web model picker (Mac capture)", () => {
 
     const trigger = page.getByRole("button", { name: /Select model/ }).first();
     await expect(trigger).toBeVisible({ timeout: 30_000 });
-    // Composer strip with the default model and effort in the trigger.
+    // Composer strip with the default model and effort in the trigger.  The
+    // model and effort labels are server-driven, so they are masked and
+    // asserted as text instead (see the `toContainText` check below).
     await expect(trigger).toHaveScreenshot("model-trigger-default.png", {
       animations: "disabled",
+      mask: [trigger.getByText(/.+/)],
       maxDiffPixelRatio: 0.01,
       timeout: 20_000,
     });
@@ -77,6 +80,7 @@ test.describe("Clutch web model picker (Mac capture)", () => {
     await expect(page.getByRole("menuitemradio").first()).toBeVisible();
     await expect(page).toHaveScreenshot("model-picker-models-pane.png", {
       animations: "disabled",
+      mask: [menu.getByRole("menuitemradio").getByText(/.+/)],
       maxDiffPixelRatio: 0.02,
       timeout: 20_000,
     });
@@ -93,6 +97,7 @@ test.describe("Clutch web model picker (Mac capture)", () => {
       await expect(trigger).toContainText(/MiniMax[- ]M3\.1-Flash/);
       await expect(trigger).toHaveScreenshot("model-trigger-minimax.png", {
         animations: "disabled",
+        mask: [trigger.getByText(/.+/)],
         maxDiffPixelRatio: 0.01,
         timeout: 20_000,
       });
@@ -110,6 +115,7 @@ test.describe("Clutch web model picker (Mac capture)", () => {
     await expect(page.getByRole("menuitemradio").first()).toBeVisible();
     await expect(page).toHaveScreenshot(offered ? "effort-pane-minimax.png" : "effort-pane-default.png", {
       animations: "disabled",
+      mask: [menu.getByRole("menuitemradio").getByText(/.+/)],
       maxDiffPixelRatio: 0.02,
       timeout: 20_000,
     });
