@@ -124,6 +124,22 @@ describe("clutchSettings", () => {
     expect(new Set(m?.[1]?.split(" "))).toEqual(new Set(MANAGED_KEYS));
   });
 
+  it("INFISICAL.md key inventory matches the schema exactly", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const md = readFileSync(join(root, "INFISICAL.md"), "utf8").split("\n");
+    for (const def of CLUTCH_SETTINGS_SCHEMA) {
+      const row = md.find((line) => line.startsWith(`| \`${def.key}\` |`));
+      expect(row, `INFISICAL.md has no inventory row for ${def.key}`).toBeTruthy();
+      // | Key | Kind | Default | Notes | — cells shift by one for the leading pipe.
+      const [, , kind, value] = row!.split("|").map((cell) => cell.trim());
+      expect(kind, `INFISICAL.md kind for ${def.key}`).toBe(def.kind);
+      // The doc renders defaults in backticks and uses — for an empty default.
+      expect(value!.replace(/`/g, ""), `INFISICAL.md default for ${def.key}`).toBe(
+        def.defaultValue === "" ? "—" : def.defaultValue,
+      );
+    }
+  });
+
   it("seeds from process.env with a loud warning when Infisical is unconfigured", async () => {
     process.env.CLUTCH_WEB_PORT = "4000";
     const settings = await initClutchSettings();
