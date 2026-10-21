@@ -37,6 +37,14 @@ async function dismissOnboarding(page: Page): Promise<void> {
 }
 
 async function openWorkspace(page: Page): Promise<void> {
+  // A retry inherits the server-side session an earlier attempt opened, so
+  // the model trigger may already be mounted; only then is the directory
+  // dialog part of the flow.
+  const trigger = page.getByRole("button", { name: /Select model/ }).first();
+  const ready = await trigger
+    .waitFor({ state: "visible", timeout: 5_000 })
+    .then(() => true, () => false);
+  if (ready) return;
   await page.getByRole("button", { name: "Choose workspace" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Select Workspace Directory" });
   await expect(dialog).toBeVisible();
@@ -88,11 +96,16 @@ test.describe("Clutch web model picker (Mac capture)", () => {
         maxDiffPixelRatio: 0.01,
         timeout: 20_000,
       });
-      await trigger.click();
-      await expect(menu).toBeVisible();
+    } else {
+      // Re-select the active model to close the menu: the models pane
+      // replaces the root menu content, and the Effort opener only exists
+      // on the root menu.
+      await page.getByRole("menuitemradio", { checked: true }).click();
     }
 
     // Effort pane: reasoning-effort choices for the active model.
+    await trigger.click();
+    await expect(menu).toBeVisible();
     await menu.getByRole("menuitem", { name: /^Effort / }).click();
     await expect(page.getByRole("menuitemradio").first()).toBeVisible();
     await expect(page).toHaveScreenshot(offered ? "effort-pane-minimax.png" : "effort-pane-default.png", {
