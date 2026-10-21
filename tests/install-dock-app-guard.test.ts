@@ -15,19 +15,17 @@ const SCRIPT = join(__dirname, "..", "scripts", "install-dock-app.sh");
 let home: string;
 let live: string;
 
-function installApp(bundleId: string, webkit: boolean): void {
+function installApp(bundleId: string, xcode: boolean): void {
   const app = join(home, "Applications", "Clutch.app");
   mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
   writeFileSync(
     join(app, "Contents", "Info.plist"),
     `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
       `<key>CFBundleIdentifier</key><string>${bundleId}</string>` +
+      (xcode ? `<key>DTXcodeBuild</key><string>27A9275</string>` : ``) +
       `</dict></plist>\n`,
   );
-  writeFileSync(
-    join(app, "Contents", "MacOS", "Clutch"),
-    webkit ? "fake-macho-binary WKWebView linked\n" : "fake-macho-binary\n",
-  );
+  writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary\n");
 }
 
 function attempt(extraEnv: Record<string, string> = {}): { code: number; stderr: string } {
@@ -56,14 +54,14 @@ afterEach(() => {
 
 describe("install-dock-app.sh native guard", () => {
   it("refuses to pave a native app without an explicit override", () => {
-    installApp("codes.clutch.macos", false);
+    installApp("codes.clutch.macos", true);
     const { code, stderr } = attempt();
     expect(code).not.toBe(0);
     expect(stderr).toMatch(/refusing to install the Dock shell over the native/);
   });
 
   it("honours the explicit override and moves past the guard", () => {
-    installApp("codes.clutch.macos", false);
+    installApp("codes.clutch.macos", true);
     // Past the guard the fixture fails on the missing shell sources, which
     // proves the guard (not the build) was what stopped the previous case.
     const { code, stderr } = attempt({ CLUTCH_DOCK_OVERWRITE_NATIVE: "1" });

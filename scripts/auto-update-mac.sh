@@ -77,9 +77,10 @@ DOCK_RE='^(src/web/dock-app/|assets/clutch-icon-1024\.png$|scripts/install-dock-
 # C-78: the deprecated WKWebView shell and the native app install to the same
 # path.  The native app keeps codes.clutch.macos; the shell is
 # codes.clutch.macos.dock (see build-mac-app.sh).  A pre-fix shell still
-# reports the native id, so identity alone cannot tell them apart: the shell
-# is a bare swiftc binary that embeds WebKit, while the native target never
-# links it.  Both checks together decide whether the installed app is native.
+# reports the native id, and both binaries link WebKit (the native target
+# compiles its own Mac/WebViewMac.swift), so neither tells them apart.  What
+# does: Xcode injects DT* build keys into the native Info.plist at build time,
+# and the hand-rolled shell plist never has them.
 NATIVE_APP_ID="codes.clutch.macos"
 MAC_APP="${CLUTCH_MAC_APP:-$HOME/Applications/Clutch.app}"
 
@@ -156,19 +157,19 @@ code_paths_changed() { printf '%s\n' "$CHANGED" | grep -Ev "$CODE_EXCLUDE_RE" | 
 dock_paths_changed() { printf '%s\n' "$CHANGED" | grep -Eq "$DOCK_RE"; }
 changed_contains() { printf '%s\n' "$CHANGED" | grep -qx "$1"; }
 
-installed_app_bundle_id() {
-  python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleIdentifier",""))' \
-    "$MAC_APP/Contents/Info.plist" 2>/dev/null || true
-}
-
-installed_app_links_webkit() {
-  grep -q "WKWebView" "$MAC_APP/Contents/MacOS/Clutch" 2>/dev/null
-}
-
 installed_is_native() {
-  [ -d "$MAC_APP" ] \
-    && [ "$(installed_app_bundle_id)" = "$NATIVE_APP_ID" ] \
-    && ! installed_app_links_webkit
+  # An Xcode-built native app reports the shipping id and carries Xcode's
+  # DT* build keys; the hand-rolled shell has neither (post-fix shells report
+  # the .dock id instead).
+  [ -d "$MAC_APP" ] && python3 -c '
+import plistlib, sys
+try:
+    d = plistlib.load(open(sys.argv[1], "rb"))
+except Exception:
+    sys.exit(1)
+ok = d.get("CFBundleIdentifier") == "codes.clutch.macos" and "DTXcodeBuild" in d
+sys.exit(0 if ok else 1)
+' "$MAC_APP/Contents/Info.plist" 2>/dev/null
 }
 
 # Return the checkout to the last known-good commit and remember the bad one, so
