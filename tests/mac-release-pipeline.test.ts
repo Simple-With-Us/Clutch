@@ -125,6 +125,16 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     expect(body).toContain('"MARKETING_VERSION=${MARKETING_VERSION_VALUE}"');
   });
 
+  it("serializes builds that share the DerivedData directory", () => {
+    // Two overlapping runs (the updater's rebuild, update:mac, clutch-install-dock)
+    // would otherwise delete or half-overwrite each other's product.
+    expect(body).toContain("clutch-build-lock.sh");
+    const acquire = at('clutch_build_lock_acquire "$DD/.build.lock"');
+    expect(acquire).toBeGreaterThan(at('mkdir -p "$DD"'));
+    expect(acquire).toBeLessThan(at('rm -rf "$BUILT"'));
+    expect(body).toMatch(/trap '[^']*clutch_build_lock_release[^']*' EXIT/);
+  });
+
   it("regenerates the project from project.yml when asked, or when it is missing", () => {
     expect(body).toContain('"${CLUTCH_MAC_REGENERATE_PROJECT:-0}" == "1"');
     expect(body).toContain('! -d "$PROJECT"');
@@ -182,7 +192,7 @@ describe("the auto-updater can see the native Mac sources", () => {
 
   it("rebuilds for the scripts that build the bundle", () => {
     const re = dockRe();
-    for (const p of ["scripts/install-dock-app.sh", "scripts/build-mac-app.sh"]) {
+    for (const p of ["scripts/install-dock-app.sh", "scripts/build-mac-app.sh", "scripts/lib/clutch-build-lock.sh"]) {
       expect(re.test(p), `DOCK_RE must match ${p}`).toBe(true);
     }
   });
@@ -247,6 +257,7 @@ describe("the release workflow can see the native Mac sources", () => {
         "ios/project.yml",
         "ios/Clutch.xcodeproj/**",
         "scripts/build-mac-app.sh",
+        "scripts/lib/clutch-build-lock.sh",
         "scripts/install-dock-app.sh",
         ".github/workflows/mac-app-build.yml",
       ]) {

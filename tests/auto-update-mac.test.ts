@@ -338,6 +338,26 @@ describe("auto-update-mac.sh", () => {
     expect(logText()).not.toMatch(/DOCK-FAILED/);
   }, FIXTURE_TIMEOUT_MS);
 
+  it("C-86: keeps the run lock fresh while the local rebuild runs", () => {
+    // The local rebuild is a full xcodebuild, and a lock older than 30 minutes is
+    // taken for a dead run.  Backdate the lock from inside the rebuild and see
+    // whether the heartbeat has refreshed it by the time the rebuild ends.
+    const lock = join(state, "auto-update.lock");
+    const target = commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
+      CLUTCH_AUTO_UPDATE_LOCK_BEAT_SECONDS: "1",
+      CLUTCH_AUTO_UPDATE_DOCK_CMD:
+        `touch -t 200001010000 "${lock}"; sleep 3; ` +
+        `if [ -n "$(find "${lock}" -maxdepth 0 -mmin -1)" ]; then touch ${markers}/lock-fresh; fi`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(existsSync(join(markers, "lock-fresh"))).toBe(true);
+    // The heartbeat must not leave a plain file or a stray lock behind.
+    expect(existsSync(lock)).toBe(false);
+  }, FIXTURE_TIMEOUT_MS);
+
   it("C-78: still serves a pre-fix shell that reports the native id", () => {
     // A shell built before the .dock rename claims codes.clutch.macos but its
     // hand-rolled plist has no Xcode DT keys, so the guard must not mistake

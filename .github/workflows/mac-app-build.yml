@@ -15,6 +15,7 @@ on:
       - 'ios/project.yml'
       - 'ios/Clutch.xcodeproj/**'
       - 'scripts/build-mac-app.sh'
+      - 'scripts/lib/clutch-build-lock.sh'
       - 'scripts/install-dock-app.sh'
       - '.github/workflows/mac-app-build.yml'
   workflow_dispatch:
@@ -29,6 +30,7 @@ on:
       - 'ios/project.yml'
       - 'ios/Clutch.xcodeproj/**'
       - 'scripts/build-mac-app.sh'
+      - 'scripts/lib/clutch-build-lock.sh'
       - 'scripts/install-dock-app.sh'
       - '.github/workflows/mac-app-build.yml'
 

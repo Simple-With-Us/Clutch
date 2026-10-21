@@ -26,6 +26,8 @@
 #                                    pbxproj (the release workflow sets this)
 #   CLUTCH_MAC_DERIVED_DATA          DerivedData directory; default is stable, so
 #                                    dependency and incremental state survive
+#   CLUTCH_MAC_BUILD_LOCK_WAIT       seconds to wait for another build on the same
+#                                    DerivedData before giving up (default 3600)
 #   CLUTCH_MAC_BUILD_NUMBER          CFBundleVersion; default is the commit count
 #   CLUTCH_MAC_MARKETING_VERSION     CFBundleShortVersionString; default 1.0.<count>
 #
@@ -79,13 +81,22 @@ fi
 # error, SIGTERM, errexit) or the private key outlives the build.
 KEY_PATH="${RUNNER_TEMP:-/tmp}/clutch-notary-key.p8"
 ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
-trap 'rm -f "$KEY_PATH" "$ZIP"' EXIT
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/clutch-build-lock.sh
+. "$HERE/lib/clutch-build-lock.sh"
+trap 'rm -f "$KEY_PATH" "$ZIP"; clutch_build_lock_release' EXIT
 
 # DerivedData lives OUTSIDE anything the exit trap removes.  A throwaway one
 # re-resolves CometChatUIKitSwift and recompiles the whole app on every install,
 # which is most of the build time on the Mac that rebuilds on each update.
 DD="${CLUTCH_MAC_DERIVED_DATA:-${CLUTCH_HOME:-${HOME}/.clutch}/derived-data/mac}"
 mkdir -p "$DD"
+# One build at a time against it.  The auto-updater's local rebuild, update:mac
+# and an operator running clutch-install-dock can overlap, and a shared
+# DerivedData plus the product removal below would let one run delete or
+# half-overwrite what another is about to copy into the app.  The lock covers
+# the build and the swap into $APP and is released on every exit path.
+clutch_build_lock_acquire "$DD/.build.lock" "${CLUTCH_MAC_BUILD_LOCK_WAIT:-3600}"
 
 # Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise follow the
 # iOS ship scheme (scripts/ios-fleet/ship-testflight.sh): CFBundleVersion is the

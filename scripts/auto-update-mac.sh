@@ -38,6 +38,7 @@ CLUTCH_HOME_DIR="${CLUTCH_HOME:-$HOME/.clutch}"
 STATE_DIR="$CLUTCH_HOME_DIR"
 LOG="${CLUTCH_AUTO_UPDATE_LOG:-$HOME/apps/logs/clutch-auto-update.log}"
 LOCK_DIR="${CLUTCH_AUTO_UPDATE_LOCK:-$STATE_DIR/auto-update.lock}"
+LOCK_BEAT_SECONDS="${CLUTCH_AUTO_UPDATE_LOCK_BEAT_SECONDS:-60}"
 PAUSE_FILE="${CLUTCH_AUTO_UPDATE_PAUSE:-$STATE_DIR/auto-update.pause}"
 BAD_FILE="${CLUTCH_AUTO_UPDATE_BAD_SHA:-$STATE_DIR/auto-update.bad-sha}"
 SELF_STABLE="${CLUTCH_AUTO_UPDATE_SELF:-$HOME/apps/clutch-auto-update.sh}"
@@ -83,7 +84,7 @@ CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 # publish nothing, so matching them would force a local native build for
 # nothing.  tests/mac-release-pipeline.test.ts pins this.
 CODE_EXCLUDE_RE='^(docs/|tests/|e2e/|ios/|assets/|\.github/|[^/]+\.md$)'
-DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|scripts/(install-dock-app|build-mac-app)\.sh$)'
+DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|scripts/(install-dock-app|build-mac-app)\.sh$|scripts/lib/clutch-build-lock\.sh$)'
 
 # C-78: the deprecated WKWebView shell and the native app install to the same
 # path.  The native app keeps codes.clutch.macos; the shell is
@@ -137,11 +138,32 @@ do_dock() {
   # refuse-to-pave guard for an operator running it by hand, and without this
   # override the fallback would refuse the very app it exists to refresh and
   # then never retry that commit.
+  #
+  # That rebuild is a full xcodebuild, and the stale-lock rule in main() (a lock
+  # older than 30 minutes belongs to a dead run) was written for npm ci.  Keep
+  # the lock fresh while it runs so a slow build on a loaded Mac is never taken
+  # for a dead run by the next tick, which would start a second updater against
+  # the same checkout.
+  local beat rc=0
+  lock_heartbeat &
+  beat=$!
   if [ -n "$CMD_DOCK" ]; then
-    CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash -c "$CMD_DOCK"
+    CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash -c "$CMD_DOCK" || rc=$?
   else
-    (cd "$RUNTIME" && CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash scripts/install-dock-app.sh)
+    (cd "$RUNTIME" && CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash scripts/install-dock-app.sh) || rc=$?
   fi
+  kill "$beat" 2>/dev/null || true
+  wait "$beat" 2>/dev/null || true
+  return "$rc"
+}
+# Refresh the run lock's mtime until killed.  Only touches a lock that still
+# exists, since touch would otherwise create a plain file where rmdir expects a
+# directory.
+lock_heartbeat() {
+  while :; do
+    sleep "$LOCK_BEAT_SECONDS"
+    if [ -d "$LOCK_DIR" ]; then touch "$LOCK_DIR" 2>/dev/null || true; fi
+  done
 }
 do_restart() {
   if [ -n "$CMD_RESTART" ]; then bash -c "$CMD_RESTART"; return $?; fi
