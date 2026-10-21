@@ -17,6 +17,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: bash scripts/ios-fleet/test-scheduled-ship-gate.sh
+      # The App Store Connect credential rules (AFC-459):  the key comes from
+      # the environment or from Infisical, and a named ASC_KEY_PATH is ignored.
+      - run: node --test scripts/ios-fleet/*.test.mjs
+      - run: bash scripts/ios-fleet/test-asc-credentials.sh
       - run: python3 -m py_compile bridges/dsh/dsh-acp.py bridges/minimax/minimax-acp.py bridges/grok/grok-acp.py
       - run: git diff --check
 

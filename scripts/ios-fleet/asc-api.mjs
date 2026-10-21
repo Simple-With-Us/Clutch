@@ -5,10 +5,18 @@
  *
  * Auth: resolves credentials from the first source that is present
  * (never prints values):
- *   1. ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH in the environment
- *   2. APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64
+ *   1. APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64
  *      (hosted ios-ship / Infisical; p8 is base64, decoded to a 0600 temp
  *      file and removed on exit)
+ *   2. ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 in the environment
+ *   3. Fleet-OPS prod /asc through fleet-secrets
+ *
+ * A caller-supplied file is NOT a credential source (AFC-459, Kody rule 42):
+ * the private key is a secret, and the approved sources are the process
+ * environment, a captured `fleet-secrets get NAME` and bootstrap-only Keychain
+ * credentials.  The shell layer that owns the credential writes a staging key
+ * file for the Apple tools and hands the key over in the environment, so
+ * ASC_KEY_PATH never reaches this client as a path to read.
  *
  * Usage:
  *   node asc-api.mjs GET /v1/apps
@@ -20,12 +28,13 @@
  * echoing anything secret-shaped from the response (ASC responses don't
  * carry credentials, only app metadata, so this is safe to print as-is).
  */
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, rmSync, chmodSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash, createSign } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { normalizePrivateKey } from "./asc-key.mjs";
 
 function base64url(input) {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -47,6 +56,15 @@ function base64url(input) {
 // APPLE_API_KEY_P8_BASE64 is base64, so it is decoded into a 0600 file inside a
 // 0700 temp directory and unlinked on exit.  Values are never printed; only the
 // source and the key-id LENGTH are logged.
+//
+// A PATH ON DISK IS NOT A CREDENTIAL SOURCE (AFC-459, Kody rule 42):  the
+// private key is a secret, and the approved sources are the process
+// environment, a captured `fleet-secrets get NAME` and bootstrap-only Keychain
+// credentials.  A named ASC_KEY_PATH is ignored wherever it appears, so a
+// stale or foreign path in an operator's shell can never decide which key
+// signs a request.  The shell layer that owns the credential writes a staging
+// copy for altool and Xcode and hands the key over in the environment, so
+// ASC_KEY_PATH never reaches this client as a path to read.
 const TEMP_KEY_DIRS = [];
 
 function cleanupTempKeys() {
@@ -97,54 +115,69 @@ function fleetSecretsGet(name, folder) {
   }
 }
 
-function fromFile(keyId, issuerId, keyPath, source) {
-  try {
-    return { keyId: keyId.trim(), issuerId: issuerId.trim(), privateKeyPem: readFileSync(keyPath, "utf8"), source };
-  } catch {
-    return null;
-  }
-}
-
 // Returns { keyId, issuerId, privateKeyPem, source } or { error } or { error: null }.
+//
+// The order is the rule:  the environment beats the network, and a file is not
+// a source at all.  A path on disk is not an approved secret source, so
+// ASC_KEY_PATH is never read here;  the shell layer that owns the credential
+// writes a staging copy for the Apple tools and hands the key over in the
+// environment as ASC_KEY_P8.
+//
+// Every environment-sourced PEM is parsed before it is accepted:  a truncated
+// key, an armored block and a mangled export all carry the envelope and still
+// fail to parse, and an unparsable key that reaches the signer comes back as a
+// raw stack trace instead of a credential error.  normalizePrivateKey lives in
+// asc-key.mjs, which the shell layer uses as well, so both sides of the
+// handoff accept exactly the same keys.
 function resolveCredential() {
-  // 1) Already-exported ASC_* (DealDex's workflow does this).
   const envKeyId = String(process.env.ASC_KEY_ID || "").trim();
   const envIssuer = String(process.env.ASC_ISSUER_ID || "").trim();
-  const envKeyPath = String(process.env.ASC_KEY_PATH || "").trim();
-  if (envKeyId && envIssuer && envKeyPath && existsSync(envKeyPath)) {
-    const got = fromFile(envKeyId, envIssuer, envKeyPath, "ASC_KEY_* environment");
-    if (got) return got;
-  }
+  const envKeyPem = String(process.env.ASC_KEY_P8 || "").trim();
 
-  // No file is read here (AFC-359).  Local-Mac operators set ASC_KEY_ID /
-  // ASC_ISSUER_ID / ASC_KEY_PATH (or the APPLE_API_* names) in their shell, or
-  // let ship-testflight.sh stage the Infisical key and export ASC_* before
-  // it invokes this module (step 3 below also reads Infisical directly).  The hosted ios-ship runner only has the APPLE_API_*
-  // form in $GITHUB_ENV.
-
-  // 2) The APPLE_API_* trio the ship workflow exports from Infisical.
+  // 1) The APPLE_API_* trio the ship workflow exports from Infisical.  The
+  //    key itself is in the environment, so it wins over every other source.
   const keyId = String(process.env.APPLE_API_KEY_ID || "").trim();
   const issuerId = String(process.env.APPLE_API_ISSUER_ID || "").trim();
   if (keyId && issuerId && process.env.APPLE_API_KEY_P8_BASE64) {
-    const pem = decodeP8(process.env.APPLE_API_KEY_P8_BASE64);
+    const pem = normalizePrivateKey(decodeP8(process.env.APPLE_API_KEY_P8_BASE64));
     if (!pem) return { error: "APPLE_API_KEY_P8_BASE64 is set but did not decode to a PEM private key" };
     materializeP8(pem);
     return { keyId, issuerId, privateKeyPem: pem, source: "APPLE_API_* environment (base64 p8)" };
   }
 
-  // 3) Infisical Fleet-OPS /asc: key id and issuer (unless the environment already
+  // 2) The same secret as a plain environment variable.  This is the form
+  //    fleet-secrets hands out, and the form the shell layer uses when it
+  //    hands a staged key to this client.
+  if (envKeyId && envIssuer && envKeyPem) {
+    const pem = normalizePrivateKey(envKeyPem);
+    if (!pem) return { error: "ASC_KEY_P8 is set but is not a PEM private key" };
+    return { keyId: envKeyId, issuerId: envIssuer, privateKeyPem: pem, source: "ASC_KEY_P8 environment" };
+  }
+
+  // 3) No file is read here (AFC-359, and AFC-459 / Kody rule 42).  A path on
+  //    disk is not an approved secret source, so ASC_KEY_PATH is not a
+  //    credential source here:  the shell layer that owns the credential reads
+  //    a staged key and exports it as ASC_KEY_P8.  Step 4 reads Infisical
+  //    directly, so a local operator needs nothing exported at all.
+
+  // 4) Infisical Fleet-OPS /asc: key id and issuer (unless the environment already
   //    has them) and the PEM as ASC_KEY_P8 when the key id is the /asc one;  another
   //    key id falls back to AUTHKEY_<KEY_ID> in /authkey-<key id lower case>-p8.
+  //    The key id, the issuer and the private key belong together (AFC-359):  an
+  //    env key id that is NOT the /asc one needs its own ASC_ISSUER_ID and fails
+  //    closed without it, rather than borrowing the /asc issuer.
   //    Kept in memory, never written to disk.
-  const infKeyId = envKeyId || fleetSecretsGet("ASC_KEY_ID", "/asc").trim();
-  const infIssuer = envIssuer || fleetSecretsGet("ASC_ISSUER_ID", "/asc").trim();
+  const ascKeyId = fleetSecretsGet("ASC_KEY_ID", "/asc").trim();
+  const infKeyId = envKeyId || ascKeyId;
+  const infIssuer = envIssuer || (!envKeyId || envKeyId === ascKeyId ? fleetSecretsGet("ASC_ISSUER_ID", "/asc").trim() : "");
   if (/^[A-Za-z0-9]+$/.test(infKeyId) && infIssuer) {
     let pem = "";
-    if (infKeyId === fleetSecretsGet("ASC_KEY_ID", "/asc").trim()) pem = fleetSecretsGet("ASC_KEY_P8", "/asc");
+    if (infKeyId === ascKeyId) pem = fleetSecretsGet("ASC_KEY_P8", "/asc");
     if (!pem) pem = fleetSecretsGet(`AUTHKEY_${infKeyId}`, `/authkey-${infKeyId.toLowerCase()}-p8`);
     if (pem) {
-      if (!pem.endsWith("\n")) pem += "\n";
-      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: pem, source: "Infisical /asc" };
+      const normalized = normalizePrivateKey(pem);
+      if (!normalized) return { error: "the ASC_KEY_P8 in Infisical is not a PEM private key" };
+      return { keyId: infKeyId, issuerId: infIssuer, privateKeyPem: normalized, source: "Infisical /asc" };
     }
   }
 
@@ -653,8 +686,11 @@ async function main() {
   if (!cred.privateKeyPem) {
     console.error(
       "asc-auth: no App Store Connect credential found. Tried, in order:\n" +
-      "  1) ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_PATH in the environment\n" +
-      "  2) APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64 in the environment"
+      "  1) APPLE_API_KEY_ID / APPLE_API_ISSUER_ID / APPLE_API_KEY_P8_BASE64 in the environment\n" +
+      "  2) ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 in the environment\n" +
+      "  3) Fleet-OPS prod /asc through fleet-secrets\n" +
+      "  A path in ASC_KEY_PATH is not a credential source:  the shell layer that owns the\n" +
+      "  credential hands the key over in ASC_KEY_P8"
     );
     process.exit(1);
   }
