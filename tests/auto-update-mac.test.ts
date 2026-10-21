@@ -64,6 +64,9 @@ function run(overrides: Record<string, string> = {}): { status: number } {
     CLUTCH_HOME: state,
     CLUTCH_AUTO_UPDATE_LOG: log,
     CLUTCH_AUTO_UPDATE_SELF: selfStable,
+    // Point the installed-app guard at a fixture path: on the Mac the real
+    // ~/Applications/Clutch.app exists and would otherwise leak into the suite.
+    CLUTCH_MAC_APP: join(root, "Applications", "Clutch.app"),
     CLUTCH_AUTO_UPDATE_HEALTH: "0",
     CLUTCH_AUTO_UPDATE_INSTALL_CMD: `touch ${markers}/install`,
     CLUTCH_AUTO_UPDATE_SYNC_CMD: `touch ${markers}/sync`,
@@ -112,6 +115,27 @@ function fakeCurl(failures: number): string {
 
 function head(): string {
   return git(runtime, "rev-parse", "HEAD").trim();
+}
+
+/**
+ * C-78: plant a fake installed app for the native-vs-shell guard.  `webkit`
+ * marks the bare-swiftc shell binary (it embeds WebKit); the native target
+ * never links it, so id codes.clutch.macos without the marker reads native.
+ */
+function installApp(bundleId: string, webkit: boolean): string {
+  const app = join(root, "Applications", "Clutch.app");
+  mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+  writeFileSync(
+    join(app, "Contents", "Info.plist"),
+    `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
+      `<key>CFBundleIdentifier</key><string>${bundleId}</string>` +
+      `</dict></plist>\n`,
+  );
+  writeFileSync(
+    join(app, "Contents", "MacOS", "Clutch"),
+    webkit ? "fake-macho-binary WKWebView linked\n" : "fake-macho-binary\n",
+  );
+  return app;
 }
 
 beforeEach(() => {
@@ -263,6 +287,49 @@ describe("auto-update-mac.sh", () => {
     expect(head()).toBe(target);
     expect(existsSync(join(markers, "fetch"))).toBe(true);
     expect(existsSync(join(markers, "dock"))).toBe(false);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-78: skips the shell rebuild when a native app is installed", () => {
+    installApp("codes.clutch.macos", false);
+    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(logText()).toMatch(/DOCK-SKIPPED/);
+    expect(logText()).not.toMatch(/DOCK-REBUILT/);
+    expect(existsSync(join(markers, "fetch"))).toBe(false);
+    expect(existsSync(join(markers, "dock"))).toBe(false);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-78: still serves a pre-fix shell that reports the native id", () => {
+    // A shell built before the .dock rename claims codes.clutch.macos but
+    // embeds WebKit, so the guard must not mistake it for the native app.
+    installApp("codes.clutch.macos", true);
+    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(logText()).not.toMatch(/DOCK-SKIPPED/);
+    expect(existsSync(join(markers, "fetch"))).toBe(true);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-78: still serves a renamed .dock shell install", () => {
+    installApp("codes.clutch.macos.dock", true);
+    const target = commit("src/web/dock-app/ClutchWindow.swift", "// dock\n", "feat: dock");
+    const { status } = run({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: `touch ${markers}/fetch`,
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: `touch ${markers}/dock`,
+    });
+    expect(status).toBe(0);
+    expect(head()).toBe(target);
+    expect(logText()).not.toMatch(/DOCK-SKIPPED/);
+    expect(existsSync(join(markers, "fetch"))).toBe(true);
   }, FIXTURE_TIMEOUT_MS);
 
   it("stays out of the way while the pause file exists", () => {

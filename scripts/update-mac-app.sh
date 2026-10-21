@@ -7,6 +7,22 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 LIVE="${CLUTCH_RUNTIME_ROOT:-${HOME}/apps/clutch-runtime}"
 
+# C-78: same shared-path guard as auto-update-mac.sh.  The native app keeps
+# codes.clutch.macos; the shell is codes.clutch.macos.dock, and a pre-fix
+# shell still reports the native id, so the bare swiftc shell is told apart
+# by the WebKit it embeds while the native target never links.
+NATIVE_APP_ID="codes.clutch.macos"
+MAC_APP="${CLUTCH_MAC_APP:-${HOME}/Applications/Clutch.app}"
+
+installed_is_native() {
+  local bundle_id=""
+  bundle_id="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleIdentifier",""))' \
+    "$MAC_APP/Contents/Info.plist" 2>/dev/null || true)"
+  [ -d "$MAC_APP" ] \
+    && [ "$bundle_id" = "$NATIVE_APP_ID" ] \
+    && ! grep -q "WKWebView" "$MAC_APP/Contents/MacOS/Clutch" 2>/dev/null
+}
+
 # Share the auto-updater's lock (LaunchAgent com.jay.clutch-auto-update runs
 # scripts/auto-update-mac.sh every 5 minutes).  Two concurrent `npm ci` runs in
 # one checkout can leave node_modules broken, so wait for the automatic run to
@@ -28,6 +44,12 @@ while [ "$LOCK_HELD" = "0" ]; do
   fi
 done
 trap '[ "$LOCK_HELD" = "1" ] && rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+if installed_is_native; then
+  echo "==> Native Clutch.app installed; leaving it in place (C-78)." >&2
+  echo "==> Native updates ship with the C-86 release pipeline; this command only serves the Dock shell." >&2
+  exit 0
+fi
 
 echo "==> Updating Clutch Mac app from ${LIVE}..."
 # Separate statements, not one `&&` chain: under `set -e` a command inside an

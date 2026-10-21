@@ -74,6 +74,15 @@ CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 CODE_EXCLUDE_RE='^(docs/|tests/|e2e/|ios/|assets/|\.github/|[^/]+\.md$)'
 DOCK_RE='^(src/web/dock-app/|assets/clutch-icon-1024\.png$|scripts/install-dock-app\.sh$)'
 
+# C-78: the deprecated WKWebView shell and the native app install to the same
+# path.  The native app keeps codes.clutch.macos; the shell is
+# codes.clutch.macos.dock (see build-mac-app.sh).  A pre-fix shell still
+# reports the native id, so identity alone cannot tell them apart: the shell
+# is a bare swiftc binary that embeds WebKit, while the native target never
+# links it.  Both checks together decide whether the installed app is native.
+NATIVE_APP_ID="codes.clutch.macos"
+MAC_APP="${CLUTCH_MAC_APP:-$HOME/Applications/Clutch.app}"
+
 OLD=""
 NEW=""
 CHANGED=""
@@ -146,6 +155,21 @@ wait_web_up() {
 code_paths_changed() { printf '%s\n' "$CHANGED" | grep -Ev "$CODE_EXCLUDE_RE" | grep -q .; }
 dock_paths_changed() { printf '%s\n' "$CHANGED" | grep -Eq "$DOCK_RE"; }
 changed_contains() { printf '%s\n' "$CHANGED" | grep -qx "$1"; }
+
+installed_app_bundle_id() {
+  python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleIdentifier",""))' \
+    "$MAC_APP/Contents/Info.plist" 2>/dev/null || true
+}
+
+installed_app_links_webkit() {
+  grep -q "WKWebView" "$MAC_APP/Contents/MacOS/Clutch" 2>/dev/null
+}
+
+installed_is_native() {
+  [ -d "$MAC_APP" ] \
+    && [ "$(installed_app_bundle_id)" = "$NATIVE_APP_ID" ] \
+    && ! installed_app_links_webkit
+}
 
 # Return the checkout to the last known-good commit and remember the bad one, so
 # the next run does not retry it and a broken main never keeps the Mac down.
@@ -285,7 +309,9 @@ main() {
   fi
 
   if dock_paths_changed; then
-    if do_dock; then
+    if installed_is_native; then
+      log "DOCK-SKIPPED  native Clutch.app installed; shell rebuild skipped"
+    elif do_dock; then
       log "DOCK-REBUILT  ~/Applications/Clutch.app relaunched"
     else
       log "DOCK-FAILED  CI fetch and install-dock-app.sh failed; the Dock app is stale, the web is fine"
