@@ -57,8 +57,8 @@ function commit(file: string, body: string, message: string): string {
   return git(runtime, "rev-parse", "origin/main").trim();
 }
 
-function run(overrides: Record<string, string> = {}): { status: number } {
-  const env = {
+function updaterEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return {
     ...process.env,
     CLUTCH_RUNTIME_ROOT: runtime,
     CLUTCH_HOME: state,
@@ -75,6 +75,10 @@ function run(overrides: Record<string, string> = {}): { status: number } {
     CLUTCH_AUTO_UPDATE_RESTART_CMD: `touch ${markers}/restart`,
     ...overrides,
   };
+}
+
+function run(overrides: Record<string, string> = {}): { status: number } {
+  const env = updaterEnv(overrides);
   try {
     execFileSync("bash", [SCRIPT], { env, encoding: "utf8", stdio: "pipe" });
     return { status: 0 };
@@ -356,6 +360,34 @@ describe("auto-update-mac.sh", () => {
     expect(existsSync(join(markers, "lock-fresh"))).toBe(true);
     // The heartbeat must not leave a plain file or a stray lock behind.
     expect(existsSync(lock)).toBe(false);
+  }, FIXTURE_TIMEOUT_MS);
+
+  it("C-86: the lock heartbeat ends with the updater instead of outliving it", async () => {
+    // An updater killed without a chance to clean up (SIGKILL, a launchd timeout)
+    // leaves its lock behind.  A heartbeat that kept running would refresh that
+    // lock forever, so it would never age past the dead-run threshold and every
+    // later tick would refuse to run.  The rebuild stand-in kills the updater
+    // outright, then the test backdates the lock and checks nothing refreshes it.
+    const lock = join(state, "auto-update.lock");
+    commit("ios/Mac/WebViewMac.swift", "// dock\n", "feat: dock");
+    const env = updaterEnv({
+      CLUTCH_AUTO_UPDATE_FETCH_MAC_CMD: "exit 1",
+      CLUTCH_AUTO_UPDATE_LOCK_BEAT_SECONDS: "1",
+      CLUTCH_AUTO_UPDATE_DOCK_CMD: "kill -9 $PPID",
+    });
+    try {
+      // stdio is ignored so an orphaned heartbeat cannot hold a pipe open.
+      execFileSync("bash", [SCRIPT], { env, stdio: "ignore" });
+    } catch {
+      // Expected: the updater was killed.
+    }
+    // SIGKILL skips the EXIT trap, so the lock is still there.
+    expect(existsSync(lock)).toBe(true);
+    // Let a surviving heartbeat run its last beat, then backdate the lock.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    execFileSync("touch", ["-t", "200001010000", lock]);
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(execFileSync("find", [lock, "-maxdepth", "0", "-mmin", "-1"], { encoding: "utf8" })).toBe("");
   }, FIXTURE_TIMEOUT_MS);
 
   it("C-78: still serves a pre-fix shell that reports the native id", () => {

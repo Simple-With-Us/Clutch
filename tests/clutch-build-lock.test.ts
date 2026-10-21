@@ -82,6 +82,44 @@ describe("clutch-build-lock.sh", () => {
     expect(r.stderr).toMatch(/still holds/);
   }, 30_000);
 
+  it.each(["0.5", "0", "abc", ""])(
+    "still times out when the poll interval is %j (fractional, zero or not a number)",
+    (poll) => {
+      // A fractional value broke the elapsed-time arithmetic and 0 never advanced
+      // it, so the wait loop spun forever instead of reaching its timeout.
+      const r = bash(
+        [
+          `sleep 30 & holder=$!`,
+          `mkdir "${lock}"; echo "$holder" > "${lock}/pid"`,
+          `export CLUTCH_BUILD_LOCK_POLL_SECONDS="${poll}"`,
+          `clutch_build_lock_acquire "${lock}" 2; rc=$?`,
+          `kill "$holder"`,
+          `exit $rc`,
+        ].join("\n"),
+      );
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/still holds/);
+      expect(r.stderr).not.toMatch(/syntax error|invalid arithmetic|value too great/);
+    },
+    30_000,
+  );
+
+  it("reads a leading-zero poll interval as decimal, not octal", () => {
+    const r = bash(
+      [
+        `sleep 30 & holder=$!`,
+        `mkdir "${lock}"; echo "$holder" > "${lock}/pid"`,
+        `export CLUTCH_BUILD_LOCK_POLL_SECONDS=09`,
+        `clutch_build_lock_acquire "${lock}" 1; rc=$?`,
+        `kill "$holder"`,
+        `exit $rc`,
+      ].join("\n"),
+    );
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/still holds/);
+    expect(r.stderr).not.toMatch(/value too great|invalid number/);
+  }, 30_000);
+
   it("takes the lock over from a holder that died without releasing", () => {
     const dead = execFileSync("bash", ["-c", "echo $$"], { encoding: "utf8" }).trim();
     mkdirSync(lock);

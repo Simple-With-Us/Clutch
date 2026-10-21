@@ -17,6 +17,15 @@ CLUTCH_BUILD_LOCK_DIR=""
 
 clutch_build_lock_acquire() {
   local dir="$1" wait="${2:-3600}" waited=0 holder again
+  # One whole-second poll interval feeds both the sleep and the elapsed-time
+  # counter.  A fractional or non-numeric value would break the $(( )) below, and
+  # 0 would never advance it, so a bad value falls back to the 2s default and
+  # anything under 1s is raised to 1s.  10# keeps a leading zero from reading as
+  # octal.
+  local poll="${CLUTCH_BUILD_LOCK_POLL_SECONDS:-2}"
+  case "$poll" in (''|*[!0-9]*) poll=2 ;; esac
+  poll=$((10#$poll))
+  [ "$poll" -ge 1 ] || poll=1
   while ! mkdir "$dir" 2>/dev/null; do
     holder="$(cat "$dir/pid" 2>/dev/null || true)"
     if [ -n "$holder" ]; then
@@ -40,8 +49,8 @@ clutch_build_lock_acquire() {
     if [ "$waited" -eq 0 ]; then
       echo "waiting for another build to finish (${dir})" >&2
     fi
-    sleep "${CLUTCH_BUILD_LOCK_POLL_SECONDS:-2}"
-    waited=$((waited + ${CLUTCH_BUILD_LOCK_POLL_SECONDS:-2}))
+    sleep "$poll"
+    waited=$((waited + poll))
   done
   printf '%s\n' "$$" >"$dir/pid"
   CLUTCH_BUILD_LOCK_DIR="$dir"

@@ -145,7 +145,7 @@ do_dock() {
   # for a dead run by the next tick, which would start a second updater against
   # the same checkout.
   local beat rc=0
-  lock_heartbeat &
+  lock_heartbeat "$$" &
   beat=$!
   if [ -n "$CMD_DOCK" ]; then
     CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash -c "$CMD_DOCK" || rc=$?
@@ -156,13 +156,21 @@ do_dock() {
   wait "$beat" 2>/dev/null || true
   return "$rc"
 }
-# Refresh the run lock's mtime until killed.  Only touches a lock that still
-# exists, since touch would otherwise create a plain file where rmdir expects a
-# directory.
+# Refresh the run lock's mtime for as long as the updater (pid $1) is alive.
+# The loop ends on its own when that process is gone, so an updater killed
+# without a chance to clean up (SIGKILL, a launchd timeout) cannot leave an
+# orphaned heartbeat keeping the lock fresh forever;  the lock then ages past the
+# 30-minute dead-run threshold in main() and a later tick takes it over.
+#
+# The trailing slash on the touch target makes touch fail rather than create a
+# plain file where rmdir expects a directory, if the lock is removed between the
+# -d test and the touch.
 lock_heartbeat() {
-  while :; do
+  local parent="$1"
+  while kill -0 "$parent" 2>/dev/null; do
     sleep "$LOCK_BEAT_SECONDS"
-    if [ -d "$LOCK_DIR" ]; then touch "$LOCK_DIR" 2>/dev/null || true; fi
+    kill -0 "$parent" 2>/dev/null || break
+    if [ -d "$LOCK_DIR" ]; then touch "$LOCK_DIR/" 2>/dev/null || true; fi
   done
 }
 do_restart() {
