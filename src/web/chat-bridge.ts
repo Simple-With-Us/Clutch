@@ -42,12 +42,26 @@ import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
+import { readSessionUsage, withRate, type SessionUsage } from "./session-usage.ts";
+import {
+  loadSessionMeta,
+  newProjectId,
+  normalizeProjectName,
+  removeProject,
+  saveSessionMeta,
+  sessionMetaPath,
+  upsertSession,
+  type SessionMetaFile,
+} from "./session-meta.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST = "127.0.0.1";
 const PORT = Number(clutchChatPort());
 const CLUTCH_HOME = process.env.CLUTCH_HOME ?? join(homedir(), ".clutch");
 const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
+/** Where the engine keeps its session logs — the only place real usage lives. */
+const DSH_HOME = process.env.CLUCH_DSH_HOME ?? join(CLUTCH_HOME, "dsh");
+const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPath(CLUTCH_HOME);
 
 type Engine = "deepseek" | "minimax" | "mcode";
 
@@ -173,6 +187,41 @@ interface AcpSessionInfo {
   cwd?: string;
   title?: string;
   updatedAt?: string;
+  /** Real engine accounting, present only when the log could be read. */
+  usage?: SessionUsage;
+  /** Clutch-side Project assignment and archive state. */
+  projectId?: string;
+  archived?: boolean;
+}
+
+/** Read every session's real usage in one pass.  `readSessionUsage` caches per
+ *  log mtime, so a refresh that finds nothing new costs nothing. */
+export function attachUsage(sessions: readonly AcpSessionInfo[]): AcpSessionInfo[] {
+  return sessions.map((session) => {
+    const usage = readSessionUsage(DSH_HOME, session.sessionId);
+    return usage ? { ...session, usage } : session;
+  });
+}
+
+/** Apply Project/archive state, dropping archived threads unless asked for.
+ *  An archived thread is still resumable — it is hidden from the default list,
+ *  never deleted. */
+export function applySessionMeta(
+  sessions: readonly AcpSessionInfo[],
+  meta: SessionMetaFile,
+  includeArchived: boolean,
+): AcpSessionInfo[] {
+  const out: AcpSessionInfo[] = [];
+  for (const session of sessions) {
+    const entry = meta.sessions[session.sessionId];
+    if (entry?.archived && !includeArchived) continue;
+    out.push({
+      ...session,
+      ...(entry?.projectId ? { projectId: entry.projectId } : {}),
+      ...(entry?.archived ? { archived: true } : {}),
+    });
+  }
+  return out;
 }
 
 class BridgeProcessError extends Error {
@@ -498,8 +547,12 @@ async function main(): Promise<void> {
         await bridge.initialize();
         const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
         const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
+        // Archived threads are hidden unless the caller opts in, so the count
+        // is taken after filtering rather than before.
+        const includeArchived = url.searchParams.get("archived") === "include";
         const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, limit));
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: listed }));
+        const visible = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: attachUsage(visible) }));
       } catch (err) {
         log(`mcode list failed message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
@@ -555,6 +608,119 @@ async function main(): Promise<void> {
           JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
         );
       }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/session-meta") {
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ projects: meta.projects, sessions: meta.sessions }));
+      return;
+    }
+
+    // Project assignment and archiving.  Both are reversible and durable:  the
+    // engine is never asked to move or rename a thread, so unarchiving brings
+    // back exactly the session that was hidden.
+    if (req.method === "PUT" && url.pathname === "/clutch/v1/session-meta") {
+      let body: { sessionId?: unknown; projectId?: unknown; archived?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      if (typeof body.sessionId !== "string" || body.sessionId.length === 0 || body.sessionId.length > 200) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "sessionId is required" }));
+        return;
+      }
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      const patch: { projectId?: string | null; archived?: boolean } = {};
+      if (body.projectId !== undefined) {
+        if (body.projectId === null || body.projectId === "") {
+          patch.projectId = null;
+        } else if (typeof body.projectId === "string") {
+          // Refuse a project that does not exist rather than storing a
+          // dangling id the UI could never render.
+          if (!meta.projects.some((p) => p.id === body.projectId)) {
+            res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown project" }));
+            return;
+          }
+          patch.projectId = body.projectId;
+        } else {
+          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "projectId must be a string or null" }));
+          return;
+        }
+      }
+      if (body.archived !== undefined) {
+        if (typeof body.archived !== "boolean") {
+          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "archived must be a boolean" }));
+          return;
+        }
+        patch.archived = body.archived;
+      }
+      if (patch.projectId === undefined && patch.archived === undefined) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "nothing to update" }));
+        return;
+      }
+      const entry = upsertSession(meta, body.sessionId, patch);
+      try {
+        saveSessionMeta(SESSION_META_FILE, meta);
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ entry, projects: meta.projects, sessions: meta.sessions }));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/clutch/v1/projects") {
+      let body: { name?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      const name = normalizeProjectName(body.name);
+      if (!name) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "project name is required" }));
+        return;
+      }
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      const existing = meta.projects.find((p) => p.name.toLowerCase() === name.toLowerCase());
+      if (existing) {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ project: existing, created: false }));
+        return;
+      }
+      const project = { id: newProjectId(), name, createdAt: new Date().toISOString() };
+      meta.projects.push(project);
+      try {
+        saveSessionMeta(SESSION_META_FILE, meta);
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+        return;
+      }
+      res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ project, created: true }));
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/clutch/v1/projects/")) {
+      const projectId = decodeURIComponent(url.pathname.slice("/clutch/v1/projects/".length)).trim();
+      if (!projectId) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "project id is required" }));
+        return;
+      }
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      if (!removeProject(meta, projectId)) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown project" }));
+        return;
+      }
+      try {
+        saveSessionMeta(SESSION_META_FILE, meta);
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, projects: meta.projects, sessions: meta.sessions }));
       return;
     }
 
@@ -684,9 +850,19 @@ async function main(): Promise<void> {
       // can be reloaded later (mcode threads live in the sidecar map only
       // until the process exits).
       const remoteId = (): string | null => active.resumeSessionId ?? (active.bridgeSessionId || null);
+      // Live usage.  The engine writes its accounting to the session log as the
+      // turn runs, so we re-read it on a timer and push only real records.
+      // Nothing here estimates:  if the log has no usage yet, no event fires.
+      let usageTimer: ReturnType<typeof setInterval> | null = null;
+      let lastUsage: SessionUsage | null = null;
+      const stopUsage = (): void => {
+        if (usageTimer) clearInterval(usageTimer);
+        usageTimer = null;
+      };
       const finish = (event: string, data: unknown): void => {
         if (settled) return;
         settled = true;
+        stopUsage();
         active.busy = false;
         active.stream = null;
         sseSend(res, event, data);
@@ -716,6 +892,19 @@ async function main(): Promise<void> {
             if (engine === "mcode") active.resumeSessionId = active.bridgeSessionId;
           }
           log(`chat session=${chatId} bridgeSession=${active.bridgeSessionId} cwdChars=${cwd.length}`);
+        }
+        if (engine === "mcode" && active.bridgeSessionId) {
+          const sessionIdForUsage = active.bridgeSessionId;
+          usageTimer = setInterval(() => {
+            const fresh = readSessionUsage(DSH_HOME, sessionIdForUsage);
+            if (!fresh) return;
+            // Only re-announce when the engine actually wrote something new.
+            if (lastUsage && fresh.updatedAtMs === lastUsage.updatedAtMs) return;
+            const measured = withRate(fresh, lastUsage ?? undefined);
+            lastUsage = fresh;
+            if (!settled) sseSend(res, "usage", { sessionId: sessionIdForUsage, usage: measured });
+          }, 1500);
+          usageTimer.unref?.();
         }
         const result = await bridge.prompt(active.bridgeSessionId, prompt);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);
