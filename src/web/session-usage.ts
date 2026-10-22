@@ -151,8 +151,12 @@ export function extractUsageFromLogText(text: string): SessionUsage | null {
   if (!context) {
     const at = text.lastIndexOf('"request/context"');
     if (at >= 0) {
+      // `at` lands in the middle of the line, on the type value.  Rewind to the
+      // start of that line so the slice is a whole JSON object, then stop at the
+      // newline so trailing records cannot corrupt it.
+      const start = text.lastIndexOf("\n", at) + 1;
       const end = text.indexOf("\n", at);
-      const obj = parseJson(text.slice(at, end < 0 ? undefined : end));
+      const obj = parseJson(text.slice(start, end < 0 ? undefined : end));
       if (obj) context = contextFrom(obj);
     }
   }

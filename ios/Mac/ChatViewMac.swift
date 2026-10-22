@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import AppKit
 
 /// Stable device UID for this Mac's 1:1 agent thread (the relay receiver).
 /// iOS uses the vendor id; macOS has none, so one is minted once and kept.
@@ -12,6 +13,25 @@ enum MacChatIdentity {
         let uid = "clutch-mac-\(UUID().uuidString.prefix(8).lowercased())"
         defaults.set(uid, forKey: key)
         return uid
+    }
+}
+
+/// The thread rail's width, persisted so the window reopens the way it was
+/// left.  Clamped on read as well as on drag, so a stale or hand-edited value
+/// can never open a rail that swallows the chat.
+enum MacSidebarWidth {
+    private static let key = "codes.clutch.mac-sidebar-width"
+    static let fallback: CGFloat = 232
+    static let range: ClosedRange<CGFloat> = 180 ... 460
+
+    static var current: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: key)
+        guard saved > 0 else { return fallback }
+        return min(max(saved, range.lowerBound), range.upperBound)
+    }
+
+    static func save(_ width: CGFloat) {
+        UserDefaults.standard.set(min(max(width, range.lowerBound), range.upperBound), forKey: key)
     }
 }
 
@@ -110,6 +130,13 @@ public struct ChatView: View {
     @State private var sidebarLoading = false
     @State private var sidebarError: String?
     @State private var sidebarLoadingId: String?
+    /// User-resized rail width.  Persisted so the window comes back the way it
+    /// was left; the drag itself lives in `ThreadSidebar`'s trailing edge.
+    @State private var sidebarWidth: CGFloat = MacSidebarWidth.current
+    @State private var sidebarProjects: [SessionsClient.Project] = []
+    /// Newest real usage record for the open thread, pushed by the sidecar's
+    /// SSE stream.  Nil until the engine reports one.
+    @State private var activeUsage: AcpSessionUsage?
     @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
     @State private var draft: String = ""
     @State private var sessionId: String?
@@ -166,9 +193,16 @@ public struct ChatView: View {
                         loading: sidebarLoading,
                         loadingId: sidebarLoadingId,
                         errorText: sidebarError,
+                        projects: sidebarProjects,
                         onSelect: { session in openSession(session, fromSidebar: true) },
                         onNew: { startMcodeThread() },
-                        onRefresh: { Task { await loadSidebarSessions() } }
+                        onRefresh: { Task { await loadSidebarSessions() } },
+                        onAction: { action, session in handle(action, session) },
+                        fixedWidth: sidebarWidth,
+                        onResize: { width in
+                            sidebarWidth = width
+                            MacSidebarWidth.save(width)
+                        }
                     )
                     Divider()
                 }
@@ -269,6 +303,8 @@ public struct ChatView: View {
 
             Spacer()
 
+            usageStrip
+
             if let host = activeHost {
                 HStack(spacing: 5) {
                     Circle()
@@ -283,6 +319,46 @@ public struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.clutchBackground)
+    }
+
+    // MARK: - Usage
+
+    /// Live engine facts for the open thread.
+    ///
+    /// Every value here came from the engine's own accounting record.  When the
+    /// engine has not reported one —  a fresh thread, or a bridge that sends no
+    /// usage — the strip says so instead of showing a placeholder percentage
+    /// derived from a character count.
+    @ViewBuilder
+    private var usageStrip: some View {
+        if engine == .mcode {
+            HStack(spacing: 8) {
+                if let usage = activeUsage {
+                    if let rate = usage.rateLabel {
+                        metric(icon: "speedometer", value: rate)
+                    }
+                    if let occupancy = usage.occupancyLabel {
+                        metric(icon: "chart.pie.fill", value: occupancy)
+                    }
+                } else {
+                    Text("Usage Not Reported Yet")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private func metric(icon: String, value: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .help(value)
     }
 
     // MARK: - Thread
@@ -468,14 +544,80 @@ public struct ChatView: View {
         sidebarLoading = true
         defer { sidebarLoading = false }
         do {
-            sidebarSessions = try await SessionsClient(host: host).list()
+            let client = SessionsClient(host: host)
+            sidebarSessions = try await client.list()
             sidebarError = nil
+            // Project names live only in the metadata store, so the sidebar
+            // needs its own read.  A failure here must not blank the thread
+            // list, which is the thing the user actually asked for.
+            if let meta = try? await client.meta() {
+                sidebarProjects = meta.projects
+            }
         } catch {
             // Keep whatever list we already have; a retry is one click away.
             if sidebarSessions.isEmpty {
                 sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
             }
         }
+    }
+
+    // MARK: - Sidebar actions
+
+    private func handle(_ action: ThreadSidebarAction, _ session: AcpSessionInfo) {
+        switch action {
+        case let .copySessionId(session):
+            copyToPasteboard(session.sessionId)
+
+        case let .revealInFinder(session):
+            if let cwd = session.cwd, !cwd.isEmpty {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: cwd)])
+            }
+
+        case let .assignProject(session, projectId):
+            Task { await applyMeta(sessionId: session.sessionId, projectId: projectId, archived: nil) }
+
+        case let .createProject(name, session):
+            Task { await createProject(name: name, assigning: session.sessionId) }
+
+        case let .setArchived(session, archived):
+            Task { await applyMeta(sessionId: session.sessionId, projectId: nil, archived: archived) }
+        }
+    }
+
+    private func applyMeta(sessionId: String, projectId: String?, archived: Bool?) async {
+        guard let host = activeHost else { return }
+        do {
+            let meta = try await SessionsClient(host: host).updateMeta(
+                sessionId: sessionId,
+                projectId: projectId,
+                archived: archived
+            )
+            sidebarProjects = meta.projects
+            await loadSidebarSessions()
+        } catch {
+            sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+
+    private func createProject(name: String, assigning sessionId: String) async {
+        guard let host = activeHost else { return }
+        let client = SessionsClient(host: host)
+        do {
+            let result = try await client.createProject(name: name)
+            sidebarProjects.append(result.project)
+            if result.created {
+                try await client.updateMeta(sessionId: sessionId, projectId: result.project.id)
+            }
+            await loadSidebarSessions()
+        } catch {
+            sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
     }
 
     /// The sidecar answers a failed resume with a bare ACP reason, so name the

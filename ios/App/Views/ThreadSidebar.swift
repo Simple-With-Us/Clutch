@@ -1,13 +1,36 @@
 import SwiftUI
 import Foundation
 
+#if os(macOS)
+import AppKit
+#endif
+
+/// What a right-click on a thread row can do.
+///
+/// Modelled as one enum rather than a dozen callbacks so the sidebar stays a
+/// dumb surface:  it reports intent, and `ChatViewMac` decides what actually
+/// happens.  Every case here is real —  the ones the sidecar cannot yet do are
+/// absent rather than shown and silently ignored.
+public enum ThreadSidebarAction {
+    /// Copy the engine's session id to the pasteboard.
+    case copySessionId(AcpSessionInfo)
+    /// Move a thread into a Project, or out of all of them when `nil`.
+    case assignProject(AcpSessionInfo, String?)
+    /// Create a Project with this name and assign the thread to it.
+    case createProject(String, AcpSessionInfo)
+    /// Archive or restore a thread.  Archiving hides it and is reversible.
+    case setArchived(AcpSessionInfo, Bool)
+    /// Open the thread's working directory in Finder.
+    case revealInFinder(AcpSessionInfo)
+}
+
 /// The thread rail, shared by the Mac chat surface and the iPhone/iPad
 /// dashboard so both platforms show one thread list.
 ///
-/// On macOS this is a pinned 232pt rail beside the transcript.  On iOS it is
+/// On macOS this is a drag-resizable rail beside the transcript.  On iOS it is
 /// the sidebar column of a `NavigationSplitView`, where the system sizes the
 /// column and a tap pushes the thread instead of swapping the pane — so
-/// `fixedWidth` is nil there.
+/// `fixedWidth` is nil there and every macOS affordance below is compiled out.
 ///
 /// The error banner is rendered above the list rather than in a branch the
 /// loaded-list state can shadow.  That is deliberate: a failed resume used to
@@ -21,70 +44,172 @@ struct ThreadSidebar: View {
     var loading: Bool
     var loadingId: String?
     var errorText: String?
+    /// Projects offered in the row's context menu.  Empty means the menu shows
+    /// only the create-project affordance.
+    var projects: [SessionsClient.Project] = []
     var onSelect: (AcpSessionInfo) -> Void
     var onNew: () -> Void
     var onRefresh: () -> Void
+    var onAction: (ThreadSidebarAction, AcpSessionInfo) -> Void = { _, _ in }
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
     var fixedWidth: CGFloat? = 232
+    /// Called continuously while the user drags the divider.  nil on iOS.
+    var onResize: ((CGFloat) -> Void)? = nil
+
+    /// Drag the rail no narrower than this or wider than the chat can spare.
+    static let minWidth: CGFloat = 180
+    static let maxWidth: CGFloat = 460
+
+    #if os(macOS)
+    /// Ask for a Project name from a context menu.
+    ///
+    /// A menu cannot host a text field, so this uses the platform's own
+    /// sheet-style prompt.  It runs a modal alert only while the user has
+    /// deliberately clicked "New Project…"; nothing here fires on its own.
+    static func promptForProjectName() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "New Project"
+        alert.informativeText = "Threads you assign to it are grouped together."
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "Project Name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+    #endif
+
+    @State private var query: String = ""
+    @State private var hoveredId: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-
-            if let errorText, !errorText.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text(errorText)
-                        .font(.system(size: 11))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Button("Retry", action: onRefresh)
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.12))
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                searchBar
+                header
                 Divider()
-            }
 
-            if ordered.isEmpty && loading {
-                ProgressView("Loading Threads…")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if ordered.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.tertiary)
-                    Text("No Threads Yet")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Start One With The Button Above.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(ordered) { session in
-                            row(session)
-                        }
+                if let errorText, !errorText.isEmpty {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(errorText)
+                            .font(.system(size: 11))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Button("Retry", action: onRefresh)
+                            .font(.system(size: 11, weight: .semibold))
                     }
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.12))
+                    Divider()
                 }
+
+                if visible.isEmpty && loading {
+                    ProgressView("Loading Threads…")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if visible.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: query.isEmpty ? "text.bubble" : "magnifyingglass")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.tertiary)
+                        Text(query.isEmpty ? "No Threads Yet" : "No Matches")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(query.isEmpty ? "Start One With The Button Above." : "Try A Different Search.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 2) {
+                            ForEach(visible) { session in
+                                row(session)
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 6)
+                    }
+                }
+            }
+            .frame(width: fixedWidth)
+            .frame(maxHeight: .infinity)
+            .background(Color.clutchBackground)
+
+            #if os(macOS)
+            if onResize != nil {
+                resizeHandle
+            }
+            #endif
+        }
+    }
+
+    /// The search field sits above the New/Threads row at the top-left, where a
+    /// user looks first when they know part of a name but not the whole thing.
+    @ViewBuilder
+    private var searchBar: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            TextField("Search Threads", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11))
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel("Clear Search")
             }
         }
-        .frame(width: fixedWidth)
-        .frame(maxHeight: .infinity)
-        .background(Color.clutchBackground)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        #if os(macOS)
+        .help("Search Threads By Name, Folder, ID Or Model")
+        #endif
     }
+
+    #if os(macOS)
+    /// A 5pt grab strip on the rail's trailing edge.  `col-resize` is the
+    /// platform's own cursor for this, and a plain Rectangle is enough for
+    /// AppKit to turn dragging into a resize.
+    private var resizeHandle: some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: 5)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                #if os(macOS)
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                #endif
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        let next = min(max(value.location.x, Self.minWidth), Self.maxWidth)
+                        onResize?(next)
+                    }
+            )
+            .accessibilityLabel("Resize Sidebar")
+    }
+    #endif
 
     private var header: some View {
         HStack(spacing: 6) {
@@ -132,15 +257,32 @@ struct ThreadSidebar: View {
             isSelected: session.sessionId == selectedId,
             isLoading: loadingId == session.sessionId,
             isDisabled: loadingId != nil && loadingId != session.sessionId,
-            onSelect: onSelect
+            projects: projects,
+            onSelect: onSelect,
+            onAction: onAction
         )
+        #if os(macOS)
+        .onHover { inside in
+            hoveredId = inside ? session.sessionId : (hoveredId == session.sessionId ? nil : hoveredId)
+        }
+        .popover(isPresented: Binding(
+            get: { hoveredId == session.sessionId },
+            set: { if !$0 && hoveredId == session.sessionId { hoveredId = nil } }
+        ), arrowEdge: .trailing) {
+            ThreadDetailsCard(session: session, projects: projects)
+        }
+        .help("")
+        #endif
     }
 
-    /// Newest first.  `updatedAt` is a free-form string from the engine, so a
-    /// value we cannot read sinks below the dated rows and keeps its listed
-    /// order — a malformed date can never scramble or trap the list.
+    /// Newest first, then filtered by the search field.  A blank query matches
+    /// everything, so clearing the field always restores the full list.
     private var ordered: [AcpSessionInfo] {
         AcpSessionInfo.newestFirst(sessions)
+    }
+
+    private var visible: [AcpSessionInfo] {
+        ordered.filter { $0.matchesSearch(query) }
     }
 }
 
@@ -154,7 +296,9 @@ struct ThreadSidebarRow: View {
     var isSelected: Bool
     var isLoading: Bool
     var isDisabled: Bool
+    var projects: [SessionsClient.Project] = []
     var onSelect: (AcpSessionInfo) -> Void
+    var onAction: (ThreadSidebarAction, AcpSessionInfo) -> Void = { _, _ in }
 
     var body: some View {
         Button {
@@ -182,6 +326,15 @@ struct ThreadSidebarRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
+                    // The one usage fact cheap enough to show inline on every
+                    // row.  Absent rather than estimated when the engine has not
+                    // reported a window.
+                    if let occupancy = session.usage?.occupancyLabel {
+                        Text(occupancy)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
                 if isLoading {
                     ProgressView()
@@ -205,12 +358,152 @@ struct ThreadSidebarRow: View {
         // VoiceOver needs the thread named, not just its working directory.
         .accessibilityLabel("Thread, \(session.displayTitle)")
         #if os(macOS)
-        .help(session.cwd ?? session.sessionId)
+        .contextMenu { menu }
         #endif
+    }
+
+    #if os(macOS)
+    @ViewBuilder
+    private var menu: some View {
+        Button("Copy Session ID") {
+            onAction(.copySessionId(session), session)
+        }
+
+        if let cwd = session.cwd, !cwd.isEmpty {
+            Button("Reveal Working Folder In Finder") {
+                onAction(.revealInFinder(session), session)
+            }
+        }
+
+        Divider()
+
+        Menu("Assign To Project") {
+            Button("None") {
+                onAction(.assignProject(session, nil), session)
+            }
+            Divider()
+            ForEach(projects) { project in
+                // The tick marks where this thread currently sits.
+                let current = project.id == session.projectId
+                Button {
+                    onAction(.assignProject(session, current ? nil : project.id), session)
+                } label: {
+                    if current {
+                        Label(project.name, systemImage: "checkmark")
+                    } else {
+                        Text(project.name)
+                    }
+                }
+            }
+            Divider()
+            Button("New Project…") {
+                guard let name = ThreadSidebar.promptForProjectName() else { return }
+                onAction(.createProject(name, session), session)
+            }
+        }
+
+        Divider()
+
+        if session.archived == true {
+            Button("Restore From Archive") {
+                onAction(.setArchived(session, false), session)
+            }
+        } else {
+            Button("Archive") {
+                onAction(.setArchived(session, true), session)
+            }
+        }
+    }
+    #endif
+}
+
+/// The hover card.  Shows only what the sidecar actually knows;  a fact the
+/// engine did not report reads "Not reported" instead of showing a zero or an
+/// invented estimate.
+struct ThreadDetailsCard: View {
+    let session: AcpSessionInfo
+    var projects: [SessionsClient.Project] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(session.displayTitle)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(2)
+
+            Divider()
+
+            detail("Session ID", session.sessionId, monospaced: true)
+            detail("Folder", session.cwd ?? "Not reported", monospaced: true)
+            detail("Model", session.usage?.model ?? "Not reported")
+            detail("Provider", session.usage?.provider ?? "Not reported")
+
+            if let usage = session.usage {
+                Divider()
+                detail(
+                    "Context Used",
+                    usage.occupancyLabel ?? "Not reported",
+                    monospaced: true
+                )
+                detail(
+                    "Output Rate",
+                    usage.rateLabel ?? "Not enough data yet",
+                    monospaced: true
+                )
+                if let cache = usage.cacheReadTokens {
+                    detail("Cached Input", AcpSessionUsage.compact(cache), monospaced: true)
+                }
+            } else {
+                Divider()
+                Text("The engine has not reported usage for this thread.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let projectId = session.projectId,
+               let name = projects.first(where: { $0.id == projectId })?.name {
+                Divider()
+                detail("Project", name)
+            }
+
+            if session.archived == true {
+                detail("Archived", "Yes")
+            }
+        }
+        .padding(10)
+        .frame(width: 260, alignment: .leading)
+    }
+
+    private func detail(_ label: String, _ value: String, monospaced: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(monospaced ? .system(size: 10, design: .monospaced) : .system(size: 10))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        }
     }
 }
 
 extension AcpSessionInfo {
+    /// Case-insensitive substring match across everything a row can show, so a
+    /// user can search by thread name, folder, the raw session id, or the model
+    /// driving it.  An empty query matches everything.
+    func matchesSearch(_ query: String) -> Bool {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if needle.isEmpty { return true }
+        var haystacks = [displayTitle.lowercased(), sessionId.lowercased()]
+        if let cwd, !cwd.isEmpty { haystacks.append(cwd.lowercased()) }
+        if let model = usage?.model { haystacks.append(model.lowercased()) }
+        if let provider = usage?.provider { haystacks.append(provider.lowercased()) }
+        if let projectId { haystacks.append(projectId.lowercased()) }
+        return haystacks.contains { $0.contains(needle) }
+    }
+
     /// Stable newest-first ordering, shared by both thread lists.
     ///
     /// Rows whose `updatedAt` cannot be parsed sink below every dated row and
