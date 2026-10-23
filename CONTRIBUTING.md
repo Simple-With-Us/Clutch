@@ -44,9 +44,11 @@ and applies to human contributors too in spirit:
 - **No forks of other repositories.**  This repo is independent.  If you
   need a custom build of an upstream, file an issue here for the owner
   to review.
-- **Two spaces between sentences** in every paragraph a human reads.
-  Title Case headings.  Light theme is the first-visit default.
-  Timestamps in Central Time.
+- **Two spaces between sentences** in every paragraph a human reads,
+  written as a real U+00A0 plus a normal space (owner ruling 2026-10-23),
+  never the `&nbsp;` entity and never two plain ASCII spaces.  In Swift
+  string literals spell it `"\u{00A0} "`.  Title Case headings.  Light
+  theme is the first-visit default.  Timestamps in Central Time.
 
 ## License
 
