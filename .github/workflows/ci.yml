@@ -21,6 +21,10 @@ jobs:
       # the environment or from Infisical, and a named ASC_KEY_PATH is ignored.
       - run: node --test scripts/ios-fleet/*.test.mjs
       - run: bash scripts/ios-fleet/test-asc-credentials.sh
+      # The Infisical loader (AFC-465) and its entry-module regression
+      # (AFC-475).  Clutch carried the canonical loader test without a line
+      # that ran it, so the copy was never exercised here.
+      - run: node --test scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch.symlink-regression.node-test.mjs
       - run: python3 -m py_compile bridges/dsh/dsh-acp.py bridges/minimax/minimax-acp.py bridges/grok/grok-acp.py
       - run: git diff --check
 
