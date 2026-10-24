@@ -570,7 +570,10 @@ public struct SessionThreadView: View {
             return
         }
         guard let attachment = ChatAttachment.from(data: data, name: "attachment") else {
-            model.sendError = "That image type is not supported.  Use PNG, JPEG, GIF, or WebP."
+            model.sendError = Copy.gap(
+                "That image type is not supported.",
+                "Use PNG, JPEG, GIF, or WebP."
+            )
             return
         }
         model.attachments.append(attachment)
