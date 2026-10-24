@@ -58,6 +58,7 @@ public struct SessionsView: View {
     @State private var selectedId: String?
     @State private var isStartingThread = false
     @State private var searchText = ""
+    @State private var pinnedIds: Set<String> = []
 
     public init(host: ClutchHost) {
         self.host = host
@@ -70,7 +71,10 @@ public struct SessionsView: View {
         } detail: {
             detail
         }
-        .task { await model.load() }
+        .task {
+            pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+            await model.load()
+        }
     }
 
     // MARK: - Sidebar
@@ -143,7 +147,7 @@ public struct SessionsView: View {
 
     private var threadList: some View {
         List(selection: $selectedId) {
-            ForEach(AcpSessionInfo.grouped(visibleSessions)) { group in
+            ForEach(AcpSessionInfo.grouped(visibleSessions, pinned: pinnedIds)) { group in
                 Section(group.title) {
                     ForEach(group.sessions) { session in
                         ThreadSidebarRow(
@@ -154,6 +158,17 @@ public struct SessionsView: View {
                             onSelect: { selectedId = $0.sessionId }
                         )
                         .tag(session.sessionId)
+                        .contextMenu {
+                            Button {
+                                ThreadPinStore.toggle(session.sessionId, forHost: host.id)
+                                pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+                            } label: {
+                                Label(
+                                    pinnedIds.contains(session.sessionId) ? "Unpin Thread" : "Pin Thread",
+                                    systemImage: pinnedIds.contains(session.sessionId) ? "pin.slash" : "pin"
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -326,7 +341,7 @@ final class NewThreadModel {
                     case .message(let chunk):
                         text += chunk
                         reply = text
-                    case .thought:
+                    case .thought, .tool:
                         break
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }

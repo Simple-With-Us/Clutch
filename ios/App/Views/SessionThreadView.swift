@@ -5,11 +5,14 @@ struct ThreadBubbleItem: Identifiable, Equatable {
     enum Role: Equatable {
         case user
         case assistant
+        case tool
     }
 
     var id: String
     var role: Role
     var text: String
+    /// Tool status (`running` / `completed` / `failed`) for `.tool` bubbles.
+    var toolStatus: String?
 }
 
 @MainActor
@@ -72,11 +75,20 @@ final class SessionThreadModel {
             // for; a reload without it fails every thread outside $HOME.
             cwd = loaded.cwd
             remoteSessionId = loaded.remoteSessionId
-            bubbles = loaded.history.filter(\.isVisible).map {
-                ThreadBubbleItem(
-                    id: "\($0.sessionId)-\($0.kind)-\($0.text.hashValue)",
-                    role: $0.isUser ? .user : .assistant,
-                    text: $0.text
+            bubbles = loaded.history.compactMap { entry in
+                if entry.isTool {
+                    return ThreadBubbleItem(
+                        id: "tool-\(entry.toolCallId ?? entry.text)-\(entry.text.hashValue)",
+                        role: .tool,
+                        text: entry.text,
+                        toolStatus: entry.toolStatus ?? "completed"
+                    )
+                }
+                guard entry.isVisible else { return nil }
+                return ThreadBubbleItem(
+                    id: "\(entry.sessionId)-\(entry.kind)-\(entry.text.hashValue)",
+                    role: entry.isUser ? .user : .assistant,
+                    text: entry.text
                 )
             }
             phase = .ready
@@ -117,10 +129,14 @@ final class SessionThreadModel {
                         upsert(replyId, text: reply)
                     case .thought(let text):
                         thoughtLine = text
+                    case .tool(let id, let name, let status):
+                        upsertTool(id: id, name: name, status: status)
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
+                        TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                     case .failed(let message):
                         sendError = message
+                        TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
             } catch {
@@ -147,6 +163,18 @@ final class SessionThreadModel {
         isSending = false
     }
 
+    /// Tool updates rewrite the card minted for that call, so a long-running
+    /// tool shows one card moving running → completed, not a pile of rows.
+    private func upsertTool(id: String, name: String, status: String) {
+        let key = id.isEmpty ? "tool-\(name)" : "tool-\(id)"
+        if let index = bubbles.firstIndex(where: { $0.id == key }) {
+            bubbles[index].toolStatus = status
+            if !name.isEmpty { bubbles[index].text = name }
+        } else {
+            bubbles.append(ThreadBubbleItem(id: key, role: .tool, text: name.isEmpty ? "Tool call" : name, toolStatus: status))
+        }
+    }
+
     /// Streaming rewrites the tail bubble on every event, so match on the id
     /// we minted for this turn instead of appending a new one each chunk.
     private func upsert(_ id: String, text: String) {
@@ -166,6 +194,10 @@ final class SessionThreadModel {
 public struct SessionThreadView: View {
     let session: AcpSessionInfo
     @State private var model: SessionThreadModel
+    @State private var showFind = false
+    @State private var findText = ""
+    @StateObject private var dictation = DictationController()
+    @State private var draftBase = ""
 
     public init(host: ClutchHost, session: AcpSessionInfo) {
         self.session = session
@@ -174,6 +206,10 @@ public struct SessionThreadView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            if showFind {
+                findBar
+                Divider()
+            }
             transcript
             Divider()
             composer
@@ -182,7 +218,75 @@ public struct SessionThreadView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showFind.toggle()
+                    if !showFind { findText = "" }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+                .accessibilityLabel(showFind ? "Hide Find" : "Find In Thread")
+                if !model.bubbles.isEmpty {
+                    ShareLink(item: exportMarkdown) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share Transcript")
+                }
+            }
+        }
         .task { await model.load() }
+        .onChange(of: dictation.transcript) { _, text in
+            guard dictation.isRecording || !text.isEmpty else { return }
+            model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
+        }
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Find In Thread", text: $findText)
+                .textFieldStyle(.plain)
+            Text(matchLabel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button {
+                showFind = false
+                findText = ""
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close Find")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.clutchSecondaryBackground.opacity(0.6))
+    }
+
+    private var matchingIDs: Set<String> {
+        let needle = findText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return [] }
+        return Set(model.bubbles.filter { $0.text.lowercased().contains(needle) }.map(\.id))
+    }
+
+    private var matchLabel: String {
+        let needle = findText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if needle.isEmpty { return "" }
+        let count = matchingIDs.count
+        return count == 1 ? "1 match" : "\(count) matches"
+    }
+
+    private var exportMarkdown: String {
+        let entries = model.bubbles.map { bubble in
+            TranscriptExport.Entry(
+                role: bubble.role == .user ? .user : bubble.role == .tool ? .tool : .assistant,
+                text: bubble.text
+            )
+        }
+        return TranscriptExport.markdown(title: session.displayTitle, cwd: session.cwd, entries: entries)
     }
 
     @ViewBuilder
@@ -204,7 +308,7 @@ public struct SessionThreadView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(model.bubbles) { bubble in
-                            ThreadBubbleRow(bubble: bubble)
+                            ThreadBubbleRow(bubble: bubble, isMatch: matchingIDs.contains(bubble.id))
                                 .id(bubble.id)
                         }
                         if let thought = model.thoughtLine, !thought.isEmpty {
@@ -241,6 +345,17 @@ public struct SessionThreadView: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Button {
+                if !dictation.isRecording { draftBase = model.draft }
+                dictation.toggle()
+            } label: {
+                Image(systemName: dictation.isRecording ? "mic.fill" : "mic")
+                    .font(.title3)
+                    .foregroundStyle(dictation.isRecording ? Color.red : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isSending)
+            .accessibilityLabel(dictation.isRecording ? "Stop Dictation" : "Dictate")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -276,17 +391,30 @@ public struct SessionThreadView: View {
 
 struct ThreadBubbleRow: View {
     let bubble: ThreadBubbleItem
+    var isMatch: Bool = false
 
     var body: some View {
-        HStack {
-            if bubble.role == .user { Spacer(minLength: 40) }
-            Text(bubble.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 8)
-                .background(bubble.role == .user ? Color.accentColor.opacity(0.18) : Color.clutchSecondaryBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            if bubble.role == .assistant { Spacer(minLength: 40) }
+        if bubble.role == .tool {
+            ThreadToolCard(name: bubble.text, status: bubble.toolStatus ?? "completed")
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+                )
+        } else {
+            HStack {
+                if bubble.role == .user { Spacer(minLength: 40) }
+                Text(bubble.text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 8)
+                    .background(bubble.role == .user ? Color.accentColor.opacity(0.18) : Color.clutchSecondaryBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+                    )
+                if bubble.role == .assistant { Spacer(minLength: 40) }
+            }
         }
     }
 }

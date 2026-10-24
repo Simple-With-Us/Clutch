@@ -66,6 +66,17 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// Date groups with a Pinned group floated above them.  Pins are a
+    /// local, per-host reading aid (see `ThreadPinStore`); a pinned thread
+    /// appears once, in Pinned, not again in its date bucket.
+    public static func grouped(_ sessions: [AcpSessionInfo], pinned: Set<String>, now: Date = Date(), calendar: Calendar = .current) -> [Group] {
+        guard !pinned.isEmpty else { return grouped(sessions, now: now, calendar: calendar) }
+        let pinnedRows = newestFirst(sessions.filter { pinned.contains($0.sessionId) })
+        let rest = sessions.filter { !pinned.contains($0.sessionId) }
+        guard !pinnedRows.isEmpty else { return grouped(sessions, now: now, calendar: calendar) }
+        return [Group(title: "Pinned", sessions: pinnedRows)] + grouped(rest, now: now, calendar: calendar)
+    }
+
     /// Newest-first sessions bucketed as Today / Yesterday / Previous 7 Days
     /// / Older / Undated, empty buckets dropped.  Undated threads go last:
     /// they still work, they just cannot claim a place in the timeline.
@@ -96,12 +107,19 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     public var sessionId: String
     public var kind: String
     public var text: String
+    /// Present on tool-call entries (`tool_call`, `tool_call_update`).
+    public var toolCallId: String?
+    public var toolStatus: String?
 
-    public init(sessionId: String, kind: String, text: String) {
+    public init(sessionId: String, kind: String, text: String, toolCallId: String? = nil, toolStatus: String? = nil) {
         self.sessionId = sessionId
         self.kind = kind
         self.text = text
+        self.toolCallId = toolCallId
+        self.toolStatus = toolStatus
     }
+
+    public var isTool: Bool { kind == "tool_call" || kind == "tool_call_update" }
 
     /// Sidecar kinds that are user- or assistant-visible; tool chatter and
     /// progress notices are dropped so the transcript stays readable.  The

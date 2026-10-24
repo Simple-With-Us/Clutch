@@ -29,6 +29,10 @@ struct ThreadSidebar: View {
     var onSelect: (AcpSessionInfo) -> Void
     var onNew: () -> Void
     var onRefresh: () -> Void
+    /// Locally pinned thread ids (see `ThreadPinStore`); rendered as their
+    /// own group above the date buckets when non-empty.
+    var pinnedIds: Set<String> = []
+    var onTogglePin: ((AcpSessionInfo) -> Void)?
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
     var fixedWidth: CGFloat? = 248
@@ -232,7 +236,9 @@ struct ThreadSidebar: View {
             isSelected: session.sessionId == selectedId,
             isLoading: loadingId == session.sessionId,
             isDisabled: loadingId != nil && loadingId != session.sessionId,
-            onSelect: onSelect
+            onSelect: onSelect,
+            isPinned: pinnedIds.contains(session.sessionId),
+            onTogglePin: onTogglePin
         )
     }
 
@@ -244,7 +250,7 @@ struct ThreadSidebar: View {
     }
 
     private var visibleGroups: [AcpSessionInfo.Group] {
-        AcpSessionInfo.grouped(AcpSessionInfo.filtered(ordered, query: query))
+        AcpSessionInfo.grouped(AcpSessionInfo.filtered(ordered, query: query), pinned: pinnedIds)
     }
 }
 
@@ -259,6 +265,8 @@ struct ThreadSidebarRow: View {
     var isLoading: Bool
     var isDisabled: Bool
     var onSelect: (AcpSessionInfo) -> Void
+    var isPinned: Bool = false
+    var onTogglePin: ((AcpSessionInfo) -> Void)?
 
     var body: some View {
         Button {
@@ -266,9 +274,16 @@ struct ThreadSidebarRow: View {
         } label: {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.displayTitle)
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        if isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(session.displayTitle)
+                            .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                            .lineLimit(1)
+                    }
                     HStack(spacing: 4) {
                         if let cwd = session.cwd, !cwd.isEmpty {
                             Image(systemName: "folder")
@@ -316,6 +331,9 @@ struct ThreadSidebarRow: View {
         .help(session.cwd ?? session.sessionId)
         .contextMenu {
             Button("Open Thread") { onSelect(session) }
+            if let onTogglePin {
+                Button(isPinned ? "Unpin Thread" : "Pin Thread") { onTogglePin(session) }
+            }
             Divider()
             Button("Copy Session ID") { copy(session.sessionId) }
             if let cwd = session.cwd, !cwd.isEmpty {

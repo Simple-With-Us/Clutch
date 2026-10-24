@@ -77,6 +77,41 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(AcpSessionInfo.filtered([a, b], query: "nope").isEmpty)
     }
 
+    func testToolHistoryEntriesAreMarkedForCards() {
+        let entry = AcpHistoryEntry(sessionId: "s", kind: "tool_call", text: "Read file", toolCallId: "t1", toolStatus: "completed")
+        XCTAssertTrue(entry.isTool)
+        XCTAssertFalse(entry.isVisible)
+        let plain = AcpHistoryEntry(sessionId: "s", kind: "agent_message_chunk", text: "hi")
+        XCTAssertFalse(plain.isTool)
+        XCTAssertNil(plain.toolCallId)
+    }
+
+    func testGroupedFloatsPinnedAboveDateBuckets() {
+        let pinned = AcpSessionInfo(sessionId: "old-but-pinned", updatedAt: "2026-09-01T12:00:00Z")
+        let today = AcpSessionInfo(sessionId: "today", updatedAt: "2026-10-16T08:00:00Z")
+        let now = AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z")!
+        let groups = AcpSessionInfo.grouped([pinned, today], pinned: ["old-but-pinned"], now: now)
+        XCTAssertEqual(groups.map(\.title), ["Pinned", "Today"])
+        XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["old-but-pinned"])
+    }
+
+    func testTranscriptExportRendersRolesAndTools() {
+        let markdown = TranscriptExport.markdown(
+            title: "Fix Login",
+            cwd: "/srv/app",
+            entries: [
+                TranscriptExport.Entry(role: .user, text: "Fix it"),
+                TranscriptExport.Entry(role: .tool, text: "Read file"),
+                TranscriptExport.Entry(role: .assistant, text: "Done"),
+            ],
+            exportedAt: Date(timeIntervalSince1970: 0)
+        )
+        XCTAssertTrue(markdown.contains("# Fix Login"))
+        XCTAssertTrue(markdown.contains("## You"))
+        XCTAssertTrue(markdown.contains("**Tool:** Read file"))
+        XCTAssertTrue(markdown.contains("## Assistant"))
+    }
+
     func testGroupedBucketsByRecencyAndSinksUndated() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
@@ -94,6 +129,20 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertEqual(groups.map(\.title), ["Today", "Yesterday", "Previous 7 Days", "Older", "Undated"])
         XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["today"])
         XCTAssertEqual(groups.last?.sessions.map(\.sessionId), ["undated"])
+    }
+
+    func testPinStoreTogglesPerHost() {
+        let name = "PinStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        let hostA = UUID()
+        let hostB = UUID()
+        XCTAssertFalse(ThreadPinStore.isPinned("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertTrue(ThreadPinStore.toggle("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertTrue(ThreadPinStore.isPinned("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertFalse(ThreadPinStore.isPinned("s-1", forHost: hostB, defaults: defaults))
+        XCTAssertFalse(ThreadPinStore.toggle("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertTrue(ThreadPinStore.pinnedIDs(forHost: hostA, defaults: defaults).isEmpty)
     }
 
     /// The Mac rail and the iOS sidebar share this ordering, so a thread must

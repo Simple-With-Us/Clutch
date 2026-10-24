@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
 /// Stable device UID for this Mac's 1:1 agent thread (the relay receiver).
 /// iOS uses the vendor id; macOS has none, so one is minted once and kept.
@@ -94,6 +95,8 @@ public struct ChatView: View {
         var fromAgent: Bool
         var isCard: Bool
         var isThought: Bool = false
+        /// Non-nil for tool-call rows: `running` / `completed` / `failed`.
+        var toolStatus: String? = nil
     }
 
     @State private var phase: Phase = .loading
@@ -124,6 +127,21 @@ public struct ChatView: View {
     @State private var sendTask: Task<Void, Never>?
     @State private var showingCwdEditor = false
     @State private var cwdDraft: String = ""
+    @State private var pinnedIds: Set<String> = []
+    /// Tool calls from the in-flight turn; folded into the transcript on done.
+    @State private var liveTools: [LiveTool] = []
+    @State private var showFind = false
+    @State private var findText = ""
+    @State private var findFocusId: String?
+    @State private var findNonce = 0
+    @StateObject private var dictation = DictationController()
+    @State private var draftBase = ""
+
+    struct LiveTool: Identifiable, Equatable {
+        var id: String
+        var name: String
+        var status: String
+    }
 
     let activeHost: ClutchHost?
 
@@ -141,7 +159,10 @@ public struct ChatView: View {
         let bubbleRows = agentBubbles.map {
             Row(id: $0.id, text: $0.text, date: $0.date, fromAgent: $0.senderUid != deviceUid, isCard: $0.kind == "card")
         }
-        return (promptRows + bubbleRows).sorted { $0.date < $1.date }
+        let toolRows = liveTools.map {
+            Row(id: "live-\($0.id)", text: $0.name, date: Date(), fromAgent: true, isCard: false, toolStatus: $0.status)
+        }
+        return (promptRows + bubbleRows).sorted { $0.date < $1.date } + toolRows
     }
 
     /// MiniMax Code rows keep server order (replayed history is already
@@ -154,11 +175,15 @@ public struct ChatView: View {
                 date: Date(),
                 fromAgent: entry.kind != "user_message_chunk",
                 isCard: false,
-                isThought: entry.kind == "agent_thought_chunk"
+                isThought: entry.kind == "agent_thought_chunk",
+                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil
             )
         }
         out += mcodePending.map {
             Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
+        }
+        out += liveTools.map {
+            Row(id: "live-\($0.id)", text: $0.name, date: Date(), fromAgent: true, isCard: false, toolStatus: $0.status)
         }
         return out
     }
@@ -175,7 +200,13 @@ public struct ChatView: View {
                         errorText: sidebarError,
                         onSelect: { session in openSession(session, fromSidebar: true) },
                         onNew: { startMcodeThread() },
-                        onRefresh: { Task { await loadSidebarSessions() } }
+                        onRefresh: { Task { await loadSidebarSessions() } },
+                        pinnedIds: pinnedIds,
+                        onTogglePin: { session in
+                            guard let host = activeHost else { return }
+                            ThreadPinStore.toggle(session.sessionId, forHost: host.id)
+                            pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+                        }
                     )
                     Divider()
                 }
@@ -183,8 +214,25 @@ public struct ChatView: View {
             }
             .navigationTitle("Chat")
             .toolbar {
-                if engine == .mcode {
-                    ToolbarItem(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        showFind.toggle()
+                        if !showFind { findText = ""; findFocusId = nil }
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .accessibilityLabel(showFind ? "Hide Find" : "Find In Thread")
+                    .help("Find In Thread (⌘F)")
+                    .keyboardShortcut("f", modifiers: .command)
+                    Menu {
+                        Button("Copy Transcript") { copyTranscript() }
+                        Button("Save Transcript…") { saveTranscript() }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Export Transcript")
+                    .help("Export Transcript")
+                    if engine == .mcode {
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) { showingSidebar.toggle() }
                         } label: {
@@ -217,6 +265,9 @@ public struct ChatView: View {
             if engine == .mcode {
                 cwdBar
             }
+            if showFind {
+                findBar
+            }
             Divider()
             threadSurface
             if sending, !streamingText.isEmpty {
@@ -236,9 +287,82 @@ public struct ChatView: View {
                 draft: $draft,
                 sending: sending,
                 onSend: { send(draft) },
-                onStop: { stop() }
+                onStop: { stop() },
+                isDictating: dictation.isRecording,
+                onMic: {
+                    if !dictation.isRecording { draftBase = draft }
+                    dictation.toggle()
+                }
             )
         }
+        .onChange(of: dictation.transcript) { _, text in
+            guard dictation.isRecording || !text.isEmpty else { return }
+            draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
+        }
+    }
+
+    // MARK: - Find In Thread
+
+    private var findMatches: [Row] {
+        let needle = findText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return [] }
+        return rows.filter { $0.text.lowercased().contains(needle) }
+    }
+
+    private var findBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Find In Thread", text: $findText)
+                .textFieldStyle(.plain)
+                .onSubmit { stepFind(forward: true) }
+            Text(findText.isEmpty ? "" : "\(findMatches.count) match\(findMatches.count == 1 ? "" : "es")")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Button {
+                stepFind(forward: false)
+            } label: {
+                Image(systemName: "chevron.up")
+            }
+            .buttonStyle(.plain)
+            .disabled(findMatches.isEmpty)
+            .accessibilityLabel("Previous Match")
+            Button {
+                stepFind(forward: true)
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .buttonStyle(.plain)
+            .disabled(findMatches.isEmpty)
+            .accessibilityLabel("Next Match")
+            Button {
+                showFind = false
+                findText = ""
+                findFocusId = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close Find")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.clutchSecondaryBackground.opacity(0.6))
+    }
+
+    private func stepFind(forward: Bool) {
+        let matches = findMatches
+        guard !matches.isEmpty else { return }
+        let current = matches.firstIndex(where: { $0.id == findFocusId })
+        let next: Int
+        if let current {
+            next = (current + (forward ? 1 : -1) + matches.count) % matches.count
+        } else {
+            next = forward ? 0 : matches.count - 1
+        }
+        findFocusId = matches[next].id
+        findNonce += 1
     }
 
     // MARK: - Working Directory
@@ -514,7 +638,7 @@ public struct ChatView: View {
                         ScrollView {
                             LazyVStack(spacing: 10) {
                                 ForEach(rows) { row in
-                                    MacChatRow(row: row)
+                                    MacChatRow(row: row, isMatch: showFind && !findText.isEmpty && row.text.lowercased().contains(findText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()))
                                         .id(row.id)
                                 }
                             }
@@ -523,6 +647,9 @@ public struct ChatView: View {
                         }
                         .onChange(of: rows.count) {
                             if let last = rows.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                        .onChange(of: findNonce) {
+                            if let focus = findFocusId { proxy.scrollTo(focus, anchor: .center) }
                         }
                         .onAppear {
                             if let last = rows.last { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -675,6 +802,7 @@ public struct ChatView: View {
 
     private func prepare() async {
         guard let host = activeHost else { return }
+        pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
         await checkSidecar()
         if engine != .mcode, MacEngineStore.load() == .mcode {
             engine = .mcode
@@ -767,6 +895,7 @@ public struct ChatView: View {
         sendError = nil
         sending = true
         streamingText = ""
+        liveTools = []
         if engine == .mcode {
             mcodePending.append(LocalPrompt(text: prompt, at: Date()))
         } else {
@@ -796,6 +925,14 @@ public struct ChatView: View {
                         streamingText += chunk
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
+                    case .tool(let id, let name, let status):
+                        let key = id.isEmpty ? name : id
+                        if let index = liveTools.firstIndex(where: { $0.id == key }) {
+                            liveTools[index].status = status
+                            if !name.isEmpty { liveTools[index].name = name }
+                        } else {
+                            liveTools.append(LiveTool(id: key, name: name.isEmpty ? "Tool call" : name, status: status))
+                        }
                     case .done(let stop, let id, let remoteId):
                         if engine == .mcode {
                             mcodeChatId = id
@@ -806,9 +943,14 @@ public struct ChatView: View {
                             if !streamingText.isEmpty {
                                 mcodeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: streamingText))
                             }
+                            for tool in liveTools {
+                                mcodeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
+                            }
                         } else {
                             sessionId = id
                         }
+                        liveTools = []
+                        TurnNotifier.turnFinished(threadTitle: engine == .mcode ? (sidebarSessions.first(where: { $0.sessionId == mcodeRemoteId })?.displayTitle ?? "MiniMax Code") : selectedModel)
                         sending = false
                         streamingText = ""
                         thoughtLine = nil
@@ -822,6 +964,8 @@ public struct ChatView: View {
                         streamingText = ""
                         thoughtLine = nil
                         sendError = message
+                        liveTools = []
+                        TurnNotifier.turnFinished(threadTitle: engine == .mcode ? "MiniMax Code" : selectedModel, failed: true)
                     }
                 }
                 sending = false
@@ -831,6 +975,34 @@ public struct ChatView: View {
                 thoughtLine = nil
                 sendError = error.localizedDescription
             }
+        }
+    }
+
+    private var transcriptMarkdown: String {
+        let entries = rows.map { row in
+            TranscriptExport.Entry(
+                role: row.toolStatus != nil ? .tool : row.isThought ? .thought : row.fromAgent ? .assistant : .user,
+                text: row.text
+            )
+        }
+        let title = engine == .mcode
+            ? (sidebarSessions.first(where: { $0.sessionId == mcodeRemoteId })?.displayTitle ?? "MiniMax Code Thread")
+            : "\(selectedModel) Thread"
+        return TranscriptExport.markdown(title: title, cwd: engine == .mcode ? displayCwd : nil, entries: entries)
+    }
+
+    private func copyTranscript() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transcriptMarkdown, forType: .string)
+    }
+
+    private func saveTranscript() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "minimax-code-thread.md"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            try? transcriptMarkdown.write(to: url, atomically: true, encoding: .utf8)
         }
     }
 
@@ -984,13 +1156,20 @@ struct MacSessionsSheet: View {
 /// Thread bubble and user prompt rows.
 struct MacChatRow: View {
     var row: ChatView.Row
+    var isMatch: Bool = false
 
     @State private var expanded = false
     @State private var hovering = false
     @State private var copied = false
 
     var body: some View {
-        if row.isThought {
+        if let toolStatus = row.toolStatus {
+            ThreadToolCard(name: row.text, status: toolStatus)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+                )
+        } else if row.isThought {
             HStack(alignment: .top, spacing: 6) {
                 Button {
                     expanded.toggle()
@@ -1025,6 +1204,10 @@ struct MacChatRow: View {
                                 ? Color.clutchSecondaryBackground
                                 : Color.accentColor.opacity(0.15),
                             in: RoundedRectangle(cornerRadius: 12)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
                         )
                     HStack(spacing: 6) {
                         Text(row.date, style: .time)
@@ -1073,10 +1256,21 @@ struct MacChatInputBar: View {
     var sending: Bool
     var onSend: () -> Void
     var onStop: () -> Void
+    var isDictating: Bool = false
+    var onMic: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 4) {
             HStack(alignment: .bottom, spacing: 8) {
+                Button(action: onMic) {
+                    Image(systemName: isDictating ? "mic.fill" : "mic")
+                        .font(.system(size: 15))
+                        .foregroundStyle(isDictating ? Color.red : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(sending)
+                .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
+                .help(isDictating ? "Stop Dictation" : "Dictate A Message")
                 TextField("Message The Agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...8)
