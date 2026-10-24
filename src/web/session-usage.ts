@@ -81,31 +81,40 @@ function parseJson(line: string): Record<string, unknown> | null {
   }
 }
 
+/** An optional fact the engine may omit, write as `null`, or fill with a
+ *  non-number.  Only a real (finite) value is read;  anything else counts as
+ *  "not reported" for that one field instead of discarding the whole record,
+ *  so a `cacheReadTokens: null` cannot hide the total next to it. */
+const reportedNumber = z.number().optional().catch(undefined);
+const reportedString = z.string().optional().catch(undefined);
+
 /** Shape of one session-log record we trust enough to read.  Parsing with
  *  zod instead of casting means a malformed line is skipped, never trusted. */
 const RequestContextRecordSchema = z.object({
   type: z.literal("request/context"),
-  time: z.number().optional(),
+  time: reportedNumber,
   data: z
     .object({
-      provider: z.string().optional(),
-      model: z.string().optional(),
-      contextWindow: z.number().optional(),
+      provider: reportedString,
+      model: reportedString,
+      contextWindow: reportedNumber,
     })
     .optional(),
 });
 
 const AssistantMessageRecordSchema = z.object({
   type: z.literal("assistant/message"),
-  time: z.number().optional(),
+  time: reportedNumber,
   data: z
     .object({
       usage: z
         .object({
-          inputTokens: z.number().optional(),
-          outputTokens: z.number().optional(),
+          inputTokens: reportedNumber,
+          outputTokens: reportedNumber,
+          // The total is the measurement itself:  a record without a real
+          // one is skipped, and the scan moves on to an older record.
           totalTokens: z.number(),
-          cacheReadTokens: z.number().optional(),
+          cacheReadTokens: reportedNumber,
         })
         .optional(),
     })

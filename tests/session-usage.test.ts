@@ -96,6 +96,27 @@ describe("extractUsageFromLogText", () => {
     ].join("\n");
     expect(extractUsageFromLogText(text)?.totalTokens).toBe(7);
   });
+
+  it("keeps a record whose optional fields are null or not numbers", () => {
+    const text = [
+      line({ type: "request/context", seq: 1, time: null, data: { provider: null, model: "MiniMax-M3", contextWindow: 1000 } }),
+      line({
+        type: "assistant/message",
+        seq: 2,
+        time: 2000,
+        data: { usage: { inputTokens: 3, outputTokens: "4", totalTokens: 7, cacheReadTokens: null } },
+      }),
+    ].join("\n");
+    const usage = extractUsageFromLogText(text);
+    expect(usage?.totalTokens).toBe(7);
+    expect(usage?.inputTokens).toBe(3);
+    expect(usage?.outputTokens).toBe(0);
+    expect(usage?.cacheReadTokens).toBeUndefined();
+    expect(usage?.updatedAtMs).toBe(2000);
+    expect(usage?.model).toBe("MiniMax-M3");
+    expect(usage?.provider).toBeUndefined();
+    expect(usage?.contextWindow).toBe(1000);
+  });
 });
 
 describe("outputTokensPerSecond", () => {
