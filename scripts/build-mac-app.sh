@@ -30,6 +30,9 @@
 #                                    DerivedData before giving up (default 3600)
 #   CLUTCH_MAC_BUILD_NUMBER          CFBundleVersion; default is the commit count
 #   CLUTCH_MAC_MARKETING_VERSION     CFBundleShortVersionString; default 1.0.<count>
+#                                    (this bundle is not on App Store Connect, so
+#                                    it does not follow the TestFlight ship
+#                                    version scheme)
 #
 # Never prints secret values.
 set -euo pipefail
@@ -98,11 +101,16 @@ mkdir -p "$DD"
 # the build and the swap into $APP and is released on every exit path.
 clutch_build_lock_acquire "$DD/.build.lock" "${CLUTCH_MAC_BUILD_LOCK_WAIT:-3600}"
 
-# Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise follow the
-# iOS ship scheme (scripts/ios-fleet/ship-testflight.sh): CFBundleVersion is the
-# commit count and CFBundleShortVersionString is 1.0.<commit count>, so a Mac
-# bundle says which commit it came from instead of the target's checked-in
-# record forever.  A shallow clone under-counts and would stamp a LOWER number
+# Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise the
+# bundle is stamped from the commit count:  CFBundleVersion is the commit count
+# and CFBundleShortVersionString is 1.0.<commit count>, so a Mac bundle says
+# which commit it came from instead of the target's checked-in record forever.
+# This is the DOCK APP's own stamping, not the App Store Connect scheme:  the
+# TestFlight ship (scripts/ios-fleet/ship-testflight.sh) numbers the marketing
+# version as the next patch on the app's train and keeps the build number
+# independent of it (AFC-517), but this bundle is released as a GitHub zip and
+# is never uploaded to App Store Connect, so it has no train to advance.
+# A shallow clone under-counts and would stamp a LOWER number
 # than an earlier full build, so there the target's own values stay; the release
 # workflow checks out with fetch-depth 0 for this reason.
 COMMIT_COUNT=""

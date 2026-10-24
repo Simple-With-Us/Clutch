@@ -17,6 +17,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: bash scripts/ios-fleet/test-scheduled-ship-gate.sh
+      # The version-numbering rules (AFC-517):  the marketing version is the
+      # next patch on the app's train and the build number is independent of
+      # it.  The offline test script answers the App Store Connect queries
+      # from a stub node, so it never touches the network.
+      - run: bash scripts/ios-fleet/test-ship-seq.sh
       # The App Store Connect credential rules (AFC-459):  the key comes from
       # the environment or from Infisical, and a named ASC_KEY_PATH is ignored.
       - run: node --test scripts/ios-fleet/*.test.mjs
