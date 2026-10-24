@@ -566,7 +566,7 @@ public struct ChatView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.png, .jpeg, .gif, .webp]
+        panel.allowedContentTypes = [.png, .jpeg, .gif, UTType(filenameExtension: "webp") ?? .image]
         panel.prompt = "Attach"
         guard panel.runModal() == .OK else { return }
         for url in panel.urls {
