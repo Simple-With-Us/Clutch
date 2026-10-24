@@ -70,7 +70,10 @@ struct InfisicalSettingsSection: View {
     }
 
     private var hostUnavailableText: String {
-        "Pair a Mac to manage Infisical settings.  This section reads and writes that Mac's Infisical identity and managed settings."
+        Copy.gap(
+            "Pair a Mac to manage Infisical settings.",
+            "This section reads and writes that Mac's Infisical identity and managed settings."
+        )
     }
 
     // MARK: - Source
@@ -96,7 +99,10 @@ struct InfisicalSettingsSection: View {
 
             if snapshot.identity.fromEnv {
                 Label {
-                    Text("The machine identity is coming from the Mac's environment.  Saving a change here writes the identity file, which the environment still overrides.")
+                    Text(Copy.gap(
+                        "The machine identity is coming from the Mac's environment.",
+                        "Saving a change here writes the identity file, which the environment still overrides."
+                    ))
                         .font(.footnote)
                 } icon: {
                     Image(systemName: "info.circle")
@@ -172,7 +178,7 @@ struct InfisicalSettingsSection: View {
 
     private func clientSecretHelpText(_ model: InfisicalSettingsModel) -> String {
         model.hasStoredClientSecret
-            ? "A client secret is saved on the Mac.  Leave this empty to keep it."
+            ? Copy.gap("A client secret is saved on the Mac.", "Leave this empty to keep it.")
             : "No client secret is saved on the Mac yet."
     }
 
@@ -261,9 +267,15 @@ struct InfisicalSettingsSection: View {
             return "Saving writes this value to Infisical and updates the Mac's settings cache."
         }
         if entry.isSet {
-            return "A value is saved on the Mac.  Clutch never shows a stored secret, so enter a new one to replace it."
+            return Copy.gap(
+                "A value is saved on the Mac.",
+                "Clutch never shows a stored secret, so enter a new one to replace it."
+            )
         }
-        return "No value is set on this Mac.  Leave it empty to keep it that way — saving an empty secret would clear it."
+        return Copy.gap(
+            "No value is set on this Mac.",
+            "Leave it empty to keep it that way — saving an empty secret would clear it."
+        )
     }
 
     // MARK: - Shared

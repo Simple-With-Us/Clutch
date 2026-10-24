@@ -33,11 +33,11 @@ public final class DictationController: ObservableObject {
         transcript = ""
         Task {
             guard await speechAuthorized() else {
-                errorText = "Speech recognition is not allowed.  Enable it in Settings, then try again."
+                errorText = Copy.gap("Speech recognition is not allowed.", "Enable it in Settings, then try again.")
                 return
             }
             guard await microphoneAuthorized() else {
-                errorText = "Microphone access is not allowed.  Enable it in Settings, then try again."
+                errorText = Copy.gap("Microphone access is not allowed.", "Enable it in Settings, then try again.")
                 return
             }
             do {

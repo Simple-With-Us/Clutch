@@ -404,7 +404,10 @@ public struct ChatView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12, design: .monospaced))
                         .frame(width: 340)
-                    Text("Applies to the next new thread.  An open thread keeps the folder it was created in.")
+                    Text(Copy.gap(
+                        "Applies to the next new thread.",
+                        "An open thread keeps the folder it was created in."
+                    ))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .frame(width: 340, alignment: .leading)
