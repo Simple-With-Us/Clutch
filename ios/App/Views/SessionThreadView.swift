@@ -117,6 +117,8 @@ final class SessionThreadModel {
                         thoughtLine = text
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
+                    case .usage:
+                        break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
                     }

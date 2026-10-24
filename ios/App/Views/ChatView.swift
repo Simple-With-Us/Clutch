@@ -195,6 +195,8 @@ public struct ChatView: View {
                         if stop != "endTurn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         }
+                    case .usage:
+                        break // live usage strip is Mac-only
                     case .failed(let message):
                         sending = false
                         thoughtLine = nil
