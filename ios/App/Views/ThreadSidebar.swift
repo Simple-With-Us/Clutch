@@ -58,6 +58,10 @@ struct ThreadSidebar: View {
     /// it unreachable: every list call excluded archived rows, so the restore
     /// action could never be reached.
     var onToggleArchived: (() -> Void)? = nil
+    /// Locally pinned thread ids (see `ThreadPinStore`); rendered as their
+    /// own group above the date buckets when non-empty.
+    var pinnedIds: Set<String> = []
+    var onTogglePin: ((AcpSessionInfo) -> Void)?
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
     var fixedWidth: CGFloat? = 248
@@ -362,6 +366,8 @@ struct ThreadSidebar: View {
             projects: projects,
             showsTooltip: false,
             onSelect: onSelect,
+            isPinned: pinnedIds.contains(session.sessionId),
+            onTogglePin: onTogglePin,
             onAction: onAction
         )
         #if os(macOS)
@@ -385,7 +391,7 @@ struct ThreadSidebar: View {
     /// blank query matches everything, so clearing the field always restores
     /// the full list.
     private var visibleGroups: [AcpSessionInfo.Group] {
-        AcpSessionInfo.grouped(AcpSessionInfo.filtered(ordered, query: query))
+        AcpSessionInfo.grouped(AcpSessionInfo.filtered(ordered, query: query), pinned: pinnedIds)
     }
 }
 
@@ -404,6 +410,8 @@ struct ThreadSidebarRow: View {
     /// already shows it.
     var showsTooltip: Bool = true
     var onSelect: (AcpSessionInfo) -> Void
+    var isPinned: Bool = false
+    var onTogglePin: ((AcpSessionInfo) -> Void)?
     /// Handles the Project, Archive and Finder items of the context menu.
     /// nil where no surface handles them (the Mac Code tab's thread list), so
     /// those items are left out there instead of shown and silently ignored.
@@ -415,9 +423,16 @@ struct ThreadSidebarRow: View {
         } label: {
             HStack(spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.displayTitle)
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        if isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(session.displayTitle)
+                            .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                            .lineLimit(1)
+                    }
                     HStack(spacing: 4) {
                         if let cwd = session.cwd, !cwd.isEmpty {
                             Image(systemName: "folder")
@@ -483,6 +498,10 @@ struct ThreadSidebarRow: View {
     @ViewBuilder
     private var menu: some View {
         Button("Open Thread") { onSelect(session) }
+
+        if let onTogglePin {
+            Button(isPinned ? "Unpin Thread" : "Pin Thread") { onTogglePin(session) }
+        }
 
         Divider()
 

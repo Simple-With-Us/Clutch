@@ -12,8 +12,8 @@
  *   GET  /clutch/v1/sessions?engine=mcode → MiniMax Code's own threads
  *   POST /clutch/v1/sessions/load          → replay one mcode thread
  *
- * SSE events: `message` {text}, `thought` {text}, `done`
- * {stopReason, sessionId}.  Each turn runs a real coding session through
+ * SSE events: `message` {text}, `thought` {text}, `tool`
+ * {id, name, status}, `done` {stopReason, sessionId}.  Each turn runs a real coding session through
  * the existing Python ACP bridges (DeepSeek via `scripts/dsh-acp.sh`,
  * MiniMax via `scripts/minimax-acp.sh`).  The MiniMax Code Remote is a
  * separate direct `mcode acp` client so its existing native threads remain
@@ -256,8 +256,99 @@ function bearerOk(req: IncomingMessage, token: string): boolean {
 
 interface AcpUpdate {
   sessionId: string;
-  kind: "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk";
+  kind: "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" | "tool_call" | "tool_call_update";
   text: string;
+  toolCallId?: string;
+  toolStatus?: "running" | "completed" | "failed";
+}
+
+/** ACP tool-call status as the clients render it. */
+export function toolStatusOf(raw: unknown): "running" | "completed" | "failed" {
+  switch (raw) {
+    case "completed": return "completed";
+    case "failed": return "failed";
+    default: return "running"; // pending, in_progress, missing — still in flight
+  }
+}
+
+function toolContentText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const row = block as { type?: unknown; content?: { type?: unknown; text?: unknown }; path?: unknown };
+    if (row.type === "content" && row.content?.type === "text" && typeof row.content.text === "string") {
+      parts.push(row.content.text);
+    } else if (row.type === "diff" && typeof row.path === "string") {
+      parts.push(`Edited ${row.path}`);
+    }
+  }
+  return parts.join("\n").slice(0, 2000);
+}
+
+/**
+ * One ACP `session/update` as an `AcpUpdate`, or null for updates the
+ * clients do not render (plan entries, mode changes, …).  Tool calls used
+ * to be dropped here, so a remote thread showed prose with the actual work
+ * invisible; they now ride through with their title and status, both live
+ * (SSE `tool` events) and in replayed history.
+ */
+export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
+  if (!params || typeof params !== "object") return null;
+  const row = params as { sessionId?: unknown; update?: Record<string, unknown> };
+  if (typeof row.sessionId !== "string" || !row.update || typeof row.update !== "object") return null;
+  const update = row.update;
+  const kind = update.sessionUpdate;
+  if (kind === "agent_message_chunk" || kind === "agent_thought_chunk" || kind === "user_message_chunk") {
+    const content = update.content as { text?: unknown } | undefined;
+    if (typeof content?.text !== "string") return null;
+    return { sessionId: row.sessionId, kind, text: content.text };
+  }
+  if (kind === "tool_call" || kind === "tool_call_update") {
+    const titled = typeof update.title === "string" && update.title.length > 0 ? update.title : "";
+    // An update often carries no title at all — just a new status.  Empty
+    // text tells the client to keep the name it already shows for this
+    // call instead of replacing it with a generic label.
+    const text = titled || (kind === "tool_call" ? toolContentText(update.content) || (typeof update.kind === "string" ? update.kind : "Tool call") : toolContentText(update.content));
+    return {
+      sessionId: row.sessionId,
+      kind,
+      text: text.slice(0, 500),
+      ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
+      toolStatus: toolStatusOf(update.status),
+    };
+  }
+  return null;
+}
+
+/**
+ * Collapse a replayed history's tool updates into one entry per call: the
+ * first `tool_call` keeps its name, later updates only move its status.
+ * Without this a single file write replays as a stack of identical cards.
+ */
+export function compactToolHistory(history: readonly AcpUpdate[]): AcpUpdate[] {
+  const out: AcpUpdate[] = [];
+  const byId = new Map<string, number>();
+  for (const entry of history) {
+    if (entry.kind === "tool_call" || entry.kind === "tool_call_update") {
+      const id = entry.toolCallId ?? "";
+      const existing = id ? byId.get(id) : undefined;
+      const kept = existing !== undefined ? out[existing] : undefined;
+      if (existing !== undefined && kept) {
+        out[existing] = {
+          ...kept,
+          text: kept.text || entry.text,
+          toolStatus: entry.toolStatus ?? kept.toolStatus ?? "running",
+        };
+        continue;
+      }
+      if (id) byId.set(id, out.length);
+      out.push(entry);
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
 }
 
 interface AcpSessionInfo {
@@ -401,16 +492,8 @@ class Bridge {
         continue;
       }
       if (msg.method === "session/update") {
-        const params = (msg.params ?? {}) as { sessionId?: unknown; update?: { sessionUpdate?: unknown; content?: { text?: unknown } } };
-        const kind = params.update?.sessionUpdate;
-        const text = params.update?.content?.text;
-        if (
-          (kind === "agent_message_chunk" || kind === "agent_thought_chunk" || kind === "user_message_chunk")
-          && typeof text === "string"
-          && typeof params.sessionId === "string"
-        ) {
-          this.onUpdate?.({ sessionId: params.sessionId, kind, text });
-        }
+        const update = normalizeSessionUpdate(msg.params);
+        if (update) this.onUpdate?.(update);
         continue;
       }
       if (typeof msg.id === "number") {
@@ -754,7 +837,7 @@ async function main(): Promise<void> {
         session.busy = false;
         session.stream = null;
         res.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, history: sliceThreadHistory(history, historyLimit) }),
+          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, history: sliceThreadHistory(compactToolHistory(history), historyLimit) }),
         );
       } catch (err) {
         sessions.delete(chatId);
@@ -1005,6 +1088,10 @@ async function main(): Promise<void> {
         }
       }
       active.stream = (u) => {
+        if (u.kind === "tool_call" || u.kind === "tool_call_update") {
+          sseSend(res, "tool", { id: u.toolCallId ?? "", name: u.text, status: u.toolStatus ?? "running" });
+          return;
+        }
         const r = route(u);
         sseSend(res, r.event, { text: r.text });
         if (u.kind !== "user_message_chunk") sink?.onUpdate(u.kind, r.text);

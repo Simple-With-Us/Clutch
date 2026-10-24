@@ -62,3 +62,11 @@ The health answer reports `mcode.available`, which is false when MiniMax Code is
 - **iPhone and iPad:** the Code tab is the MiniMax Code split view (thread sidebar plus transcript), and the Chat tab carries the same surface behind its Agent / MiniMax Code switch.  A server host also lands on the Code tab when selected, because it has no agent relay behind it.
 - **Mac:** the native Chat surface has a DeepSeek / MiniMax / MiniMax Code engine picker.  MiniMax Code mode adds the thread rail (filter, Today / Yesterday / Previous 7 Days / Older groups, thread count, selected folder in the footer), a working-directory bar for the next new thread, sidecar health in the header, and a Stop button while a turn runs.
 - **Browser:** the sidecar also serves the MiniMax Code remote shell at `/minimax-code/` on the sidecar origin, now with a thread filter.  `clutch-pair-ios --shell` mints its link.
+
+On both native apps, threads can be pinned locally (per host, on-device only), tool calls stream as cards with running / completed / failed status and replay as one card per call, transcripts export as Markdown (share sheet on iOS, Copy and Save on Mac), a turn finishing in the background posts a local notification, Find searches the open thread, and the mic dictates into the composer through the system speech recognizer.
+
+## Troubleshooting
+
+- **`mcode` answers "Internal error" on every turn, but listing threads works:** MiniMax Code refuses to use an OAuth credential file that is not private.  Check `~/.minimax/auth/prod/en/mcode-public/auth.json` is mode 600 for the service user; a group-readable 660 passes silently until a token refresh trips the check.  Listing keeps working because it never touches the credential.
+- **Health says `mcode.available: false`:** MiniMax Code is not installed for the service user, or `mcode login` has not been run as that user.
+- **Phones get 401:** the pairing link predates the token, or the sidecar was paired from a different `$CLUTCH_HOME`.  Re-run the `--server` pairing and paste the fresh link.

@@ -17,6 +17,8 @@ public struct ChatView: View {
     }
 
     @State private var surface: Surface = .agent
+    @StateObject private var dictation = DictationController()
+    @State private var draftBase = ""
     @State private var manager = CometChatManager.shared
     @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
     @State private var draft: String = ""
@@ -108,11 +110,11 @@ public struct ChatView: View {
 
                 Divider()
 
-                if isTranscribingVoice {
+                if dictation.isRecording {
                     HStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
-                        Text(voiceStatusMessage ?? "Transcribing voice with Whisper…")
+                        Text("Listening… Tap The Mic Again To Stop.")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                         Spacer()
@@ -192,6 +194,10 @@ public struct ChatView: View {
                 guard let host = activeHost else { return }
                 await manager.prepare(host: host)
             }
+            .onChange(of: dictation.transcript) { _, text in
+                guard dictation.isRecording || !text.isEmpty else { return }
+                draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
+            }
             .onReceive(NotificationCenter.default.publisher(for: .clutchCardAction)) { note in
                 cardAlert = (note.userInfo?["title"] as? String) ?? "Card action"
             }
@@ -224,10 +230,13 @@ public struct ChatView: View {
                         thoughtLine = nil
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
+                    case .tool:
+                        break
                     case .done(let stop, let id, _):
                         sessionId = id
                         sending = false
                         thoughtLine = nil
+                        TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         if stop != "endTurn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         }
@@ -249,17 +258,8 @@ public struct ChatView: View {
     }
 
     private func startVoice() {
-        // Hold-to-record lives on the native bar; transcription reuses the
-        // Whisper path and submits through the same send.
-        isTranscribingVoice = true
-        voiceStatusMessage = "Hold-to-record attaches on the next pass — type for now."
-        Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await MainActor.run {
-                isTranscribingVoice = false
-                voiceStatusMessage = nil
-            }
-        }
+        if !dictation.isRecording { draftBase = draft }
+        dictation.toggle()
     }
 }
 

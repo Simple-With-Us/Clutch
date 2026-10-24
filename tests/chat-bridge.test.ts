@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { loadOrMintToken, mcodeAvailable, parseLimitParam, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated } from "../src/web/chat-bridge.ts";
+import { compactToolHistory, loadOrMintToken, mcodeAvailable, normalizeSessionUpdate, parseLimitParam, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -197,6 +197,51 @@ describe("server bridge install assets", () => {
     expect(source).toContain('"--server"');
     expect(source).toContain("serverPairingLink");
     expect(source).toContain("server-pairing-link.txt");
+  });
+});
+
+describe("normalizeSessionUpdate", () => {
+  it("passes text chunks through unchanged", () => {
+    expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } } }))
+      .toEqual({ sessionId: "s1", kind: "agent_message_chunk", text: "hi" });
+  });
+
+  it("forwards tool calls with title and mapped status instead of dropping them", () => {
+    expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read file", status: "in_progress" } }))
+      .toEqual({ sessionId: "s1", kind: "tool_call", text: "Read file", toolCallId: "t1", toolStatus: "running" });
+    expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", content: [{ type: "content", content: { type: "text", text: "done" } }] } }))
+      .toEqual({ sessionId: "s1", kind: "tool_call_update", text: "done", toolCallId: "t1", toolStatus: "completed" });
+  });
+
+  it("drops updates the clients do not render", () => {
+    expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "plan", entries: [] } })).toBe(null);
+    expect(normalizeSessionUpdate({ update: { sessionUpdate: "agent_message_chunk", content: { text: "x" } } })).toBe(null);
+    expect(normalizeSessionUpdate(null)).toBe(null);
+  });
+
+  it("maps ACP statuses onto the three client states", () => {
+    expect(toolStatusOf("completed")).toBe("completed");
+    expect(toolStatusOf("failed")).toBe("failed");
+    expect(toolStatusOf("pending")).toBe("running");
+    expect(toolStatusOf(undefined)).toBe("running");
+  });
+
+  it("wires the SSE tool event beside message and thought", () => {
+    const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+    expect(source).toContain('sseSend(res, "tool"');
+    expect(source).toContain("normalizeSessionUpdate");
+  });
+
+  it("compacts replayed tool updates into one entry per call", () => {
+    const history = [
+      { sessionId: "s", kind: "agent_message_chunk" as const, text: "working" },
+      { sessionId: "s", kind: "tool_call" as const, text: "write", toolCallId: "t1", toolStatus: "running" as const },
+      { sessionId: "s", kind: "tool_call_update" as const, text: "", toolCallId: "t1", toolStatus: "completed" as const },
+      { sessionId: "s", kind: "agent_message_chunk" as const, text: "done" },
+    ];
+    const compacted = compactToolHistory(history);
+    expect(compacted).toHaveLength(3);
+    expect(compacted[1]).toMatchObject({ text: "write", toolStatus: "completed" });
   });
 });
 
