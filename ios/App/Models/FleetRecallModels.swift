@@ -140,13 +140,16 @@ public enum RecallContributionError: Error, Equatable, Hashable {
     case serverRejected
     case unrecognizedResponse
 
-    /// Sentence case, two spaces between sentences, no server text.
+    /// Sentence case, Copy.sentenceGap (a real U+00A0 plus a space) between sentences, no server text.
     public var message: String {
         switch self {
         case .invalidCategory:
             return "Pick a category from Lesson, Preference, Infrastructure, Decision, or Runbook."
         case .textTooShort:
-            return "Add more detail before submitting.  A lesson needs at least \(RecallContributionDraft.minTextLength) characters."
+            return Copy.gap(
+                "Add more detail before submitting.",
+                "A lesson needs at least \(RecallContributionDraft.minTextLength) characters."
+            )
         case .textTooLong:
             return "Trim the lesson to \(RecallContributionDraft.maxTextLength) characters or fewer."
         case .badEndpoint:
@@ -154,13 +157,19 @@ public enum RecallContributionError: Error, Equatable, Hashable {
         case .malformedRequest:
             return "Clutch couldn't build the request for the fleet recall corpus."
         case .unreachable:
-            return "Couldn't reach the fleet recall corpus.  Check the connection and try again."
+            return Copy.gap(
+                "Couldn't reach the fleet recall corpus.",
+                "Check the connection and try again."
+            )
         case .rejected(let statusCode):
             return "The fleet recall corpus rejected the request (HTTP \(statusCode))."
         case .serverRejected:
             return "The fleet recall corpus refused the contribution."
         case .unrecognizedResponse:
-            return "The fleet recall corpus replied in a form Clutch didn't understand.  Check that the endpoint is reachable and not behind a sign-in wall."
+            return Copy.gap(
+                "The fleet recall corpus replied in a form Clutch didn't understand.",
+                "Check that the endpoint is reachable and not behind a sign-in wall."
+            )
         }
     }
 }
