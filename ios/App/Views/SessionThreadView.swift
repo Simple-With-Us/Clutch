@@ -81,6 +81,14 @@ final class SessionThreadModel {
         catalog?.descriptor(engine)?.effortLevels ?? []
     }
 
+    /// What the model picker shows: the picked model, or the catalog's first
+    /// row.  The first row is only shown — it is not sent with a turn, so an
+    /// untouched thread keeps the model it was created with.
+    var pickerLabel: String {
+        if let modelId { return modelId }
+        return models.first?.displayLabel ?? engineLabel
+    }
+
     /// Load the catalog so the pickers can show what this host really
     /// offers.  A failure is not fatal: the thread still works, the pickers
     /// just stay empty.
@@ -324,7 +332,10 @@ public struct SessionThreadView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "cpu")
                         .font(.system(size: 10))
-                    Text(model.modelId ?? model.engineLabel)
+                    // What the engine will run: the picked model, or the
+                    // catalog's first row, which is only shown — an
+                    // untouched thread keeps the model it was created with.
+                    Text(model.pickerLabel)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Image(systemName: "chevron.down")

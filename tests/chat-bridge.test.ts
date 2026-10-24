@@ -358,6 +358,10 @@ describe("parsePromptImages", () => {
     expect(parsePromptImages(undefined)).toEqual([]);
     expect(parsePromptImages("nope")).toEqual([]);
     expect(parsePromptImages([null, 42])).toEqual([]);
+    // An array element is boundary data too: an array or a nested object
+    // is not an image.
+    expect(parsePromptImages([["image/png", png]])).toEqual([]);
+    expect(parsePromptImages([{ mimeType: "image/png", data: { bytes: png } }])).toEqual([]);
   });
 });
 
