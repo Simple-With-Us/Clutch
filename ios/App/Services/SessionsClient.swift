@@ -62,11 +62,11 @@ public struct SessionsClient {
         }
     }
 
-    public func list(limit: Int = 100) async throws -> [AcpSessionInfo] {
+    public func list(engine: String = "mcode", limit: Int = 100) async throws -> [AcpSessionInfo] {
         var comps = try base()
         comps.path = "/clutch/v1/sessions"
         comps.queryItems = [
-            URLQueryItem(name: "engine", value: "mcode"),
+            URLQueryItem(name: "engine", value: engine),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
         guard let url = comps.url else { throw ChatClientError.badHost }
@@ -84,15 +84,24 @@ public struct SessionsClient {
     /// session workspace").  Always pass the cwd the session was listed with,
     /// or every thread outside `$HOME` fails to resume.
     @discardableResult
-    public func load(sessionId: String, cwd: String? = nil, limit: Int = 200) async throws -> LoadedSession {
+    public func load(
+        sessionId: String,
+        cwd: String? = nil,
+        engine: String = "mcode",
+        model: String? = nil,
+        effort: String? = nil,
+        limit: Int = 200
+    ) async throws -> LoadedSession {
         var comps = try base()
         comps.path = "/clutch/v1/sessions/load"
         guard let url = comps.url else { throw ChatClientError.badHost }
         var req = try authorized(url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["engine": "mcode", "sessionId": sessionId, "limit": limit]
+        var body: [String: Any] = ["engine": engine, "sessionId": sessionId, "limit": limit]
         if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
+        if let model, !model.isEmpty { body["model"] = model }
+        if let effort, !effort.isEmpty { body["effort"] = effort }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {

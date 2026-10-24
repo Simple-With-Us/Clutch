@@ -18,22 +18,35 @@ public struct ChatSessionClient {
     public var model: String
     public var sessionId: String?
     public var relayReceiverUid: String
-    /// Engine override (`mcode` for MiniMax Code remote). Nil routes by
-    /// model on the sidecar, preserving the DeepSeek/MiniMax behavior.
+    /// Engine override (`mcode` for MiniMax Code remote, `muse` for Muse
+    /// Code). Nil routes by model on the sidecar, preserving the
+    /// DeepSeek/MiniMax behavior.
     public var engine: String?
     /// Working directory for a turn that creates a session.  The sidecar
     /// defaults a missing cwd to `$HOME`, and MiniMax Code then refuses to
     /// resume the thread from anywhere else — so the Mac sidebar's chosen
     /// folder has to ride along on the first turn.
     public var cwd: String?
+    /// Reasoning effort for this turn.  The sidecar maps it onto whatever
+    /// the engine calls its effort option.
+    public var effort: String?
 
-    public init(host: ClutchHost, model: String, sessionId: String? = nil, relayReceiverUid: String, engine: String? = nil, cwd: String? = nil) {
+    public init(
+        host: ClutchHost,
+        model: String,
+        sessionId: String? = nil,
+        relayReceiverUid: String,
+        engine: String? = nil,
+        cwd: String? = nil,
+        effort: String? = nil
+    ) {
         self.host = host
         self.model = model
         self.sessionId = sessionId
         self.relayReceiverUid = relayReceiverUid
         self.engine = engine
         self.cwd = cwd
+        self.effort = effort
     }
 
     public func chatURL() -> URL? {
@@ -66,6 +79,7 @@ public struct ChatSessionClient {
                     if let sessionId { body["sessionId"] = sessionId }
                     if let engine { body["engine"] = engine }
                     if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
+                    if let effort, !effort.isEmpty { body["effort"] = effort }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
                     let (bytes, resp) = try await URLSession.shared.bytes(for: req)
                     guard (resp as? HTTPURLResponse)?.statusCode == 200 else {

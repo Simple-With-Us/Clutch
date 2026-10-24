@@ -70,11 +70,32 @@ struct ChatThreadClient {
 }
 
 /// Which backend a Mac chat turn runs through. DeepSeek and MiniMax route
-/// by model on the sidecar; MiniMax Code resumes a direct `mcode` thread.
-enum ChatEngine: String {
+/// by model on the sidecar; MiniMax Code and Muse Code resume a direct
+/// thread of that engine.
+enum ChatEngine: String, CaseIterable, Identifiable {
     case deepseek
     case minimax
     case mcode
+    case muse
+
+    var id: String { rawValue }
+
+    /// The engine id the sidecar knows this one by.
+    var sidecarId: String { rawValue }
+
+    /// True for the engines whose threads can be listed and resumed.
+    var supportsThreads: Bool {
+        self == .mcode || self == .muse
+    }
+
+    var label: String {
+        switch self {
+        case .deepseek: return "DeepSeek"
+        case .minimax: return "MiniMax"
+        case .mcode: return "MiniMax Code"
+        case .muse: return "Muse Code"
+        }
+    }
 }
 
 /// The native Chat tab for macOS: the agent thread renders from the sidecar
@@ -103,18 +124,17 @@ public struct ChatView: View {
     @State private var engine: ChatEngine = .deepseek
     @State private var agentBubbles: [ThreadBubble] = []
     @State private var localPrompts: [LocalPrompt] = MacChatStore.loadPrompts()
-    @State private var mcodeChatId: String?
-    @State private var mcodeRemoteId: String?
-    @State private var mcodeCwd: String?
-    @State private var mcodeLoaded: [AcpHistoryEntry] = []
-    @State private var mcodePending: [LocalPrompt] = []
+    @State private var codeChatId: String?
+    @State private var codeRemoteId: String?
+    @State private var codeCwd: String?
+    @State private var codeLoaded: [AcpHistoryEntry] = []
+    @State private var codePending: [LocalPrompt] = []
     @State private var showingSessions = false
     @State private var showingSidebar = true
     @State private var sidebarSessions: [AcpSessionInfo] = []
     @State private var sidebarLoading = false
     @State private var sidebarError: String?
     @State private var sidebarLoadingId: String?
-    @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
     @State private var draft: String = ""
     @State private var sessionId: String?
     @State private var sending: Bool = false
@@ -136,6 +156,13 @@ public struct ChatView: View {
     @State private var findNonce = 0
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
+    /// The host's engine catalog: which engines it runs, which models each
+    /// offers, and which effort levels it accepts.
+    @State private var catalog: EngineCatalog?
+    /// The picked model id, for the engine in the picker.
+    @State private var selectedModel = ""
+    /// The picked reasoning effort.
+    @State private var selectedEffort: String?
 
     struct LiveTool: Identifiable, Equatable {
         var id: String
@@ -145,14 +172,63 @@ public struct ChatView: View {
 
     let activeHost: ClutchHost?
 
-    public init(activeHost: ClutchHost? = nil) {
+    /// The paired-host store.  The Mac app pairs the same way the phone
+    /// does, so the chat surface can point at another machine — a Linux
+    /// server running Muse Code, for example — instead of only this Mac.
+    let store: HostStore?
+
+    @State private var isShowingHosts = false
+    @State private var isShowingAddHost = false
+
+    public init(activeHost: ClutchHost? = nil, store: HostStore? = nil) {
         self.activeHost = activeHost
+        self.store = store
     }
 
     private var deviceUid: String { MacChatIdentity.deviceUid }
 
+    /// The engines this host can run, from its catalog.  A host that answers
+    /// with no catalog falls back to the built-in list, so the picker is
+    /// never empty.
+    private var availableEngines: [ChatEngine] {
+        guard let catalog else { return ChatEngine.allCases }
+        let listed = ChatEngine.allCases.filter { candidate in
+            guard let descriptor = catalog.descriptor(candidate.sidecarId) else { return false }
+            return descriptor.available
+        }
+        return listed.isEmpty ? ChatEngine.allCases : listed
+    }
+
+    /// The models the picked engine offers, from the catalog.
+    private var engineModels: [EngineModel] {
+        catalog?.descriptor(engine.sidecarId)?.models ?? []
+    }
+
+    /// The effort levels the picked engine accepts, from the catalog.
+    private var engineEfforts: [String] {
+        catalog?.descriptor(engine.sidecarId)?.effortLevels ?? []
+    }
+
+    /// Load the host's catalog and pick the model and effort from it.
+    private func loadCatalog() async {
+        guard let host = activeHost else { return }
+        let loaded = try? await EngineCatalogClient(host: host).fetch()
+        catalog = loaded
+        guard let loaded else { return }
+        let models = loaded.descriptor(engine.sidecarId)?.models ?? []
+        if !models.contains(where: { $0.id == selectedModel }) {
+            selectedModel = models.first?.id ?? ""
+        }
+        let efforts = loaded.descriptor(engine.sidecarId)?.effortLevels ?? []
+        if let selectedEffort, !efforts.contains(selectedEffort) {
+            self.selectedEffort = efforts.first
+        } else if selectedEffort == nil {
+            selectedEffort = efforts.first
+        }
+    }
+
     private var rows: [Row] {
-        if engine == .mcode { return mcodeRows }
+        if engine.supportsThreads { return codeRows }
         let promptRows = localPrompts.map {
             Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
         }
@@ -167,10 +243,10 @@ public struct ChatView: View {
 
     /// MiniMax Code rows keep server order (replayed history is already
     /// chronological); in-flight prompts and the live bubble append after.
-    private var mcodeRows: [Row] {
-        var out = mcodeLoaded.enumerated().map { index, entry in
+    private var codeRows: [Row] {
+        var out = codeLoaded.enumerated().map { index, entry in
             Row(
-                id: "mcode-\(index)-\(entry.text.hashValue)",
+                id: "code-\(index)-\(entry.text.hashValue)",
                 text: entry.text,
                 date: Date(),
                 fromAgent: entry.kind != "user_message_chunk",
@@ -179,7 +255,7 @@ public struct ChatView: View {
                 toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil
             )
         }
-        out += mcodePending.map {
+        out += codePending.map {
             Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
         }
         out += liveTools.map {
@@ -191,10 +267,10 @@ public struct ChatView: View {
     public var body: some View {
         NavigationStack {
             HStack(spacing: 0) {
-                if engine == .mcode && showingSidebar {
+                if engine.supportsThreads && showingSidebar {
                     ThreadSidebar(
                         sessions: sidebarSessions,
-                        selectedId: mcodeRemoteId,
+                        selectedId: codeRemoteId,
                         loading: sidebarLoading,
                         loadingId: sidebarLoadingId,
                         errorText: sidebarError,
@@ -232,7 +308,7 @@ public struct ChatView: View {
                     }
                     .accessibilityLabel("Export Transcript")
                     .help("Export Transcript")
-                    if engine == .mcode {
+                    if engine.supportsThreads {
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) { showingSidebar.toggle() }
                         } label: {
@@ -248,21 +324,47 @@ public struct ChatView: View {
             await prepare()
         }
         .task(id: engine) {
-            if engine == .mcode { await loadSidebarSessions() }
+            if engine.supportsThreads { await loadSidebarSessions() }
         }
         .sheet(isPresented: $showingSessions) {
             if let host = activeHost {
-                MacSessionsSheet(host: host) { _, chatId, remoteId, cwd, history in
-                    adopt(chatId: chatId, remoteId: remoteId, cwd: cwd, history: history)
+                MacSessionsSheet(host: host, engine: engine.sidecarId) { _, chatId, remoteId, cwd, history in
+                    adopt(chatId: chatId, remoteId: remoteId, cwd: cwd, history: history, for: engine)
                 }
             }
+        }
+        .sheet(isPresented: $isShowingHosts) {
+            if let store {
+                HostsSheet(store: store)
+            }
+        }
+        .sheet(isPresented: $isShowingAddHost) {
+            NavigationStack {
+                PairView(showsIntro: false) { payload in
+                    store?.pair(payload)
+                    isShowingAddHost = false
+                }
+                .padding(.top, 16)
+                .navigationTitle("Add Host")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { isShowingAddHost = false }
+                    }
+                }
+            }
+        }
+        .onChange(of: activeHost?.id) { _, _ in
+            // A different host means a different engine catalog and a
+            // different thread list; both are re-read by prepare().
+            resetTurnState()
+            Task { await prepare() }
         }
     }
 
     private var chatPane: some View {
         VStack(spacing: 0) {
             modelStrip
-            if engine == .mcode {
+            if engine.supportsThreads {
                 cwdBar
             }
             if showFind {
@@ -389,7 +491,7 @@ public struct ChatView: View {
                 .foregroundStyle(.tint)
                 .help("Choose the working folder for the next new thread")
             Button("Edit") {
-                cwdDraft = mcodeCwd ?? ""
+                cwdDraft = codeCwd ?? ""
                 showingCwdEditor = true
             }
             .font(.system(size: 11))
@@ -416,7 +518,7 @@ public struct ChatView: View {
                         Button("Cancel") { showingCwdEditor = false }
                         Button("Use Folder") {
                             let trimmed = cwdDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            mcodeCwd = trimmed.isEmpty ? nil : trimmed
+                            codeCwd = trimmed.isEmpty ? nil : trimmed
                             showingCwdEditor = false
                         }
                         .buttonStyle(.borderedProminent)
@@ -431,8 +533,8 @@ public struct ChatView: View {
     }
 
     private var displayCwd: String {
-        if let cwd = mcodeCwd, !cwd.isEmpty { return cwd }
-        if let selected = sidebarSessions.first(where: { $0.sessionId == mcodeRemoteId })?.cwd, !selected.isEmpty { return selected }
+        if let cwd = codeCwd, !cwd.isEmpty { return cwd }
+        if let selected = sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.cwd, !selected.isEmpty { return selected }
         return FileManager.default.homeDirectoryForCurrentUser.path
     }
 
@@ -444,7 +546,7 @@ public struct ChatView: View {
         panel.canCreateDirectories = true
         panel.directoryURL = URL(fileURLWithPath: displayCwd)
         if panel.runModal() == .OK, let url = panel.url {
-            mcodeCwd = url.path
+            codeCwd = url.path
         }
     }
 
@@ -453,48 +555,53 @@ public struct ChatView: View {
     private var modelStrip: some View {
         HStack(spacing: 8) {
             Picker("Engine", selection: engineBinding) {
-                Text("DeepSeek").tag(ChatEngine.deepseek)
-                Text("MiniMax").tag(ChatEngine.minimax)
-                Text("MiniMax Code").tag(ChatEngine.mcode)
+                ForEach(availableEngines) { candidate in
+                    Text(candidate.label).tag(candidate)
+                }
             }
             .pickerStyle(.segmented)
             .frame(width: 264)
 
-            if engine != .mcode {
+            // The model picker, straight from the host's catalog.  This is
+            // the web canvas's picker: whatever the engine advertises right
+            // now, so a new provider model appears without a Mac release.
+            if !engineModels.isEmpty {
                 Menu {
-                    Section(engine == .minimax ? "MiniMax" : "DeepSeek") {
-                        if engine == .minimax {
-                            Button("MiniMax-M3.1-Flash") { selectModel("MiniMax-M3.1-Flash") }
-                            Button("MiniMax-M3") { selectModel("MiniMax-M3") }
-                            Button("MiniMax-M2.7-highspeed") { selectModel("MiniMax-M2.7-highspeed") }
-                        } else {
-                            Button("DeepSeek-V4.1-Pro") { selectModel("DeepSeek-V4.1-Pro") }
-                            Button("DeepSeek-V4.1-Flash") { selectModel("DeepSeek-V4.1-Flash") }
+                    ForEach(engineModels) { entry in
+                        Button {
+                            selectedModel = entry.id
+                        } label: {
+                            if entry.id == selectedModel {
+                                Label(entry.displayLabel, systemImage: "checkmark")
+                            } else {
+                                Text(entry.displayLabel)
+                            }
                         }
-                    }
-                    Section("MiniMax Code") {
-                        Button("Resume Thread…") {
-                            selectEngine(.mcode)
-                            showingSessions = true
-                        }
-                        Button("New Thread") { startMcodeThread() }
                     }
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "cpu")
-                            .font(.system(size: 11))
-                        Text(selectedModel)
-                            .font(.system(size: 12, weight: .semibold))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.clutchSecondaryBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    pickerLabel(entryLabel: selectedModel.isEmpty ? engine.label : selectedModel, symbol: "cpu")
                 }
-            } else if !mcodeAvailable {
+            }
+
+            if !engineEfforts.isEmpty {
+                Menu {
+                    ForEach(engineEfforts, id: \.self) { level in
+                        Button {
+                            selectedEffort = level
+                        } label: {
+                            if level == selectedEffort {
+                                Label(level.capitalized, systemImage: "checkmark")
+                            } else {
+                                Text(level.capitalized)
+                            }
+                        }
+                    }
+                } label: {
+                    pickerLabel(entryLabel: (selectedEffort ?? "default").capitalized, symbol: "gauge.with.dots.needle.50percent")
+                }
+            }
+
+            if engine == .mcode && !mcodeAvailable {
                 Label("mcode Not Found On Host", systemImage: "exclamationmark.triangle")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
@@ -503,7 +610,7 @@ public struct ChatView: View {
 
             Spacer()
 
-            if engine == .mcode {
+            if engine.supportsThreads {
                 Button {
                     Task { await loadSidebarSessions() }
                 } label: {
@@ -517,14 +624,51 @@ public struct ChatView: View {
             }
 
             if let host = activeHost {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(statusColor(for: host))
-                        .frame(width: 6, height: 6)
-                    Text(host.name)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(.secondary)
+                // The host menu: the Mac pairs and switches hosts the way
+                // the phone does, so a code server on another machine is one
+                // click away.
+                Menu {
+                    if let store {
+                        ForEach(store.hosts) { candidate in
+                            Button {
+                                store.activate(candidate)
+                            } label: {
+                                if candidate.id == host.id {
+                                    Label(candidate.name, systemImage: "checkmark")
+                                } else {
+                                    Text(candidate.name)
+                                }
+                            }
+                        }
+                        Divider()
+                        Button {
+                            isShowingAddHost = true
+                        } label: {
+                            Label("Add Host…", systemImage: "plus")
+                        }
+                        Button {
+                            isShowingHosts = true
+                        } label: {
+                            Label("Hosts and Settings…", systemImage: "gearshape")
+                        }
+                    } else {
+                        Text(host.name)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(statusColor(for: host))
+                            .frame(width: 6, height: 6)
+                        Text(host.name)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 .help(statusHelp(for: host))
             }
         }
@@ -540,29 +684,43 @@ public struct ChatView: View {
         )
     }
 
+    private func pickerLabel(entryLabel: String, symbol: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+            Text(entryLabel)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.clutchSecondaryBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
     private func selectEngine(_ next: ChatEngine) {
         guard next != engine else { return }
-        if next == .mcode {
+        engine = next
+        MacEngineStore.save(next)
+        resetTurnState()
+        sessionId = nil
+        if next.supportsThreads {
             // Resume, not reset: prepare() reopens the last thread for this
             // host.  Clearing it is what the sidebar's New Thread button is
             // for (startMcodeThread).
-            engine = .mcode
-            MacEngineStore.save(.mcode)
-            resetTurnState()
             Task { await prepare() }
             return
         }
-        engine = next
-        MacEngineStore.save(next)
-        if next == .minimax, !selectedModel.lowercased().hasPrefix("minimax") {
-            selectedModel = "MiniMax-M3.1-Flash"
+        // The agent engines keep their own model names; the catalog picks the
+        // default for the engine that was just chosen.
+        selectedModel = ""
+        Task {
+            await loadCatalog()
+            await prepare()
         }
-        if next == .deepseek, selectedModel.lowercased().hasPrefix("minimax") {
-            selectedModel = "DeepSeek-V4.1-Pro"
-        }
-        resetTurnState()
-        sessionId = nil
-        Task { await prepare() }
     }
 
     private func statusColor(for host: ClutchHost) -> Color {
@@ -620,10 +778,10 @@ public struct ChatView: View {
             case .ready:
                 if rows.isEmpty {
                     Spacer()
-                    if engine == .mcode {
+                    if engine.supportsThreads {
                         MacChatSetupCard(
                             symbol: "terminal",
-                            title: "MiniMax Code",
+                            title: engine.label,
                             message: "Resume an existing thread or type below to start one in this Mac's workspace."
                         )
                         Button("Resume Thread…") { showingSessions = true }
@@ -701,25 +859,16 @@ public struct ChatView: View {
 
     // MARK: - Flow
 
-    private func selectModel(_ model: String) {
-        selectedModel = model
-        engine = model.lowercased().hasPrefix("minimax") ? .minimax : .deepseek
-        MacEngineStore.save(engine)
-        resetTurnState()
-        sessionId = nil
-        Task { await prepare() }
-    }
-
     private func startMcodeThread() {
         engine = .mcode
         MacEngineStore.save(engine)
         resetTurnState()
         sessionId = nil
-        mcodeChatId = nil
-        mcodeRemoteId = nil
-        mcodeCwd = nil
-        mcodeLoaded = []
-        mcodePending = []
+        codeChatId = nil
+        codeRemoteId = nil
+        codeCwd = nil
+        codeLoaded = []
+        codePending = []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.clear(for: host)
@@ -727,19 +876,19 @@ public struct ChatView: View {
         if !showingSidebar { showingSidebar = true }
     }
 
-    /// Adopt a freshly loaded MiniMax Code thread into the chat pane.
-    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry]) {
-        engine = .mcode
+    /// Adopt a freshly loaded code-engine thread into the chat pane.
+    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry], for engine: ChatEngine) {
+        self.engine = engine
         MacEngineStore.save(engine)
         resetTurnState()
-        mcodeChatId = chatId
-        mcodeRemoteId = remoteId
-        mcodeCwd = cwd
-        mcodeLoaded = history
-        mcodePending = []
+        codeChatId = chatId
+        codeRemoteId = remoteId
+        codeCwd = cwd
+        codeLoaded = history
+        codePending = []
         phase = .ready
         if let host = activeHost {
-            MacMcodeStore.save(remoteId: remoteId, cwd: cwd, for: host)
+            MacMcodeStore.save(remoteId: remoteId, cwd: cwd, engine: engine.sidecarId, for: host)
         }
     }
 
@@ -752,30 +901,34 @@ public struct ChatView: View {
             sidebarLoadingId = session.sessionId
             sidebarError = nil
         }
+        let target = engine
         Task {
             defer { if fromSidebar { sidebarLoadingId = nil } }
             do {
                 let loaded = try await SessionsClient(host: host).load(
                     sessionId: session.sessionId,
-                    cwd: session.cwd
+                    cwd: session.cwd,
+                    engine: target.sidecarId,
+                    model: selectedModel.isEmpty ? nil : selectedModel,
+                    effort: selectedEffort
                 )
-                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history)
+                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target)
             } catch {
                 if fromSidebar {
-                    sidebarError = mcodeLoadErrorMessage(error, session: session)
+                    sidebarError = codeLoadErrorMessage(error, session: session)
                 } else {
-                    sendError = mcodeLoadErrorMessage(error, session: session)
+                    sendError = codeLoadErrorMessage(error, session: session)
                 }
             }
         }
     }
 
     private func loadSidebarSessions() async {
-        guard let host = activeHost, engine == .mcode else { return }
+        guard let host = activeHost, engine.supportsThreads else { return }
         sidebarLoading = true
         defer { sidebarLoading = false }
         do {
-            sidebarSessions = try await SessionsClient(host: host).list()
+            sidebarSessions = try await SessionsClient(host: host).list(engine: engine.sidecarId)
             sidebarError = nil
         } catch {
             // Keep whatever list we already have; a retry is one click away.
@@ -787,7 +940,7 @@ public struct ChatView: View {
 
     /// The sidecar answers a failed resume with a bare ACP reason, so name the
     /// thread and say what to try rather than showing a raw params error.
-    private func mcodeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
+    private func codeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
         let detail = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
         let name = session.title ?? session.sessionId
         return Copy.gap(
@@ -807,28 +960,37 @@ public struct ChatView: View {
         guard let host = activeHost else { return }
         pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
         await checkSidecar()
-        if engine != .mcode, MacEngineStore.load() == .mcode {
-            engine = .mcode
+        await loadCatalog()
+        // The host's catalog decides which engines this Mac can offer: a
+        // server with Muse Code but no MiniMax Code shows Muse Code only.
+        if !availableEngines.contains(where: { $0 == engine }) {
+            if let saved = MacEngineStore.load(), availableEngines.contains(saved) {
+                engine = saved
+            } else if let first = availableEngines.first {
+                engine = first
+            }
         }
-        if engine == .mcode {
+        if engine.supportsThreads {
             // Reopen the last thread for this host when there is one, so a
             // finished turn survives relaunch instead of going nowhere.
             if let saved = MacMcodeStore.load(for: host) {
+                let savedEngine = ChatEngine(rawValue: saved.engine ?? "mcode") ?? .mcode
                 do {
                     let loaded = try await SessionsClient(host: host).load(
                         sessionId: saved.remoteId,
-                        cwd: saved.cwd
+                        cwd: saved.cwd,
+                        engine: savedEngine.sidecarId
                     )
-                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history)
+                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: savedEngine)
                     return
                 } catch {
                     MacMcodeStore.clear(for: host)
                 }
             }
-            mcodeChatId = nil
-            mcodeRemoteId = nil
-            mcodeLoaded = []
-            mcodePending = []
+            codeChatId = nil
+            codeRemoteId = nil
+            codeLoaded = []
+            codePending = []
             phase = .ready
             return
         }
@@ -843,17 +1005,18 @@ public struct ChatView: View {
 
     private func refreshThread() async {
         guard let host = activeHost, phase == .ready else { return }
-        if engine == .mcode {
-            guard let remoteId = mcodeRemoteId else { return }
+        if engine.supportsThreads {
+            guard let remoteId = codeRemoteId else { return }
             do {
                 let loaded = try await SessionsClient(host: host).load(
                     sessionId: remoteId,
-                    cwd: mcodeCwd
+                    cwd: codeCwd,
+                    engine: engine.sidecarId
                 )
-                mcodeChatId = loaded.chatId
-                mcodeCwd = loaded.cwd
-                mcodeLoaded = loaded.history
-                mcodePending = []
+                codeChatId = loaded.chatId
+                codeCwd = loaded.cwd
+                codeLoaded = loaded.history
+                codePending = []
             } catch {
                 // Keep the in-view thread; the next send or pull retries.
             }
@@ -899,8 +1062,8 @@ public struct ChatView: View {
         sending = true
         streamingText = ""
         liveTools = []
-        if engine == .mcode {
-            mcodePending.append(LocalPrompt(text: prompt, at: Date()))
+        if engine.supportsThreads {
+            codePending.append(LocalPrompt(text: prompt, at: Date()))
         } else {
             localPrompts.append(LocalPrompt(text: prompt, at: Date()))
             MacChatStore.savePrompts(localPrompts)
@@ -908,18 +1071,19 @@ public struct ChatView: View {
         let client = ChatSessionClient(
             host: host,
             model: selectedModel,
-            sessionId: engine == .mcode ? mcodeChatId : sessionId,
+            sessionId: engine.supportsThreads ? codeChatId : sessionId,
             relayReceiverUid: deviceUid,
-            engine: engine == .mcode ? "mcode" : nil,
-            cwd: engine == .mcode ? mcodeCwd : nil
+            engine: engine.supportsThreads ? engine.sidecarId : nil,
+            cwd: engine.supportsThreads ? codeCwd : nil,
+            effort: selectedEffort
         )
         sendTask = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
                     case .started(let id, _):
-                        if engine == .mcode {
-                            mcodeChatId = id
+                        if engine.supportsThreads {
+                            codeChatId = id
                         } else {
                             sessionId = id
                         }
@@ -937,29 +1101,29 @@ public struct ChatView: View {
                             liveTools.append(LiveTool(id: key, name: name.isEmpty ? "Tool call" : name, status: status))
                         }
                     case .done(let stop, let id, let remoteId):
-                        if engine == .mcode {
-                            mcodeChatId = id
+                        if engine.supportsThreads {
+                            codeChatId = id
                             if let remoteId, !remoteId.isEmpty {
-                                mcodeRemoteId = remoteId
-                                MacMcodeStore.save(remoteId: remoteId, cwd: mcodeCwd, for: host)
+                                codeRemoteId = remoteId
+                                MacMcodeStore.save(remoteId: remoteId, cwd: codeCwd, engine: engine.sidecarId, for: host)
                             }
                             if !streamingText.isEmpty {
-                                mcodeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: streamingText))
+                                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: streamingText))
                             }
                             for tool in liveTools {
-                                mcodeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
+                                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
                             }
                         } else {
                             sessionId = id
                         }
                         liveTools = []
-                        TurnNotifier.turnFinished(threadTitle: engine == .mcode ? (sidebarSessions.first(where: { $0.sessionId == mcodeRemoteId })?.displayTitle ?? "MiniMax Code") : selectedModel)
+                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : selectedModel)
                         sending = false
                         streamingText = ""
                         thoughtLine = nil
                         if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
-                        } else if engine != .mcode {
+                        } else if !engine.supportsThreads {
                             await refreshThread()
                         }
                     case .failed(let message):
@@ -968,7 +1132,7 @@ public struct ChatView: View {
                         thoughtLine = nil
                         sendError = message
                         liveTools = []
-                        TurnNotifier.turnFinished(threadTitle: engine == .mcode ? "MiniMax Code" : selectedModel, failed: true)
+                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? engine.label : selectedModel, failed: true)
                     }
                 }
                 sending = false
@@ -988,10 +1152,10 @@ public struct ChatView: View {
                 text: row.text
             )
         }
-        let title = engine == .mcode
-            ? (sidebarSessions.first(where: { $0.sessionId == mcodeRemoteId })?.displayTitle ?? "MiniMax Code Thread")
+        let title = engine.supportsThreads
+            ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? "\(engine.label) Thread")
             : "\(selectedModel) Thread"
-        return TranscriptExport.markdown(title: title, cwd: engine == .mcode ? displayCwd : nil, entries: entries)
+        return TranscriptExport.markdown(title: title, cwd: engine.supportsThreads ? displayCwd : nil, entries: entries)
     }
 
     private func copyTranscript() {
@@ -1015,7 +1179,7 @@ public struct ChatView: View {
     /// a stopped turn is not a finished answer.
     private func stop() {
         guard sending else { return }
-        if let host = activeHost, let chatId = engine == .mcode ? mcodeChatId : sessionId {
+        if let host = activeHost, let chatId = engine.supportsThreads ? codeChatId : sessionId {
             Task { await ChatSessionClient.cancel(host: host, sessionId: chatId) }
         }
         sendTask?.cancel()
@@ -1030,6 +1194,8 @@ public struct ChatView: View {
 /// history back to the Chat tab.
 struct MacSessionsSheet: View {
     var host: ClutchHost
+    /// The engine whose threads the sheet lists.
+    var engine: String = "mcode"
     /// Carries the listed session so the resume can send its own `cwd`.
     var onLoaded: (AcpSessionInfo, String, String, String?, [AcpHistoryEntry]) -> Void
 
@@ -1117,7 +1283,7 @@ struct MacSessionsSheet: View {
                     }
                 }
             }
-            .navigationTitle("MiniMax Code Threads")
+            .navigationTitle(engine == "muse" ? "Muse Code Threads" : "MiniMax Code Threads")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1133,7 +1299,7 @@ struct MacSessionsSheet: View {
     private func refresh() async {
         error = nil
         do {
-            sessions = try await SessionsClient(host: host).list()
+            sessions = try await SessionsClient(host: host).list(engine: engine)
         } catch {
             self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
         }
@@ -1146,7 +1312,8 @@ struct MacSessionsSheet: View {
         do {
             let loaded = try await SessionsClient(host: host).load(
                 sessionId: session.sessionId,
-                cwd: session.cwd
+                cwd: session.cwd,
+                engine: engine
             )
             onLoaded(session, loaded.chatId, loaded.remoteSessionId, loaded.cwd, loaded.history)
             dismiss()
@@ -1348,6 +1515,12 @@ enum MacMcodeStore {
     struct Saved: Codable {
         var remoteId: String
         var cwd: String?
+        /// The engine the thread belongs to (`mcode` or `muse`).  Absent in
+        /// records written before Muse Code existed: those are MiniMax Code.
+        var engine: String?
+
+        /// The engine id to resume with.
+        var engineId: String { engine ?? "mcode" }
     }
 
     private static func map() -> [String: Saved] {
@@ -1360,9 +1533,9 @@ enum MacMcodeStore {
         map()[host.id.uuidString]
     }
 
-    static func save(remoteId: String, cwd: String?, for host: ClutchHost) {
+    static func save(remoteId: String, cwd: String?, engine: String = "mcode", for host: ClutchHost) {
         var current = map()
-        current[host.id.uuidString] = Saved(remoteId: remoteId, cwd: cwd)
+        current[host.id.uuidString] = Saved(remoteId: remoteId, cwd: cwd, engine: engine)
         if let data = try? JSONEncoder().encode(current) {
             UserDefaults.standard.set(data, forKey: key)
         }

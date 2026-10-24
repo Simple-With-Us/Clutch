@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { compactToolHistory, loadOrMintToken, mcodeAvailable, normalizeSessionUpdate, parseLimitParam, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { compactToolHistory, loadOrMintToken, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,6 +27,46 @@ describe("routeForModel", () => {
     expect(routeForModel(undefined, undefined)).toBe("deepseek");
     expect(routeForModel("DeepSeek-V4.1-Pro", "minimax")).toBe("minimax");
     expect(routeForModel(undefined, "mcode")).toBe("mcode");
+  });
+
+  it("routes Muse models to the Muse engine when no engine is named", () => {
+    expect(routeForModel("muse-wonder-1.0", undefined)).toBe("muse");
+    expect(routeForModel("muse-spark-1.3", undefined)).toBe("muse");
+    expect(routeForModel(undefined, "muse")).toBe("muse");
+  });
+});
+
+describe("museInstalled", () => {
+  it("needs both the Muse host and the ACP adapter", () => {
+    const none = { hosts: [] as string[], adapters: [] as string[] };
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(true);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(false);
+    // A stale override path must not count as installed.
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).toBe(false);
+  });
+});
+
+describe("Muse engine wiring", () => {
+  const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+
+  it("runs Muse Code through the shipped adapter launcher", () => {
+    expect(source).toContain('join(ROOT, "scripts", "muse-code-acp.sh")');
+    expect(source).toContain("CLUTCH_CHAT_LAUNCHER_MUSE");
+  });
+
+  it("sends ACP content blocks to Muse, which rejects a bare string", () => {
+    expect(source).toContain('this.engine === "mcode" || this.engine === "muse"');
+  });
+
+  it("publishes the engine catalog the native model picker reads", () => {
+    expect(source).toContain('"/clutch/v1/engines"');
+    expect(source).toContain("engineCatalog(");
+  });
+
+  it("applies the model and the effort as ACP config options", () => {
+    expect(source).toContain("session/set_config_option");
+    expect(source).toContain("applySessionChoices");
   });
 });
 

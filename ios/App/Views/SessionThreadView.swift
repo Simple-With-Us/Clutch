@@ -12,7 +12,7 @@ struct ThreadBubbleItem: Identifiable, Equatable {
     var role: Role
     var text: String
     /// Tool status (`running` / `completed` / `failed`) for `.tool` bubbles.
-    var toolStatus: String?
+    var toolStatus: String? = nil
 }
 
 @MainActor
@@ -43,14 +43,46 @@ final class SessionThreadModel {
     var thoughtLine: String?
     var sendError: String?
 
+    /// The engine this thread runs on (`mcode` for MiniMax Code, `muse` for
+    /// Muse Code).  Set when the thread is opened, and what the catalog is
+    /// filtered by.
+    var engine: String = "mcode"
+    /// The picked model, by the id the catalog published.
+    var modelId: String?
+    /// The picked reasoning effort, by the level the catalog published.
+    var effort: String?
+    /// The host's engine catalog, for the model and effort pickers.
+    var catalog: EngineCatalog?
+
     private var sendTask: Task<Void, Never>?
 
-    init(host: ClutchHost, session: AcpSessionInfo) {
+    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
         self.host = host
         self.client = SessionsClient(host: host)
         self.session = session
+        self.engine = engine
         self.remoteSessionId = session.sessionId
         self.cwd = session.cwd
+    }
+
+    /// The engine's models, as the catalog published them.
+    var models: [EngineModel] {
+        catalog?.descriptor(engine)?.models ?? []
+    }
+
+    /// The engine's effort levels, as the catalog published them.
+    var effortLevels: [String] {
+        catalog?.descriptor(engine)?.effortLevels ?? []
+    }
+
+    /// Load the catalog so the pickers can show what this host really
+    /// offers.  A failure is not fatal: the thread still works, the pickers
+    /// just stay empty.
+    func loadCatalog() async {
+        guard catalog == nil else { return }
+        catalog = try? await EngineCatalogClient(host: host).fetch()
+        if modelId == nil { modelId = models.first?.id }
+        if effort == nil { effort = effortLevels.first }
     }
 
     func load() async {
@@ -69,7 +101,7 @@ final class SessionThreadModel {
     private func fetch() async {
         phase = .loading
         do {
-            let loaded = try await client.load(sessionId: remoteSessionId, cwd: session.cwd)
+            let loaded = try await client.load(sessionId: remoteSessionId, cwd: session.cwd, engine: engine)
             chatId = loaded.chatId
             // The sidecar does not echo cwd back, so keep the one we asked
             // for; a reload without it fails every thread outside $HOME.
@@ -110,10 +142,12 @@ final class SessionThreadModel {
         // to relay into, and the sidecar skips the mirror when it is blank.
         let client = ChatSessionClient(
             host: host,
-            model: "mcode",
+            model: modelId ?? "",
             sessionId: chatId,
             relayReceiverUid: "",
-            engine: "mcode"
+            engine: engine,
+            cwd: cwd,
+            effort: effort
         )
         let replyId = UUID().uuidString
         var reply = ""
@@ -189,6 +223,11 @@ final class SessionThreadModel {
         if case .failed = phase { return true }
         return false
     }
+
+    /// The engine's owner-facing name, when the catalog has not loaded yet.
+    var engineLabel: String {
+        catalog?.descriptor(engine)?.label ?? (engine == "muse" ? "Muse Code" : "MiniMax Code")
+    }
 }
 
 public struct SessionThreadView: View {
@@ -199,13 +238,14 @@ public struct SessionThreadView: View {
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
 
-    public init(host: ClutchHost, session: AcpSessionInfo) {
+    public init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
         self.session = session
-        _model = State(initialValue: SessionThreadModel(host: host, session: session))
+        _model = State(initialValue: SessionThreadModel(host: host, session: session, engine: engine))
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            modelBar
             if showFind {
                 findBar
                 Divider()
@@ -240,6 +280,82 @@ public struct SessionThreadView: View {
             guard dictation.isRecording || !text.isEmpty else { return }
             model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+    }
+
+    /// The model and effort pickers, straight from the host's catalog.
+    ///
+    /// This is the web canvas's model picker, reduced to what a phone can
+    /// show: the engine's own models and the effort levels it accepts, so
+    /// a new provider model appears here without an app release.
+    private var modelBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                if model.models.isEmpty {
+                    Text("No Models Advertised")
+                } else {
+                    ForEach(model.models) { entry in
+                        Button {
+                            model.modelId = entry.id
+                        } label: {
+                            if entry.id == model.modelId {
+                                Label(entry.displayLabel, systemImage: "checkmark")
+                            } else {
+                                Text(entry.displayLabel)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 10))
+                    Text(model.modelId ?? model.engineLabel)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+            }
+            .disabled(model.models.isEmpty)
+
+            if !model.effortLevels.isEmpty {
+                Menu {
+                    ForEach(model.effortLevels, id: \.self) { level in
+                        Button {
+                            model.effort = level
+                        } label: {
+                            if level == model.effort {
+                                Label(level.capitalized, systemImage: "checkmark")
+                            } else {
+                                Text(level.capitalized)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gauge.with.dots.needle.50percent")
+                            .font(.system(size: 10))
+                        Text((model.effort ?? "default").capitalized)
+                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if let note = model.catalog?.descriptor(model.engine)?.note {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .help(note)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.clutchSecondaryBackground.opacity(0.6))
+        .task { await model.loadCatalog() }
     }
 
     private var findBar: some View {

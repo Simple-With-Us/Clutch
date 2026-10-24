@@ -55,7 +55,7 @@ final class PairingLinkTests: XCTestCase {
 
     func testServerLinkPairsMiniMaxCodeHostWithoutLaunchToken() throws {
         let p = try payload("clutch://pair?h=jay-server.boa-roygbiv.ts.net&tls=1&kind=mcode&chat=bridge-token-9&chatPort=3181&name=jay-server")
-        XCTAssertEqual(p.kind, .miniMaxCode)
+        XCTAssertEqual(p.kind, .codeServer)
         XCTAssertEqual(p.chatToken, "bridge-token-9")
         XCTAssertEqual(p.chatPort, 3181)
         XCTAssertNil(p.launchToken)
@@ -216,13 +216,13 @@ final class HostStoreTests: XCTestCase {
         let defaults = freshDefaults()
         let store = HostStore(defaults: defaults)
         var payload = PairingPayload(name: "jay-server", origin: URL(string: "https://jay-server.boa-roygbiv.ts.net:3181")!, launchToken: nil)
-        payload.kind = .miniMaxCode
+        payload.kind = .codeServer
         payload.chatToken = "chat-server"
         store.pair(payload)
-        XCTAssertEqual(store.activeHost?.kind, .miniMaxCode)
+        XCTAssertEqual(store.activeHost?.kind, .codeServer)
         XCTAssertTrue(store.activeHost?.isMiniMaxCodeOnly == true)
 
         let reloaded = HostStore(defaults: defaults)
-        XCTAssertEqual(reloaded.activeHost?.kind, .miniMaxCode)
+        XCTAssertEqual(reloaded.activeHost?.kind, .codeServer)
     }
 }

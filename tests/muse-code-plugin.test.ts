@@ -198,7 +198,14 @@ describe("the Muse Code launcher", () => {
     let message = "";
     try {
       execFileSync(LAUNCHER, [], {
-        env: { PATH: "/usr/bin:/bin", HOME: stub },
+        // The launcher's own search list is replaced with an empty one, so a
+        // machine that really has the adapter installed (this server does)
+        // does not change what this test sees.
+        env: {
+          PATH: "/usr/bin:/bin",
+          HOME: stub,
+          MUSE_CODE_ACP_SEARCH_PATHS: join(stub, "empty"),
+        },
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       });

@@ -16,19 +16,34 @@ die() { printf 'muse-code-acp: %s\n' "$1" >&2; exit 1; }
 # 1. The adapter.  An explicit MUSE_CODE_ACP_BIN wins, then PATH, then the
 #    usual global-install prefixes (a GUI app's PATH is often thinner than an
 #    interactive shell's).
+#
+#    MUSE_CODE_ACP_SEARCH_PATHS replaces that list with colon-separated
+#    directories, so a machine that keeps the adapter outside the global
+#    npm prefix (the fleet runtime does) can point at it exactly, and a
+#    machine that must not find a stray global copy can point somewhere
+#    empty.
 find_adapter() {
   if [ -n "${MUSE_CODE_ACP_BIN:-}" ] && [ -x "$MUSE_CODE_ACP_BIN" ]; then
     printf '%s' "$MUSE_CODE_ACP_BIN"; return 0
   fi
   local found
   if found="$(command -v muse-code-acp 2>/dev/null)"; then printf '%s' "$found"; return 0; fi
-  for candidate in \
-    "$HOME/.local/bin/muse-code-acp" \
-    "$(npm prefix -g 2>/dev/null)/bin/muse-code-acp" \
-    "/opt/homebrew/bin/muse-code-acp" \
-    "/usr/local/bin/muse-code-acp"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then printf '%s' "$candidate"; return 0; fi
+  local candidates=""
+  if [ -n "${MUSE_CODE_ACP_SEARCH_PATHS:-}" ]; then
+    candidates="${MUSE_CODE_ACP_SEARCH_PATHS}"
+  else
+    candidates="${HOME}/.local/bin:$(npm prefix -g 2>/dev/null)/bin:/opt/homebrew/bin:/usr/local/bin"
+  fi
+  local dir
+  local saved_ifs="$IFS"
+  IFS=':'
+  for dir in $candidates; do
+    IFS="$saved_ifs"
+    [ -n "$dir" ] || continue
+    if [ -x "$dir/muse-code-acp" ]; then printf '%s' "$dir/muse-code-acp"; return 0; fi
+    IFS=':'
   done
+  IFS="$saved_ifs"
   return 1
 }
 

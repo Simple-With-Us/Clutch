@@ -8,7 +8,7 @@ struct RootView: View {
         Group {
             if let host = store.activeHost {
                 TabView(selection: $selectedTab) {
-                    ChatView(activeHost: host)
+                    ChatView(activeHost: host, store: store)
                         .tabItem {
                             Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
                         }

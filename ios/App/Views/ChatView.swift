@@ -17,6 +17,9 @@ public struct ChatView: View {
     }
 
     @State private var surface: Surface = .agent
+    /// The paired-host store, so the chat surface can switch hosts the way
+    /// the web canvas does.  The Mac app uses it to reach a code server.
+    let store: HostStore?
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
     @State private var manager = CometChatManager.shared
@@ -33,8 +36,9 @@ public struct ChatView: View {
     let activeHost: ClutchHost?
     let transcriptionService = TranscriptionService.shared
 
-    public init(activeHost: ClutchHost? = nil) {
+    public init(activeHost: ClutchHost? = nil, store: HostStore? = nil) {
         self.activeHost = activeHost
+        self.store = store
     }
 
     public var body: some View {

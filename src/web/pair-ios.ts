@@ -185,7 +185,13 @@ function pairServer(args: Set<string>): void {
   }
   const host = detectTailnetHost();
   const name = hostname().replace(/\.local$/, "");
-  const link = serverPairingLink({ host, name, chatToken, chatPort: clutchChatPort() });
+  // Name the code engine the server actually runs, so the app opens on the
+  // right surface instead of guessing.
+  const engine = process.env.CLUTCH_SERVER_ENGINE?.trim()
+    || (existsSync("/usr/local/bin/muse-code-acp") || existsSync(join(homedir(), ".local", "bin", "muse-code-acp"))
+      ? "muse"
+      : "mcode");
+  const link = serverPairingLink({ host, name, chatToken, chatPort: clutchChatPort(), engine });
   if (args.has("--print")) {
     process.stdout.write(`${link}\n`);
     return;
