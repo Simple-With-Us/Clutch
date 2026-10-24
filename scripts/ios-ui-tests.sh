@@ -22,11 +22,13 @@ DEVICE_NAME="${CLUTCH_UI_DEVICE_NAME:-}"
 log() { printf 'ios-ui-tests: %s\n' "$1" >&2; }
 
 available_devices() {
-  # Names of the iPhone simulators this image can actually run.
+  # "iPhone 16 Pro (UDID) (Shutdown)" lines, reduced to "UDID<TAB>name".
+  # The UDID is what xcodebuild wants: a name is ambiguous when two runtimes
+  # offer a device with the same name.
   xcrun simctl list devices available 2>/dev/null \
-    | awk -F '[()]' '/iPhone/ { print $2 }' \
-    | sed 's/[[:space:]]*$//' \
-    | grep -v '^$' \
+    | grep -E '^[[:space:]]+iPhone' \
+    | sed -E 's/^[[:space:]]+//; s/ \(([^)]*)\) \([^)]*\)$/\t\1/' \
+    | awk -F '\t' 'NF == 2 { print $2 "\t" $1 }' \
     | head -20
 }
 
@@ -35,12 +37,11 @@ pick_device() {
   devices="$(available_devices)"
   [ -n "$devices" ] || return 1
   if [ -n "$DEVICE_NAME" ]; then
-    printf '%s\n' "$devices" | grep -Fxq "$DEVICE_NAME" || return 1
-    printf '%s\n' "$DEVICE_NAME"
+    printf '%s\n' "$devices" | awk -F '\t' -v want="$DEVICE_NAME" '$2 == want { print $1; exit }'
     return 0
   fi
   # The newest runtime first: simctl lists them newest first.
-  printf '%s\n' "$devices" | head -1
+  printf '%s\n' "$devices" | head -1 | cut -f1
 }
 
 download_runtime() {
@@ -70,12 +71,12 @@ if [ -z "$DEVICE" ]; then
   log "skipped: no iOS simulator runtime available on this machine"
   exit 10
 fi
-log "running the UI tests on $DEVICE"
+log "running the UI tests on simulator $DEVICE"
 
 set -o pipefail
 xcodebuild -project Clutch.xcodeproj \
   -scheme Clutch \
-  -destination "platform=iOS Simulator,name=$DEVICE" \
+  -destination "platform=iOS Simulator,id=$DEVICE" \
   -only-testing:ClutchUITests/ClutchThreadSurfaceUITests \
   -resultBundlePath "$RESULT_BUNDLE" \
   test
