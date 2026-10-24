@@ -394,7 +394,7 @@ describe("project and archive routes", () => {
     // property read inside the async handler, which ended the bridge.
     expect((await meta("PUT", metaUrl(), null)).status).toBe(400);
     expect((await meta("POST", projectsUrl(), null)).status).toBe(400);
-    for (const path of ["/clutch/v1/sessions/load", "/clutch/v1/chat"]) {
+    for (const path of ["/clutch/v1/sessions/load", "/clutch/v1/chat", "/clutch/v1/chat/cancel"]) {
       for (const body of ["null", "[]", "7"]) {
         const res = await fetch(`http://127.0.0.1:${chatPort}${path}`, {
           method: "POST",

@@ -655,6 +655,12 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
+      // A literal `null` body parses fine and would then throw on
+      // `body.sessionId` inside this async handler, which ends the bridge.
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
+        return;
+      }
       const chatId = typeof body.sessionId === "string" ? body.sessionId : "";
       const session = chatId ? sessions.get(chatId) : undefined;
       let cancelled = false;
