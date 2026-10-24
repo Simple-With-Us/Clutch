@@ -50,18 +50,7 @@ jobs:
       - name: Run the iOS UI tests
         run: |
           set -o pipefail
-<<<<<<< HEAD
           bash scripts/ios-ui-tests.sh
-=======
-          cd ios
-          xcodegen generate
-          xcodebuild -project Clutch.xcodeproj \
-            -scheme Clutch \
-            -destination "platform=iOS Simulator,name=iPhone 16 Pro" \
-            -only-testing:ClutchUITests/ClutchThreadSurfaceUITests \
-            -resultBundlePath "$RUNNER_TEMP/clutch-ios-ui.xcresult" \
-            test
->>>>>>> origin/main
       - name: Publish the iOS UI screenshots
         if: always()
         uses: actions/upload-artifact@v4
