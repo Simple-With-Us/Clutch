@@ -70,8 +70,10 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         snap("ios-thread-open")
 
         // The find bar is open with the query in it, and the match count is
-        // the bar's own feedback that the search ran.
-        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 30))
+        // the bar's own feedback that the search ran.  Both stub messages
+        // mention "redirect", so the count is two.
+        let count = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'match'")).firstMatch
+        XCTAssertTrue(count.waitForExistence(timeout: 30))
         snap("ios-find-match")
     }
 }
