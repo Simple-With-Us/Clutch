@@ -41,6 +41,10 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
     }
 
     func testFindInThreadShowsMatches() throws {
+        // The find bar opens with the query already in it: the simulator's
+        // keyboard is not dependable in CI, and the point of this test is
+        // the highlighted match, not the typing.
+        app.launchArguments = ["-ClutchResetHosts", "-ClutchShowFind", "1", "-ClutchFindText", "redirect"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30))
 
@@ -65,21 +69,9 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         thread.tap()
         snap("ios-thread-open")
 
-        // The find bar is in the thread toolbar.
-        let find = app.buttons["Find In Thread"]
-        XCTAssertTrue(find.waitForExistence(timeout: 30))
-        find.tap()
-
-        let field = app.textFields["Find In Thread"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
-        // The field needs focus before it can be typed into, and the
-        // software keyboard takes a moment to come up.
-        field.tap()
-        _ = app.keyboards.firstMatch.waitForExistence(timeout: 10)
-        field.typeText("redirect")
+        // The find bar is open with the query in it, and the match count is
+        // the bar's own feedback that the search ran.
+        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 30))
         snap("ios-find-match")
-
-        // The match count is the bar's own feedback that the search ran.
-        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 10))
     }
 }

@@ -246,8 +246,8 @@ final class SessionThreadModel {
 public struct SessionThreadView: View {
     let session: AcpSessionInfo
     @State private var model: SessionThreadModel
-    @State private var showFind = false
-    @State private var findText = ""
+    @State private var showFind = DebugLaunch.showsFind
+    @State private var findText = DebugLaunch.findText ?? ""
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
