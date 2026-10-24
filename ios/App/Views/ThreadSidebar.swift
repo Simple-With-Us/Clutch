@@ -51,6 +51,12 @@ struct ThreadSidebar: View {
     var onNew: () -> Void
     var onRefresh: () -> Void
     var onAction: (ThreadSidebarAction, AcpSessionInfo) -> Void = { _, _ in }
+    /// Whether archived threads are listed (marked, restorable) or hidden.
+    var showArchived: Bool = false
+    /// Flip `showArchived` and reload.  Without this, archiving a thread made
+    /// it unreachable: every list call excluded archived rows, so the restore
+    /// action could never be reached.
+    var onToggleArchived: (() -> Void)? = nil
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
     var fixedWidth: CGFloat? = 232
@@ -245,6 +251,19 @@ struct ThreadSidebar: View {
                 .foregroundStyle(.secondary)
 
             Spacer(minLength: 0)
+
+            if let onToggleArchived {
+                Button(action: onToggleArchived) {
+                    Image(systemName: showArchived ? "archivebox.fill" : "archivebox")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(showArchived ? Color.accentColor : .secondary)
+                .accessibilityLabel(showArchived ? "Hide Archived Threads" : "Show Archived Threads")
+                #if os(macOS)
+                .help(showArchived ? "Hide Archived Threads" : "Show Archived Threads")
+                #endif
+            }
 
             if loading {
                 ProgressView()

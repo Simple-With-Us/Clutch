@@ -134,6 +134,9 @@ public struct ChatView: View {
     /// was left; the drag itself lives in `ThreadSidebar`'s trailing edge.
     @State private var sidebarWidth: CGFloat = MacSidebarWidth.current
     @State private var sidebarProjects: [SessionsClient.Project] = []
+    /// When true the sidebar also lists archived threads so they can be
+    /// restored; archiving a thread would otherwise make it unreachable.
+    @State private var showArchived = false
     /// Newest real usage record for the open thread, pushed by the sidecar's
     /// SSE stream.  Nil until the engine reports one.
     @State private var activeUsage: AcpSessionUsage?
@@ -198,6 +201,11 @@ public struct ChatView: View {
                         onNew: { startMcodeThread() },
                         onRefresh: { Task { await loadSidebarSessions() } },
                         onAction: { action, session in handle(action, session) },
+                        showArchived: showArchived,
+                        onToggleArchived: {
+                            showArchived.toggle()
+                            Task { await loadSidebarSessions() }
+                        },
                         fixedWidth: sidebarWidth,
                         onResize: { width in
                             sidebarWidth = width
@@ -549,7 +557,7 @@ public struct ChatView: View {
         defer { sidebarLoading = false }
         do {
             let client = SessionsClient(host: host)
-            sidebarSessions = try await client.list()
+            sidebarSessions = try await client.list(includingArchived: showArchived)
             sidebarError = nil
             // Project names live only in the metadata store, so the sidebar
             // needs its own read.  A failure here must not blank the thread

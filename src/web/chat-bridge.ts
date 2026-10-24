@@ -453,6 +453,9 @@ const SessionMetaPatchSchema = z
   .strict()
   .refine((v) => v.projectId !== undefined || v.archived !== undefined, { message: "nothing to update" });
 
+/** Most sessions enriched with log-derived usage per list request. */
+const USAGE_ENRICH_CAP = 50;
+
 const ProjectCreateSchema = z
   .object({
     name: z.string({ error: "project name is required" }),
@@ -576,8 +579,12 @@ async function main(): Promise<void> {
         // possible, then trim back to the requested page size after filtering.
         const fetchLimit = includeArchived ? limit : Math.max(limit, 500);
         const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, fetchLimit));
-        const visible = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived).slice(0, limit);
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: attachUsage(visible) }));
+        const page = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived).slice(0, limit);
+        // Reading usage means a synchronous zstd log read per session, so cap
+        // how many rows get enriched in one request; rows past the cap simply
+        // report no usage (the UI already renders "not reported").
+        const sessions = attachUsage(page.slice(0, USAGE_ENRICH_CAP)).concat(page.slice(USAGE_ENRICH_CAP));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions }));
       } catch (err) {
         log(`mcode list failed message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(

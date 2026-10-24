@@ -13,6 +13,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 interface CcCall {
@@ -300,13 +302,27 @@ describe("project and archive routes", () => {
   const metaUrl = (): string => `http://127.0.0.1:${chatPort}/clutch/v1/session-meta`;
   const projectsUrl = (): string => `http://127.0.0.1:${chatPort}/clutch/v1/projects`;
 
+  // Validate the sidecar's response envelopes before the test reads them:
+  // a shape change should fail here, at the boundary, not inside an expect.
+  const TestApiResponseSchema = z
+    .object({
+      projects: z.array(z.unknown()).optional(),
+      sessions: z.record(z.string(), z.unknown()).optional(),
+      project: z.record(z.string(), z.unknown()).optional(),
+      created: z.boolean().optional(),
+      entry: z.record(z.string(), z.unknown()).optional(),
+      ok: z.boolean().optional(),
+      error: z.string().optional(),
+    })
+    .strict();
+
   async function meta(method: string, url: string, body?: unknown) {
     const res = await fetch(url, {
       method,
       headers: chatHeaders(),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    return { status: res.status, json: (await res.json()) as Record<string, unknown> };
+    return { status: res.status, json: TestApiResponseSchema.parse(await res.json()) };
   }
 
   it("starts empty and stays behind the chat token", async () => {
@@ -383,8 +399,8 @@ describe("project and archive routes", () => {
       headers: chatHeaders(),
     });
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { sessions: Record<string, unknown> };
-    expect(json.sessions["session-doomed"]).toBeUndefined();
+    const json = TestApiResponseSchema.parse(await res.json());
+    expect(json.sessions?.["session-doomed"]).toBeUndefined();
 
     const again = await fetch(`${projectsUrl()}/${encodeURIComponent(id)}`, {
       method: "DELETE",
