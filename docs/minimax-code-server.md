@@ -87,9 +87,19 @@ On both native apps, threads can be pinned locally (per host, on-device only), t
 
 The app asks for a model by id; the sidecar maps it onto the exact wire value the engine wants, because every engine spells its models differently (MiniMax Code uses `m:minimax:…:v:thinking`, Muse can use a provider-qualified `muse-model:[…]`).  The choice is applied as an ACP config option (`session/set_config_option`) on the model id and on the engine's own effort option: `reasoning_effort` on dsh, `thinkingEffort` on MiniMax Code, `reasoningEffort` on Muse Code.  A refusal is reported, never fatal: the turn still runs with the engine's default.
 
+The picker only *shows* the catalog's first row; it does not send it.  A thread keeps the model and effort it was created with unless the owner picks another one, so opening an old thread never silently switches its model.
+
+### Attachments
+
+Images ride a turn as base64 data — the phone has no shared filesystem with the server — and the sidecar forwards them as ACP image blocks to MiniMax Code and Muse Code, both of which accept them.  The dsh bridges take no image block, so the sidecar writes the bytes into a per-session directory under `$CLUTCH_HOME/attachments` and names that file in the prompt; the agent opens it with its own read tool.  The name comes from the client, so it is never trusted: only the last path segment survives, and the resolved path is checked against the attachment root before the write.  Attachments live outside the working directory on purpose — an attachment is not a project file, and writing it there would dirty the working tree.  Directories older than a day are pruned.
+
 ### The Mac App Reaching Another Machine
 
 The Mac app pairs and switches hosts the way the phone does, so a code server on another machine is one click away: the chat surface has a host menu with every paired host plus **Add Host…**, and the same pairing link the phone uses works there.  A paired server host has no web canvas and no dsh host contract behind it, so the Mac shows the code surfaces only — the thread rail, the model and effort pickers, and the composer.
+
+## Verifying The Client Surfaces
+
+The hosted iOS build runs the thread surfaces, not just compiles them: `scripts/ios-ui-tests.sh` resolves a simulator, drives the app against a local stub sidecar (`ios/UITests/StubSidecar.swift`), and keeps a screenshot per state — the thread list, the open thread, and the find bar with a match highlighted.  The result bundle is published as the `ios-ui-screenshots` artifact, so a reviewer sees the surfaces rather than reading about them.  The script skips (exit 10) when the runner image has no simulator runtime, which is not the same as a failing test.
 
 ## Troubleshooting
 
