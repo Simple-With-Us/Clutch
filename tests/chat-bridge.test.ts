@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { compactToolHistory, loadOrMintToken, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { compactToolHistory, loadOrMintToken, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -255,6 +255,33 @@ describe("normalizeSessionUpdate", () => {
     const compacted = compactToolHistory(history);
     expect(compacted).toHaveLength(3);
     expect(compacted[1]).toMatchObject({ text: "write", toolStatus: "completed" });
+  });
+});
+
+describe("parsePromptImages", () => {
+  const png = "iVBORw0KGgo=";
+
+  it("keeps the images the engines accept", () => {
+    const images = parsePromptImages([
+      { mimeType: "image/png", data: png, name: "shot.png" },
+      { mimeType: "IMAGE/JPEG", data: png },
+    ]);
+    expect(images).toHaveLength(2);
+    expect(images[0]).toEqual({ mimeType: "image/png", data: png, name: "shot.png" });
+    expect(images[1].mimeType).toBe("image/jpeg");
+  });
+
+  it("drops unsupported types, empty data, and oversized attachments", () => {
+    expect(parsePromptImages([{ mimeType: "image/tiff", data: png }])).toEqual([]);
+    expect(parsePromptImages([{ mimeType: "image/png", data: "" }])).toEqual([]);
+    const big = "A".repeat(9 * 1024 * 1024);
+    expect(parsePromptImages([{ mimeType: "image/png", data: big }])).toEqual([]);
+  });
+
+  it("ignores anything that is not a list of images", () => {
+    expect(parsePromptImages(undefined)).toEqual([]);
+    expect(parsePromptImages("nope")).toEqual([]);
+    expect(parsePromptImages([null, 42])).toEqual([]);
   });
 });
 

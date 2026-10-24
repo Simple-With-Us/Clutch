@@ -30,6 +30,8 @@ public struct ChatSessionClient {
     /// Reasoning effort for this turn.  The sidecar maps it onto whatever
     /// the engine calls its effort option.
     public var effort: String?
+    /// Images attached to this turn, the way the web canvas attaches files.
+    public var images: [ChatAttachment]
 
     public init(
         host: ClutchHost,
@@ -38,7 +40,8 @@ public struct ChatSessionClient {
         relayReceiverUid: String,
         engine: String? = nil,
         cwd: String? = nil,
-        effort: String? = nil
+        effort: String? = nil,
+        images: [ChatAttachment] = []
     ) {
         self.host = host
         self.model = model
@@ -47,6 +50,7 @@ public struct ChatSessionClient {
         self.engine = engine
         self.cwd = cwd
         self.effort = effort
+        self.images = images
     }
 
     public func chatURL() -> URL? {
@@ -80,6 +84,15 @@ public struct ChatSessionClient {
                     if let engine { body["engine"] = engine }
                     if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
                     if let effort, !effort.isEmpty { body["effort"] = effort }
+                    if !images.isEmpty {
+                        body["images"] = images.map { image in
+                            [
+                                "mimeType": image.mimeType,
+                                "data": image.data,
+                                "name": image.name,
+                            ]
+                        }
+                    }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
                     let (bytes, resp) = try await URLSession.shared.bytes(for: req)
                     guard (resp as? HTTPURLResponse)?.statusCode == 200 else {

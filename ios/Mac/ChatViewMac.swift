@@ -156,6 +156,9 @@ public struct ChatView: View {
     @State private var findNonce = 0
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
+    /// Images attached to the next turn, the way the web canvas attaches
+    /// files to a message.
+    @State private var attachments: [ChatAttachment] = []
     /// The host's engine catalog: which engines it runs, which models each
     /// offers, and which effort levels it accepts.
     @State private var catalog: EngineCatalog?
@@ -394,6 +397,11 @@ public struct ChatView: View {
                 onMic: {
                     if !dictation.isRecording { draftBase = draft }
                     dictation.toggle()
+                },
+                attachments: attachments,
+                onAttach: { attachImage() },
+                onRemoveAttachment: { attachment in
+                    attachments.removeAll { $0.id == attachment.id }
                 }
             )
         }
@@ -547,6 +555,24 @@ public struct ChatView: View {
         panel.directoryURL = URL(fileURLWithPath: displayCwd)
         if panel.runModal() == .OK, let url = panel.url {
             codeCwd = url.path
+        }
+    }
+
+    /// Attach an image to the next turn, the way the web canvas attaches a
+    /// file.  The bytes travel with the prompt, because the server has no
+    /// access to this Mac's filesystem.
+    private func attachImage() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.png, .jpeg, .gif, .webp]
+        panel.prompt = "Attach"
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            guard let attachment = ChatAttachment.from(data: data, name: url.lastPathComponent) else { continue }
+            attachments.append(attachment)
         }
     }
 
@@ -1075,8 +1101,10 @@ public struct ChatView: View {
             relayReceiverUid: deviceUid,
             engine: engine.supportsThreads ? engine.sidecarId : nil,
             cwd: engine.supportsThreads ? codeCwd : nil,
-            effort: selectedEffort
+            effort: selectedEffort,
+            images: attachments
         )
+        attachments = []
         sendTask = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
@@ -1428,9 +1456,40 @@ struct MacChatInputBar: View {
     var onStop: () -> Void
     var isDictating: Bool = false
     var onMic: () -> Void = {}
+    /// Images attached to the next turn.
+    var attachments: [ChatAttachment] = []
+    var onAttach: () -> Void = {}
+    var onRemoveAttachment: (ChatAttachment) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 4) {
+            if !attachments.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(attachments) { attachment in
+                        HStack(spacing: 4) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 10))
+                            Text(attachment.displayName)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                            Button {
+                                onRemoveAttachment(attachment)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove \(attachment.displayName)")
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.clutchSecondaryBackground, in: Capsule())
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 Button(action: onMic) {
                     Image(systemName: isDictating ? "mic.fill" : "mic")
@@ -1441,6 +1500,15 @@ struct MacChatInputBar: View {
                 .disabled(sending)
                 .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
                 .help(isDictating ? "Stop Dictation" : "Dictate A Message")
+                Button(action: onAttach) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(sending)
+                .accessibilityLabel("Attach Image")
+                .help("Attach An Image")
                 TextField("Message The Agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...8)

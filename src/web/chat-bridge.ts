@@ -401,6 +401,20 @@ class BridgeProcessError extends Error {
   }
 }
 
+/**
+ * One image attached to a turn.
+ *
+ * ACP carries images as content blocks with base64 data, which is what both
+ * code engines accept (`promptCapabilities.image` is true on MiniMax Code and
+ * Muse Code).  The dsh bridges take a plain string, so an attachment there
+ * rides as a path the agent opens with its own read tool.
+ */
+export interface PromptImage {
+  mimeType: string;
+  data: string;
+  name?: string;
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 class Bridge {
   private child: ChildProcess | null = null;
@@ -597,13 +611,25 @@ class Bridge {
     return this.send("session/load", { sessionId, cwd, mcpServers: [] });
   }
 
-  prompt(sessionId: string, text: string): Promise<{ stopReason: string }> {
+  prompt(sessionId: string, text: string, images: PromptImage[] = []): Promise<{ stopReason: string }> {
     // ACP agents take content blocks; the dsh bridges take a plain string.
     // Muse Code rejects a bare string ("Invalid params"), so the code
     // engines get the block form every time.
-    const prompt = this.engine === "mcode" || this.engine === "muse"
-      ? [{ type: "text", text }]
-      : text;
+    let prompt: unknown = text;
+    if (this.engine === "mcode" || this.engine === "muse") {
+      const blocks: unknown[] = [{ type: "text", text }];
+      for (const image of images) {
+        blocks.push({ type: "image", mimeType: image.mimeType, data: image.data });
+      }
+      prompt = blocks;
+    } else if (images.length > 0) {
+      // The dsh bridges have no image block: name the files instead, and
+      // let the agent open them with its own read tool.
+      const names = images.map((image) => image.name).filter(Boolean);
+      if (names.length > 0) {
+        prompt = `${text}\n\n${names.map((name) => `<attached-image path="${name}" />`).join("\n")}`;
+      }
+    }
     return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;
   }
 
@@ -651,6 +677,42 @@ function readJsonBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<unk
 
 function sseSend(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/** The image MIME types the code engines accept. */
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** One image per turn, and the bytes it carries. */
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+
+/**
+ * The images attached to a turn.
+ *
+ * The client posts base64 data (an attachment is never a file path: the
+ * phone has no shared filesystem with the server).  The size and the MIME
+ * type are checked here so a bad attachment is refused before a model turn
+ * is billed for it.
+ */
+export function parsePromptImages(raw: unknown): Array<{ mimeType: string; data: string; name?: string }> {
+  if (!Array.isArray(raw)) return [];
+  const images: Array<{ mimeType: string; data: string; name?: string }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as { mimeType?: unknown; data?: unknown; name?: unknown };
+    const mimeType = typeof row.mimeType === "string" ? row.mimeType.trim().toLowerCase() : "";
+    if (!IMAGE_MIME_TYPES.has(mimeType)) continue;
+    const data = typeof row.data === "string" ? row.data.trim() : "";
+    if (!data) continue;
+    // The client sends raw base64; the byte count is what the engine caps.
+    const bytes = Math.floor((data.length * 3) / 4);
+    if (bytes > MAX_IMAGE_BYTES) continue;
+    images.push({
+      mimeType,
+      data,
+      ...(typeof row.name === "string" && row.name.length > 0 ? { name: row.name } : {}),
+    });
+  }
+  return images;
 }
 
 async function main(): Promise<void> {
@@ -975,6 +1037,7 @@ async function main(): Promise<void> {
         sessionId?: unknown;
         cwd?: unknown;
         relay?: unknown;
+        images?: unknown;
       };
       try {
         body = (await readJsonBody(req)) as typeof body;
@@ -996,6 +1059,8 @@ async function main(): Promise<void> {
       // optional: without them the engine keeps its own defaults.
       const requestedModel = typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : undefined;
       const requestedEffort = typeof body.effort === "string" && body.effort.trim().length > 0 ? body.effort.trim() : undefined;
+      // Images attached to the turn, the way the web canvas attaches files.
+      const images = parsePromptImages(body.images);
 
       let chatId = typeof body.sessionId === "string" && body.sessionId.length > 0 ? body.sessionId : null;
       let session = chatId ? sessions.get(chatId) : undefined;
@@ -1094,7 +1159,7 @@ async function main(): Promise<void> {
           const applied = await applySessionChoices(bridge, active, await catalog());
           log(`chat choices session=${chatId} model=${applied.modelApplied} effort=${applied.effortApplied}`);
         }
-        const result = await bridge.prompt(active.bridgeSessionId, prompt);
+        const result = await bridge.prompt(active.bridgeSessionId, prompt, images);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);
         if (sink) {
           try {

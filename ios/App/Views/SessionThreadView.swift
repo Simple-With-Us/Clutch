@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(PhotosUI)
+import PhotosUI
+#endif
 
 /// One rendered turn in a native MiniMax Code thread.
 struct ThreadBubbleItem: Identifiable, Equatable {
@@ -42,6 +45,9 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
+    /// Images attached to the next turn, the way the web canvas attaches
+    /// files to a message.
+    var attachments: [ChatAttachment] = []
 
     /// The engine this thread runs on (`mcode` for MiniMax Code, `muse` for
     /// Muse Code).  Set when the thread is opened, and what the catalog is
@@ -147,8 +153,10 @@ final class SessionThreadModel {
             relayReceiverUid: "",
             engine: engine,
             cwd: cwd,
-            effort: effort
+            effort: effort,
+            images: attachments
         )
+        attachments = []
         let replyId = UUID().uuidString
         var reply = ""
         sendTask = Task {
@@ -237,6 +245,8 @@ public struct SessionThreadView: View {
     @State private var findText = ""
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
+    /// The photo the user picked for the next turn.
+    @State private var pickedPhoto: PhotosPickerItem?
 
     public init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
         self.session = session
@@ -460,7 +470,11 @@ public struct SessionThreadView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        VStack(spacing: 6) {
+            if !model.attachments.isEmpty {
+                attachmentStrip
+            }
+            HStack(alignment: .bottom, spacing: 8) {
             Button {
                 if !dictation.isRecording { draftBase = model.draft }
                 dictation.toggle()
@@ -472,6 +486,13 @@ public struct SessionThreadView: View {
             .buttonStyle(.plain)
             .disabled(model.isSending)
             .accessibilityLabel(dictation.isRecording ? "Stop Dictation" : "Dictate")
+            PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                Image(systemName: "paperclip")
+                    .font(.title3)
+                    .foregroundStyle(Color.secondary)
+            }
+            .disabled(model.isSending)
+            .accessibilityLabel("Attach Image")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -499,9 +520,60 @@ public struct SessionThreadView: View {
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send Message")
             }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .onChange(of: pickedPhoto) { _, item in
+            guard let item else { return }
+            pickedPhoto = nil
+            Task { await loadAttachment(item) }
+        }
+    }
+
+    /// The images waiting on the next turn, each removable.
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.attachments) { attachment in
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 10))
+                        Text(attachment.displayName)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                        Button {
+                            model.attachments.removeAll { $0.id == attachment.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(attachment.displayName)")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.clutchSecondaryBackground, in: Capsule())
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+    }
+
+    /// Read a picked photo into an attachment.  A photo the engines cannot
+    /// take (an unsupported type, or one over the size cap) is reported
+    /// instead of failing silently at the send.
+    private func loadAttachment(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            model.sendError = "Could not read that photo."
+            return
+        }
+        guard let attachment = ChatAttachment.from(data: data, name: "attachment") else {
+            model.sendError = "That image type is not supported.  Use PNG, JPEG, GIF, or WebP."
+            return
+        }
+        model.attachments.append(attachment)
     }
 }
 
