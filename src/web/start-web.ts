@@ -16,6 +16,7 @@ import { httpStatusIsUp } from "../shared/http-up.ts";
 import { clutchWebPort } from "../shared/ports.ts";
 import { initClutchSettings, reloadSettingsOnSighup } from "../shared/clutchSettings.ts";
 import { tailnetDnsName, trustedHostArgs } from "./pair-link.ts";
+import { readTailnetStatus } from "./tailnet-status.ts";
 
 // Load app settings from Infisical (sole source of truth) before any
 // managed setting is read below.  Owned keys not already in process.env are
@@ -126,7 +127,9 @@ async function detectTailnetHost(): Promise<string | null> {
   // boot can come back empty and leave the server trusting loopback only, which
   // 403s every /api request from the iOS app until the next restart.  Retry for
   // a bounded window; scripts/lib/clutch-tailnet-host.sh reconciles the slower
-  // case by restarting once the name actually appears.
+  // case by restarting once the name actually appears.  Each read is itself
+  // bounded (readTailnetStatus), so a wedged tailscaled counts as "not ready"
+  // instead of hanging this wait for good.
   const waitSeconds = Number(process.env.CLUTCH_TAILNET_WAIT_SECONDS ?? 30);
   const deadline = Date.now() + (Number.isFinite(waitSeconds) ? waitSeconds : 30) * 1000;
 
@@ -139,21 +142,10 @@ async function detectTailnetHost(): Promise<string | null> {
 }
 
 function readTailnetHost(): Promise<string | null> {
-  return new Promise((resolvePromise) => {
-    const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
-    let out = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      out += chunk.toString("utf8");
-    });
-    child.on("error", () => resolvePromise(null));
-    child.on("exit", () => {
-      try {
-        resolvePromise(tailnetDnsName(JSON.parse(out)));
-      } catch {
-        resolvePromise(null);
-      }
-    });
-  });
+  // The read is bounded: `tailscale status` can block forever on a wedged
+  // tailscaled, and this runs before the sidecar listens, so an unbounded call
+  // would keep the server from ever starting.
+  return readTailnetStatus().then((status) => tailnetDnsName(status));
 }
 
 async function main(): Promise<void> {
