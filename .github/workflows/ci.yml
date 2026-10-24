@@ -17,6 +17,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: bash scripts/ios-fleet/test-scheduled-ship-gate.sh
+      # The version-numbering rules (AFC-517):  the marketing version is the
+      # next patch on the app's train and the build number is independent of
+      # it.  The offline test script answers the App Store Connect queries
+      # from a stub node, so it never touches the network.
+      - run: bash scripts/ios-fleet/test-ship-seq.sh
       # The App Store Connect credential rules (AFC-459):  the key comes from
       # the environment or from Infisical, and a named ASC_KEY_PATH is ignored.
       - run: node --test scripts/ios-fleet/*.test.mjs
@@ -49,21 +54,19 @@ jobs:
       # code compiles, not that the surface works.
       - name: Run the iOS UI tests
         run: |
-          set -o pipefail
-          cd ios
-          xcodegen generate
-          xcodebuild -project Clutch.xcodeproj \
-            -scheme Clutch \
-            -destination "platform=iOS Simulator,name=iPhone 16 Pro" \
-            -only-testing:ClutchUITests/ClutchThreadSurfaceUITests \
-            -resultBundlePath "$RUNNER_TEMP/clutch-ios-ui.xcresult" \
-            test
+          status=0
+          bash scripts/ios-ui-tests.sh || status=$?
+          if [ "$status" = "10" ]; then
+            echo "::warning title=iOS UI tests::no iOS simulator runtime on this runner; the UI tests were skipped"
+            exit 0
+          fi
+          exit "$status"
       - name: Publish the iOS UI screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ios-ui-screenshots
-          path: ${{ runner.temp }}/clutch-ios-ui.xcresult
+          path: ios-ui.xcresult
           if-no-files-found: ignore
 
   macos:

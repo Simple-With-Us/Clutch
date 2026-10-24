@@ -34,7 +34,7 @@ final class StubSidecar {
         listener.stateUpdateHandler = { [weak self] state in
             if case .ready = state {
                 if let port = self?.listener?.port?.rawValue {
-                    self?.port = port
+                    self?.port = Int(port)
                 }
                 ready.signal()
             }
@@ -62,16 +62,52 @@ final class StubSidecar {
         connection.start(queue: queue)
         receive(on: connection) { [weak self] request in
             guard let self, let request else { return }
+            // The stub answers on the test runner's stderr, so a CI log shows
+            // whether the app ever reached it.
+            FileHandle.standardError.write(Data("stub-sidecar: \(request.split(separator: "\n").first ?? "")\n".utf8))
             let body = self.body(for: request)
             self.respond(on: connection, status: body.status, json: body.json)
         }
     }
 
+    /// Read until the request headers end and the announced body has arrived.
+    ///
+    /// Answering before the body is drained can make the client reset the
+    /// connection instead of reading the response, so the whole request is
+    /// read first.
     private func receive(on connection: NWConnection, then handler: @escaping (String?) -> Void) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, _ in
-            let text = data.flatMap { String(data: $0, encoding: .utf8) }
-            handler(text)
+        var buffer = ""
+        func bodyLength(_ text: String) -> Int {
+            for line in text.split(separator: "\r\n") {
+                let parts = line.split(separator: ":", maxSplits: 1)
+                guard parts.count == 2 else { continue }
+                if parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
+                    return Int(parts[1].trimmingCharacters(in: .whitespaces)) ?? 0
+                }
+            }
+            return 0
         }
+        func readMore() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
+                if let data {
+                    buffer += String(decoding: data, as: UTF8.self)
+                    if let headerEnd = buffer.range(of: "\r\n\r\n") {
+                        let header = String(buffer[buffer.startIndex..<headerEnd.lowerBound])
+                        let body = String(buffer[headerEnd.upperBound...])
+                        if body.utf8.count >= bodyLength(header) {
+                            handler(buffer)
+                            return
+                        }
+                    }
+                }
+                if error != nil || isComplete {
+                    handler(buffer.isEmpty ? nil : buffer)
+                    return
+                }
+                readMore()
+            }
+        }
+        readMore()
     }
 
     private struct StubBody {
@@ -121,13 +157,15 @@ final class StubSidecar {
 
     private func respond(on connection: NWConnection, status: Int, json: String) {
         let payload = Data(json.utf8)
-        let header = """
-        HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")
-        Content-Type: application/json
-        Content-Length: \(payload.count)
-        Connection: close
-
-        """
+        // The header block ends with a blank line: CRLF CRLF.  A Swift
+        // multi-line string ends with a single newline, which leaves the
+        // body glued to the headers and the client reads the whole thing as
+        // one malformed header.
+        let header = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\n"
+            + "Content-Type: application/json\r\n"
+            + "Content-Length: \(payload.count)\r\n"
+            + "Connection: close\r\n"
+            + "\r\n"
         var response = Data(header.utf8)
         response.append(payload)
         connection.send(content: response, completion: .contentProcessed { _ in
