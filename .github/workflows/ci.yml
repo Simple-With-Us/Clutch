@@ -49,8 +49,13 @@ jobs:
       # code compiles, not that the surface works.
       - name: Run the iOS UI tests
         run: |
-          set -o pipefail
-          bash scripts/ios-ui-tests.sh
+          status=0
+          bash scripts/ios-ui-tests.sh || status=$?
+          if [ "$status" = "10" ]; then
+            echo "::warning title=iOS UI tests::no iOS simulator runtime on this runner; the UI tests were skipped"
+            exit 0
+          fi
+          exit "$status"
       - name: Publish the iOS UI screenshots
         if: always()
         uses: actions/upload-artifact@v4

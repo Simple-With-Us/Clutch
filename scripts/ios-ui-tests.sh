@@ -46,7 +46,11 @@ pick_device() {
 
 download_runtime() {
   log "no iOS simulator runtime on this image; downloading the iOS platform"
-  xcodebuild -downloadPlatform iOS >>"$REPO_ROOT/ios-ui-download.log" 2>&1 || return 1
+  local log_file="${RUNNER_TEMP:-/tmp}/clutch-ios-ui-download.log"
+  xcodebuild -downloadPlatform iOS >>"$log_file" 2>&1 || {
+    log "the platform download failed (see $log_file); skipping the UI tests"
+    return 1
+  }
   # A downloaded runtime needs a device of its own.
   local runtime
   runtime="$(xcrun simctl list runtimes 2>/dev/null | awk -F '[()]' '/iOS/ { print $2; exit }')"
