@@ -7,7 +7,8 @@
 set -euo pipefail
 
 # Sentence gap: AGENTS.md § Copy Rules (a real U+00A0 plus a normal space
-# in prose a human reads).  This file is code, so it never takes a U+00A0.
+# between sentences in prose a human reads;  code, identifiers and
+# machine-readable config never take a U+00A0).
 REPO_NAME="Clutch"
 NODE_MAJOR_MIN=22
 ENV_FILE_REL=".cursor/infisical.env"

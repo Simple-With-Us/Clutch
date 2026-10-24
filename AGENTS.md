@@ -13,7 +13,7 @@ Infisical is the sole source of truth for Clutch's app settings — secrets, env
 - The local user IS the admin (single-user local tool — documented no-op gate).  Admin edits go through `clutch-settings set`, the native Hosts and Settings sheet, or the Infisical UI, and write through to Infisical first.
 - **The machine identity is the one exception, by necessity.**  The project ID, client ID, and client secret authenticate the read of Infisical, so they cannot live in Infisical.  They live in `$CLUTCH_HOME/infisical.json` at mode `600` (`src/shared/infisicalIdentity.ts` for Node, `_clutch_infisical_identity()` in `scripts/lib/clutch-infisical-env.sh` for the bash launchers), with an explicitly-set env var always winning.  Editing it needs a restart; the native panel says so.
 - The web Settings dialog is **upstream `dsh` code and not ours** — `scripts/clutch.sh` execs `node_modules/.bin/dsh` and npm ships `dsh-web-frontend` as compiled `dist` only.  Clutch's own settings surface is the `clutch-settings` CLI, the `GET`/`PUT /clutch/v1/infisical` sidecar route (`src/web/infisical-route.ts`), and the native sheet.  See `INFISICAL.md` § "Consuming the client" before assuming the dialog is extensible.
-- The real dsh **TypeScript** is not in `node_modules`.  A read-only reference checkout of `github.com/deepseek-ai/deepseek-harness` (MIT) lives at `~/apps/upstream/deepseek-harness`, pinned to `dsh-v0.1.5-rc.3`.  Read it to learn from and to extend — never commit to it, push to it, or contact DeepSeek.  [`docs/upstream-dsh-reference.md`](./docs/upstream-dsh-reference.md) records the location, the license, the extension seams, and why Clutch keeps consuming dsh by pin rather than forking it.
+- The real dsh **TypeScript** is not in `node_modules`.  A read-only reference checkout of `github.com/deepseek-ai/deepseek-harness` (MIT) lives at `~/apps/upstream/deepseek-harness`, pinned to `dsh-v0.1.5-rc.3`.  Read it to learn from and to extend — never commit to it, push to it, or contact DeepSeek.  [`docs/upstream-dsh-reference.md`](./docs/upstream-dsh-reference.md) records the location, the license, the extension seams, and why Clutch keeps consuming dsh by pin rather than forking it.
 - Per-user settings (iOS per-host connections) stay in the app's own store — never Infisical.
 - Secret values never appear in code, logs, PR bodies, or chat — names and metadata only.
 
@@ -67,7 +67,7 @@ Per-use-case feature depth is the open-ended part: any profile may independently
 
 ## Consumers
 
-This repo is **canonical for the DSH ACP driver**, the **MiniMax ACP bridge**, and the **engine plugin set**.  BotFleet imports from `Simple-With-Us/Clutch` via an npm git dependency (`"clutch": "github:Simple-With-Us/Clutch"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `ClutchWindow.swift`, `install-dock-app.sh`).
+This repo is **canonical for the DSH ACP driver**, the **MiniMax ACP bridge**, and the **engine plugin set**.  BotFleet imports from `Simple-With-Us/Clutch` via an npm git dependency (`"clutch": "github:Simple-With-Us/Clutch"`).  ai-fleet-coordinator tracks the live-install scripts (`start-web.sh`, `ensure-web.sh`, `serve-tailscale.sh`, the profile sync, `ClutchWindow.swift`, `install-dock-app.sh`).
 
 **Never edit driver or bridge code in BotFleet.**  Edit it here, in `src/dsh/acp/` or `src/minimax/acp/`, or as a drop-in plugin under `engines/` loaded by `src/shared/engines/`.  BotFleet and AFC consume via PR.
 
@@ -115,14 +115,14 @@ The sentence gap (a real U+00A0 plus a normal space) between sentences in every 
 
 - Never write the `&nbsp;` entity in prose.  It shows up as literal text in squash-merge commits, plain-text email and many APIs.
 - Two plain ASCII spaces are not enough.  Rendered surfaces (Zulip, GitHub, Linear, HTML, Markdown chat panes) collapse them to one.
-- Generate the U+00A0 in the shell rather than typing it, because a model-typed U+00A0 can be normalized to a plain space.  Write the text to a file (`printf 'One.\302\240 Two.\n' > reply.txt`, or run the converter in the canonical `sentence-gap` skill over it: `AI-Fleet-Coordinator/docs/fleet-skills/sentence-gap/SKILL.md`, https://github.com/Simple-With-Us/AI-Fleet-Coordinator/blob/main/docs/fleet-skills/sentence-gap/SKILL.md), check the bytes in that same file with the skill's canonical pair of greps (the U+00A0 count must not be 0, and the missed-gap count must be 0), and post that file rather than a re-typed copy of it.
+- Generate the U+00A0 in the shell rather than typing it, because a model-typed U+00A0 can be normalized to a plain space.  Write the text to a scratch file outside the repo (`f=$(mktemp)`, then `printf 'One.\302\240 Two.\n' > "$f"`, or run the converter in the canonical `sentence-gap` skill over it: `AI-Fleet-Coordinator/docs/fleet-skills/sentence-gap/SKILL.md`, https://github.com/Simple-With-Us/AI-Fleet-Coordinator/blob/main/docs/fleet-skills/sentence-gap/SKILL.md), check the bytes in that same file with the skill's canonical pair of greps (the U+00A0 count must not be 0, and the missed-gap count must be 0), and post that file rather than a re-typed copy of it.
 - Product copy in source, by language:  Swift string literals `"\u{00A0} "`, or the existing Swift-only helper `Copy.sentenceGap` (and `Copy.gap`) in `ios/App/Views/PairView.swift`;  JS/TS string literals `"\u00A0 "`;  JSX text `{'\u00A0'}` followed by a space, or `&#160;` inside JSX text;  HTML markup source `&#160;` (markup only, never prose).  JS, TS and HTML have no shared sentence-gap constant in this repo, so use the escapes above there.
 - Code, identifiers and machine-readable config never get a U+00A0.  If a surface strips U+00A0, leave the text as it is rather than switching to the entity, and report that surface in #Work-In-Progress (formerly #agent-sync) so it can be given a working mechanism.
 - This replaces the earlier per-surface rules (the entity in chat panes or on GitHub, and two plain ASCII spaces in files, commits and terminals).
 
 ## App Icon And Logo Policy: Full-Bleed Square Only, Never Squircle
 
-**Never generate or deliver app icons or logos solely in a pre-baked squircle format.**  All icon assets and design explorations must be generated as standard, uncropped, full-bleed 1:1 squares with 90° sharp corners.  (Channel and avatar crops inside the app are a different thing and may be rounded.)
+**Never generate or deliver app icons or logos solely in a pre-baked squircle format.**  All icon assets and design explorations must be generated as standard, uncropped, full-bleed 1:1 squares with 90° sharp corners.  (Channel and avatar crops inside the app are a different thing and may be rounded.)
 
 ## Secret Handoff (owner -> agent)
 

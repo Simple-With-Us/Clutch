@@ -18,7 +18,7 @@ repo.  Read both before opening a PR.
 - TypeScript for `src/`.  `noUncheckedIndexedAccess`,
   `exactOptionalPropertyTypes`, `verbatimModuleSyntax` are on.  `pnpm
   typecheck` must pass.
-- Python for `bridges/`.  stdlib only.  No `pip install`.  Code must run
+- Python for `bridges/`.  stdlib only.  No `pip install`.  Code must run
   under `/opt/homebrew/bin/python3` on the owner's Mac.
 - Cordis profiles are YAML.  Empty patch layers are `[]`, not `null` or
   absent — the loader distinguishes.
