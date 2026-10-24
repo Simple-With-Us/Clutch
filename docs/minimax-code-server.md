@@ -91,7 +91,7 @@ The picker only *shows* the catalog's first row; it does not send it.  A thread 
 
 ### Attachments
 
-Images ride a turn as base64 data — the phone has no shared filesystem with the server — and the sidecar forwards them as ACP image blocks to MiniMax Code and Muse Code, both of which accept them.  The dsh bridges take no image block, so the sidecar writes the bytes into a per-session directory under `$CLUTCH_HOME/attachments` and names that file in the prompt; the agent opens it with its own read tool.  The name comes from the client, so it is never trusted: only the last path segment survives, and the resolved path is checked against the attachment root before the write.  Attachments live outside the working directory on purpose — an attachment is not a project file, and writing it there would dirty the working tree.  Directories older than a day are pruned.
+Images ride a turn as base64 data — the phone has no shared filesystem with the server — and the sidecar forwards them as ACP image blocks to MiniMax Code and Muse Code, both of which accept them.  The dsh bridges take no image block, so the sidecar writes the bytes into a per-session directory under `$CLUTCH_HOME/attachments` and names that file in the prompt; the agent opens it with its own read tool.  The name comes from the client, so it is never trusted: only the last path segment survives, and the resolved path is checked against the attachment root before the write.  Attachments live outside the working directory on purpose — an attachment is not a project file, and writing it there would dirty the working tree.  Directories older than a day are pruned when the next attachment is written.
 
 ### The Mac App Reaching Another Machine
 
