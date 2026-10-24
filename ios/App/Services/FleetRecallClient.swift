@@ -188,7 +188,11 @@ enum RecallTransportError: Error, Equatable {
         switch self {
         case .badEndpoint: return "The saved fleet recall endpoint isn't a valid URL."
         case .malformedRequest: return "Clutch couldn't build the request for the fleet recall corpus."
-        case .transport: return "Couldn't reach the fleet recall corpus.  Check the connection and try again."
+        case .transport:
+            return Copy.gap(
+                "Couldn't reach the fleet recall corpus.",
+                "Check the connection and try again."
+            )
         case .statusCode(let code): return "The fleet recall corpus rejected the request (HTTP \(code))."
         case .serverError: return "The fleet recall corpus refused the request."
         case .unreadablePayload: return SearchFailure.unreadable.message
