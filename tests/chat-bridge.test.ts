@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { loadOrMintToken, mcodeAvailable, parseLimitParam, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated } from "../src/web/chat-bridge.ts";
+import { loadOrMintToken, mcodeAvailable, parseLimitParam, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -114,6 +114,33 @@ describe("resolveTailnetHost", () => {
     expect(resolveTailnetHost("", status)).toBe("jay-server.boa-roygbiv.ts.net");
     expect(resolveTailnetHost(null, null)).toBe(null);
     expect(resolveTailnetHost(null, { Self: {} })).toBe(null);
+  });
+});
+
+describe("readTailnetStatus", () => {
+  const fakeTailscale = (body: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), "fake-tailscale-"));
+    const path = join(dir, "tailscale");
+    writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return path;
+  };
+
+  it("parses the status JSON the CLI prints", async () => {
+    const cli = fakeTailscale(`echo '{"Self":{"DNSName":"box.ts.net."}}'`);
+    await expect(readTailnetStatus(5000, cli)).resolves.toEqual({ Self: { DNSName: "box.ts.net." } });
+  });
+
+  it("gives up on a CLI that never exits instead of holding startup", async () => {
+    // A wedged tailscaled can leave `tailscale status` waiting forever, and
+    // detection runs before the sidecar listens.
+    const cli = fakeTailscale("exec sleep 30");
+    const started = Date.now();
+    await expect(readTailnetStatus(200, cli)).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("treats a missing CLI as no tailnet", async () => {
+    await expect(readTailnetStatus(5000, join(tmpdir(), "no-such-tailscale-cli"))).resolves.toBeNull();
   });
 });
 

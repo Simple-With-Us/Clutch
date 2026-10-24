@@ -150,19 +150,39 @@ export function resolveTailnetHost(explicit: string | null | undefined, statusJs
   return tailnetDnsName(statusJson);
 }
 
-function readTailnetStatus(): Promise<unknown> {
+/** How long one `tailscale status` call may take.  Detection runs before the
+ *  sidecar listens, so a CLI left waiting on a wedged tailscaled would keep the
+ *  bridge from ever starting; past this the call counts as "no tailnet yet". */
+const TAILNET_STATUS_TIMEOUT_MS = 3000;
+
+export function readTailnetStatus(
+  timeoutMs: number = TAILNET_STATUS_TIMEOUT_MS,
+  command: string = "tailscale",
+): Promise<unknown> {
   return new Promise((resolvePromise) => {
-    const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (value: unknown): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolvePromise(value);
+    };
+    const child = spawn(command, ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
+    timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      settle(null);
+    }, timeoutMs);
     let out = "";
     child.stdout.on("data", (chunk: Buffer) => {
       out += chunk.toString("utf8");
     });
-    child.on("error", () => resolvePromise(null));
+    child.on("error", () => settle(null));
     child.on("exit", () => {
       try {
-        resolvePromise(JSON.parse(out));
+        settle(JSON.parse(out));
       } catch {
-        resolvePromise(null);
+        settle(null);
       }
     });
   });
