@@ -32,7 +32,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -469,21 +469,45 @@ export async function materializeAttachment(options: {
   index: number;
 }): Promise<string | null> {
   const sessionDir = join(options.root, options.sessionId);
-  const file = resolve(sessionDir, safeAttachmentName(options.image.name, options.index));
+  const candidate = resolve(sessionDir, safeAttachmentName(options.image.name, options.index));
   const root = resolve(options.root);
   // The resolved file must sit under the resolved root: the name is
   // sanitized already, and this is the second line of defence.
-  if (file !== root && !file.startsWith(root + sep)) {
+  if (candidate !== root && !candidate.startsWith(root + sep)) {
     log(`attachment refused: the name escaped the attachment directory`);
     return null;
   }
+  let imageDir: string | undefined;
   try {
-    await mkdir(sessionDir, { recursive: true });
-    await writeFile(file, Buffer.from(options.image.data, "base64"));
+    await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+    // Each image gets a directory created exclusively by mkdtemp. Names can
+    // repeat within a turn or across turns without changing an earlier path.
+    imageDir = await mkdtemp(join(sessionDir, "image-"));
+    const file = join(imageDir, safeAttachmentName(options.image.name, options.index));
+    await writeFile(file, Buffer.from(options.image.data, "base64"), { flag: "wx", mode: 0o600 });
     return file;
-  } catch (err) {
-    log(`attachment write failed path=${file} message=${(err as Error).message.slice(0, 120)}`);
+  } catch {
+    if (imageDir) await rm(imageDir, { recursive: true, force: true }).catch(() => undefined);
+    log("attachment write failed");
     return null;
+  }
+}
+
+/** Prepare every image before a turn can be sent. Never silently drop one. */
+export async function prepareAttachedPrompt(root: string, sessionId: string, text: string, images: PromptImage[]): Promise<string> {
+  const written: string[] = [];
+  try {
+    for (const [index, image] of images.entries()) {
+      const file = await materializeAttachment({ root, sessionId, image, index });
+      if (!file) throw new Error("An attachment could not be saved. The turn was not sent. Please try again.");
+      written.push(file);
+    }
+    return `${text}\n\n${written.map((file) => `<attached-image path="${file}" />`).join("\n")}`;
+  } catch (error) {
+    // These directories were created exclusively for this preparation. A
+    // partial batch is never sent, so only its own unused files are removed.
+    await Promise.all(written.map((file) => rm(dirname(file), { recursive: true, force: true }).catch(() => undefined)));
+    throw error;
   }
 }
 
@@ -513,7 +537,7 @@ export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1
 }
 
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
-class Bridge {
+export class Bridge {
   private child: ChildProcess | null = null;
   private initialized: Promise<unknown> | null = null;
   private nextId = 1;
@@ -736,19 +760,7 @@ class Bridge {
       // materialized to a file, with the path appended to the text, so the
       // agent opens the file with its own read tool.  Naming a file that
       // does not exist would lose the attachment entirely.
-      const written: string[] = [];
-      for (const [index, image] of images.entries()) {
-        const file = await materializeAttachment({
-          root: attachmentRoot(),
-          sessionId,
-          image,
-          index,
-        });
-        if (file) written.push(file);
-      }
-      if (written.length > 0) {
-        prompt = `${text}\n\n${written.map((file) => `<attached-image path="${file}" />`).join("\n")}`;
-      }
+      prompt = await prepareAttachedPrompt(attachmentRoot(), sessionId, text, images);
     }
     return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;
   }
