@@ -57,6 +57,7 @@ public struct SessionsView: View {
     @State private var model: SessionsModel
     @State private var selectedId: String?
     @State private var isStartingThread = false
+    @State private var searchText = ""
 
     public init(host: ClutchHost) {
         self.host = host
@@ -136,21 +137,35 @@ public struct SessionsView: View {
         }
     }
 
+    private var visibleSessions: [AcpSessionInfo] {
+        AcpSessionInfo.filtered(AcpSessionInfo.newestFirst(model.sessions), query: searchText)
+    }
+
     private var threadList: some View {
         List(selection: $selectedId) {
-            ForEach(AcpSessionInfo.newestFirst(model.sessions)) { session in
-                ThreadSidebarRow(
-                    session: session,
-                    isSelected: session.sessionId == selectedId,
-                    isLoading: false,
-                    isDisabled: false,
-                    onSelect: { selectedId = $0.sessionId }
-                )
-                .tag(session.sessionId)
+            ForEach(AcpSessionInfo.grouped(visibleSessions)) { group in
+                Section(group.title) {
+                    ForEach(group.sessions) { session in
+                        ThreadSidebarRow(
+                            session: session,
+                            isSelected: session.sessionId == selectedId,
+                            isLoading: false,
+                            isDisabled: false,
+                            onSelect: { selectedId = $0.sessionId }
+                        )
+                        .tag(session.sessionId)
+                    }
+                }
             }
         }
         .listStyle(.plain)
+        .searchable(text: $searchText, prompt: "Filter Threads")
         .refreshable { await model.refresh() }
+        .overlay {
+            if visibleSessions.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            }
+        }
     }
 
     // MARK: - Detail

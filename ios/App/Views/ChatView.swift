@@ -8,6 +8,15 @@ import CometChatSDK
 /// instead of CometChat's cloud send, and the sidecar relays the turn back
 /// into the thread. Model strip and hold-to-record voice stay native.
 public struct ChatView: View {
+    /// Which surface the Chat tab shows: the CometChat agent thread, or the
+    /// host's MiniMax Code threads (the same split view as the Code tab, so
+    /// the two entry points can never drift apart).
+    enum Surface: Hashable {
+        case agent
+        case code
+    }
+
+    @State private var surface: Surface = .agent
     @State private var manager = CometChatManager.shared
     @State private var selectedModel: String = "DeepSeek-V4.1-Pro"
     @State private var draft: String = ""
@@ -27,8 +36,35 @@ public struct ChatView: View {
     }
 
     public var body: some View {
+        Group {
+            if surface == .code, let host = activeHost {
+                VStack(spacing: 0) {
+                    surfacePicker
+                    SessionsView(host: host)
+                }
+            } else {
+                agentBody
+            }
+        }
+        .onAppear {
+            if activeHost?.isMiniMaxCodeOnly == true { surface = .code }
+        }
+    }
+
+    private var surfacePicker: some View {
+        Picker("Chat Surface", selection: $surface) {
+            Text("Agent").tag(Surface.agent)
+            Text("MiniMax Code").tag(Surface.code)
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private var agentBody: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                surfacePicker
                 // Model header strip
                 HStack(spacing: 8) {
                     Menu {

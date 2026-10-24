@@ -20,13 +20,19 @@ public struct ChatSessionClient {
     /// Engine override (`mcode` for MiniMax Code remote). Nil routes by
     /// model on the sidecar, preserving the DeepSeek/MiniMax behavior.
     public var engine: String?
+    /// Working directory for a turn that creates a session.  The sidecar
+    /// defaults a missing cwd to `$HOME`, and MiniMax Code then refuses to
+    /// resume the thread from anywhere else — so the Mac sidebar's chosen
+    /// folder has to ride along on the first turn.
+    public var cwd: String?
 
-    public init(host: ClutchHost, model: String, sessionId: String? = nil, relayReceiverUid: String, engine: String? = nil) {
+    public init(host: ClutchHost, model: String, sessionId: String? = nil, relayReceiverUid: String, engine: String? = nil, cwd: String? = nil) {
         self.host = host
         self.model = model
         self.sessionId = sessionId
         self.relayReceiverUid = relayReceiverUid
         self.engine = engine
+        self.cwd = cwd
     }
 
     public func chatURL() -> URL? {
@@ -58,6 +64,7 @@ public struct ChatSessionClient {
                     ]
                     if let sessionId { body["sessionId"] = sessionId }
                     if let engine { body["engine"] = engine }
+                    if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
                     req.httpBody = try JSONSerialization.data(withJSONObject: body)
                     let (bytes, resp) = try await URLSession.shared.bytes(for: req)
                     guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -81,6 +88,27 @@ public struct ChatSessionClient {
                 }
             }
         }
+    }
+
+    /// Stop one in-flight turn without dropping the stream first
+    /// (`POST /clutch/v1/chat/cancel`).  Best effort: the stream's own close
+    /// handler on the sidecar cancels again, so a failed call here still
+    /// ends with the local task cancelled by the caller.
+    public static func cancel(host: ClutchHost, sessionId: String) async {
+        guard let token = host.chatToken, !token.isEmpty else { return }
+        var comps = URLComponents()
+        comps.scheme = host.origin.scheme
+        comps.host = host.origin.host
+        comps.port = host.chatPort
+        comps.path = "/clutch/v1/chat/cancel"
+        guard let url = comps.url else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["sessionId": sessionId])
+        req.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: req)
     }
 
     static func decode(event: String, payload: String) -> ChatStreamEvent? {

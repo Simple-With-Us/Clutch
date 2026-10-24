@@ -33,6 +33,35 @@ public struct SessionsClient {
         return comps
     }
 
+    /// Sidecar health: reachable, token accepted, and whether this host can
+    /// actually run MiniMax Code (`mcode` installed and signed in there).
+    public func health() async throws -> Health {
+        var comps = try base()
+        comps.path = "/clutch/v1/health"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url, timeout: 15))
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        struct Payload: Decodable {
+            var ok: Bool
+            var mcode: Mcode?
+            struct Mcode: Decodable { var available: Bool }
+        }
+        let payload = try? JSONDecoder().decode(Payload.self, from: data)
+        return Health(ok: payload?.ok ?? true, mcodeAvailable: payload?.mcode?.available ?? true)
+    }
+
+    public struct Health: Equatable, Sendable {
+        public var ok: Bool
+        public var mcodeAvailable: Bool
+
+        public init(ok: Bool, mcodeAvailable: Bool) {
+            self.ok = ok
+            self.mcodeAvailable = mcodeAvailable
+        }
+    }
+
     public func list(limit: Int = 100, includingArchived: Bool = false) async throws -> [AcpSessionInfo] {
         var comps = try base()
         comps.path = "/clutch/v1/sessions"

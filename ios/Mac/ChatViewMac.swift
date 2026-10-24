@@ -21,7 +21,7 @@ enum MacChatIdentity {
 /// can never open a rail that swallows the chat.
 enum MacSidebarWidth {
     private static let key = "codes.clutch.mac-sidebar-width"
-    static let fallback: CGFloat = 232
+    static let fallback: CGFloat = 248
     static let range: ClosedRange<CGFloat> = 180 ... 460
 
     static var current: CGFloat {
@@ -147,6 +147,12 @@ public struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
+    /// nil until the first health check lands; drives the header status dot.
+    @State private var sidecarReachable: Bool?
+    @State private var mcodeAvailable: Bool = true
+    @State private var sendTask: Task<Void, Never>?
+    @State private var showingCwdEditor = false
+    @State private var cwdDraft: String = ""
 
     let activeHost: ClutchHost?
 
@@ -253,6 +259,9 @@ public struct ChatView: View {
     private var chatPane: some View {
         VStack(spacing: 0) {
             modelStrip
+            if engine == .mcode {
+                cwdBar
+            }
             Divider()
             threadSurface
             if sending, !streamingText.isEmpty {
@@ -271,8 +280,89 @@ public struct ChatView: View {
             MacChatInputBar(
                 draft: $draft,
                 sending: sending,
-                onSend: { send(draft) }
+                onSend: { send(draft) },
+                onStop: { stop() }
             )
+        }
+    }
+
+    // MARK: - Working Directory
+
+    /// Where a new MiniMax Code thread will start, and the folder the open
+    /// thread lives in.  MiniMax Code refuses to resume a thread from a
+    /// different folder than the one it was created in, so this is shown
+    /// always — not buried — and changing it applies to the next new thread.
+    private var cwdBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(displayCwd)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .help(displayCwd)
+            Spacer(minLength: 0)
+            Button("Choose…") { chooseCwd() }
+                .font(.system(size: 11))
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .help("Choose the working folder for the next new thread")
+            Button("Edit") {
+                cwdDraft = mcodeCwd ?? ""
+                showingCwdEditor = true
+            }
+            .font(.system(size: 11))
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .help("Type a working directory path")
+            .popover(isPresented: $showingCwdEditor) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Working Directory")
+                        .font(.system(size: 12, weight: .semibold))
+                    TextField("Path", text: $cwdDraft)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 12, design: .monospaced))
+                        .frame(width: 340)
+                    Text("Applies to the next new thread.  An open thread keeps the folder it was created in.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 340, alignment: .leading)
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { showingCwdEditor = false }
+                        Button("Use Folder") {
+                            let trimmed = cwdDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            mcodeCwd = trimmed.isEmpty ? nil : trimmed
+                            showingCwdEditor = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(12)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.clutchSecondaryBackground.opacity(0.6))
+    }
+
+    private var displayCwd: String {
+        if let cwd = mcodeCwd, !cwd.isEmpty { return cwd }
+        if let selected = sidebarSessions.first(where: { $0.sessionId == mcodeRemoteId })?.cwd, !selected.isEmpty { return selected }
+        return FileManager.default.homeDirectoryForCurrentUser.path
+    }
+
+    private func chooseCwd() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: displayCwd)
+        if panel.runModal() == .OK, let url = panel.url {
+            mcodeCwd = url.path
         }
     }
 
@@ -280,52 +370,82 @@ public struct ChatView: View {
 
     private var modelStrip: some View {
         HStack(spacing: 8) {
-            Menu {
-                Section("DeepSeek") {
-                    Button("DeepSeek-V4.1-Pro") { selectModel("DeepSeek-V4.1-Pro") }
-                    Button("DeepSeek-V4.1-Flash") { selectModel("DeepSeek-V4.1-Flash") }
-                }
-                Section("MiniMax") {
-                    Button("MiniMax-M3.1-Flash") { selectModel("MiniMax-M3.1-Flash") }
-                    Button("MiniMax-M3") { selectModel("MiniMax-M3") }
-                    Button("MiniMax-M2.7-highspeed") { selectModel("MiniMax-M2.7-highspeed") }
-                }
-                Section("MiniMax Code") {
-                    Button("Resume thread…") {
-                        engine = .mcode
-                        showingSessions = true
+            Picker("Engine", selection: engineBinding) {
+                Text("DeepSeek").tag(ChatEngine.deepseek)
+                Text("MiniMax").tag(ChatEngine.minimax)
+                Text("MiniMax Code").tag(ChatEngine.mcode)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 264)
+
+            if engine != .mcode {
+                Menu {
+                    Section(engine == .minimax ? "MiniMax" : "DeepSeek") {
+                        if engine == .minimax {
+                            Button("MiniMax-M3.1-Flash") { selectModel("MiniMax-M3.1-Flash") }
+                            Button("MiniMax-M3") { selectModel("MiniMax-M3") }
+                            Button("MiniMax-M2.7-highspeed") { selectModel("MiniMax-M2.7-highspeed") }
+                        } else {
+                            Button("DeepSeek-V4.1-Pro") { selectModel("DeepSeek-V4.1-Pro") }
+                            Button("DeepSeek-V4.1-Flash") { selectModel("DeepSeek-V4.1-Flash") }
+                        }
                     }
-                    Button("New thread") { startMcodeThread() }
+                    Section("MiniMax Code") {
+                        Button("Resume Thread…") {
+                            selectEngine(.mcode)
+                            showingSessions = true
+                        }
+                        Button("New Thread") { startMcodeThread() }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 11))
+                        Text(selectedModel)
+                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.clutchSecondaryBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 11))
-                    Text(engine == .mcode ? "MiniMax Code" : selectedModel)
-                        .font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.clutchSecondaryBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if !mcodeAvailable {
+                Label("mcode Not Found On Host", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .help("The sidecar answered, but MiniMax Code is not installed or not signed in on that host.")
             }
 
             Spacer()
 
             usageStrip
 
+            if engine == .mcode {
+                Button {
+                    Task { await loadSidebarSessions() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Refresh Threads")
+                .help("Refresh Threads")
+            }
+
             if let host = activeHost {
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(host.status == .online ? Color.green : Color.orange)
+                        .fill(statusColor(for: host))
                         .frame(width: 6, height: 6)
                     Text(host.name)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
+                .help(statusHelp(for: host))
             }
         }
         .padding(.horizontal, 12)
@@ -353,7 +473,7 @@ public struct ChatView: View {
                         metric(icon: "chart.pie.fill", value: occupancy)
                     }
                 } else {
-                    Text("Usage Not Reported Yet")
+                    Text("Usage not reported yet")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
@@ -371,6 +491,62 @@ public struct ChatView: View {
                 .foregroundStyle(.secondary)
         }
         .help(value)
+    }
+
+    private var engineBinding: Binding<ChatEngine> {
+        Binding(
+            get: { engine },
+            set: { selectEngine($0) }
+        )
+    }
+
+    private func selectEngine(_ next: ChatEngine) {
+        guard next != engine else { return }
+        if next == .mcode {
+            // Resume, not reset: prepare() reopens the last thread for this
+            // host.  Clearing it is what the sidebar's New Thread button is
+            // for (startMcodeThread).
+            engine = .mcode
+            MacEngineStore.save(.mcode)
+            resetTurnState()
+            Task { await prepare() }
+            return
+        }
+        engine = next
+        MacEngineStore.save(next)
+        if next == .minimax, !selectedModel.lowercased().hasPrefix("minimax") {
+            selectedModel = "MiniMax-M3.1-Flash"
+        }
+        if next == .deepseek, selectedModel.lowercased().hasPrefix("minimax") {
+            selectedModel = "DeepSeek-V4.1-Pro"
+        }
+        resetTurnState()
+        sessionId = nil
+        Task { await prepare() }
+    }
+
+    private func statusColor(for host: ClutchHost) -> Color {
+        if let reachable = sidecarReachable { return reachable ? .green : .red }
+        return host.status == .online ? .green : .orange
+    }
+
+    private func statusHelp(for host: ClutchHost) -> String {
+        switch sidecarReachable {
+        case true: return "\(host.name): sidecar reachable"
+        case false: return "\(host.name): sidecar unreachable — check Tailscale and that the chat bridge is running there"
+        case nil: return host.name
+        }
+    }
+
+    private func checkSidecar() async {
+        guard let host = activeHost else { return }
+        do {
+            let health = try await SessionsClient(host: host).health()
+            sidecarReachable = health.ok
+            mcodeAvailable = health.mcodeAvailable
+        } catch {
+            sidecarReachable = false
+        }
     }
 
     // MARK: - Thread
@@ -577,9 +753,6 @@ public struct ChatView: View {
 
     private func handle(_ action: ThreadSidebarAction, _ session: AcpSessionInfo) {
         switch action {
-        case let .copySessionId(session):
-            copyToPasteboard(session.sessionId)
-
         case let .revealInFinder(session):
             if let cwd = session.cwd, !cwd.isEmpty {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: cwd)])
@@ -632,12 +805,6 @@ public struct ChatView: View {
         }
     }
 
-    private func copyToPasteboard(_ value: String) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(value, forType: .string)
-    }
-
     /// The sidecar answers a failed resume with a bare ACP reason, so name the
     /// thread and say what to try rather than showing a raw params error.
     private func mcodeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
@@ -658,6 +825,7 @@ public struct ChatView: View {
 
     private func prepare() async {
         guard let host = activeHost else { return }
+        await checkSidecar()
         if engine != .mcode, MacEngineStore.load() == .mcode {
             engine = .mcode
         }
@@ -760,9 +928,10 @@ public struct ChatView: View {
             model: selectedModel,
             sessionId: engine == .mcode ? mcodeChatId : sessionId,
             relayReceiverUid: deviceUid,
-            engine: engine == .mcode ? "mcode" : nil
+            engine: engine == .mcode ? "mcode" : nil,
+            cwd: engine == .mcode ? mcodeCwd : nil
         )
-        Task {
+        sendTask = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
@@ -815,6 +984,22 @@ public struct ChatView: View {
                 sendError = error.localizedDescription
             }
         }
+    }
+
+    /// Stop the in-flight turn: tell the sidecar to cancel the ACP session,
+    /// then drop the local stream (whose close cancels a second time on the
+    /// server, harmlessly).  The partial reply stays out of the transcript —
+    /// a stopped turn is not a finished answer.
+    private func stop() {
+        guard sending else { return }
+        if let host = activeHost, let chatId = engine == .mcode ? mcodeChatId : sessionId {
+            Task { await ChatSessionClient.cancel(host: host, sessionId: chatId) }
+        }
+        sendTask?.cancel()
+        sendTask = nil
+        sending = false
+        streamingText = ""
+        thoughtLine = nil
     }
 }
 
@@ -952,19 +1137,36 @@ struct MacSessionsSheet: View {
 struct MacChatRow: View {
     var row: ChatView.Row
 
+    @State private var expanded = false
+    @State private var hovering = false
+    @State private var copied = false
+
     var body: some View {
         if row.isThought {
-            HStack {
+            HStack(alignment: .top, spacing: 6) {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 12, height: 16)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(expanded ? "Collapse Thinking" : "Expand Thinking")
                 Text(row.text)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
-                    .lineLimit(3)
+                    .lineLimit(expanded ? nil : 3)
                 Spacer(minLength: 48)
             }
         } else {
-            HStack {
+            HStack(alignment: .bottom, spacing: 6) {
                 if !row.fromAgent { Spacer(minLength: 48) }
-                VStack(alignment: row.fromAgent ? .leading : .trailing, spacing: 4) {
+                if row.fromAgent, hovering || copied {
+                    copyButton
+                }
+                VStack(alignment: row.fromAgent ? .leading : .trailing, spacing: 3) {
                     Text(row.text)
                         .font(.system(size: 13))
                         .textSelection(.enabled)
@@ -976,15 +1178,44 @@ struct MacChatRow: View {
                                 : Color.accentColor.opacity(0.15),
                             in: RoundedRectangle(cornerRadius: 12)
                         )
-                    if row.isCard {
-                        Text("TOOL SUMMARY")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundColor(.secondary)
+                    HStack(spacing: 6) {
+                        Text(row.date, style: .time)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                        if row.isCard {
+                            Text("TOOL SUMMARY")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(.secondary)
+                        }
                     }
+                }
+                if !row.fromAgent, hovering || copied {
+                    copyButton
                 }
                 if row.fromAgent { Spacer(minLength: 48) }
             }
+            .onHover { hovering = $0 }
         }
+    }
+
+    private var copyButton: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(row.text, forType: .string)
+            copied = true
+            Task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                copied = false
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10))
+                .foregroundStyle(copied ? Color.green : Color.secondary)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(copied ? "Copied" : "Copy Message")
+        .help(copied ? "Copied" : "Copy Message")
     }
 }
 
@@ -993,23 +1224,48 @@ struct MacChatInputBar: View {
     @Binding var draft: String
     var sending: Bool
     var onSend: () -> Void
+    var onStop: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField("Message the agent…", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .disabled(sending)
-                .onSubmit(onSend)
-            Button(action: onSend) {
+        VStack(spacing: 4) {
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Message The Agent…", text: $draft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...8)
+                    .disabled(sending)
+                    .onSubmit(onSend)
                 if sending {
-                    ProgressView()
+                    Button(action: onStop) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop")
+                    .help("Stop This Turn")
                 } else {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 24))
+                    Button(action: onSend) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 24))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Send Message")
+                    .help("Send (Return)")
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
             }
-            .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Send Message")
+            HStack(spacing: 8) {
+                Text(sending ? "Working… Stop Ends The Turn And Keeps The Thread." : "Return Sends · Shift+Return Adds A Line · ⌘Return Also Sends.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+                if draft.count >= 200 {
+                    Text("\(draft.count)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
