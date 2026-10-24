@@ -32,6 +32,14 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         add(shot)
     }
 
+    /// The on-screen tree, so a failure says what was actually there.
+    private func dump(_ name: String) {
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = name
+        tree.lifetime = .keepAlways
+        add(tree)
+    }
+
     func testFindInThreadShowsMatches() throws {
         app.launch()
         XCTAssertTrue(app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30))
@@ -49,7 +57,11 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
 
         // Open the stub's one thread.
         let thread = app.staticTexts["Fix The Login Redirect"]
-        XCTAssertTrue(thread.waitForExistence(timeout: 30))
+        if !thread.waitForExistence(timeout: 30) {
+            snap("ios-code-threads-missing")
+            dump("ios-code-threads-tree")
+            XCTFail("the stub's thread did not appear in the Code tab")
+        }
         thread.tap()
         snap("ios-thread-open")
 

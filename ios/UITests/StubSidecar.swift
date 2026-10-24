@@ -62,16 +62,35 @@ final class StubSidecar {
         connection.start(queue: queue)
         receive(on: connection) { [weak self] request in
             guard let self, let request else { return }
+            // The stub answers on the test runner's stderr, so a CI log shows
+            // whether the app ever reached it.
+            FileHandle.standardError.write(Data("stub-sidecar: \(request.split(separator: "\n").first ?? "")\n".utf8))
             let body = self.body(for: request)
             self.respond(on: connection, status: body.status, json: body.json)
         }
     }
 
+    /// Read until the request headers end, so a request split across TCP
+    /// segments is still understood.
     private func receive(on connection: NWConnection, then handler: @escaping (String?) -> Void) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, _, _ in
-            let text = data.flatMap { String(data: $0, encoding: .utf8) }
-            handler(text)
+        var buffer = ""
+        func readMore() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
+                if let data {
+                    buffer += String(decoding: data, as: UTF8.self)
+                    if buffer.contains("\r\n\r\n") {
+                        handler(buffer)
+                        return
+                    }
+                }
+                if error != nil || isComplete {
+                    handler(buffer.isEmpty ? nil : buffer)
+                    return
+                }
+                readMore()
+            }
         }
+        readMore()
     }
 
     private struct StubBody {
