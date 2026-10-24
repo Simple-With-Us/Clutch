@@ -490,6 +490,10 @@ export async function materializeAttachment(options: {
 /**
  * Remove attachment directories older than a day, so a long-lived sidecar
  * does not keep every image it ever received.
+ *
+ * Called when an attachment is written, not on a timer: the sidecar has no
+ * background loop to hang this on, and a write is the moment a stale
+ * directory can be noticed.
  */
 export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
   let entries: string[];
@@ -736,16 +740,20 @@ class Bridge {
       // materialized to a file, with the path appended to the text, so the
       // agent opens the file with its own read tool.  Naming a file that
       // does not exist would lose the attachment entirely.
+      const root = attachmentRoot();
       const written: string[] = [];
       for (const [index, image] of images.entries()) {
         const file = await materializeAttachment({
-          root: attachmentRoot(),
+          root,
           sessionId,
           image,
           index,
         });
         if (file) written.push(file);
       }
+      // Old attachment directories are pruned while a new one is written:
+      // the sidecar has no background loop to hang this on.
+      await pruneAttachments(root);
       if (written.length > 0) {
         prompt = `${text}\n\n${written.map((file) => `<attached-image path="${file}" />`).join("\n")}`;
       }

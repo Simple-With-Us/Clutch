@@ -933,6 +933,11 @@ public struct ChatView: View {
         self.engine = engine
         MacEngineStore.save(engine)
         resetTurnState()
+        // The picked model and effort belong to the thread that was open,
+        // so they are cleared here: a new thread must not inherit the
+        // previous thread's choice.
+        selectedModel = nil
+        selectedEffort = nil
         codeChatId = chatId
         codeRemoteId = remoteId
         codeCwd = cwd
