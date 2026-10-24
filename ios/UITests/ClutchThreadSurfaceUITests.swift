@@ -72,6 +72,10 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
 
         let field = app.textFields["Find In Thread"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
+        // The field needs focus before it can be typed into, and the
+        // software keyboard takes a moment to come up.
+        field.tap()
+        _ = app.keyboards.firstMatch.waitForExistence(timeout: 10)
         field.typeText("redirect")
         snap("ios-find-match")
 
