@@ -34,6 +34,9 @@ export interface SessionUsage {
   contextWindow?: number;
   inputTokens: number;
   outputTokens: number;
+  /** `false` when the record carried no real `outputTokens`, so the `0` above
+   *  is a placeholder rather than a count.  Absent when the engine reported it. */
+  outputTokensReported?: false;
   /** Context occupancy in tokens: input + cacheRead + output. */
   totalTokens: number;
   cacheReadTokens?: number;
@@ -148,6 +151,7 @@ function usageFrom(obj: Record<string, unknown>): SessionUsage | null {
     outputTokens: usage.outputTokens ?? 0,
     totalTokens: usage.totalTokens,
   };
+  if (usage.outputTokens === undefined) out.outputTokensReported = false;
   if (usage.cacheReadTokens !== undefined) out.cacheReadTokens = usage.cacheReadTokens;
   if (parsed.data.time !== undefined) out.updatedAtMs = parsed.data.time;
   return out;
@@ -227,12 +231,16 @@ export function sessionLogPath(dshHome: string, sessionId: string): string | nul
 /**
  * Tokens per second between two engine records.
  *
- * Deliberately strict:  a missing timestamp, a non-advancing clock, or an
- * output count that went backwards (a compaction, or a provider that resets
- * its counters) all yield `undefined` rather than a misleading figure.
+ * Deliberately strict:  a missing timestamp, a non-advancing clock, an output
+ * count either record did not report, or an output count that went backwards
+ * (a compaction, or a provider that resets its counters) all yield `undefined`
+ * rather than a misleading figure.
  */
 export function outputTokensPerSecond(current: SessionUsage, previous?: SessionUsage): number | undefined {
   if (!previous) return undefined;
+  // An unreported count is a placeholder `0`, so a delta that uses one is a
+  // guess:  as the older record's count, it overstates the rate.
+  if (current.outputTokensReported === false || previous.outputTokensReported === false) return undefined;
   const t0 = previous.updatedAtMs;
   const t1 = current.updatedAtMs;
   if (t0 === undefined || t1 === undefined) return undefined;

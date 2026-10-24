@@ -42,6 +42,7 @@ describe("extractUsageFromLogText", () => {
     expect(usage?.contextWindow).toBe(1_000_000);
     expect(usage?.inputTokens).toBe(151_923);
     expect(usage?.outputTokens).toBe(20);
+    expect(usage?.outputTokensReported).toBeUndefined();
     expect(usage?.totalTokens).toBe(152_071);
     expect(usage?.cacheReadTokens).toBe(128);
     expect(usage?.updatedAtMs).toBe(179_252_640_2614);
@@ -111,6 +112,7 @@ describe("extractUsageFromLogText", () => {
     expect(usage?.totalTokens).toBe(7);
     expect(usage?.inputTokens).toBe(3);
     expect(usage?.outputTokens).toBe(0);
+    expect(usage?.outputTokensReported).toBe(false);
     expect(usage?.cacheReadTokens).toBeUndefined();
     expect(usage?.updatedAtMs).toBe(2000);
     expect(usage?.model).toBe("MiniMax-M3");
@@ -143,6 +145,16 @@ describe("outputTokensPerSecond", () => {
     // Either timestamp missing.
     const noTime = { inputTokens: 0, outputTokens: 10, totalTokens: 0 };
     expect(outputTokensPerSecond(at(2000, 10), noTime)).toBeUndefined();
+  });
+
+  it("refuses a rate when either record did not report its output count", () => {
+    // The previous record really held 5000 output tokens but did not say so:
+    // measuring against its placeholder 0 would claim 2600 tok/s, not 100.
+    const unreported = (timeMs: number) => ({ ...at(timeMs, 0), outputTokensReported: false as const });
+    expect(outputTokensPerSecond(at(2000, 5200), unreported(0))).toBeUndefined();
+    expect(outputTokensPerSecond(unreported(2000), at(0, 5000))).toBeUndefined();
+    // A count the engine really reported as 0 is still a real baseline.
+    expect(outputTokensPerSecond(at(2000, 200), at(0, 0))).toBe(100);
   });
 });
 
