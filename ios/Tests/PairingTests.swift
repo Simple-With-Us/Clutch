@@ -53,6 +53,22 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertNil(try payload("127.0.0.1:3180").launchToken)
     }
 
+    func testServerLinkPairsMiniMaxCodeHostWithoutLaunchToken() throws {
+        let p = try payload("clutch://pair?h=jay-server.boa-roygbiv.ts.net&tls=1&kind=mcode&chat=bridge-token-9&chatPort=3181&name=jay-server")
+        XCTAssertEqual(p.kind, .miniMaxCode)
+        XCTAssertEqual(p.chatToken, "bridge-token-9")
+        XCTAssertEqual(p.chatPort, 3181)
+        XCTAssertNil(p.launchToken)
+        // No web port exists on a server host: the origin rides the chat port.
+        XCTAssertEqual(p.origin.absoluteString, "https://jay-server.boa-roygbiv.ts.net:3181")
+        XCTAssertEqual(p.name, "jay-server")
+    }
+
+    func testWebLinksCarryNoServerKind() throws {
+        let p = try payload("http://127.0.0.1:3180/?token=t0k")
+        XCTAssertNil(p.kind)
+    }
+
     func testGarbageIsRejected() {
         XCTAssertEqual(failure("   "), .empty)
         XCTAssertEqual(failure("ftp://example.com"), .unsupportedScheme("ftp"))
@@ -100,6 +116,13 @@ final class ClutchHostTests: XCTestCase {
 final class HostProbeTests: XCTestCase {
     func testAuthWallMeansClutchIsOnline() {
         XCTAssertEqual(HostProbe.classify(statusCode: 401, body: "dsh web authentication required; reopen the URL printed by dsh web.\n"), .online)
+    }
+
+    func testMiniMaxCodeProbeTrustsTheSidecarHealthAnswers() {
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 200), .online)
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 401), .online)
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 404), .notClutch)
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 0), .offline)
     }
 
     func testOtherResponsesAreNotClutch() {
@@ -184,5 +207,22 @@ final class HostStoreTests: XCTestCase {
         XCTAssertNil(host.pendingLaunchToken)
         XCTAssertEqual(host.chatPort, 3181)
         XCTAssertEqual(host.status, .online)
+        // Archives written before server hosts existed decode as web hosts.
+        XCTAssertEqual(host.kind, .web)
+        XCTAssertFalse(host.isMiniMaxCodeOnly)
+    }
+
+    func testServerPairingPersistsKind() {
+        let defaults = freshDefaults()
+        let store = HostStore(defaults: defaults)
+        var payload = PairingPayload(name: "jay-server", origin: URL(string: "https://jay-server.boa-roygbiv.ts.net:3181")!, launchToken: nil)
+        payload.kind = .miniMaxCode
+        payload.chatToken = "chat-server"
+        store.pair(payload)
+        XCTAssertEqual(store.activeHost?.kind, .miniMaxCode)
+        XCTAssertTrue(store.activeHost?.isMiniMaxCodeOnly == true)
+
+        let reloaded = HostStore(defaults: defaults)
+        XCTAssertEqual(reloaded.activeHost?.kind, .miniMaxCode)
     }
 }

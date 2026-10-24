@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
-import { isTrustedHostHeader, pairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { loadOrMintToken, parseLimitParam, parseThreadQuery, routeForModel, sliceThreadHistory, sortSessionsByUpdated } from "../src/web/chat-bridge.ts";
+import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
+import { loadOrMintToken, mcodeAvailable, parseLimitParam, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated } from "../src/web/chat-bridge.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -98,6 +98,78 @@ describe("MiniMax Code remote shell", () => {
     const script = /<script>([\s\S]*)<\/script>/.exec(miniMaxCodeRemoteHtml())?.[1];
     expect(script).toBeDefined();
     expect(() => new Function(script ?? "")).not.toThrow();
+  });
+});
+
+describe("resolveTailnetHost", () => {
+  const status = { Self: { DNSName: "jay-server.boa-roygbiv.ts.net." } };
+
+  it("prefers an explicit override over tailscale status", () => {
+    expect(resolveTailnetHost(" Mac.TS.net ", status)).toBe("mac.ts.net");
+    expect(resolveTailnetHost("mac.ts.net", null)).toBe("mac.ts.net");
+  });
+
+  it("reads the MagicDNS name from tailscale status otherwise", () => {
+    expect(resolveTailnetHost(null, status)).toBe("jay-server.boa-roygbiv.ts.net");
+    expect(resolveTailnetHost("", status)).toBe("jay-server.boa-roygbiv.ts.net");
+    expect(resolveTailnetHost(null, null)).toBe(null);
+    expect(resolveTailnetHost(null, { Self: {} })).toBe(null);
+  });
+});
+
+describe("chat-bridge server-host wiring", () => {
+  const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+
+  it("detects the tailnet host instead of trusting loopback only", () => {
+    expect(source).toContain("detectTailnetHost");
+    expect(source).toContain("tailscale");
+  });
+
+  it("registers the explicit cancel route the native Stop buttons call", () => {
+    expect(source).toContain('"/clutch/v1/chat/cancel"');
+  });
+
+  it("reports MiniMax Code availability on the health route", () => {
+    expect(source).toContain("mcodeAvailable");
+    expect(mcodeAvailable({ command: "/definitely/not/here/mcode", args: ["acp"] })).toBe(false);
+    expect(mcodeAvailable({ command: "mcode", args: ["acp"] })).toBe(true);
+  });
+});
+
+describe("server pairing link", () => {
+  it("pairs a MiniMax Code server host with no launch token", () => {
+    const link = new URL(serverPairingLink({ host: "jay-server.boa-roygbiv.ts.net", name: "jay-server", chatToken: "sekrit", chatPort: "3181" }));
+    expect(link.protocol).toBe("clutch:");
+    expect(link.searchParams.get("h")).toBe("jay-server.boa-roygbiv.ts.net");
+    expect(link.searchParams.get("tls")).toBe("1");
+    expect(link.searchParams.get("kind")).toBe("mcode");
+    expect(link.searchParams.get("chat")).toBe("sekrit");
+    expect(link.searchParams.get("chatPort")).toBe("3181");
+    expect(link.searchParams.get("name")).toBe("jay-server");
+    expect(link.searchParams.has("url")).toBe(false);
+  });
+
+  it("rejects a missing host or token instead of minting a dead link", () => {
+    expect(() => serverPairingLink({ host: " ", chatToken: "x" })).toThrow();
+    expect(() => serverPairingLink({ host: "jay-server.boa-roygbiv.ts.net", chatToken: "" })).toThrow();
+  });
+});
+
+describe("server bridge install assets", () => {
+  it("ships a systemd unit and installer for the Linux server host", () => {
+    const unit = readFileSync(join(ROOT, "scripts", "systemd", "clutch-chat-bridge.service"), "utf8");
+    expect(unit).toContain("scripts/chat-bridge.sh");
+    expect(unit).toContain("Restart=on-failure");
+    const installer = readFileSync(join(ROOT, "scripts", "install-server-bridge.sh"), "utf8");
+    expect(installer).toContain("systemctl enable --now clutch-chat-bridge");
+    expect(installer).toContain("--server");
+  });
+
+  it("pair-ios knows the --server mode", () => {
+    const source = readFileSync(join(ROOT, "src", "web", "pair-ios.ts"), "utf8");
+    expect(source).toContain('"--server"');
+    expect(source).toContain("serverPairingLink");
+    expect(source).toContain("server-pairing-link.txt");
   });
 });
 

@@ -6,8 +6,9 @@
  * protocol), so native clients get this thin loopback server instead:
  *
  *   POST /clutch/v1/chat    {prompt, model?, sessionId?, cwd?} → SSE stream
+ *   POST /clutch/v1/chat/cancel {sessionId} → stop one in-flight turn
  *   GET  /clutch/v1/thread?uid=<deviceUid>&limit=<n> → agent thread bubbles
- *   GET  /clutch/v1/health  liveness + advertised models
+ *   GET  /clutch/v1/health  liveness, engines, and MiniMax Code availability
  *   GET  /clutch/v1/sessions?engine=mcode → MiniMax Code's own threads
  *   POST /clutch/v1/sessions/load          → replay one mcode thread
  *
@@ -117,6 +118,61 @@ export function sortSessionsByUpdated<T extends { updatedAt?: string }>(sessions
 export function sliceThreadHistory<T>(history: readonly T[], limit: number): T[] {
   if (history.length <= limit) return [...history];
   return history.slice(history.length - limit);
+}
+
+/**
+ * The tailnet host a sidecar should trust: an explicit override wins, and
+ * otherwise the MagicDNS name from `tailscale status --self --json`.  The
+ * Mac launcher used to be the only place that detected this (for `dsh web`),
+ * so a sidecar run on its own — a Linux MiniMax Code server, a manual
+ * `chat-bridge.sh` — trusted loopback only and 403'd every phone request
+ * until someone exported the name by hand.
+ */
+export function resolveTailnetHost(explicit: string | null | undefined, statusJson: unknown): string | null {
+  const override = explicit?.trim();
+  if (override) return override.toLowerCase();
+  return tailnetDnsName(statusJson);
+}
+
+function readTailnetStatus(): Promise<unknown> {
+  return new Promise((resolvePromise) => {
+    const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString("utf8");
+    });
+    child.on("error", () => resolvePromise(null));
+    child.on("exit", () => {
+      try {
+        resolvePromise(JSON.parse(out));
+      } catch {
+        resolvePromise(null);
+      }
+    });
+  });
+}
+
+/**
+ * Detect this machine's tailnet name, retrying briefly: tailscaled routinely
+ * starts after the sidecar on a fresh boot, and trusting loopback only until
+ * the next restart is the failure this exists to avoid.
+ */
+async function detectTailnetHost(): Promise<string | null> {
+  const explicit = process.env.CLUTCH_TAILNET_HOST?.trim();
+  if (explicit) return explicit.toLowerCase();
+  const waitMs = Number(process.env.CLUTCH_TAILNET_WAIT_SECONDS ?? 10) * 1000;
+  const deadline = Date.now() + (Number.isFinite(waitMs) && waitMs >= 0 ? waitMs : 10_000);
+  for (;;) {
+    const host = resolveTailnetHost(null, await readTailnetStatus());
+    if (host) return host;
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+/** Whether the direct MiniMax Code launcher is present on this machine. */
+export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
+  return launcher.command.includes("/") ? existsSync(launcher.command) : true;
 }
 
 /** Load the Bearer token, minting and persisting it (mode 600) on first boot. */
@@ -422,7 +478,8 @@ async function main(): Promise<void> {
   // instance; this is what backs the native Infisical settings panel.
   const settings = await initClutchSettings();
   const tokenFingerprint = createHash("sha256").update(token).digest("hex").slice(0, 12);
-  const tailnetHost = process.env.CLUTCH_TAILNET_HOST?.trim() || null;
+  const tailnetHost = await detectTailnetHost();
+  if (!tailnetHost) log("no tailnet host detected; remote (Tailscale) requests will 403 until tailscale is up — set CLUTCH_TAILNET_HOST to override");
   const extraHosts = (process.env.CLUTCH_TRUSTED_HOSTS ?? "").split(",");
   const ipv4 = process.env.CLUTCH_TAILNET_IPV4?.trim() || null;
   const allowed = trustedAuthoritySet([tailnetHost, ipv4, ...extraHosts], String(PORT));
@@ -479,7 +536,43 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/health") {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, engines: ["deepseek", "minimax", "mcode"] }));
+      res.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({
+          ok: true,
+          engines: ["deepseek", "minimax", "mcode"],
+          mcode: { available: mcodeAvailable() },
+          tailnetHost,
+        }),
+      );
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/clutch/v1/chat/cancel") {
+      // Explicit stop from a native client (the Mac/iPhone Stop button).
+      // Dropping the SSE connection already cancels through the `close`
+      // handler below; this endpoint exists so a client can stop a turn
+      // without tearing down its stream reader first.  Unknown sessions are
+      // a no-op success — the turn the caller meant to stop is already gone.
+      let body: { sessionId?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      const chatId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const session = chatId ? sessions.get(chatId) : undefined;
+      let cancelled = false;
+      if (session?.bridgeSessionId) {
+        try {
+          bridgeFor(session.engine).cancel(session.bridgeSessionId);
+          cancelled = true;
+        } catch {
+          /* bridge already gone */
+        }
+      }
+      log(`chat cancel-request session=${chatId || "none"} cancelled=${cancelled}`);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, cancelled }));
       return;
     }
 

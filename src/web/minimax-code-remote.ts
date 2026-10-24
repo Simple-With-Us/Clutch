@@ -49,6 +49,7 @@ export function miniMaxCodeRemoteHtml(): string {
     <aside>
       <header><div class="mark">M</div><div><h1>MiniMax Code</h1><div class="subtle">Existing local threads</div></div></header>
       <div class="actions"><button id="new">New Thread</button><button id="refresh" class="secondary">Refresh</button></div>
+      <div style="padding:0 12px 10px"><input id="filter" type="search" placeholder="Filter threads" style="width:100%;padding:8px 10px;border:1px solid #dce2ea;border-radius:8px;outline:0"></div>
       <div id="threads"></div>
     </aside>
     <main>
@@ -100,9 +101,14 @@ export function miniMaxCodeRemoteHtml(): string {
         const date = new Date(value);
         return Number.isNaN(date.valueOf()) ? '' : date.toLocaleString();
       };
+      let allThreads = [];
       const drawThreads = (items) => {
+        const query = (document.querySelector('#filter').value || '').trim().toLowerCase();
+        const visible = query
+          ? items.filter((item) => [item.title || '', item.cwd || '', item.sessionId || ''].join(' ').toLowerCase().includes(query))
+          : items;
         threads.innerHTML = '';
-        for (const item of items) {
+        for (const item of visible) {
           const button = document.createElement('button');
           button.className = 'thread' + (item.sessionId === remoteSessionId ? ' active' : '');
           const name = document.createElement('strong');
@@ -113,13 +119,14 @@ export function miniMaxCodeRemoteHtml(): string {
           button.addEventListener('click', () => loadThread(item));
           threads.appendChild(button);
         }
-        if (!items.length) threads.innerHTML = '<div class="subtle" style="padding:12px">No MiniMax Code threads found.</div>';
+        if (!visible.length) threads.innerHTML = '<div class="subtle" style="padding:12px">' + (items.length ? 'No threads match the filter.' : 'No MiniMax Code threads found.') + '</div>';
       };
       const refresh = async () => {
         setStatus('Loading threads…');
         try {
           const body = await api('/clutch/v1/sessions?engine=mcode');
-          drawThreads(Array.isArray(body.sessions) ? body.sessions : []);
+          allThreads = Array.isArray(body.sessions) ? body.sessions : [];
+          drawThreads(allThreads);
           setStatus('Ready');
         } catch (error) {
           setStatus('Unavailable');
@@ -165,7 +172,7 @@ export function miniMaxCodeRemoteHtml(): string {
         detail.textContent = 'The thread is created when you send the first instruction.\u00a0 ACP permission requests are allowed once.';
         clearMessages();
         prompt.focus();
-        drawThreads([]);
+        drawThreads(allThreads);
         refresh();
       };
       const consumeSse = async (response) => {
@@ -217,6 +224,7 @@ export function miniMaxCodeRemoteHtml(): string {
           prompt.focus();
         }
       };
+      document.querySelector('#filter').addEventListener('input', () => drawThreads(allThreads));
       document.querySelector('#refresh').addEventListener('click', refresh);
       document.querySelector('#new').addEventListener('click', newThread);
       send.addEventListener('click', sendPrompt);

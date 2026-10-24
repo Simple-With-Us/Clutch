@@ -14,25 +14,39 @@ struct RootView: View {
                         }
                         .tag(0)
 
-                    ClutchScreen(host: host, store: store)
+                    SessionsView(host: host)
                         .tabItem {
-                            Label("Web Canvas", systemImage: "macwindow")
+                            Label("Code", systemImage: "terminal.fill")
                         }
                         .tag(1)
+
+                    if !host.isMiniMaxCodeOnly {
+                        ClutchScreen(host: host, store: store)
+                            .tabItem {
+                                Label("Web Canvas", systemImage: "macwindow")
+                            }
+                            .tag(2)
+
+                        DshHostView(host: host)
+                            .tabItem {
+                                Label("Host", systemImage: "server.rack")
+                            }
+                            .tag(3)
+                    }
 
                     FleetRecallView()
                         .tabItem {
                             Label("Fleet Recall", systemImage: "sparkles.rectangle.stack.fill")
                         }
-                        .tag(2)
-
-                    DshHostView(host: host)
-                        .tabItem {
-                            Label("Host", systemImage: "server.rack")
-                        }
-                        .tag(3)
+                        .tag(4)
                 }
                 .tint(.accentColor)
+                .onAppear {
+                    // A MiniMax Code server host has no chat relay or web
+                    // canvas behind it; land on its threads, not an empty
+                    // agent chat.
+                    if host.isMiniMaxCodeOnly, selectedTab == 0 { selectedTab = 1 }
+                }
             } else {
                 PairView { payload in
                     store.pair(payload)

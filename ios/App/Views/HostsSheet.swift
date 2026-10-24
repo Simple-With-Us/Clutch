@@ -95,8 +95,18 @@ private struct HostRow: View {
                 .foregroundStyle(color)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 2) {
-                Text(host.name)
-                    .font(.body.weight(.semibold))
+                HStack(spacing: 6) {
+                    Text(host.name)
+                        .font(.body.weight(.semibold))
+                    if host.isMiniMaxCodeOnly {
+                        Text("MiniMax Code Server")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Color.clutchSecondaryBackground, in: Capsule())
+                    }
+                }
                 Text(host.address)
                     .font(.caption)
                     .foregroundStyle(.secondary)

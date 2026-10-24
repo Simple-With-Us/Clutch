@@ -86,8 +86,12 @@ cd ios && xcodegen generate && xcodebuild -project Clutch.xcodeproj -scheme Clut
 
 Never hand-edit `Clutch.xcodeproj`; change `project.yml` and regenerate.
 
+## MiniMax Code Server Hosts
+
+A host does not have to be a Mac running clutch web.  A Linux server with MiniMax Code installed can pair as a MiniMax Code server host (`kind=mcode`): it runs only the chat sidecar, so the app gives it a Code tab and the Chat tab's MiniMax Code surface, and skips the web canvas and dsh host tabs it has nothing behind.  Its status probe reads the sidecar health route instead of the web auth wall.  Setup, the systemd unit, and the live Hetzner host are in [`docs/minimax-code-server.md`](minimax-code-server.md); pairing is `clutch-pair-ios --server` on that machine.
+
 ## Known Limits
 
 - The phone reaches clutch web only over Tailscale (the web process binds loopback).  Tailscale must be connected on the phone.
-- Pairing links stop working when `clutch-web` restarts; an already-paired phone keeps working on its cookie for 30 days.
+- Pairing links stop working when `clutch-web` restarts; an already-paired phone keeps working on its cookie for 30 days.  A MiniMax Code server pairing does not expire that way — its sidecar token survives restarts.
 - The clutch web layout is the upstream one; very narrow phone widths get the upstream mobile layout, not a bespoke native design.
