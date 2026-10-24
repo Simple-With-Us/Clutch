@@ -16,6 +16,11 @@ const SWIFT_ROOT = "ios";
 // A sentence end followed by two ASCII spaces and more text.
 const TWO_ASCII_SPACES = /[.!?]  \S/;
 
+// A sentence that closes with an ellipsis, then a plain space and a capital.
+// SwiftUI collapses the gap here exactly as it does after `.`, `!` and `?`, so
+// an ellipsis boundary needs the same U+00A0 treatment.
+const ELLIPSIS_ASCII_GAP = /…[ \t](?=[A-Z])/;
+
 /** Every `.swift` file under a directory, recursively, sorted. */
 function swiftFiles(dir: string): string[] {
   const out: string[] = [];
@@ -138,6 +143,39 @@ describe("swift copy gap", () => {
       hits,
       `two-ASCII-space sentence gaps found:\n${hits.join("\n")}`,
     ).toEqual([]);
+  });
+
+  it("has no plain-space gap after an ellipsis in user-visible Swift literals", () => {
+    const hits: string[] = [];
+    for (const full of swiftFiles(IOS_ROOT)) {
+      const rel = relative(ROOT, full);
+      const lines = readFileSync(full, "utf8").split("\n");
+      lines.forEach((line, i) => {
+        for (const literal of swiftStringLiterals(stripComments(line))) {
+          if (ELLIPSIS_ASCII_GAP.test(literal)) {
+            hits.push(`${rel}:${i + 1}: ${literal.trim().slice(0, 120)}`);
+          }
+        }
+      });
+    }
+
+    expect(
+      hits,
+      `plain-space gaps after an ellipsis found:\n${hits.join("\n")}`,
+    ).toEqual([]);
+  });
+
+  it("detects a plain-space gap after an ellipsis and accepts the Copy helper", () => {
+    // Positive control: the guard has to fire on the old copy.
+    const bad = swiftStringLiterals(stripComments('        Text("Listening… Tap The Mic Again To Stop.")'));
+    expect(bad.some((literal) => ELLIPSIS_ASCII_GAP.test(literal))).toBe(true);
+
+    // And it has to pass the ruled fix, in both spellings, and the helper.
+    const escapedNbsp = swiftStringLiterals(stripComments('        Text("Listening…\\u{00A0} Tap The Mic Again To Stop.")'));
+    expect(escapedNbsp.some((literal) => ELLIPSIS_ASCII_GAP.test(literal))).toBe(false);
+
+    const helper = swiftStringLiterals(stripComments('        Text(Copy.gap("Listening…", "Tap The Mic Again To Stop."))'));
+    expect(helper.some((literal) => ELLIPSIS_ASCII_GAP.test(literal))).toBe(false);
   });
 
   it("detects two-ASCII-space gaps and ignores comment lines", () => {

@@ -37,21 +37,38 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { z } from "zod";
+
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { ENGINE_ORDER, isEngine, type Engine } from "../shared/engine-types.ts";
 import { engineCatalog, resolveModelAltValue, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
+import { readTailnetStatus } from "./tailnet-status.ts";
 import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
+import { readSessionUsage, withRate, type SessionUsage } from "./session-usage.ts";
+import {
+  loadSessionMeta,
+  newProjectId,
+  normalizeProjectName,
+  removeProject,
+  saveSessionMeta,
+  sessionMetaPath,
+  upsertSession,
+  type SessionMetaFile,
+} from "./session-meta.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST = "127.0.0.1";
 const PORT = Number(clutchChatPort());
 const CLUTCH_HOME = process.env.CLUTCH_HOME ?? join(homedir(), ".clutch");
 const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
+/** Where the engine keeps its session logs — the only place real usage lives. */
+const DSH_HOME = process.env.CLUTCH_DSH_HOME ?? join(CLUTCH_HOME, "dsh");
+const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPath(CLUTCH_HOME);
 
 interface Launcher {
   command: string;
@@ -182,23 +199,13 @@ export function resolveTailnetHost(explicit: string | null | undefined, statusJs
   return tailnetDnsName(statusJson);
 }
 
-function readTailnetStatus(): Promise<unknown> {
-  return new Promise((resolvePromise) => {
-    const child = spawn("tailscale", ["status", "--self", "--json"], { stdio: ["ignore", "pipe", "ignore"] });
-    let out = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      out += chunk.toString("utf8");
-    });
-    child.on("error", () => resolvePromise(null));
-    child.on("exit", () => {
-      try {
-        resolvePromise(JSON.parse(out));
-      } catch {
-        resolvePromise(null);
-      }
-    });
-  });
-}
+/**
+ * The bounded `tailscale status` reader lives in ./tailnet-status.ts so this
+ * bridge and the web launcher share one implementation.  Detection runs before
+ * the sidecar listens, so a CLI left waiting on a wedged tailscaled must not
+ * keep the bridge from ever starting.
+ */
+export { readTailnetStatus };
 
 /**
  * Detect this machine's tailnet name, retrying briefly: tailscaled routinely
@@ -410,6 +417,41 @@ interface AcpSessionInfo {
   cwd?: string;
   title?: string;
   updatedAt?: string;
+  /** Real engine accounting, present only when the log could be read. */
+  usage?: SessionUsage;
+  /** Clutch-side Project assignment and archive state. */
+  projectId?: string;
+  archived?: boolean;
+}
+
+/** Read every session's real usage in one pass.  `readSessionUsage` caches per
+ *  log mtime, so a refresh that finds nothing new costs nothing. */
+export function attachUsage(sessions: readonly AcpSessionInfo[]): AcpSessionInfo[] {
+  return sessions.map((session) => {
+    const usage = readSessionUsage(DSH_HOME, session.sessionId);
+    return usage ? { ...session, usage } : session;
+  });
+}
+
+/** Apply Project/archive state, dropping archived threads unless asked for.
+ *  An archived thread is still resumable — it is hidden from the default list,
+ *  never deleted. */
+export function applySessionMeta(
+  sessions: readonly AcpSessionInfo[],
+  meta: SessionMetaFile,
+  includeArchived: boolean,
+): AcpSessionInfo[] {
+  const out: AcpSessionInfo[] = [];
+  for (const session of sessions) {
+    const entry = meta.sessions[session.sessionId];
+    if (entry?.archived && !includeArchived) continue;
+    out.push({
+      ...session,
+      ...(entry?.projectId ? { projectId: entry.projectId } : {}),
+      ...(entry?.archived ? { archived: true } : {}),
+    });
+  }
+  return out;
 }
 
 class BridgeProcessError extends Error {
@@ -783,6 +825,30 @@ interface ChatSession {
   effort?: string;
 }
 
+/** Untrusted request bodies for the project/archive routes.  Strict so an
+ *  unexpected field is rejected instead of silently ignored. */
+const SessionMetaPatchSchema = z
+  .object({
+    sessionId: z.string({ error: "sessionId is required" }).min(1, "sessionId is required").max(200, "sessionId is required"),
+    projectId: z
+      .string({ error: "projectId must be a string or null" })
+      .max(200, "projectId must be a string or null")
+      .nullable()
+      .optional(),
+    archived: z.boolean({ error: "archived must be a boolean" }).optional(),
+  })
+  .strict()
+  .refine((v) => v.projectId !== undefined || v.archived !== undefined, { message: "nothing to update" });
+
+/** Most sessions enriched with log-derived usage per list request. */
+const USAGE_ENRICH_CAP = 50;
+
+const ProjectCreateSchema = z
+  .object({
+    name: z.string({ error: "project name is required" }),
+  })
+  .strict();
+
 function readJsonBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -1023,6 +1089,12 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
+      // A literal `null` body parses fine and would then throw on
+      // `body.sessionId` inside this async handler, which ends the bridge.
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
+        return;
+      }
       const chatId = typeof body.sessionId === "string" ? body.sessionId : "";
       const session = chatId ? sessions.get(chatId) : undefined;
       let cancelled = false;
@@ -1058,8 +1130,18 @@ async function main(): Promise<void> {
         await bridge.initialize();
         const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
         const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
-        const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, limit));
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: listed }));
+        const includeArchived = url.searchParams.get("archived") === "include";
+        // Archived threads are dropped after listing, so over-fetch candidates
+        // (capped well past the page size) to keep `limit` visible rows when
+        // possible, then trim back to the requested page size after filtering.
+        const fetchLimit = includeArchived ? limit : Math.max(limit, 500);
+        const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, fetchLimit));
+        const page = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived).slice(0, limit);
+        // Reading usage means a synchronous zstd log read per session, so cap
+        // how many rows get enriched in one request; rows past the cap simply
+        // report no usage (the UI already renders "not reported").
+        const sessions = attachUsage(page.slice(0, USAGE_ENRICH_CAP)).concat(page.slice(USAGE_ENRICH_CAP));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions }));
       } catch (err) {
         log(`${listEngine} list failed message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
@@ -1075,6 +1157,10 @@ async function main(): Promise<void> {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
         return;
       }
       if (!isEngine(body.engine) || !CODE_ENGINES.includes(body.engine) || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
@@ -1125,6 +1211,122 @@ async function main(): Promise<void> {
           JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
         );
       }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/session-meta") {
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ projects: meta.projects, sessions: meta.sessions }));
+      return;
+    }
+
+    // Project assignment and archiving.  Both are reversible and durable:  the
+    // engine is never asked to move or rename a thread, so unarchiving brings
+    // back exactly the session that was hidden.
+    if (req.method === "PUT" && url.pathname === "/clutch/v1/session-meta") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      const parsed = SessionMetaPatchSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: parsed.error.issues[0]?.message ?? "invalid request body" }));
+        return;
+      }
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      const patch: { projectId?: string | null; archived?: boolean } = {};
+      if (parsed.data.projectId !== undefined) {
+        if (parsed.data.projectId === null || parsed.data.projectId === "") {
+          patch.projectId = null;
+        } else {
+          // Refuse a project that does not exist rather than storing a
+          // dangling id the UI could never render.
+          if (!meta.projects.some((p) => p.id === parsed.data.projectId)) {
+            res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown project" }));
+            return;
+          }
+          patch.projectId = parsed.data.projectId;
+        }
+      }
+      if (parsed.data.archived !== undefined) {
+        patch.archived = parsed.data.archived;
+      }
+      const entry = upsertSession(meta, parsed.data.sessionId, patch);
+      try {
+        saveSessionMeta(SESSION_META_FILE, meta);
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ entry, projects: meta.projects, sessions: meta.sessions }));
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/clutch/v1/projects") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      const parsed = ProjectCreateSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: parsed.error.issues[0]?.message ?? "invalid request body" }));
+        return;
+      }
+      const name = normalizeProjectName(parsed.data.name);
+      if (!name) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "project name is required" }));
+        return;
+      }
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      const existing = meta.projects.find((p) => p.name.toLowerCase() === name.toLowerCase());
+      if (existing) {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ project: existing, created: false }));
+        return;
+      }
+      const project = { id: newProjectId(), name, createdAt: new Date().toISOString() };
+      meta.projects.push(project);
+      try {
+        saveSessionMeta(SESSION_META_FILE, meta);
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+        return;
+      }
+      res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ project, created: true }));
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/clutch/v1/projects/")) {
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(url.pathname.slice("/clutch/v1/projects/".length)).trim();
+      } catch {
+        // Malformed percent-encoding (e.g. "%zz") throws URIError; that is a
+        // bad request, not a reason to crash the bridge.
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid project id encoding" }));
+        return;
+      }
+      if (!projectId) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "project id is required" }));
+        return;
+      }
+      const meta = loadSessionMeta(SESSION_META_FILE);
+      if (!removeProject(meta, projectId)) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown project" }));
+        return;
+      }
+      try {
+        saveSessionMeta(SESSION_META_FILE, meta);
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, projects: meta.projects, sessions: meta.sessions }));
       return;
     }
 
@@ -1191,6 +1393,12 @@ async function main(): Promise<void> {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      // A literal `null` body parses fine and would then throw on `body.prompt`
+      // inside this async handler, an unhandled rejection that ends the bridge.
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
         return;
       }
       const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
@@ -1268,9 +1476,19 @@ async function main(): Promise<void> {
       // can be reloaded later (mcode threads live in the sidecar map only
       // until the process exits).
       const remoteId = (): string | null => active.resumeSessionId ?? (active.bridgeSessionId || null);
+      // Live usage.  The engine writes its accounting to the session log as the
+      // turn runs, so we re-read it on a timer and push only real records.
+      // Nothing here estimates:  if the log has no usage yet, no event fires.
+      let usageTimer: ReturnType<typeof setInterval> | null = null;
+      let lastUsage: SessionUsage | null = null;
+      const stopUsage = (): void => {
+        if (usageTimer) clearInterval(usageTimer);
+        usageTimer = null;
+      };
       const finish = (event: string, data: unknown): void => {
         if (settled) return;
         settled = true;
+        stopUsage();
         active.busy = false;
         active.stream = null;
         sseSend(res, event, data);
@@ -1306,6 +1524,19 @@ async function main(): Promise<void> {
         if (active.model || active.effort) {
           const applied = await applySessionChoices(bridge, active, await catalog());
           log(`chat choices session=${chatId} model=${applied.modelApplied} effort=${applied.effortApplied}`);
+        }
+        if (engine === "mcode" && active.bridgeSessionId) {
+          const sessionIdForUsage = active.bridgeSessionId;
+          usageTimer = setInterval(() => {
+            const fresh = readSessionUsage(DSH_HOME, sessionIdForUsage);
+            if (!fresh) return;
+            // Only re-announce when the engine actually wrote something new.
+            if (lastUsage && fresh.updatedAtMs === lastUsage.updatedAtMs) return;
+            const measured = withRate(fresh, lastUsage ?? undefined);
+            lastUsage = fresh;
+            if (!settled) sseSend(res, "usage", { sessionId: sessionIdForUsage, usage: measured });
+          }, 1500);
+          usageTimer.unref?.();
         }
         const result = await bridge.prompt(active.bridgeSessionId, prompt, images, active.cwd);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);

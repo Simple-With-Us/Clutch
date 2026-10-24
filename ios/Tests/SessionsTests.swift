@@ -77,6 +77,19 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(AcpSessionInfo.filtered([a, b], query: "nope").isEmpty)
     }
 
+    func testFilteredAlsoMatchesModelProviderAndProject() {
+        let a = AcpSessionInfo(
+            sessionId: "s-1",
+            title: "One",
+            usage: AcpSessionUsage(provider: "minimax", model: "MiniMax-M3"),
+            projectId: "proj-clutch"
+        )
+        let b = AcpSessionInfo(sessionId: "s-2", title: "Two")
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "m3").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "MINIMAX").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "proj-clutch").map(\.sessionId), ["s-1"])
+    }
+
     func testToolHistoryEntriesAreMarkedForCards() {
         let entry = AcpHistoryEntry(sessionId: "s", kind: "tool_call", text: "Read file", toolCallId: "t1", toolStatus: "completed")
         XCTAssertTrue(entry.isTool)

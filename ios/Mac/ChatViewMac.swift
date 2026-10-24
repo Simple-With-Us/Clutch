@@ -17,6 +17,25 @@ enum MacChatIdentity {
     }
 }
 
+/// The thread rail's width, persisted so the window reopens the way it was
+/// left.  Clamped on read as well as on drag, so a stale or hand-edited value
+/// can never open a rail that swallows the chat.
+enum MacSidebarWidth {
+    private static let key = "codes.clutch.mac-sidebar-width"
+    static let fallback: CGFloat = 248
+    static let range: ClosedRange<CGFloat> = 180 ... 460
+
+    static var current: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: key)
+        guard saved > 0 else { return fallback }
+        return min(max(saved, range.lowerBound), range.upperBound)
+    }
+
+    static func save(_ width: CGFloat) {
+        UserDefaults.standard.set(min(max(width, range.lowerBound), range.upperBound), forKey: key)
+    }
+}
+
 /// One bubble from `GET /clutch/v1/thread`.
 struct ThreadBubble: Identifiable, Equatable, Decodable {
     var id: String
@@ -135,6 +154,16 @@ public struct ChatView: View {
     @State private var sidebarLoading = false
     @State private var sidebarError: String?
     @State private var sidebarLoadingId: String?
+    /// User-resized rail width.  Persisted so the window comes back the way it
+    /// was left; the drag itself lives in `ThreadSidebar`'s trailing edge.
+    @State private var sidebarWidth: CGFloat = MacSidebarWidth.current
+    @State private var sidebarProjects: [SessionsClient.Project] = []
+    /// When true the sidebar also lists archived threads so they can be
+    /// restored; archiving a thread would otherwise make it unreachable.
+    @State private var showArchived = false
+    /// Newest real usage record for the open thread, pushed by the sidecar's
+    /// SSE stream.  Nil until the engine reports one.
+    @State private var activeUsage: AcpSessionUsage?
     @State private var draft: String = ""
     @State private var sessionId: String?
     @State private var sending: Bool = false
@@ -289,14 +318,30 @@ public struct ChatView: View {
                         loading: sidebarLoading,
                         loadingId: sidebarLoadingId,
                         errorText: sidebarError,
+                        projects: sidebarProjects,
                         onSelect: { session in openSession(session, fromSidebar: true) },
                         onNew: { startMcodeThread() },
                         onRefresh: { Task { await loadSidebarSessions() } },
+                        onAction: { action, session in handle(action, session) },
+                        showArchived: showArchived,
+                        onToggleArchived: {
+                            showArchived.toggle()
+                            Task { await loadSidebarSessions() }
+                        },
                         pinnedIds: pinnedIds,
                         onTogglePin: { session in
                             guard let host = activeHost else { return }
                             ThreadPinStore.toggle(session.sessionId, forHost: host.id)
                             pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+                        },
+                        fixedWidth: sidebarWidth,
+                        onResize: { width in
+                            sidebarWidth = width
+                        },
+                        onResizeEnd: { width in
+                            // Persist once when the drag finishes; saving on
+                            // every drag event hammered UserDefaults per frame.
+                            MacSidebarWidth.save(width)
                         }
                     )
                     Divider()
@@ -655,6 +700,8 @@ public struct ChatView: View {
 
             Spacer()
 
+            usageStrip
+
             if engine.supportsThreads {
                 Button {
                     Task { await loadSidebarSessions() }
@@ -720,6 +767,46 @@ public struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.clutchBackground)
+    }
+
+    // MARK: - Usage
+
+    /// Live engine facts for the open thread.
+    ///
+    /// Every value here came from the engine's own accounting record.  When the
+    /// engine has not reported one —  a fresh thread, or a bridge that sends no
+    /// usage — the strip says so instead of showing a placeholder percentage
+    /// derived from a character count.
+    @ViewBuilder
+    private var usageStrip: some View {
+        if engine == .mcode {
+            HStack(spacing: 8) {
+                if let usage = activeUsage {
+                    if let rate = usage.rateLabel {
+                        metric(icon: "speedometer", value: rate)
+                    }
+                    if let occupancy = usage.occupancyLabel {
+                        metric(icon: "chart.pie.fill", value: occupancy)
+                    }
+                } else {
+                    Text("Usage not reported yet")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private func metric(icon: String, value: String) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+            Text(value)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .help(value)
     }
 
     private var engineBinding: Binding<ChatEngine> {
@@ -980,13 +1067,76 @@ public struct ChatView: View {
         sidebarLoading = true
         defer { sidebarLoading = false }
         do {
-            sidebarSessions = try await SessionsClient(host: host).list(engine: engine.sidecarId)
+            let client = SessionsClient(host: host)
+            sidebarSessions = try await client.list(engine: engine.sidecarId, includingArchived: showArchived)
             sidebarError = nil
+            // Project names live only in the metadata store, so the sidebar
+            // needs its own read.  A failure here must not blank the thread
+            // list, which is the thing the user actually asked for.
+            if let meta = try? await client.meta() {
+                sidebarProjects = meta.projects
+            }
         } catch {
             // Keep whatever list we already have; a retry is one click away.
             if sidebarSessions.isEmpty {
                 sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
             }
+        }
+    }
+
+    // MARK: - Sidebar actions
+
+    private func handle(_ action: ThreadSidebarAction, _ session: AcpSessionInfo) {
+        switch action {
+        case let .revealInFinder(session):
+            if let cwd = session.cwd, !cwd.isEmpty {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: cwd)])
+            }
+
+        case let .assignProject(session, projectId):
+            // `.some(projectId)` keeps the key on the wire even when the inner
+            // value is nil (unassign sends null); a plain nil would mean
+            // "leave the assignment alone".
+            Task { await applyMeta(sessionId: session.sessionId, projectId: .some(projectId), archived: nil) }
+
+        case let .createProject(name, session):
+            Task { await createProject(name: name, assigning: session.sessionId) }
+
+        case let .setArchived(session, archived):
+            // No projectId argument: archiving must not touch the assignment.
+            Task { await applyMeta(sessionId: session.sessionId, archived: archived) }
+        }
+    }
+
+    private func applyMeta(sessionId: String, projectId: String?? = nil, archived: Bool? = nil) async {
+        guard let host = activeHost else { return }
+        do {
+            let meta = try await SessionsClient(host: host).updateMeta(
+                sessionId: sessionId,
+                projectId: projectId,
+                archived: archived
+            )
+            sidebarProjects = meta.projects
+            await loadSidebarSessions()
+        } catch {
+            sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+
+    private func createProject(name: String, assigning sessionId: String) async {
+        guard let host = activeHost else { return }
+        let client = SessionsClient(host: host)
+        do {
+            let result = try await client.createProject(name: name)
+            // Assign through the returned id whether the project was just
+            // created or already existed, and take the sidecar's project list
+            // from the response instead of appending locally — appending an
+            // already-existing project duplicated it in the sidebar.
+            let meta = try await client.updateMeta(sessionId: sessionId, projectId: result.project.id)
+            sidebarProjects = meta.projects
+            await loadSidebarSessions()
+        } catch {
+            sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
         }
     }
 
@@ -1188,6 +1338,8 @@ public struct ChatView: View {
                         } else if !engine.supportsThreads {
                             await refreshThread()
                         }
+                    case .usage(let usage):
+                        activeUsage = usage
                     case .failed(let message):
                         sending = false
                         streamingText = ""
@@ -1570,7 +1722,7 @@ struct MacChatInputBar: View {
                 }
             }
             HStack(spacing: 8) {
-                Text(sending ? "Working… Stop Ends The Turn And Keeps The Thread." : "Return Sends · Shift+Return Adds A Line · ⌘Return Also Sends.")
+                Text(sending ? Copy.gap("Working…", "Stop Ends The Turn And Keeps The Thread.") : "Return Sends · Shift+Return Adds A Line · ⌘Return Also Sends.")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)

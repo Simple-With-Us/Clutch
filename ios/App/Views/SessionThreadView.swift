@@ -181,6 +181,8 @@ final class SessionThreadModel {
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
+                    case .usage:
+                        break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)

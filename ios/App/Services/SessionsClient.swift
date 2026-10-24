@@ -62,13 +62,15 @@ public struct SessionsClient {
         }
     }
 
-    public func list(engine: String = "mcode", limit: Int = 100) async throws -> [AcpSessionInfo] {
+    public func list(engine: String = "mcode", limit: Int = 100, includingArchived: Bool = false) async throws -> [AcpSessionInfo] {
         var comps = try base()
         comps.path = "/clutch/v1/sessions"
-        comps.queryItems = [
+        var items = [
             URLQueryItem(name: "engine", value: engine),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
+        if includingArchived { items.append(URLQueryItem(name: "archived", value: "include")) }
+        comps.queryItems = items
         guard let url = comps.url else { throw ChatClientError.badHost }
         let (data, resp) = try await URLSession.shared.data(for: authorized(url))
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -76,6 +78,113 @@ public struct SessionsClient {
         }
         struct Payload: Decodable { var sessions: [AcpSessionInfo] }
         return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
+    }
+
+    // MARK: - Projects and archiving
+    //
+    // The engine has no concept of either, so this is Clutch-side metadata that
+    // the sidecar owns in `$CLUTCH_HOME/session-meta.json`, keyed by engine
+    // session id.  Archiving hides a thread from the default list and is fully
+    // reversible; nothing the engine owns is moved or deleted.
+
+    public struct Project: Decodable, Equatable, Identifiable, Sendable {
+        public var id: String
+        public var name: String
+        public var createdAt: String?
+        public init(id: String, name: String, createdAt: String? = nil) {
+            self.id = id
+            self.name = name
+            self.createdAt = createdAt
+        }
+    }
+
+    /// A session's stored Project assignment and archive state.
+    public struct SessionMetaEntry: Decodable, Equatable, Sendable {
+        public var projectId: String?
+        public var archived: Bool?
+        public var archivedAt: String?
+        public init(projectId: String? = nil, archived: Bool? = nil, archivedAt: String? = nil) {
+            self.projectId = projectId
+            self.archived = archived
+            self.archivedAt = archivedAt
+        }
+    }
+
+    public struct SessionMeta: Decodable, Equatable, Sendable {
+        public var projects: [Project]
+        public var sessions: [String: SessionMetaEntry]
+        public init(projects: [Project] = [], sessions: [String: SessionMetaEntry] = [:]) {
+            self.projects = projects
+            self.sessions = sessions
+        }
+    }
+
+    public func meta() async throws -> SessionMeta {
+        var comps = try base()
+        comps.path = "/clutch/v1/session-meta"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url))
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        return (try? JSONDecoder().decode(SessionMeta.self, from: data)) ?? SessionMeta()
+    }
+
+    /// Assign, unassign (`projectId: nil`), archive or unarchive one session.
+    /// Returns the fresh metadata so the caller can redraw without a refetch.
+    @discardableResult
+    public func updateMeta(
+        sessionId: String,
+        projectId: String?? = nil,
+        archived: Bool? = nil
+    ) async throws -> SessionMeta {
+        var comps = try base()
+        comps.path = "/clutch/v1/session-meta"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        var req = try authorized(url)
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // `projectId` is doubly optional so "leave it alone" and "clear it" are
+        // distinguishable:  the outer nil omits the key, the inner nil sends null.
+        var body: [String: Any] = ["sessionId": sessionId]
+        if let projectId { body["projectId"] = projectId as Any? ?? NSNull() }
+        if let archived { body["archived"] = archived }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        struct Payload: Decodable {
+            var projects: [Project]
+            var sessions: [String: SessionMetaEntry]
+        }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            throw ChatClientError.http(200)
+        }
+        return SessionMeta(projects: payload.projects, sessions: payload.sessions)
+    }
+
+    /// Create a Project, or return the existing one when the name already
+    /// exists — the sidecar matches case-insensitively and reports `created`.
+    @discardableResult
+    public func createProject(name: String) async throws -> (project: Project, created: Bool) {
+        var comps = try base()
+        comps.path = "/clutch/v1/projects"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        var req = try authorized(url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["name": name])
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 || status == 201 else {
+            throw ChatClientError.http(status)
+        }
+        struct Payload: Decodable { var project: Project; var created: Bool }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            throw ChatClientError.http(200)
+        }
+        return (payload.project, payload.created)
     }
 
     /// `cwd` is effectively required: the sidecar falls back to `$HOME` when it
