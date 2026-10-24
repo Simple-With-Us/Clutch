@@ -919,6 +919,12 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
+      // A literal `null` body parses fine and would then throw on `body.prompt`
+      // inside this async handler, an unhandled rejection that ends the bridge.
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
+        return;
+      }
       const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
       if (!prompt) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "prompt is required" }));

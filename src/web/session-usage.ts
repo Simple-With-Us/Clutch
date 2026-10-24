@@ -81,11 +81,6 @@ function parseJson(line: string): Record<string, unknown> | null {
   }
 }
 
-function numberAt(source: Record<string, unknown> | undefined, key: string): number | undefined {
-  const raw = source?.[key];
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
-}
-
 /** Shape of one session-log record we trust enough to read.  Parsing with
  *  zod instead of casting means a malformed line is skipped, never trusted. */
 const RequestContextRecordSchema = z.object({

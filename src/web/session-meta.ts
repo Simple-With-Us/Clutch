@@ -42,10 +42,6 @@ export function sessionMetaPath(clutchHome: string): string {
   return join(clutchHome, "session-meta.json");
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "string");
-}
-
 /** Parse defensively:  a hand-edited or truncated file must not take the
  *  sidecar down, so anything unusable falls back to an empty record. */
 export function parseSessionMeta(raw: string): SessionMetaFile {
