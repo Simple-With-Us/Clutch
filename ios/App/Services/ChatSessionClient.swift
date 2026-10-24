@@ -7,6 +7,8 @@ public enum ChatStreamEvent: Equatable {
     case started(sessionId: String, engine: String)
     case message(String)
     case thought(String)
+    /// One tool call the agent ran, or a status update to one already shown.
+    case tool(id: String, name: String, status: String)
     case done(stopReason: String, sessionId: String, remoteSessionId: String?)
     case failed(String)
 }
@@ -123,6 +125,12 @@ public struct ChatSessionClient {
         case "thought":
             guard let text = json["text"] as? String else { return nil }
             return .thought(text)
+        case "tool":
+            return .tool(
+                id: (json["id"] as? String) ?? "",
+                name: (json["name"] as? String) ?? "Tool call",
+                status: (json["status"] as? String) ?? "running"
+            )
         case "done":
             return .done(
                 stopReason: (json["stopReason"] as? String) ?? "",
