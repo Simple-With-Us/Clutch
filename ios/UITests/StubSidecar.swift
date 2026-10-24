@@ -140,13 +140,15 @@ final class StubSidecar {
 
     private func respond(on connection: NWConnection, status: Int, json: String) {
         let payload = Data(json.utf8)
-        let header = """
-        HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")
-        Content-Type: application/json
-        Content-Length: \(payload.count)
-        Connection: close
-
-        """
+        // The header block ends with a blank line: CRLF CRLF.  A Swift
+        // multi-line string ends with a single newline, which leaves the
+        // body glued to the headers and the client reads the whole thing as
+        // one malformed header.
+        let header = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\n"
+            + "Content-Type: application/json\r\n"
+            + "Content-Length: \(payload.count)\r\n"
+            + "Connection: close\r\n"
+            + "\r\n"
         var response = Data(header.utf8)
         response.append(payload)
         connection.send(content: response, completion: .contentProcessed { _ in
