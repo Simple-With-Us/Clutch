@@ -44,7 +44,7 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         // The find bar opens with the query already in it: the simulator's
         // keyboard is not dependable in CI, and the point of this test is
         // the highlighted match, not the typing.
-        app.launchArguments = ["-ClutchResetHosts", "-ClutchShowFind", "1", "-ClutchFindText", "redirect"]
+        app.launchArguments = ["-ClutchResetHosts", "-ClutchShowFind", "1", "-ClutchFindText", "login"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30))
 
@@ -70,10 +70,9 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         snap("ios-thread-open")
 
         // The find bar is open with the query in it, and the match count is
-        // the bar's own feedback that the search ran.  Both stub messages
-        // mention "redirect", so the count is two.
-        let count = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] 'match'")).firstMatch
-        XCTAssertTrue(count.waitForExistence(timeout: 30))
+        // the bar's own feedback that the search ran.  Only one stub message
+        // mentions "login", so the count is exactly one.
+        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 30))
         snap("ios-find-match")
     }
 }

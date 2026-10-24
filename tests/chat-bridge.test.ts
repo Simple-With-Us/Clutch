@@ -1,12 +1,12 @@
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { compactToolHistory, loadOrMintToken, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
 import { parseAcpMessage, readMuseProviderCatalog } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
@@ -260,12 +260,41 @@ describe("normalizeSessionUpdate", () => {
 });
 
 describe("attachments on the dsh bridges", () => {
-  it("writes the image bytes where the agent can open them", () => {
-    // The dsh bridges take a plain string, so an attachment has to become a
-    // real file; naming a path that does not exist loses the image.
-    const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
-    expect(source).toContain("writeFileSync(file, Buffer.from(image.data, \"base64\"))");
-    expect(source).toContain("<attached-image path=");
+  it("writes the image bytes where the agent can open them", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clutch-attachments-"));
+    const file = await materializeAttachment({
+      root,
+      sessionId: "session-1",
+      image: { mimeType: "image/png", data: Buffer.from("hello").toString("base64"), name: "shot.png" },
+      index: 0,
+    });
+    expect(file).not.toBe(null);
+    expect(readFileSync(file as string, "utf8")).toBe("hello");
+    // The attachment lands under the attachment root, not in the working
+    // directory the caller happens to be in.
+    expect((file as string).startsWith(root)).toBe(true);
+    expect((file as string).endsWith("shot.png")).toBe(true);
+  });
+
+  it("keeps a traversal name inside the attachment directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clutch-attachments-"));
+    const file = await materializeAttachment({
+      root,
+      sessionId: "session-1",
+      image: { mimeType: "image/png", data: Buffer.from("x").toString("base64"), name: "../../.ssh/authorized_keys" },
+      index: 0,
+    });
+    expect(file).not.toBe(null);
+    expect((file as string).startsWith(root)).toBe(true);
+    expect((file as string).includes("..")).toBe(false);
+    expect(basename(file as string)).toBe("authorized_keys");
+  });
+
+  it("names an unnamed attachment rather than writing nothing", () => {
+    expect(safeAttachmentName(undefined, 0)).toBe("attachment-1");
+    expect(safeAttachmentName("", 2)).toBe("attachment-3");
+    expect(safeAttachmentName("..", 0)).toBe("attachment-1");
+    expect(safeAttachmentName("a/b/c.png", 0)).toBe("c.png");
   });
 });
 

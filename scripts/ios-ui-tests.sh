@@ -18,6 +18,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IOS_DIR="$REPO_ROOT/ios"
 RESULT_BUNDLE="${CLUTCH_UI_RESULT_BUNDLE:-$REPO_ROOT/ios-ui.xcresult}"
 DEVICE_NAME="${CLUTCH_UI_DEVICE_NAME:-}"
+# The device this script created, when it had to make one.
+CREATED_DEVICE=""
 
 log() { printf 'ios-ui-tests: %s\n' "$1" >&2; }
 
@@ -66,7 +68,11 @@ download_runtime() {
   local identifier
   identifier="$(xcrun simctl list devicetypes 2>/dev/null | awk -F '[()]' '/iPhone 16 Pro/ { print $2; exit }')"
   [ -n "$identifier" ] || identifier="iPhone 16 Pro"
-  xcrun simctl create "Clutch UI iPhone" "$identifier" "$runtime" >/dev/null 2>&1 || return 1
+  # The created device is named "Clutch UI iPhone", which the device filter
+  # below does not keep, so its identifier is captured here and used
+  # directly.
+  CREATED_DEVICE="$(xcrun simctl create "Clutch UI iPhone" "$identifier" "$runtime" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$CREATED_DEVICE" ] || return 1
   return 0
 }
 
@@ -76,7 +82,7 @@ xcodegen generate || exit 1
 DEVICE="$(pick_device || true)"
 if [ -z "$DEVICE" ]; then
   if download_runtime; then
-    DEVICE="$(pick_device || true)"
+    DEVICE="$CREATED_DEVICE"
   fi
 fi
 if [ -z "$DEVICE" ]; then

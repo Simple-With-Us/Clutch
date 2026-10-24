@@ -70,17 +70,34 @@ final class StubSidecar {
         }
     }
 
-    /// Read until the request headers end, so a request split across TCP
-    /// segments is still understood.
+    /// Read until the request headers end and the announced body has arrived.
+    ///
+    /// Answering before the body is drained can make the client reset the
+    /// connection instead of reading the response, so the whole request is
+    /// read first.
     private func receive(on connection: NWConnection, then handler: @escaping (String?) -> Void) {
         var buffer = ""
+        func bodyLength(_ text: String) -> Int {
+            for line in text.split(separator: "\r\n") {
+                let parts = line.split(separator: ":", maxSplits: 1)
+                guard parts.count == 2 else { continue }
+                if parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" {
+                    return Int(parts[1].trimmingCharacters(in: .whitespaces)) ?? 0
+                }
+            }
+            return 0
+        }
         func readMore() {
             connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
                 if let data {
                     buffer += String(decoding: data, as: UTF8.self)
-                    if buffer.contains("\r\n\r\n") {
-                        handler(buffer)
-                        return
+                    if let headerEnd = buffer.range(of: "\r\n\r\n") {
+                        let header = String(buffer[buffer.startIndex..<headerEnd.lowerBound])
+                        let body = String(buffer[headerEnd.upperBound...])
+                        if body.utf8.count >= bodyLength(header) {
+                            handler(buffer)
+                            return
+                        }
                     }
                 }
                 if error != nil || isComplete {

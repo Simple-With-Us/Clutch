@@ -1130,7 +1130,10 @@ public struct ChatView: View {
             model: selectedModel ?? "",
             sessionId: engine.supportsThreads ? codeChatId : sessionId,
             relayReceiverUid: deviceUid,
-            engine: engine.supportsThreads ? engine.sidecarId : nil,
+            // The engine always rides along: without it the sidecar routes
+            // by model name, and a MiniMax turn with no model named would
+            // land on DeepSeek.
+            engine: engine.sidecarId,
             cwd: engine.supportsThreads ? codeCwd : nil,
             effort: selectedEffort,
             images: attachments
