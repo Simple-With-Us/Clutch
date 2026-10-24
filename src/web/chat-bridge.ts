@@ -32,7 +32,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -480,6 +480,10 @@ export async function materializeAttachment(options: {
   try {
     await mkdir(sessionDir, { recursive: true });
     await writeFile(file, Buffer.from(options.image.data, "base64"));
+    // Writing a file does not move the directory's own timestamp, so an
+    // active session's directory would look old to the prune.  Touch it.
+    const now = new Date();
+    await utimes(sessionDir, now, now);
     return file;
   } catch (err) {
     log(`attachment write failed path=${file} message=${(err as Error).message.slice(0, 120)}`);
@@ -508,12 +512,36 @@ export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1
     try {
       const info = await stat(dir);
       if (!info.isDirectory()) continue;
-      if (now - info.mtimeMs < maxAgeMs) continue;
+      // The newest file inside counts too: a session that keeps receiving
+      // attachments must not be pruned because its directory timestamp
+      // did not move.
+      const newest = await newestFileTime(dir, info.mtimeMs);
+      if (now - newest < maxAgeMs) continue;
       await rm(dir, { recursive: true, force: true });
     } catch {
       /* a directory we cannot prune is not worth failing a turn over */
     }
   }
+}
+
+/** The newest modification time inside a directory, or the directory's own. */
+async function newestFileTime(dir: string, fallback: number): Promise<number> {
+  let newest = fallback;
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return fallback;
+  }
+  for (const entry of entries) {
+    try {
+      const info = await stat(join(dir, entry));
+      if (info.mtimeMs > newest) newest = info.mtimeMs;
+    } catch {
+      /* a file that vanished mid-scan is not worth failing over */
+    }
+  }
+  return newest;
 }
 
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
@@ -825,8 +853,10 @@ export function parsePromptImages(raw: unknown): Array<{ mimeType: string; data:
   if (!Array.isArray(raw)) return [];
   const images: Array<{ mimeType: string; data: string; name?: string }> = [];
   for (const item of raw) {
-    if (!item || typeof item !== "object") continue;
-    const row = item as { mimeType?: unknown; data?: unknown; name?: unknown };
+    // The array and its elements are boundary data: each one is checked
+    // before any field is read.
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
     const mimeType = typeof row.mimeType === "string" ? row.mimeType.trim().toLowerCase() : "";
     if (!IMAGE_MIME_TYPES.has(mimeType)) continue;
     const data = typeof row.data === "string" ? row.data.trim() : "";
