@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-To maximize developer ergonomics, protect local hardware, and optimize fleet economics, **all compute-intensive workloads for public repositories must be offloaded to free cloud infrastructure** — primarily GitHub Actions hosted runners (`ubuntu-latest` and `macos-15` / `macos-14`).  Local machines and local guest VMs should only perform fast pre-flight validation or handle tasks strictly requiring local resources.
+To maximize developer ergonomics, protect local hardware, and optimize fleet economics, **all compute-intensive workloads for public repositories must be offloaded to free cloud infrastructure** — primarily GitHub Actions hosted runners (`ubuntu-latest` and `macos-15` / `macos-14`).  Local machines and local guest VMs should only perform fast pre-flight validation or handle tasks strictly requiring local resources.
 
 ---
 
