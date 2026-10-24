@@ -39,7 +39,23 @@ permissions:
   actions: write
 
 concurrency:
-  group: mac-app-build-clutch
+  # Same event-scoped shape as ios-ship.yml and Usage-Monitor's mac-release.yml.
+  #
+  # This workflow is triggered by push, workflow_dispatch and pull_request, and
+  # the build job is skipped on pull_request, so a PR run contributes nothing
+  # to the Mac release.  While PR runs shared one group with the push-to-main
+  # build, cancel-in-progress: true meant a PR run cancelled main's build
+  # outright, and two different PRs also cancelled each other.
+  #
+  # 2026-10-24, twice in 70 minutes:
+  #   - push 6b3487f2 mac build 40075066076 was cancelled at 07:42:50Z by PR
+  #     run 40073521084.
+  #   - push ed510c85 mac build 40070842512 was cancelled at 06:36:16Z.
+  #
+  # Keying the group on the event gives every PR its own group (so PR builds
+  # stop cancelling each other) and leaves main alone in the 'main' group.
+  # cancel-in-progress stays true so a newer push to the same PR still wins.
+  group: mac-app-build-clutch-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
   cancel-in-progress: true
 
 jobs:

@@ -1,12 +1,13 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { compactToolHistory, loadOrMintToken, mcodeAvailable, normalizeSessionUpdate, parseLimitParam, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { parseAcpMessage, readMuseProviderCatalog } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -27,6 +28,46 @@ describe("routeForModel", () => {
     expect(routeForModel(undefined, undefined)).toBe("deepseek");
     expect(routeForModel("DeepSeek-V4.1-Pro", "minimax")).toBe("minimax");
     expect(routeForModel(undefined, "mcode")).toBe("mcode");
+  });
+
+  it("routes Muse models to the Muse engine when no engine is named", () => {
+    expect(routeForModel("muse-wonder-1.0", undefined)).toBe("muse");
+    expect(routeForModel("muse-spark-1.3", undefined)).toBe("muse");
+    expect(routeForModel(undefined, "muse")).toBe("muse");
+  });
+});
+
+describe("museInstalled", () => {
+  it("needs both the Muse host and the ACP adapter", () => {
+    const none = { hosts: [] as string[], adapters: [] as string[] };
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(true);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(false);
+    // A stale override path must not count as installed.
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).toBe(false);
+  });
+});
+
+describe("Muse engine wiring", () => {
+  const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+
+  it("runs Muse Code through the shipped adapter launcher", () => {
+    expect(source).toContain('join(ROOT, "scripts", "muse-code-acp.sh")');
+    expect(source).toContain("CLUTCH_CHAT_LAUNCHER_MUSE");
+  });
+
+  it("sends ACP content blocks to Muse, which rejects a bare string", () => {
+    expect(source).toContain('this.engine === "mcode" || this.engine === "muse"');
+  });
+
+  it("publishes the engine catalog the native model picker reads", () => {
+    expect(source).toContain('"/clutch/v1/engines"');
+    expect(source).toContain("engineCatalog(");
+  });
+
+  it("applies the model and the effort as ACP config options", () => {
+    expect(source).toContain("session/set_config_option");
+    expect(source).toContain("applySessionChoices");
   });
 });
 
@@ -242,6 +283,108 @@ describe("normalizeSessionUpdate", () => {
     const compacted = compactToolHistory(history);
     expect(compacted).toHaveLength(3);
     expect(compacted[1]).toMatchObject({ text: "write", toolStatus: "completed" });
+  });
+});
+
+describe("attachments on the dsh bridges", () => {
+  it("writes the image bytes where the agent can open them", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clutch-attachments-"));
+    const file = await materializeAttachment({
+      root,
+      sessionId: "session-1",
+      image: { mimeType: "image/png", data: Buffer.from("hello").toString("base64"), name: "shot.png" },
+      index: 0,
+    });
+    expect(file).not.toBe(null);
+    expect(readFileSync(file as string, "utf8")).toBe("hello");
+    // The attachment lands under the attachment root, not in the working
+    // directory the caller happens to be in.
+    expect((file as string).startsWith(root)).toBe(true);
+    expect((file as string).endsWith("shot.png")).toBe(true);
+  });
+
+  it("keeps a traversal name inside the attachment directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clutch-attachments-"));
+    const file = await materializeAttachment({
+      root,
+      sessionId: "session-1",
+      image: { mimeType: "image/png", data: Buffer.from("x").toString("base64"), name: "../../.ssh/authorized_keys" },
+      index: 0,
+    });
+    expect(file).not.toBe(null);
+    expect((file as string).startsWith(root)).toBe(true);
+    expect((file as string).includes("..")).toBe(false);
+    expect(basename(file as string)).toBe("authorized_keys");
+  });
+
+  it("names an unnamed attachment rather than writing nothing", () => {
+    expect(safeAttachmentName(undefined, 0)).toBe("attachment-1");
+    expect(safeAttachmentName("", 2)).toBe("attachment-3");
+    expect(safeAttachmentName("..", 0)).toBe("attachment-1");
+    expect(safeAttachmentName("a/b/c.png", 0)).toBe("c.png");
+  });
+});
+
+describe("parseAcpMessage", () => {
+  it("keeps only the fields it understands", () => {
+    const message = parseAcpMessage(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "x", result: { sessionId: "s" } }));
+    expect(message).toEqual({ id: 2, method: "x", result: { sessionId: "s" } });
+  });
+
+  it("drops a malformed message instead of believing it", () => {
+    expect(parseAcpMessage("not json")).toBe(null);
+    expect(parseAcpMessage("[]")).toBe(null);
+    expect(parseAcpMessage(JSON.stringify({ id: "2" }))).toEqual({});
+    expect(parseAcpMessage(JSON.stringify({ id: 2, result: "text" }))).toEqual({ id: 2 });
+  });
+});
+
+describe("Muse model wire values", () => {
+  it("offers the provider-qualified form as a fallback for a provider-catalog model", () => {
+    const dir = mkdtempSync(join(tmpdir(), "muse-catalog-"));
+    writeFileSync(join(dir, "catalog.json"), JSON.stringify({
+      provider_id: "meta",
+      profile_id: "tbh",
+      rows: [
+        { model_id: "muse-wonder-1.0", display_label: "muse-wonder-1.0", provider_id: "meta", profile_id: "tbh", visibility: "visible", context_limit: 1007997 },
+        { model_id: "muse-hidden-1.0", display_label: "hidden", provider_id: "meta", profile_id: "tbh", visibility: "hidden" },
+      ],
+    }));
+    const home = mkdtempSync(join(tmpdir(), "muse-home-"));
+    mkdirSync(join(home, ".local", "share", "muse", "model-catalog"), { recursive: true });
+    writeFileSync(join(home, ".local", "share", "muse", "model-catalog", "c.json"), readFileSync(join(dir, "catalog.json")));
+    const models = readMuseProviderCatalog(home);
+    expect(models.map((model) => model.id)).toEqual(["muse-wonder-1.0"]);
+    expect(models[0].value).toBe("muse-wonder-1.0");
+    expect(models[0].altValue).toBe('muse-model:["meta","tbh","muse-wonder-1.0"]');
+    expect(models[0].contextWindow).toBe(1007997);
+  });
+});
+
+describe("parsePromptImages", () => {
+  const png = "iVBORw0KGgo=";
+
+  it("keeps the images the engines accept", () => {
+    const images = parsePromptImages([
+      { mimeType: "image/png", data: png, name: "shot.png" },
+      { mimeType: "IMAGE/JPEG", data: png },
+    ]);
+    expect(images).toHaveLength(2);
+    expect(images[0]).toEqual({ mimeType: "image/png", data: png, name: "shot.png" });
+    expect(images[1].mimeType).toBe("image/jpeg");
+  });
+
+  it("drops unsupported types, empty data, and oversized attachments", () => {
+    expect(parsePromptImages([{ mimeType: "image/tiff", data: png }])).toEqual([]);
+    expect(parsePromptImages([{ mimeType: "image/png", data: "" }])).toEqual([]);
+    const big = "A".repeat(9 * 1024 * 1024);
+    expect(parsePromptImages([{ mimeType: "image/png", data: big }])).toEqual([]);
+  });
+
+  it("ignores anything that is not a list of images", () => {
+    expect(parsePromptImages(undefined)).toEqual([]);
+    expect(parsePromptImages("nope")).toEqual([]);
+    expect(parsePromptImages([null, 42])).toEqual([]);
   });
 });
 

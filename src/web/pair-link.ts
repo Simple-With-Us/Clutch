@@ -111,6 +111,8 @@ export function serverPairingLink(options: {
   chatToken: string;
   chatPort?: string | undefined;
   tls?: boolean;
+  /** The code engine the server runs (`mcode` or `muse`). */
+  engine?: string;
 }): string {
   const host = options.host.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   if (!host) throw new Error("host is required; is tailscale up on the server?");
@@ -118,7 +120,7 @@ export function serverPairingLink(options: {
   const link = new URL("clutch://pair");
   link.searchParams.set("h", host);
   link.searchParams.set("tls", options.tls === false ? "0" : "1");
-  link.searchParams.set("kind", "mcode");
+  link.searchParams.set("kind", options.engine?.trim() || "mcode");
   link.searchParams.set("chat", options.chatToken);
   if (options.chatPort) link.searchParams.set("chatPort", options.chatPort);
   if (options.name) link.searchParams.set("name", options.name);

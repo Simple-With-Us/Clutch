@@ -18,6 +18,8 @@ final class SessionsModel {
 
     private let host: ClutchHost
     private let client: SessionsClient
+    /// The engine whose threads are listed.
+    var engine: String = "mcode"
 
     var phase: Phase = .idle
 
@@ -32,7 +34,7 @@ final class SessionsModel {
         do {
             // Newest first, with an unparseable stamp sinking below the dated
             // rows instead of scrambling the list.
-            phase = .loaded(AcpSessionInfo.newestFirst(try await client.list()))
+            phase = .loaded(AcpSessionInfo.newestFirst(try await client.list(engine: engine)))
         } catch {
             phase = .failed(error.localizedDescription)
         }
@@ -54,11 +56,16 @@ final class SessionsModel {
 
 public struct SessionsView: View {
     let host: ClutchHost
+    /// The engine whose threads this list shows (`mcode` for MiniMax Code,
+    /// `muse` for Muse Code).  A host that runs both can switch between
+    /// them from the picker above the list.
+    @State private var engine: String = "mcode"
     @State private var model: SessionsModel
     @State private var selectedId: String?
     @State private var isStartingThread = false
     @State private var searchText = ""
     @State private var pinnedIds: Set<String> = []
+    @State private var catalog: EngineCatalog?
 
     public init(host: ClutchHost) {
         self.host = host
@@ -73,7 +80,21 @@ public struct SessionsView: View {
         }
         .task {
             pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+            // The catalog can take a while on a cold server, so the thread
+            // list does not wait for it.
+            async let catalogTask = EngineCatalogClient(host: host).fetch()
+            model.engine = engine
             await model.load()
+            catalog = try? await catalogTask
+            // A host that runs Muse Code but no MiniMax Code starts on
+            // Muse, not on an engine that is not installed there.
+            if let descriptor = catalog?.descriptor(engine), descriptor.available == false {
+                if let first = catalog?.availableEngines.first(where: { $0.supportsThreads }) {
+                    engine = first.id
+                    model.engine = first.id
+                    await model.refresh()
+                }
+            }
         }
     }
 
@@ -111,6 +132,9 @@ public struct SessionsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .safeAreaInset(edge: .top, spacing: 0) {
+            engineBar
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -131,7 +155,7 @@ public struct SessionsView: View {
             }
         }
         .sheet(isPresented: $isStartingThread) {
-            NewThreadSheet(host: host) { created in
+            NewThreadSheet(host: host, engine: engine) { created in
                 isStartingThread = false
                 Task {
                     await model.refresh()
@@ -139,6 +163,43 @@ public struct SessionsView: View {
                 }
             }
         }
+    }
+
+    /// Which engine's threads are listed.  A host can run MiniMax Code and
+    /// Muse Code side by side, so the list says which one it is showing.
+    private var engineBar: some View {
+        HStack(spacing: 8) {
+            if threadEngines.count > 1 {
+                Picker("Engine", selection: $engine) {
+                    ForEach(threadEngines, id: \.id) { descriptor in
+                        Text(descriptor.label).tag(descriptor.id)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: engine) { _, next in
+                    model.engine = next
+                    selectedId = nil
+                    Task { await model.refresh() }
+                }
+            } else {
+                Text(engineLabel)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.clutchSecondaryBackground.opacity(0.6))
+    }
+
+    /// The engines on this host whose threads can be listed.
+    private var threadEngines: [EngineDescriptor] {
+        (catalog?.engines ?? []).filter { $0.available && $0.supportsThreads }
+    }
+
+    private var engineLabel: String {
+        catalog?.descriptor(engine)?.label ?? (engine == "muse" ? "Muse Code" : "MiniMax Code")
     }
 
     private var visibleSessions: [AcpSessionInfo] {
@@ -188,7 +249,7 @@ public struct SessionsView: View {
     @ViewBuilder
     private var detail: some View {
         if let session = selectedSession {
-            SessionThreadView(host: host, session: session)
+            SessionThreadView(host: host, session: session, engine: engine)
         } else {
             ContentUnavailableView(
                 "Select A Thread",
@@ -227,15 +288,18 @@ public struct SessionsView: View {
 /// resets local state and lets the first message create the session.
 struct NewThreadSheet: View {
     let host: ClutchHost
+    /// The engine the new thread runs on.
+    let engine: String
     let onCreated: (AcpSessionInfo) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: NewThreadModel
 
-    init(host: ClutchHost, onCreated: @escaping (AcpSessionInfo) -> Void) {
+    init(host: ClutchHost, engine: String = "mcode", onCreated: @escaping (AcpSessionInfo) -> Void) {
         self.host = host
+        self.engine = engine
         self.onCreated = onCreated
-        _model = State(initialValue: NewThreadModel(host: host))
+        _model = State(initialValue: NewThreadModel(host: host, engine: engine))
     }
 
     var body: some View {
@@ -303,6 +367,8 @@ struct NewThreadSheet: View {
 @Observable
 final class NewThreadModel {
     private let host: ClutchHost
+    /// The engine the new thread runs on.
+    private let engine: String
     private var chatId: String?
     private var remoteSessionId: String?
     var onCreated: ((AcpSessionInfo) -> Void)?
@@ -312,8 +378,9 @@ final class NewThreadModel {
     var errorText: String?
     var isSending = false
 
-    init(host: ClutchHost) {
+    init(host: ClutchHost, engine: String = "mcode") {
         self.host = host
+        self.engine = engine
     }
 
     func send() {
@@ -326,10 +393,10 @@ final class NewThreadModel {
 
         let client = ChatSessionClient(
             host: host,
-            model: "mcode",
+            model: "",
             sessionId: nil,
             relayReceiverUid: "",
-            engine: "mcode"
+            engine: engine
         )
         Task {
             var text = ""

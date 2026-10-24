@@ -32,14 +32,17 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { z } from "zod";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
+import { ENGINE_ORDER, isEngine, type Engine } from "../shared/engine-types.ts";
+import { engineCatalog, resolveModelAltValue, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
 import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
@@ -66,18 +69,26 @@ const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat
 const DSH_HOME = process.env.CLUTCH_DSH_HOME ?? join(CLUTCH_HOME, "dsh");
 const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPath(CLUTCH_HOME);
 
-type Engine = "deepseek" | "minimax" | "mcode";
-
 interface Launcher {
   command: string;
   args: string[];
 }
+
+/**
+ * Engines whose threads the native clients can list and resume.
+ *
+ * The dsh bridges (DeepSeek, MiniMax) keep no resumable session list of
+ * their own, so discovery only makes sense for the code engines: MiniMax
+ * Code and Muse Code, both of which speak ACP `session/list`.
+ */
+const CODE_ENGINES: Engine[] = ["mcode", "muse"];
 
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
   join(homedir(), ".minimax-code", "bin", "mcode"),
 ].find(existsSync) ?? "mcode";
 const mcodeLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MCODE?.trim();
+const museLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MUSE?.trim();
 
 const LAUNCHERS: Record<Engine, Launcher> = {
   // CLUTCH_CHAT_LAUNCHER_<ENGINE> overrides exist for the full-loop test,
@@ -88,17 +99,54 @@ const LAUNCHERS: Record<Engine, Launcher> = {
   mcode: mcodeLauncherOverride
     ? { command: mcodeLauncherOverride, args: [] }
     : { command: process.env.CLUTCH_MCODE_CLI?.trim() || defaultMcode, args: ["acp"] },
+  // Muse Code is not an ACP agent: `muse serve` speaks MSP and the community
+  // adapter translates it to ACP on stdio.  The shipped launcher execs the
+  // adapter directly, so there is no Python bridge for this engine.
+  muse: museLauncherOverride
+    ? { command: museLauncherOverride, args: [] }
+    : { command: join(ROOT, "scripts", "muse-code-acp.sh"), args: [] },
 };
+
+/** Engines a phone or Mac can pick, in the order the picker shows them. */
+export { ENGINE_ORDER, ENGINE_LABELS, isEngine, type Engine } from "../shared/engine-types.ts";
 
 function log(line: string): void {
   process.stderr.write(`chat-bridge: ${line}\n`);
 }
 
+/** Whether a bare command name resolves on PATH. */
+function commandOnPath(command: string): boolean {
+  const path = process.env.PATH ?? "";
+  for (const dir of path.split(":")) {
+    if (!dir) continue;
+    if (existsSync(join(dir, command))) return true;
+  }
+  return false;
+}
+
 /** Route a model id to its engine. Unknown prefixes default to DeepSeek. */
 export function routeForModel(model: string | undefined, engine: string | undefined): Engine {
-  if (engine === "minimax" || engine === "deepseek" || engine === "mcode") return engine;
-  if (typeof model === "string" && /^minimax/i.test(model.trim())) return "minimax";
+  if (isEngine(engine)) return engine;
+  // No engine named: the model id says which one it belongs to.
+  const fromModel = engineForModelId(model);
+  if (fromModel) return fromModel;
   return "deepseek";
+}
+
+/**
+ * The engine a model id belongs to, when the model names its own engine.
+ * `muse-wonder` and `muse-spark-1.3` are Muse models; `mcode-*` are
+ * MiniMax Code's; everything else stays on the DeepSeek sidecar.
+ */
+export function engineForModelId(model: string | undefined): Engine | null {
+  if (typeof model !== "string") return null;
+  const id = model.trim().toLowerCase();
+  if (!id) return null;
+  if (id.startsWith("muse")) return "muse";
+  if (id.startsWith("mcode")) return "mcode";
+  if (id.startsWith("minimax")) return "minimax";
+  if (id.startsWith("deepseek")) return "deepseek";
+  return null;
 }
 
 /**
@@ -209,6 +257,48 @@ async function detectTailnetHost(): Promise<string | null> {
 /** Whether the direct MiniMax Code launcher is present on this machine. */
 export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
   return launcher.command.includes("/") ? existsSync(launcher.command) : true;
+}
+
+/**
+ * Whether Muse Code can run here.
+ *
+ * Two pieces are needed: the `muse` host binary, and the community ACP
+ * adapter that translates Muse's MSP to ACP.  The adapter is usually a
+ * global npm install, so its bin lands in the npm global prefix — on a
+ * server that is `/usr/local/bin`, on a Mac it is under the Homebrew
+ * prefix — and the launcher script searches the same places.
+ */
+export function museInstalled(
+  env: Record<string, string | undefined> = process.env,
+  candidates: { hosts?: string[]; adapters?: string[] } = {},
+): boolean {
+  // An explicit override only counts when the path is really there: a stale
+  // variable must not make the catalog claim Muse Code is installed.
+  const hostPaths = candidates.hosts ?? [
+    "/usr/local/bin/muse",
+    "/opt/homebrew/bin/muse",
+    join(homedir(), ".local", "bin", "muse"),
+  ];
+  // The launcher's own search list wins, so a host that keeps the adapter
+  // outside the global npm prefix (the fleet runtime does) still reads as
+  // installed.
+  const adapterPaths = candidates.adapters ?? [
+    ...(env.MUSE_CODE_ACP_SEARCH_PATHS ?? "")
+      .split(":")
+      .filter((dir) => dir.length > 0)
+      .map((dir) => join(dir, "muse-code-acp")),
+    "/usr/local/bin/muse-code-acp",
+    "/opt/homebrew/bin/muse-code-acp",
+    join(homedir(), ".local", "bin", "muse-code-acp"),
+  ];
+  const override = env.MUSE_CODE_EXECUTABLE?.trim();
+  const host = (override && existsSync(override) ? override : undefined)
+    || hostPaths.find(existsSync);
+  if (!host) return false;
+  const adapterOverride = env.MUSE_CODE_ACP_BIN?.trim();
+  const adapter = (adapterOverride && existsSync(adapterOverride) ? adapterOverride : undefined)
+    || adapterPaths.find(existsSync);
+  return Boolean(adapter);
 }
 
 /** Load the Bearer token, minting and persisting it (mode 600) on first boot. */
@@ -400,8 +490,125 @@ class BridgeProcessError extends Error {
   }
 }
 
+/**
+ * One image attached to a turn.
+ *
+ * ACP carries images as content blocks with base64 data, which is what both
+ * code engines accept (`promptCapabilities.image` is true on MiniMax Code and
+ * Muse Code).  The dsh bridges take a plain string, so an attachment there
+ * rides as a path the agent opens with its own read tool.
+ */
+export interface PromptImage {
+  mimeType: string;
+  data: string;
+  name?: string;
+}
+
+/** Where attachments are materialized for the engines that take a path. */
+export function attachmentRoot(): string {
+  return join(CLUTCH_HOME, "attachments");
+}
+
+/**
+ * The file name an attachment is written under.
+ *
+ * The name comes from the client, so it is never trusted: only the last
+ * path segment survives, and a name that is empty after that falls back to
+ * a generated one.  Without this, a name like `../../.ssh/authorized_keys`
+ * would write outside the attachment directory.
+ */
+export function safeAttachmentName(raw: string | undefined, index: number): string {
+  const base = basename(raw ?? "").trim();
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
+  if (!cleaned || cleaned === "." || cleaned === "..") return `attachment-${index + 1}`;
+  return cleaned.slice(0, 120);
+}
+
+/**
+ * Write an attachment to disk for the engines that take a path.
+ *
+ * The bytes land in a per-session directory under the attachment root, never
+ * in the user's working directory: an attachment is not a project file, and
+ * writing it there would dirty the working tree and accumulate forever.
+ * The resolved path is checked against the root before the write, so a
+ * crafted name cannot escape.
+ */
+export async function materializeAttachment(options: {
+  root: string;
+  sessionId: string;
+  image: PromptImage;
+  index: number;
+}): Promise<string | null> {
+  const sessionDir = join(options.root, options.sessionId);
+  const candidate = resolve(sessionDir, safeAttachmentName(options.image.name, options.index));
+  const root = resolve(options.root);
+  // The resolved file must sit under the resolved root: the name is
+  // sanitized already, and this is the second line of defence.
+  if (candidate !== root && !candidate.startsWith(root + sep)) {
+    log(`attachment refused: the name escaped the attachment directory`);
+    return null;
+  }
+  let imageDir: string | undefined;
+  try {
+    await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+    // Each image gets a directory created exclusively by mkdtemp. Names can
+    // repeat within a turn or across turns without changing an earlier path.
+    imageDir = await mkdtemp(join(sessionDir, "image-"));
+    const file = join(imageDir, safeAttachmentName(options.image.name, options.index));
+    await writeFile(file, Buffer.from(options.image.data, "base64"), { flag: "wx", mode: 0o600 });
+    return file;
+  } catch {
+    if (imageDir) await rm(imageDir, { recursive: true, force: true }).catch(() => undefined);
+    log("attachment write failed");
+    return null;
+  }
+}
+
+/** Prepare every image before a turn can be sent. Never silently drop one. */
+export async function prepareAttachedPrompt(root: string, sessionId: string, text: string, images: PromptImage[]): Promise<string> {
+  const written: string[] = [];
+  try {
+    for (const [index, image] of images.entries()) {
+      const file = await materializeAttachment({ root, sessionId, image, index });
+      if (!file) throw new Error("An attachment could not be saved. The turn was not sent. Please try again.");
+      written.push(file);
+    }
+    return `${text}\n\n${written.map((file) => `<attached-image path="${file}" />`).join("\n")}`;
+  } catch (error) {
+    // These directories were created exclusively for this preparation. A
+    // partial batch is never sent, so only its own unused files are removed.
+    await Promise.all(written.map((file) => rm(dirname(file), { recursive: true, force: true }).catch(() => undefined)));
+    throw error;
+  }
+}
+
+/**
+ * Remove attachment directories older than a day, so a long-lived sidecar
+ * does not keep every image it ever received.
+ */
+export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(root);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    const dir = join(root, entry);
+    try {
+      const info = await stat(dir);
+      if (!info.isDirectory()) continue;
+      if (now - info.mtimeMs < maxAgeMs) continue;
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      /* a directory we cannot prune is not worth failing a turn over */
+    }
+  }
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
-class Bridge {
+export class Bridge {
   private child: ChildProcess | null = null;
   private initialized: Promise<unknown> | null = null;
   private nextId = 1;
@@ -545,6 +752,24 @@ class Bridge {
     return result.sessionId;
   }
 
+  /**
+   * Switch the session's model or reasoning effort.
+   *
+   * ACP carries both as config options: `model` for the model choice, and a
+   * per-engine effort option (`reasoning_effort` on dsh, `thinkingEffort` on
+   * MiniMax Code, `reasoningEffort` on Muse Code).  An engine that does not
+   * offer the option answers with an error, which is not fatal for the turn:
+   * the caller keeps the session as it was and reports the refusal.
+   */
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<boolean> {
+    try {
+      await this.send("session/set_config_option", { sessionId, configId, value });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async listSessions(cwd?: string, limit: number = 100): Promise<AcpSessionInfo[]> {
     const cap = Math.min(Math.max(Math.trunc(limit) || 100, 1), 500);
     const sessions: AcpSessionInfo[] = [];
@@ -578,8 +803,36 @@ class Bridge {
     return this.send("session/load", { sessionId, cwd, mcpServers: [] });
   }
 
-  prompt(sessionId: string, text: string): Promise<{ stopReason: string }> {
-    const prompt = this.engine === "mcode" ? [{ type: "text", text }] : text;
+  /**
+   * Send one turn.
+   *
+   * `cwd` is the session's working directory, passed per call: the bridge
+   * is shared by every session of an engine, so it cannot hold a directory
+   * of its own.
+   */
+  async prompt(
+    sessionId: string,
+    text: string,
+    images: PromptImage[] = [],
+    cwd: string = process.env.HOME ?? "/tmp",
+  ): Promise<{ stopReason: string }> {
+    // ACP agents take content blocks; the dsh bridges take a plain string.
+    // Muse Code rejects a bare string ("Invalid params"), so the code
+    // engines get the block form every time.
+    let prompt: unknown = text;
+    if (this.engine === "mcode" || this.engine === "muse") {
+      const blocks: unknown[] = [{ type: "text", text }];
+      for (const image of images) {
+        blocks.push({ type: "image", mimeType: image.mimeType, data: image.data });
+      }
+      prompt = blocks;
+    } else if (images.length > 0) {
+      // The dsh bridges have no image block.  Their contract is an image
+      // materialized to a file, with the path appended to the text, so the
+      // agent opens the file with its own read tool.  Naming a file that
+      // does not exist would lose the attachment entirely.
+      prompt = await prepareAttachedPrompt(attachmentRoot(), sessionId, text, images);
+    }
     return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;
   }
 
@@ -595,6 +848,10 @@ interface ChatSession {
   cwd: string;
   busy: boolean;
   stream: ((u: AcpUpdate) => void) | null;
+  /** The model this session runs, as the client asked for it. */
+  model?: string;
+  /** The reasoning effort this session runs, as the client asked for it. */
+  effort?: string;
 }
 
 /** Untrusted request bodies for the project/archive routes.  Strict so an
@@ -649,6 +906,42 @@ function sseSend(res: ServerResponse, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
+/** The image MIME types the code engines accept. */
+const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/** One image per turn, and the bytes it carries. */
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+
+/**
+ * The images attached to a turn.
+ *
+ * The client posts base64 data (an attachment is never a file path: the
+ * phone has no shared filesystem with the server).  The size and the MIME
+ * type are checked here so a bad attachment is refused before a model turn
+ * is billed for it.
+ */
+export function parsePromptImages(raw: unknown): Array<{ mimeType: string; data: string; name?: string }> {
+  if (!Array.isArray(raw)) return [];
+  const images: Array<{ mimeType: string; data: string; name?: string }> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as { mimeType?: unknown; data?: unknown; name?: unknown };
+    const mimeType = typeof row.mimeType === "string" ? row.mimeType.trim().toLowerCase() : "";
+    if (!IMAGE_MIME_TYPES.has(mimeType)) continue;
+    const data = typeof row.data === "string" ? row.data.trim() : "";
+    if (!data) continue;
+    // The client sends raw base64; the byte count is what the engine caps.
+    const bytes = Math.floor((data.length * 3) / 4);
+    if (bytes > MAX_IMAGE_BYTES) continue;
+    images.push({
+      mimeType,
+      data,
+      ...(typeof row.name === "string" && row.name.length > 0 ? { name: row.name } : {}),
+    });
+  }
+  return images;
+}
+
 async function main(): Promise<void> {
   const token = loadOrMintToken();
   // Clutch's own settings (Infisical is the sole source of truth).  The bridge
@@ -690,6 +983,77 @@ async function main(): Promise<void> {
     return b;
   }
 
+  /**
+   * Whether an engine's launcher and host binary are present here, so the
+   * catalog can say "not installed" instead of failing on the first turn.
+   */
+  function engineAvailable(engine: Engine): boolean {
+    const launcher = LAUNCHERS[engine];
+    // A launcher with a path is checked against the filesystem; a bare
+    // command name is checked against PATH, so a server without MiniMax
+    // Code does not claim to have it.
+    if (launcher.command.includes("/")) {
+      if (!existsSync(launcher.command)) return false;
+    } else if (!commandOnPath(launcher.command)) {
+      return false;
+    }
+    if (engine === "muse") return museInstalled();
+    return true;
+  }
+
+  /** The catalog for this host, with the real launchers wired in. */
+  async function catalog(): Promise<EngineCatalog> {
+    return engineCatalog({
+      launchers: LAUNCHERS,
+      available: Object.fromEntries(ENGINE_ORDER.map((engine) => [engine, engineAvailable(engine)])) as Record<Engine, boolean>,
+      probeCwd: process.env.HOME ?? "/tmp",
+    });
+  }
+
+  /**
+   * Apply the client's model and effort choices to a session.
+   *
+   * Both are ACP config options, and every engine spells them differently,
+   * so the catalog is what maps a requested model to the wire value.  A
+   * refusal is reported but never fatal: the turn still runs with the
+   * engine's own default, which is better than refusing to answer.
+   */
+  async function applySessionChoices(
+    bridge: Bridge,
+    session: ChatSession,
+    catalogValue: EngineCatalog,
+  ): Promise<{ modelApplied: boolean; effortApplied: boolean }> {
+    let modelApplied = false;
+    let effortApplied = false;
+    if (!session.bridgeSessionId) return { modelApplied, effortApplied };
+    const descriptor = catalogValue.engines.find((entry) => entry.id === session.engine);
+    if (session.model) {
+      const value = resolveModelValue(catalogValue, session.engine, session.model);
+      if (value) {
+        modelApplied = await bridge.setConfigOption(session.bridgeSessionId, descriptor?.modelConfigId ?? "model", value);
+        if (!modelApplied) {
+          // The engine may spell the same model another way (Muse Code:
+          // bare id versus provider-qualified tuple).  Give the second form
+          // its turn before giving up on the choice.
+          const alt = resolveModelAltValue(catalogValue, session.engine, session.model);
+          if (alt) {
+            modelApplied = await bridge.setConfigOption(session.bridgeSessionId, descriptor?.modelConfigId ?? "model", alt);
+          }
+        }
+        if (!modelApplied) log(`model refused session=${session.bridgeSessionId} engine=${session.engine}`);
+      }
+    }
+    if (session.effort) {
+      effortApplied = await bridge.setConfigOption(
+        session.bridgeSessionId,
+        descriptor?.effortConfigId ?? "reasoning_effort",
+        session.effort,
+      );
+      if (!effortApplied) log(`effort refused session=${session.bridgeSessionId} engine=${session.engine}`);
+    }
+    return { modelApplied, effortApplied };
+  }
+
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
     if (!isTrustedHostHeader(req.headers.host, allowed)) {
@@ -717,11 +1081,27 @@ async function main(): Promise<void> {
       res.writeHead(200, { "content-type": "application/json" }).end(
         JSON.stringify({
           ok: true,
-          engines: ["deepseek", "minimax", "mcode"],
+          engines: ENGINE_ORDER,
           mcode: { available: mcodeAvailable() },
           tailnetHost,
         }),
       );
+      return;
+    }
+
+    // The engine catalog: which engines this host runs, which models each
+    // offers right now, and which effort levels it accepts.  The native
+    // model picker reads this instead of shipping a list that goes stale.
+    if (req.method === "GET" && url.pathname === "/clutch/v1/engines") {
+      try {
+        const value = await catalog();
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(value));
+      } catch (err) {
+        log(`engine catalog failed message=${(err as Error).message.slice(0, 120)}`);
+        res.writeHead(502, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
+        );
+      }
       return;
     }
 
@@ -766,12 +1146,16 @@ async function main(): Promise<void> {
     if (await handleInfisicalSettingsRequest(req, res, url.pathname, { settings })) return;
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/sessions") {
-      if (url.searchParams.get("engine") !== "mcode") {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "session discovery requires engine=mcode" }));
+      const requestedEngine = url.searchParams.get("engine");
+      if (!isEngine(requestedEngine) || !CODE_ENGINES.includes(requestedEngine)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: `session discovery requires engine to be one of ${CODE_ENGINES.join(", ")}` }),
+        );
         return;
       }
+      const listEngine = requestedEngine;
       try {
-        const bridge = bridgeFor("mcode");
+        const bridge = bridgeFor(listEngine);
         await bridge.initialize();
         const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
         const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
@@ -788,7 +1172,7 @@ async function main(): Promise<void> {
         const sessions = attachUsage(page.slice(0, USAGE_ENRICH_CAP)).concat(page.slice(USAGE_ENRICH_CAP));
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions }));
       } catch (err) {
-        log(`mcode list failed message=${(err as Error).message.slice(0, 120)}`);
+        log(`${listEngine} list failed message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
           JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
         );
@@ -797,7 +1181,7 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "POST" && url.pathname === "/clutch/v1/sessions/load") {
-      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown; limit?: unknown };
+      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown; limit?: unknown; model?: unknown; effort?: unknown };
       try {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
@@ -808,10 +1192,13 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
         return;
       }
-      if (body.engine !== "mcode" || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "engine=mcode and sessionId are required" }));
+      if (!isEngine(body.engine) || !CODE_ENGINES.includes(body.engine) || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: `engine must be one of ${CODE_ENGINES.join(", ")} and sessionId is required` }),
+        );
         return;
       }
+      const loadEngine = body.engine;
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
       const historyLimit =
         typeof body.limit === "number" || typeof body.limit === "string"
@@ -820,7 +1207,7 @@ async function main(): Promise<void> {
       const chatId = randomBytes(16).toString("hex");
       const history: AcpUpdate[] = [];
       const session: ChatSession = {
-        engine: "mcode",
+        engine: loadEngine,
         bridgeSessionId: body.sessionId,
         resumeSessionId: body.sessionId,
         cwd,
@@ -828,12 +1215,19 @@ async function main(): Promise<void> {
         stream: (update) => {
           if (history.length < 20_000) history.push(update);
         },
+        ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
+        ...(typeof body.effort === "string" && body.effort.length > 0 ? { effort: body.effort } : {}),
       };
       sessions.set(chatId, session);
       try {
-        const bridge = bridgeFor("mcode");
+        const bridge = bridgeFor(loadEngine);
         await bridge.initialize();
         await bridge.loadSession(body.sessionId, cwd);
+        // A resumed thread keeps the model it was created with unless the
+        // client asks for another one, so the choices land after the load.
+        if (session.model || session.effort) {
+          await applySessionChoices(bridge, session, await catalog());
+        }
         session.busy = false;
         session.stream = null;
         res.writeHead(200, { "content-type": "application/json" }).end(
@@ -841,7 +1235,7 @@ async function main(): Promise<void> {
         );
       } catch (err) {
         sessions.delete(chatId);
-        log(`mcode load failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+        log(`${loadEngine} load failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
           JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
         );
@@ -1017,10 +1411,12 @@ async function main(): Promise<void> {
       let body: {
         prompt?: unknown;
         model?: unknown;
+        effort?: unknown;
         engine?: unknown;
         sessionId?: unknown;
         cwd?: unknown;
         relay?: unknown;
+        images?: unknown;
       };
       try {
         body = (await readJsonBody(req)) as typeof body;
@@ -1044,6 +1440,12 @@ async function main(): Promise<void> {
         typeof body.engine === "string" ? body.engine : undefined,
       );
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
+      // The model the client picked and the effort it wants.  Both are
+      // optional: without them the engine keeps its own defaults.
+      const requestedModel = typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : undefined;
+      const requestedEffort = typeof body.effort === "string" && body.effort.trim().length > 0 ? body.effort.trim() : undefined;
+      // Images attached to the turn, the way the web canvas attaches files.
+      const images = parsePromptImages(body.images);
 
       let chatId = typeof body.sessionId === "string" && body.sessionId.length > 0 ? body.sessionId : null;
       let session = chatId ? sessions.get(chatId) : undefined;
@@ -1052,6 +1454,8 @@ async function main(): Promise<void> {
         session = { engine, bridgeSessionId: "", resumeSessionId: null, cwd, busy: false, stream: null };
         sessions.set(chatId, session);
       }
+      if (requestedModel) session.model = requestedModel;
+      if (requestedEffort) session.effort = requestedEffort;
       if (session.busy) {
         res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ error: "session busy", sessionId: chatId }));
         return;
@@ -1135,14 +1539,20 @@ async function main(): Promise<void> {
         const bridge = bridgeFor(engine);
         await bridge.initialize();
         if (!active.bridgeSessionId) {
-          if (engine === "mcode" && active.resumeSessionId) {
+          if (CODE_ENGINES.includes(engine) && active.resumeSessionId) {
             await bridge.loadSession(active.resumeSessionId, active.cwd);
             active.bridgeSessionId = active.resumeSessionId;
           } else {
             active.bridgeSessionId = await bridge.newSession(cwd);
-            if (engine === "mcode") active.resumeSessionId = active.bridgeSessionId;
+            if (CODE_ENGINES.includes(engine)) active.resumeSessionId = active.bridgeSessionId;
           }
           log(`chat session=${chatId} bridgeSession=${active.bridgeSessionId} cwdChars=${cwd.length}`);
+        }
+        // The model's and the effort's choices land before the turn, so the
+        // first prompt of a new session already runs on the picked model.
+        if (active.model || active.effort) {
+          const applied = await applySessionChoices(bridge, active, await catalog());
+          log(`chat choices session=${chatId} model=${applied.modelApplied} effort=${applied.effortApplied}`);
         }
         if (engine === "mcode" && active.bridgeSessionId) {
           const sessionIdForUsage = active.bridgeSessionId;
@@ -1157,7 +1567,7 @@ async function main(): Promise<void> {
           }, 1500);
           usageTimer.unref?.();
         }
-        const result = await bridge.prompt(active.bridgeSessionId, prompt);
+        const result = await bridge.prompt(active.bridgeSessionId, prompt, images, active.cwd);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);
         if (sink) {
           try {

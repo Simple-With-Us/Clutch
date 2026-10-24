@@ -54,8 +54,24 @@ The health answer reports `mcode.available`, which is false when MiniMax Code is
 
 - Unit: `clutch-chat-bridge.service`, running as root from the fleet checkout, always-on with `Restart=on-failure`.  It is the only Clutch process on that box; there is no clutch web there.
 - Reachable at `https://jay-server.boa-roygbiv.ts.net:3181` on the tailnet only (`tailscale serve`, set up by `scripts/chat-bridge.sh` on every start).
+- Engines on that box: MiniMax Code (`mcode acp`) and Muse Code (`muse serve` behind the community `@bex-co/muse-code-acp` adapter, installed globally at `/usr/local/bin/muse-code-acp`).  The catalog route reports both, with Muse's models read from the Muse provider catalog — Muse Wonder (`muse-wonder-1.0`) among them.
 - Pairing link: `/root/.clutch/server-pairing-link.txt` on the server (owner-only).  Re-mint it any time with the pairing command above; the token survives sidecar restarts, so existing pairings keep working.
 - Updating: pull the checkout, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  Re-run the installer if the checkout moved, because the unit points at it.
+
+### Muse Code On A Server
+
+Muse Code is not an ACP agent: `muse serve` speaks MSP, and the community adapter `@bex-co/muse-code-acp` translates MSP to ACP on stdio.  The sidecar launches that adapter through `scripts/muse-code-acp.sh`, exactly as the Shellular runtime does.
+
+```bash
+npm install -g @bex-co/muse-code-acp      # the adapter
+muse login                                # as the service user
+```
+
+The launcher's `MUSE_CODE_ACP_BIN` pins the adapter path, and `MUSE_CODE_ACP_SEARCH_PATHS` replaces the whole search list (the fleet runtime keeps the adapter outside the global npm prefix).  `MUSE_CODE_EXECUTABLE` pins the `muse` host binary.
+
+The Muse models come from two places, and the catalog merges them: what the ACP session advertises on `session/new`, and the provider catalog the Muse CLI writes to `~/.local/share/muse/model-catalog/`.  The provider catalog is what makes a model the session does not advertise — Muse Wonder — selectable from the phone and the Mac.
+
+Muse Code's ACP session takes content blocks, not a bare string, so the sidecar sends the block form to both code engines.  Tool calls ride the same path as the other engines: `session_call` updates become `tool` SSE events and replay as one card per call.
 
 ## Client Surfaces
 
@@ -64,6 +80,26 @@ The health answer reports `mcode.available`, which is false when MiniMax Code is
 - **Browser:** the sidecar also serves the MiniMax Code remote shell at `/minimax-code/` on the sidecar origin, now with a thread filter.  `clutch-pair-ios --shell` mints its link.
 
 On both native apps, threads can be pinned locally (per host, on-device only), tool calls stream as cards with running / completed / failed status and replay as one card per call, transcripts export as Markdown (share sheet on iOS, Copy and Save on Mac), a turn finishing in the background posts a local notification, Find searches the open thread, and the mic dictates into the composer through the system speech recognizer.
+
+### The Model Picker
+
+`GET /clutch/v1/engines` publishes what the host can run right now: each engine's models and reasoning-effort levels.  Both apps build their model and effort pickers from it, which is the web canvas's model picker reduced to what a native client can show — and, unlike a hardcoded list, a model the provider ships tomorrow appears without an app release.
+
+The app asks for a model by id; the sidecar maps it onto the exact wire value the engine wants, because every engine spells its models differently (MiniMax Code uses `m:minimax:…:v:thinking`, Muse can use a provider-qualified `muse-model:[…]`).  The choice is applied as an ACP config option (`session/set_config_option`) on the model id and on the engine's own effort option: `reasoning_effort` on dsh, `thinkingEffort` on MiniMax Code, `reasoningEffort` on Muse Code.  A refusal is reported, never fatal: the turn still runs with the engine's default.
+
+The picker only *shows* the catalog's first row; it does not send it.  A thread keeps the model and effort it was created with unless the owner picks another one, so opening an old thread never silently switches its model.
+
+### Attachments
+
+Images ride a turn as base64 data — the phone has no shared filesystem with the server — and the sidecar forwards them as ACP image blocks to MiniMax Code and Muse Code, both of which accept them.  The dsh bridges take no image block, so the sidecar writes the bytes into a per-session directory under `$CLUTCH_HOME/attachments` and names that file in the prompt; the agent opens it with its own read tool.  The name comes from the client, so it is never trusted: only the last path segment survives, and the resolved path is checked against the attachment root before the write.  Attachments live outside the working directory on purpose — an attachment is not a project file, and writing it there would dirty the working tree.  Directories older than a day are pruned when the next attachment is written.
+
+### The Mac App Reaching Another Machine
+
+The Mac app pairs and switches hosts the way the phone does, so a code server on another machine is one click away: the chat surface has a host menu with every paired host plus **Add Host…**, and the same pairing link the phone uses works there.  A paired server host has no web canvas and no dsh host contract behind it, so the Mac shows the code surfaces only — the thread rail, the model and effort pickers, and the composer.
+
+## Verifying The Client Surfaces
+
+The hosted iOS build runs the thread surfaces, not just compiles them: `scripts/ios-ui-tests.sh` resolves a simulator, drives the app against a local stub sidecar (`ios/UITests/StubSidecar.swift`), and keeps a screenshot per state — the thread list, the open thread, and the find bar with a match highlighted.  The result bundle is published as the `ios-ui-screenshots` artifact, so a reviewer sees the surfaces rather than reading about them.  The script skips (exit 10) when the runner image has no simulator runtime, which is not the same as a failing test.
 
 ## Troubleshooting
 

@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(PhotosUI)
+import PhotosUI
+#endif
 
 /// One rendered turn in a native MiniMax Code thread.
 struct ThreadBubbleItem: Identifiable, Equatable {
@@ -12,7 +15,7 @@ struct ThreadBubbleItem: Identifiable, Equatable {
     var role: Role
     var text: String
     /// Tool status (`running` / `completed` / `failed`) for `.tool` bubbles.
-    var toolStatus: String?
+    var toolStatus: String? = nil
 }
 
 @MainActor
@@ -42,15 +45,53 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
+    /// Images attached to the next turn, the way the web canvas attaches
+    /// files to a message.
+    var attachments: [ChatAttachment] = []
+
+    /// The engine this thread runs on (`mcode` for MiniMax Code, `muse` for
+    /// Muse Code).  Set when the thread is opened, and what the catalog is
+    /// filtered by.
+    var engine: String = "mcode"
+    /// The picked model, by the id the catalog published.
+    var modelId: String?
+    /// The picked reasoning effort, by the level the catalog published.
+    var effort: String?
+    /// The host's engine catalog, for the model and effort pickers.
+    var catalog: EngineCatalog?
 
     private var sendTask: Task<Void, Never>?
 
-    init(host: ClutchHost, session: AcpSessionInfo) {
+    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
         self.host = host
         self.client = SessionsClient(host: host)
         self.session = session
+        self.engine = engine
         self.remoteSessionId = session.sessionId
         self.cwd = session.cwd
+    }
+
+    /// The engine's models, as the catalog published them.
+    var models: [EngineModel] {
+        catalog?.descriptor(engine)?.models ?? []
+    }
+
+    /// The engine's effort levels, as the catalog published them.
+    var effortLevels: [String] {
+        catalog?.descriptor(engine)?.effortLevels ?? []
+    }
+
+    /// Load the catalog so the pickers can show what this host really
+    /// offers.  A failure is not fatal: the thread still works, the pickers
+    /// just stay empty.
+    ///
+    /// The catalog's first row is only the *default* the picker shows; it is
+    /// not sent with a turn unless the owner picked it.  A resumed thread
+    /// keeps the model and effort it was created with, and sending a
+    /// default would silently switch it.
+    func loadCatalog() async {
+        guard catalog == nil else { return }
+        catalog = try? await EngineCatalogClient(host: host).fetch()
     }
 
     func load() async {
@@ -69,7 +110,7 @@ final class SessionThreadModel {
     private func fetch() async {
         phase = .loading
         do {
-            let loaded = try await client.load(sessionId: remoteSessionId, cwd: session.cwd)
+            let loaded = try await client.load(sessionId: remoteSessionId, cwd: session.cwd, engine: engine)
             chatId = loaded.chatId
             // The sidecar does not echo cwd back, so keep the one we asked
             // for; a reload without it fails every thread outside $HOME.
@@ -108,13 +149,19 @@ final class SessionThreadModel {
 
         // relayReceiverUid is empty: an unpaired CometChat thread has no sink
         // to relay into, and the sidecar skips the mirror when it is blank.
+        // The model and the effort ride along only when the owner picked
+        // them: an untouched thread keeps the ones it was created with.
         let client = ChatSessionClient(
             host: host,
-            model: "mcode",
+            model: modelId ?? "",
             sessionId: chatId,
             relayReceiverUid: "",
-            engine: "mcode"
+            engine: engine,
+            cwd: cwd,
+            effort: effort,
+            images: attachments
         )
+        attachments = []
         let replyId = UUID().uuidString
         var reply = ""
         sendTask = Task {
@@ -191,23 +238,31 @@ final class SessionThreadModel {
         if case .failed = phase { return true }
         return false
     }
+
+    /// The engine's owner-facing name, when the catalog has not loaded yet.
+    var engineLabel: String {
+        catalog?.descriptor(engine)?.label ?? (engine == "muse" ? "Muse Code" : "MiniMax Code")
+    }
 }
 
 public struct SessionThreadView: View {
     let session: AcpSessionInfo
     @State private var model: SessionThreadModel
-    @State private var showFind = false
-    @State private var findText = ""
+    @State private var showFind = DebugLaunch.showsFind
+    @State private var findText = DebugLaunch.findText ?? ""
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
+    /// The photo the user picked for the next turn.
+    @State private var pickedPhoto: PhotosPickerItem?
 
-    public init(host: ClutchHost, session: AcpSessionInfo) {
+    public init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
         self.session = session
-        _model = State(initialValue: SessionThreadModel(host: host, session: session))
+        _model = State(initialValue: SessionThreadModel(host: host, session: session, engine: engine))
     }
 
     public var body: some View {
         VStack(spacing: 0) {
+            modelBar
             if showFind {
                 findBar
                 Divider()
@@ -242,6 +297,82 @@ public struct SessionThreadView: View {
             guard dictation.isRecording || !text.isEmpty else { return }
             model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+    }
+
+    /// The model and effort pickers, straight from the host's catalog.
+    ///
+    /// This is the web canvas's model picker, reduced to what a phone can
+    /// show: the engine's own models and the effort levels it accepts, so
+    /// a new provider model appears here without an app release.
+    private var modelBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                if model.models.isEmpty {
+                    Text("No Models Advertised")
+                } else {
+                    ForEach(model.models) { entry in
+                        Button {
+                            model.modelId = entry.id
+                        } label: {
+                            if entry.id == model.modelId {
+                                Label(entry.displayLabel, systemImage: "checkmark")
+                            } else {
+                                Text(entry.displayLabel)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 10))
+                    Text(model.modelId ?? model.engineLabel)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                }
+            }
+            .disabled(model.models.isEmpty)
+
+            if !model.effortLevels.isEmpty {
+                Menu {
+                    ForEach(model.effortLevels, id: \.self) { level in
+                        Button {
+                            model.effort = level
+                        } label: {
+                            if level == model.effort {
+                                Label(level.capitalized, systemImage: "checkmark")
+                            } else {
+                                Text(level.capitalized)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gauge.with.dots.needle.50percent")
+                            .font(.system(size: 10))
+                        Text((model.effort ?? "default").capitalized)
+                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if let note = model.catalog?.descriptor(model.engine)?.note {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .help(note)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.clutchSecondaryBackground.opacity(0.6))
+        .task { await model.loadCatalog() }
     }
 
     private var findBar: some View {
@@ -346,7 +477,11 @@ public struct SessionThreadView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        VStack(spacing: 6) {
+            if !model.attachments.isEmpty {
+                attachmentStrip
+            }
+            HStack(alignment: .bottom, spacing: 8) {
             Button {
                 if !dictation.isRecording { draftBase = model.draft }
                 dictation.toggle()
@@ -358,6 +493,13 @@ public struct SessionThreadView: View {
             .buttonStyle(.plain)
             .disabled(model.isSending)
             .accessibilityLabel(dictation.isRecording ? "Stop Dictation" : "Dictate")
+            PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                Image(systemName: "paperclip")
+                    .font(.title3)
+                    .foregroundStyle(Color.secondary)
+            }
+            .disabled(model.isSending)
+            .accessibilityLabel("Attach Image")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -385,9 +527,63 @@ public struct SessionThreadView: View {
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send Message")
             }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .onChange(of: pickedPhoto) { _, item in
+            guard let item else { return }
+            pickedPhoto = nil
+            Task { await loadAttachment(item) }
+        }
+    }
+
+    /// The images waiting on the next turn, each removable.
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.attachments) { attachment in
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 10))
+                        Text(attachment.displayName)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                        Button {
+                            model.attachments.removeAll { $0.id == attachment.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(attachment.displayName)")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.clutchSecondaryBackground, in: Capsule())
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+    }
+
+    /// Read a picked photo into an attachment.  A photo the engines cannot
+    /// take (an unsupported type, or one over the size cap) is reported
+    /// instead of failing silently at the send.
+    private func loadAttachment(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            model.sendError = "Could not read that photo."
+            return
+        }
+        guard let attachment = ChatAttachment.from(data: data, name: "attachment") else {
+            model.sendError = Copy.gap(
+                "That image type is not supported.",
+                "Use PNG, JPEG, GIF, or WebP."
+            )
+            return
+        }
+        model.attachments.append(attachment)
     }
 }
 
