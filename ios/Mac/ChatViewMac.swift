@@ -201,6 +201,10 @@ public struct ChatView: View {
                         fixedWidth: sidebarWidth,
                         onResize: { width in
                             sidebarWidth = width
+                        },
+                        onResizeEnd: { width in
+                            // Persist once when the drag finishes; saving on
+                            // every drag event hammered UserDefaults per frame.
                             MacSidebarWidth.save(width)
                         }
                     )
@@ -574,17 +578,21 @@ public struct ChatView: View {
             }
 
         case let .assignProject(session, projectId):
-            Task { await applyMeta(sessionId: session.sessionId, projectId: projectId, archived: nil) }
+            // `.some(projectId)` keeps the key on the wire even when the inner
+            // value is nil (unassign sends null); a plain nil would mean
+            // "leave the assignment alone".
+            Task { await applyMeta(sessionId: session.sessionId, projectId: .some(projectId), archived: nil) }
 
         case let .createProject(name, session):
             Task { await createProject(name: name, assigning: session.sessionId) }
 
         case let .setArchived(session, archived):
-            Task { await applyMeta(sessionId: session.sessionId, projectId: nil, archived: archived) }
+            // No projectId argument: archiving must not touch the assignment.
+            Task { await applyMeta(sessionId: session.sessionId, archived: archived) }
         }
     }
 
-    private func applyMeta(sessionId: String, projectId: String?, archived: Bool?) async {
+    private func applyMeta(sessionId: String, projectId: String?? = nil, archived: Bool? = nil) async {
         guard let host = activeHost else { return }
         do {
             let meta = try await SessionsClient(host: host).updateMeta(
@@ -604,10 +612,12 @@ public struct ChatView: View {
         let client = SessionsClient(host: host)
         do {
             let result = try await client.createProject(name: name)
-            sidebarProjects.append(result.project)
-            if result.created {
-                try await client.updateMeta(sessionId: sessionId, projectId: result.project.id)
-            }
+            // Assign through the returned id whether the project was just
+            // created or already existed, and take the sidecar's project list
+            // from the response instead of appending locally — appending an
+            // already-existing project duplicated it in the sidebar.
+            let meta = try await client.updateMeta(sessionId: sessionId, projectId: result.project.id)
+            sidebarProjects = meta.projects
             await loadSidebarSessions()
         } catch {
             sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
@@ -780,6 +790,8 @@ public struct ChatView: View {
                         } else if engine != .mcode {
                             await refreshThread()
                         }
+                    case .usage(let usage):
+                        activeUsage = usage
                     case .failed(let message):
                         sending = false
                         streamingText = ""

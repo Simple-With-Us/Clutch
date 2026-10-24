@@ -23,6 +23,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import * as nodeZlib from "node:zlib";
 
+import { z } from "zod";
+
 /** One engine-reported accounting record.  Every field is optional because the
  *  engine omits what a given provider does not return. */
 export interface SessionUsage {
@@ -84,14 +86,45 @@ function numberAt(source: Record<string, unknown> | undefined, key: string): num
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
 
+/** Shape of one session-log record we trust enough to read.  Parsing with
+ *  zod instead of casting means a malformed line is skipped, never trusted. */
+const RequestContextRecordSchema = z.object({
+  type: z.literal("request/context"),
+  time: z.number().optional(),
+  data: z
+    .object({
+      provider: z.string().optional(),
+      model: z.string().optional(),
+      contextWindow: z.number().optional(),
+    })
+    .optional(),
+});
+
+const AssistantMessageRecordSchema = z.object({
+  type: z.literal("assistant/message"),
+  time: z.number().optional(),
+  data: z
+    .object({
+      usage: z
+        .object({
+          inputTokens: z.number().optional(),
+          outputTokens: z.number().optional(),
+          totalTokens: z.number(),
+          cacheReadTokens: z.number().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
+});
+
 /** Pull `{provider, model, contextWindow}` out of one `request/context` line. */
 function contextFrom(obj: Record<string, unknown>): SessionUsage | null {
-  if (obj.type !== "request/context") return null;
-  const data = obj.data as Record<string, unknown> | undefined;
-  if (!data) return null;
-  const contextWindow = numberAt(data, "contextWindow");
-  const provider = typeof data.provider === "string" ? data.provider : undefined;
-  const model = typeof data.model === "string" ? data.model : undefined;
+  const parsed = RequestContextRecordSchema.safeParse(obj);
+  if (!parsed.success) return null;
+  const data = parsed.data.data;
+  const contextWindow = data?.contextWindow;
+  const provider = data?.provider;
+  const model = data?.model;
   if (contextWindow === undefined && provider === undefined && model === undefined) return null;
   const out: SessionUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   if (provider !== undefined) out.provider = provider;
@@ -102,21 +135,17 @@ function contextFrom(obj: Record<string, unknown>): SessionUsage | null {
 
 /** Pull the accounting record out of one `assistant/message` line. */
 function usageFrom(obj: Record<string, unknown>): SessionUsage | null {
-  if (obj.type !== "assistant/message") return null;
-  const data = obj.data as Record<string, unknown> | undefined;
-  const usage = data?.usage as Record<string, unknown> | undefined;
+  const parsed = AssistantMessageRecordSchema.safeParse(obj);
+  if (!parsed.success) return null;
+  const usage = parsed.data.data?.usage;
   if (!usage) return null;
-  const totalTokens = numberAt(usage, "totalTokens");
-  if (totalTokens === undefined) return null;
   const out: SessionUsage = {
-    inputTokens: numberAt(usage, "inputTokens") ?? 0,
-    outputTokens: numberAt(usage, "outputTokens") ?? 0,
-    totalTokens,
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    totalTokens: usage.totalTokens,
   };
-  const cacheReadTokens = numberAt(usage, "cacheReadTokens");
-  if (cacheReadTokens !== undefined) out.cacheReadTokens = cacheReadTokens;
-  const time = numberAt(obj, "time");
-  if (time !== undefined) out.updatedAtMs = time;
+  if (usage.cacheReadTokens !== undefined) out.cacheReadTokens = usage.cacheReadTokens;
+  if (parsed.data.time !== undefined) out.updatedAtMs = parsed.data.time;
   return out;
 }
 

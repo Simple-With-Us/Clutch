@@ -35,6 +35,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { z } from "zod";
+
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
@@ -436,6 +438,27 @@ interface ChatSession {
   stream: ((u: AcpUpdate) => void) | null;
 }
 
+/** Untrusted request bodies for the project/archive routes.  Strict so an
+ *  unexpected field is rejected instead of silently ignored. */
+const SessionMetaPatchSchema = z
+  .object({
+    sessionId: z.string({ error: "sessionId is required" }).min(1, "sessionId is required").max(200, "sessionId is required"),
+    projectId: z
+      .string({ error: "projectId must be a string or null" })
+      .max(200, "projectId must be a string or null")
+      .nullable()
+      .optional(),
+    archived: z.boolean({ error: "archived must be a boolean" }).optional(),
+  })
+  .strict()
+  .refine((v) => v.projectId !== undefined || v.archived !== undefined, { message: "nothing to update" });
+
+const ProjectCreateSchema = z
+  .object({
+    name: z.string({ error: "project name is required" }),
+  })
+  .strict();
+
 function readJsonBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -547,11 +570,13 @@ async function main(): Promise<void> {
         await bridge.initialize();
         const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
         const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
-        // Archived threads are hidden unless the caller opts in, so the count
-        // is taken after filtering rather than before.
         const includeArchived = url.searchParams.get("archived") === "include";
-        const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, limit));
-        const visible = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived);
+        // Archived threads are dropped after listing, so over-fetch candidates
+        // (capped well past the page size) to keep `limit` visible rows when
+        // possible, then trim back to the requested page size after filtering.
+        const fetchLimit = includeArchived ? limit : Math.max(limit, 500);
+        const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, fetchLimit));
+        const visible = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived).slice(0, limit);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: attachUsage(visible) }));
       } catch (err) {
         log(`mcode list failed message=${(err as Error).message.slice(0, 120)}`);
@@ -568,6 +593,10 @@ async function main(): Promise<void> {
         body = (await readJsonBody(req)) as typeof body;
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
         return;
       }
       if (body.engine !== "mcode" || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
@@ -621,47 +650,37 @@ async function main(): Promise<void> {
     // engine is never asked to move or rename a thread, so unarchiving brings
     // back exactly the session that was hidden.
     if (req.method === "PUT" && url.pathname === "/clutch/v1/session-meta") {
-      let body: { sessionId?: unknown; projectId?: unknown; archived?: unknown };
+      let body: unknown;
       try {
-        body = (await readJsonBody(req)) as typeof body;
+        body = await readJsonBody(req);
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
-      if (typeof body.sessionId !== "string" || body.sessionId.length === 0 || body.sessionId.length > 200) {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "sessionId is required" }));
+      const parsed = SessionMetaPatchSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: parsed.error.issues[0]?.message ?? "invalid request body" }));
         return;
       }
       const meta = loadSessionMeta(SESSION_META_FILE);
       const patch: { projectId?: string | null; archived?: boolean } = {};
-      if (body.projectId !== undefined) {
-        if (body.projectId === null || body.projectId === "") {
+      if (parsed.data.projectId !== undefined) {
+        if (parsed.data.projectId === null || parsed.data.projectId === "") {
           patch.projectId = null;
-        } else if (typeof body.projectId === "string") {
+        } else {
           // Refuse a project that does not exist rather than storing a
           // dangling id the UI could never render.
-          if (!meta.projects.some((p) => p.id === body.projectId)) {
+          if (!meta.projects.some((p) => p.id === parsed.data.projectId)) {
             res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown project" }));
             return;
           }
-          patch.projectId = body.projectId;
-        } else {
-          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "projectId must be a string or null" }));
-          return;
+          patch.projectId = parsed.data.projectId;
         }
       }
-      if (body.archived !== undefined) {
-        if (typeof body.archived !== "boolean") {
-          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "archived must be a boolean" }));
-          return;
-        }
-        patch.archived = body.archived;
+      if (parsed.data.archived !== undefined) {
+        patch.archived = parsed.data.archived;
       }
-      if (patch.projectId === undefined && patch.archived === undefined) {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "nothing to update" }));
-        return;
-      }
-      const entry = upsertSession(meta, body.sessionId, patch);
+      const entry = upsertSession(meta, parsed.data.sessionId, patch);
       try {
         saveSessionMeta(SESSION_META_FILE, meta);
       } catch (err) {
@@ -673,14 +692,19 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "POST" && url.pathname === "/clutch/v1/projects") {
-      let body: { name?: unknown };
+      let body: unknown;
       try {
-        body = (await readJsonBody(req)) as typeof body;
+        body = await readJsonBody(req);
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
-      const name = normalizeProjectName(body.name);
+      const parsed = ProjectCreateSchema.safeParse(body);
+      if (!parsed.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: parsed.error.issues[0]?.message ?? "invalid request body" }));
+        return;
+      }
+      const name = normalizeProjectName(parsed.data.name);
       if (!name) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "project name is required" }));
         return;
@@ -704,7 +728,15 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "DELETE" && url.pathname.startsWith("/clutch/v1/projects/")) {
-      const projectId = decodeURIComponent(url.pathname.slice("/clutch/v1/projects/".length)).trim();
+      let projectId: string;
+      try {
+        projectId = decodeURIComponent(url.pathname.slice("/clutch/v1/projects/".length)).trim();
+      } catch {
+        // Malformed percent-encoding (e.g. "%zz") throws URIError; that is a
+        // bad request, not a reason to crash the bridge.
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid project id encoding" }));
+        return;
+      }
       if (!projectId) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "project id is required" }));
         return;

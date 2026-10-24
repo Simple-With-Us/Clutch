@@ -56,6 +56,14 @@ struct ThreadSidebar: View {
     var fixedWidth: CGFloat? = 232
     /// Called continuously while the user drags the divider.  nil on iOS.
     var onResize: ((CGFloat) -> Void)? = nil
+    /// Called once when the drag ends, with the final width.  Persisting
+    /// belongs here, not in `onResize`, so UserDefaults is written once per
+    /// drag instead of once per frame.
+    var onResizeEnd: ((CGFloat) -> Void)? = nil
+    /// Width the current drag started from; translation-based resizing needs
+    /// it because the gesture's `location` is in the 5pt handle's own
+    /// coordinate space, not the rail's.
+    @State private var dragStartWidth: CGFloat?
 
     /// Drag the rail no narrower than this or wider than the chat can spare.
     static let minWidth: CGFloat = 180
@@ -203,8 +211,17 @@ struct ThreadSidebar: View {
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
-                        let next = min(max(value.location.x, Self.minWidth), Self.maxWidth)
+                        if dragStartWidth == nil { dragStartWidth = fixedWidth }
+                        let base = dragStartWidth ?? fixedWidth ?? Self.minWidth
+                        let next = min(max(base + value.translation.width, Self.minWidth), Self.maxWidth)
                         onResize?(next)
+                    }
+                    .onEnded { value in
+                        let base = dragStartWidth ?? fixedWidth ?? Self.minWidth
+                        let final = min(max(base + value.translation.width, Self.minWidth), Self.maxWidth)
+                        onResize?(final)
+                        onResizeEnd?(final)
+                        dragStartWidth = nil
                     }
             )
             .accessibilityLabel("Resize Sidebar")
