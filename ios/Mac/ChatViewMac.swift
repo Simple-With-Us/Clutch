@@ -226,10 +226,11 @@ public struct ChatView: View {
         guard let loaded else { return }
         // A choice that the new host does not offer is dropped rather than
         // sent and refused.
-        if let selectedModel, !loaded.descriptor(engine.sidecarId)?.models.contains(where: { $0.id == selectedModel }) == true {
+        let descriptor = loaded.descriptor(engine.sidecarId)
+        if let selectedModel, descriptor?.models.contains(where: { $0.id == selectedModel }) != true {
             self.selectedModel = nil
         }
-        if let selectedEffort, !loaded.descriptor(engine.sidecarId)?.effortLevels.contains(selectedEffort) == true {
+        if let selectedEffort, descriptor?.effortLevels.contains(selectedEffort) != true {
             self.selectedEffort = nil
         }
     }
