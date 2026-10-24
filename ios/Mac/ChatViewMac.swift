@@ -1722,7 +1722,7 @@ struct MacChatInputBar: View {
                 }
             }
             HStack(spacing: 8) {
-                Text(sending ? "Working… Stop Ends The Turn And Keeps The Thread." : "Return Sends · Shift+Return Adds A Line · ⌘Return Also Sends.")
+                Text(sending ? Copy.gap("Working…", "Stop Ends The Turn And Keeps The Thread.") : "Return Sends · Shift+Return Adds A Line · ⌘Return Also Sends.")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer(minLength: 0)

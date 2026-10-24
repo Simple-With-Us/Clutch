@@ -118,7 +118,7 @@ public struct ChatView: View {
                     HStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
-                        Text("Listening… Tap The Mic Again To Stop.")
+                        Text(Copy.gap("Listening…", "Tap The Mic Again To Stop."))
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                         Spacer()
