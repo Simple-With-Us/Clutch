@@ -34,7 +34,7 @@ final class StubSidecar {
         listener.stateUpdateHandler = { [weak self] state in
             if case .ready = state {
                 if let port = self?.listener?.port?.rawValue {
-                    self?.port = port
+                    self?.port = Int(port)
                 }
                 ready.signal()
             }
