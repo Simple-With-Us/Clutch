@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
 import { compactToolHistory, loadOrMintToken, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, resolveTailnetHost, routeForModel, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { parseAcpMessage, readMuseProviderCatalog } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -255,6 +256,42 @@ describe("normalizeSessionUpdate", () => {
     const compacted = compactToolHistory(history);
     expect(compacted).toHaveLength(3);
     expect(compacted[1]).toMatchObject({ text: "write", toolStatus: "completed" });
+  });
+});
+
+describe("parseAcpMessage", () => {
+  it("keeps only the fields it understands", () => {
+    const message = parseAcpMessage(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "x", result: { sessionId: "s" } }));
+    expect(message).toEqual({ id: 2, method: "x", result: { sessionId: "s" } });
+  });
+
+  it("drops a malformed message instead of believing it", () => {
+    expect(parseAcpMessage("not json")).toBe(null);
+    expect(parseAcpMessage("[]")).toBe(null);
+    expect(parseAcpMessage(JSON.stringify({ id: "2" }))).toEqual({});
+    expect(parseAcpMessage(JSON.stringify({ id: 2, result: "text" }))).toEqual({ id: 2 });
+  });
+});
+
+describe("Muse model wire values", () => {
+  it("offers the provider-qualified form as a fallback for a provider-catalog model", () => {
+    const dir = mkdtempSync(join(tmpdir(), "muse-catalog-"));
+    writeFileSync(join(dir, "catalog.json"), JSON.stringify({
+      provider_id: "meta",
+      profile_id: "tbh",
+      rows: [
+        { model_id: "muse-wonder-1.0", display_label: "muse-wonder-1.0", provider_id: "meta", profile_id: "tbh", visibility: "visible", context_limit: 1007997 },
+        { model_id: "muse-hidden-1.0", display_label: "hidden", provider_id: "meta", profile_id: "tbh", visibility: "hidden" },
+      ],
+    }));
+    const home = mkdtempSync(join(tmpdir(), "muse-home-"));
+    mkdirSync(join(home, ".local", "share", "muse", "model-catalog"), { recursive: true });
+    writeFileSync(join(home, ".local", "share", "muse", "model-catalog", "c.json"), readFileSync(join(dir, "catalog.json")));
+    const models = readMuseProviderCatalog(home);
+    expect(models.map((model) => model.id)).toEqual(["muse-wonder-1.0"]);
+    expect(models[0].value).toBe("muse-wonder-1.0");
+    expect(models[0].altValue).toBe('muse-model:["meta","tbh","muse-wonder-1.0"]');
+    expect(models[0].contextWindow).toBe(1007997);
   });
 });
 

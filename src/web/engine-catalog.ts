@@ -38,6 +38,14 @@ export interface EngineModel {
   label: string;
   /** The exact wire value to send in `session/set_config_option`. */
   value: string;
+  /**
+   * A second form the engine may accept for the same model, tried when the
+   * first is refused.  Muse Code spells a model two ways: the bare id
+   * (`muse-wonder-1.0`) and a provider-qualified tuple
+   * (`muse-model:["meta","tbh","muse-wonder-1.0"]`), and which one the
+   * adapter accepts depends on its backend and on the account's catalog.
+   */
+  altValue?: string;
   /** Context window in tokens, when the engine publishes one. */
   contextWindow?: number;
   /** True when the engine says the model reads images. */
@@ -194,6 +202,15 @@ export function readMuseProviderCatalog(home: string = homedir()): EngineModel[]
       if (row.visibility === "hidden") continue;
       const label = typeof row.display_label === "string" && row.display_label.length > 0 ? row.display_label : id;
       const model: EngineModel = { id, label, value: id };
+      // The provider-qualified form is the other spelling of the same model.
+      // Which one the adapter accepts depends on its backend and on the
+      // account's catalog, so both are offered and the sidecar tries the
+      // second when the first is refused.
+      const provider = typeof row.provider_id === "string" ? row.provider_id : null;
+      const profile = typeof row.profile_id === "string" ? row.profile_id : null;
+      if (provider || profile) {
+        model.altValue = `muse-model:${JSON.stringify([provider, profile, id])}`;
+      }
       if (typeof row.context_limit === "number" && row.context_limit > 0) model.contextWindow = row.context_limit;
       models.push(model);
     }
@@ -204,6 +221,36 @@ export function readMuseProviderCatalog(home: string = homedir()): EngineModel[]
 interface ProbeResult {
   models: EngineModel[];
   efforts: string[];
+}
+
+/**
+ * One ACP JSON-RPC message, as the probe reads it.
+ *
+ * The engine is an external process, so every field is checked before it is
+ * used: a malformed message is dropped, never believed.  (The repo has no
+ * runtime schema library — zod is a devDependency — so this is a hand-written
+ * parser rather than a schema.)
+ */
+interface AcpMessage {
+  id?: number;
+  method?: string;
+  result?: Record<string, unknown>;
+}
+
+/** Parse one line of engine output into a message, or null when it is not one. */
+export function parseAcpMessage(line: string): AcpMessage | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  const message: AcpMessage = {};
+  if (typeof parsed.id === "number") message.id = parsed.id;
+  if (typeof parsed.method === "string") message.method = parsed.method;
+  if (isRecord(parsed.result)) message.result = parsed.result;
+  return message;
 }
 
 /**
@@ -260,12 +307,10 @@ export function probeEngineOptions(
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
         if (!line) continue;
-        let message: { id?: number; method?: string; params?: { update?: unknown }; result?: unknown };
-        try {
-          message = JSON.parse(line) as typeof message;
-        } catch {
-          continue;
-        }
+        // The engine is an external process: every field is validated
+        // before it is believed.
+        const message = parseAcpMessage(line);
+        if (!message) continue;
         if (message.method === "session/request_permission" && message.id !== undefined) {
           // A probe never runs a turn, so any permission request means the
           // engine got somewhere unexpected: allow once and move on.
@@ -282,7 +327,7 @@ export function probeEngineOptions(
           continue;
         }
         if (message.id === 2) {
-          const result = isRecord(message.result) ? message.result : {};
+          const result = message.result ?? {};
           sessionId = typeof result.sessionId === "string" ? result.sessionId : null;
           if (Array.isArray(result.configOptions)) options.push(...result.configOptions);
           if (sessionId) {
@@ -415,10 +460,23 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
 export async function engineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
   const now = Date.now();
   if (cache && now - cache.at < CATALOG_TTL_MS) return cache.catalog;
-  const catalog = await buildEngineCatalog(sources);
-  cache = { at: now, catalog };
-  return catalog;
+  // One probe per engine, however many clients ask at once: two phones
+  // opening the Code tab must not spawn four probe processes.
+  if (!inflight) {
+    inflight = buildEngineCatalog(sources)
+      .then((catalog) => {
+        cache = { at: Date.now(), catalog };
+        return catalog;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+  }
+  return inflight;
 }
+
+/** The probe currently running, so a second reader waits for it. */
+let inflight: Promise<EngineCatalog> | null = null;
 
 /**
  * The value to send for a requested model.
@@ -438,4 +496,20 @@ export function resolveModelValue(catalog: EngineCatalog, engine: Engine, reques
   const byLabel = descriptor.models.find((model) => model.label === trimmed);
   if (byLabel) return byLabel.value;
   return trimmed;
+}
+
+/**
+ * The alternative spelling of a model, when the engine publishes one.
+ *
+ * Used when the first value was refused: Muse Code's adapter accepts the
+ * bare id on some setups and the provider-qualified tuple on others, so
+ * the second form gets its turn before the choice is given up on.
+ */
+export function resolveModelAltValue(catalog: EngineCatalog, engine: Engine, requested: string): string | null {
+  const trimmed = requested.trim();
+  if (!trimmed) return null;
+  const descriptor = catalog.engines.find((entry) => entry.id === engine);
+  if (!descriptor) return null;
+  const match = descriptor.models.find((model) => model.id === trimmed || model.value === trimmed);
+  return match?.altValue ?? null;
 }

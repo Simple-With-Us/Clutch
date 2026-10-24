@@ -80,16 +80,21 @@ public struct SessionsView: View {
         }
         .task {
             pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
-            catalog = try? await EngineCatalogClient(host: host).fetch()
+            // The catalog can take a while on a cold server, so the thread
+            // list does not wait for it.
+            async let catalogTask = EngineCatalogClient(host: host).fetch()
+            model.engine = engine
+            await model.load()
+            catalog = try? await catalogTask
             // A host that runs Muse Code but no MiniMax Code starts on
             // Muse, not on an engine that is not installed there.
             if let descriptor = catalog?.descriptor(engine), descriptor.available == false {
                 if let first = catalog?.availableEngines.first(where: { $0.supportsThreads }) {
                     engine = first.id
+                    model.engine = first.id
+                    await model.refresh()
                 }
             }
-            model.engine = engine
-            await model.load()
         }
     }
 

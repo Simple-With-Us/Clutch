@@ -39,7 +39,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { ENGINE_ORDER, isEngine, type Engine } from "../shared/engine-types.ts";
-import { engineCatalog, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
+import { engineCatalog, resolveModelAltValue, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
 import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
@@ -95,6 +95,16 @@ export { ENGINE_ORDER, ENGINE_LABELS, isEngine, type Engine } from "../shared/en
 
 function log(line: string): void {
   process.stderr.write(`chat-bridge: ${line}\n`);
+}
+
+/** Whether a bare command name resolves on PATH. */
+function commandOnPath(command: string): boolean {
+  const path = process.env.PATH ?? "";
+  for (const dir of path.split(":")) {
+    if (!dir) continue;
+    if (existsSync(join(dir, command))) return true;
+  }
+  return false;
 }
 
 /** Route a model id to its engine. Unknown prefixes default to DeepSeek. */
@@ -232,7 +242,14 @@ export function museInstalled(
     "/opt/homebrew/bin/muse",
     join(homedir(), ".local", "bin", "muse"),
   ];
+  // The launcher's own search list wins, so a host that keeps the adapter
+  // outside the global npm prefix (the fleet runtime does) still reads as
+  // installed.
   const adapterPaths = candidates.adapters ?? [
+    ...(env.MUSE_CODE_ACP_SEARCH_PATHS ?? "")
+      .split(":")
+      .filter((dir) => dir.length > 0)
+      .map((dir) => join(dir, "muse-code-acp")),
     "/usr/local/bin/muse-code-acp",
     "/opt/homebrew/bin/muse-code-acp",
     join(homedir(), ".local", "bin", "muse-code-acp"),
@@ -762,7 +779,14 @@ async function main(): Promise<void> {
    */
   function engineAvailable(engine: Engine): boolean {
     const launcher = LAUNCHERS[engine];
-    if (launcher.command.includes("/") && !existsSync(launcher.command)) return false;
+    // A launcher with a path is checked against the filesystem; a bare
+    // command name is checked against PATH, so a server without MiniMax
+    // Code does not claim to have it.
+    if (launcher.command.includes("/")) {
+      if (!existsSync(launcher.command)) return false;
+    } else if (!commandOnPath(launcher.command)) {
+      return false;
+    }
     if (engine === "muse") return museInstalled();
     return true;
   }
@@ -797,6 +821,15 @@ async function main(): Promise<void> {
       const value = resolveModelValue(catalogValue, session.engine, session.model);
       if (value) {
         modelApplied = await bridge.setConfigOption(session.bridgeSessionId, descriptor?.modelConfigId ?? "model", value);
+        if (!modelApplied) {
+          // The engine may spell the same model another way (Muse Code:
+          // bare id versus provider-qualified tuple).  Give the second form
+          // its turn before giving up on the choice.
+          const alt = resolveModelAltValue(catalogValue, session.engine, session.model);
+          if (alt) {
+            modelApplied = await bridge.setConfigOption(session.bridgeSessionId, descriptor?.modelConfigId ?? "model", alt);
+          }
+        }
         if (!modelApplied) log(`model refused session=${session.bridgeSessionId} engine=${session.engine}`);
       }
     }

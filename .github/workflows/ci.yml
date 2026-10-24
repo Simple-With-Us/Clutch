@@ -42,6 +42,29 @@ jobs:
         run: brew install xcodegen
       - name: Build Clutch iOS App
         run: bash scripts/build-ios.sh --simulator
+      # The thread surfaces (the Code tab, the transcript, the find bar) are
+      # UI, so they are verified by running them: the UI test drives the app
+      # against a local stub sidecar and keeps a screenshot per state, which
+      # the artifact below publishes for review.  A build alone proves the
+      # code compiles, not that the surface works.
+      - name: Run the iOS UI tests
+        run: |
+          set -o pipefail
+          cd ios
+          xcodegen generate
+          xcodebuild -project Clutch.xcodeproj \
+            -scheme Clutch \
+            -destination "platform=iOS Simulator,name=iPhone 16 Pro" \
+            -only-testing:ClutchUITests/ClutchThreadSurfaceUITests \
+            -resultBundlePath "$RUNNER_TEMP/clutch-ios-ui.xcresult" \
+            test
+      - name: Publish the iOS UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-screenshots
+          path: ${{ runner.temp }}/clutch-ios-ui.xcresult
+          if-no-files-found: ignore
 
   macos:
     name: macOS Build

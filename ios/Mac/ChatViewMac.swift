@@ -358,7 +358,14 @@ public struct ChatView: View {
         }
         .onChange(of: activeHost?.id) { _, _ in
             // A different host means a different engine catalog and a
-            // different thread list; both are re-read by prepare().
+            // different thread list; both are re-read by prepare(), and the
+            // stale list goes first so the rail never shows another
+            // machine's threads.
+            sidebarSessions = []
+            codeChatId = nil
+            codeRemoteId = nil
+            codeLoaded = []
+            codePending = []
             resetTurnState()
             Task { await prepare() }
         }
@@ -885,8 +892,15 @@ public struct ChatView: View {
 
     // MARK: - Flow
 
+    /// Start a fresh thread on the current engine.
+    ///
+    /// The engine is not changed: the sidebar's New Thread button must not
+    /// move a Muse Code thread over to MiniMax Code.
     private func startMcodeThread() {
-        engine = .mcode
+        guard engine.supportsThreads else {
+            selectEngine(.mcode)
+            return
+        }
         MacEngineStore.save(engine)
         resetTurnState()
         sessionId = nil
@@ -985,16 +999,21 @@ public struct ChatView: View {
     private func prepare() async {
         guard let host = activeHost else { return }
         pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+        // The catalog can take a while on a cold server, so the thread list
+        // and the health check do not wait for it.
+        async let catalogTask = loadCatalog()
         await checkSidecar()
-        await loadCatalog()
+        // The saved engine wins, so a relaunch returns to the thread the
+        // owner was working in instead of an empty tab.  Whether the host
+        // actually runs it is settled once the catalog lands.
+        if let saved = MacEngineStore.load() {
+            engine = saved
+        }
+        _ = await catalogTask
         // The host's catalog decides which engines this Mac can offer: a
         // server with Muse Code but no MiniMax Code shows Muse Code only.
-        if !availableEngines.contains(where: { $0 == engine }) {
-            if let saved = MacEngineStore.load(), availableEngines.contains(saved) {
-                engine = saved
-            } else if let first = availableEngines.first {
-                engine = first
-            }
+        if !availableEngines.contains(where: { $0 == engine }), let first = availableEngines.first {
+            engine = first
         }
         if engine.supportsThreads {
             // Reopen the last thread for this host when there is one, so a
