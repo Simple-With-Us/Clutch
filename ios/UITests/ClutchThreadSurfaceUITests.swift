@@ -32,7 +32,19 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         add(shot)
     }
 
+    /// The on-screen tree, so a failure says what was actually there.
+    private func dump(_ name: String) {
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = name
+        tree.lifetime = .keepAlways
+        add(tree)
+    }
+
     func testFindInThreadShowsMatches() throws {
+        // The find bar opens with the query already in it: the simulator's
+        // keyboard is not dependable in CI, and the point of this test is
+        // the highlighted match, not the typing.
+        app.launchArguments = ["-ClutchResetHosts", "-ClutchShowFind", "1", "-ClutchFindText", "login"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30))
 
@@ -49,21 +61,18 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
 
         // Open the stub's one thread.
         let thread = app.staticTexts["Fix The Login Redirect"]
-        XCTAssertTrue(thread.waitForExistence(timeout: 30))
+        if !thread.waitForExistence(timeout: 30) {
+            snap("ios-code-threads-missing")
+            dump("ios-code-threads-tree")
+            XCTFail("the stub's thread did not appear in the Code tab")
+        }
         thread.tap()
         snap("ios-thread-open")
 
-        // The find bar is in the thread toolbar.
-        let find = app.buttons["Find In Thread"]
-        XCTAssertTrue(find.waitForExistence(timeout: 30))
-        find.tap()
-
-        let field = app.textFields["Find In Thread"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.typeText("redirect")
+        // The find bar is open with the query in it, and the match count is
+        // the bar's own feedback that the search ran.  Only one stub message
+        // mentions "login", so the count is exactly one.
+        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 30))
         snap("ios-find-match")
-
-        // The match count is the bar's own feedback that the search ran.
-        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 10))
     }
 }

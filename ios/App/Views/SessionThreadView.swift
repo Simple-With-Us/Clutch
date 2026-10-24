@@ -84,11 +84,14 @@ final class SessionThreadModel {
     /// Load the catalog so the pickers can show what this host really
     /// offers.  A failure is not fatal: the thread still works, the pickers
     /// just stay empty.
+    ///
+    /// The catalog's first row is only the *default* the picker shows; it is
+    /// not sent with a turn unless the owner picked it.  A resumed thread
+    /// keeps the model and effort it was created with, and sending a
+    /// default would silently switch it.
     func loadCatalog() async {
         guard catalog == nil else { return }
         catalog = try? await EngineCatalogClient(host: host).fetch()
-        if modelId == nil { modelId = models.first?.id }
-        if effort == nil { effort = effortLevels.first }
     }
 
     func load() async {
@@ -146,6 +149,8 @@ final class SessionThreadModel {
 
         // relayReceiverUid is empty: an unpaired CometChat thread has no sink
         // to relay into, and the sidecar skips the mirror when it is blank.
+        // The model and the effort ride along only when the owner picked
+        // them: an untouched thread keeps the ones it was created with.
         let client = ChatSessionClient(
             host: host,
             model: modelId ?? "",
@@ -241,8 +246,8 @@ final class SessionThreadModel {
 public struct SessionThreadView: View {
     let session: AcpSessionInfo
     @State private var model: SessionThreadModel
-    @State private var showFind = false
-    @State private var findText = ""
+    @State private var showFind = DebugLaunch.showsFind
+    @State private var findText = DebugLaunch.findText ?? ""
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.

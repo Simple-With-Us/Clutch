@@ -44,6 +44,7 @@ on:
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
       - 'scripts/ios-xcodegen-post.sh'
+      - 'scripts/ios-ui-tests.sh'
       - 'ios/appstore-profiles.json'
       - '.github/workflows/ios-ship.yml'
   workflow_dispatch:
@@ -59,6 +60,7 @@ on:
       - 'scripts/ios-fleet/**'
       - 'scripts/ios-ship-testflight.sh'
       - 'scripts/build-ios.sh'
+      - 'scripts/ios-ui-tests.sh'
       - '.github/workflows/ios-ship.yml'
 
 permissions:

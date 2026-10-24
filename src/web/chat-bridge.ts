@@ -32,8 +32,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { clutchChatPort } from "../shared/ports.ts";
@@ -432,6 +433,85 @@ export interface PromptImage {
   name?: string;
 }
 
+/** Where attachments are materialized for the engines that take a path. */
+export function attachmentRoot(): string {
+  return join(CLUTCH_HOME, "attachments");
+}
+
+/**
+ * The file name an attachment is written under.
+ *
+ * The name comes from the client, so it is never trusted: only the last
+ * path segment survives, and a name that is empty after that falls back to
+ * a generated one.  Without this, a name like `../../.ssh/authorized_keys`
+ * would write outside the attachment directory.
+ */
+export function safeAttachmentName(raw: string | undefined, index: number): string {
+  const base = basename(raw ?? "").trim();
+  const cleaned = base.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "");
+  if (!cleaned || cleaned === "." || cleaned === "..") return `attachment-${index + 1}`;
+  return cleaned.slice(0, 120);
+}
+
+/**
+ * Write an attachment to disk for the engines that take a path.
+ *
+ * The bytes land in a per-session directory under the attachment root, never
+ * in the user's working directory: an attachment is not a project file, and
+ * writing it there would dirty the working tree and accumulate forever.
+ * The resolved path is checked against the root before the write, so a
+ * crafted name cannot escape.
+ */
+export async function materializeAttachment(options: {
+  root: string;
+  sessionId: string;
+  image: PromptImage;
+  index: number;
+}): Promise<string | null> {
+  const sessionDir = join(options.root, options.sessionId);
+  const file = resolve(sessionDir, safeAttachmentName(options.image.name, options.index));
+  const root = resolve(options.root);
+  // The resolved file must sit under the resolved root: the name is
+  // sanitized already, and this is the second line of defence.
+  if (file !== root && !file.startsWith(root + sep)) {
+    log(`attachment refused: the name escaped the attachment directory`);
+    return null;
+  }
+  try {
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(file, Buffer.from(options.image.data, "base64"));
+    return file;
+  } catch (err) {
+    log(`attachment write failed path=${file} message=${(err as Error).message.slice(0, 120)}`);
+    return null;
+  }
+}
+
+/**
+ * Remove attachment directories older than a day, so a long-lived sidecar
+ * does not keep every image it ever received.
+ */
+export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(root);
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  for (const entry of entries) {
+    const dir = join(root, entry);
+    try {
+      const info = await stat(dir);
+      if (!info.isDirectory()) continue;
+      if (now - info.mtimeMs < maxAgeMs) continue;
+      await rm(dir, { recursive: true, force: true });
+    } catch {
+      /* a directory we cannot prune is not worth failing a turn over */
+    }
+  }
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 class Bridge {
   private child: ChildProcess | null = null;
@@ -628,7 +708,19 @@ class Bridge {
     return this.send("session/load", { sessionId, cwd, mcpServers: [] });
   }
 
-  prompt(sessionId: string, text: string, images: PromptImage[] = []): Promise<{ stopReason: string }> {
+  /**
+   * Send one turn.
+   *
+   * `cwd` is the session's working directory, passed per call: the bridge
+   * is shared by every session of an engine, so it cannot hold a directory
+   * of its own.
+   */
+  async prompt(
+    sessionId: string,
+    text: string,
+    images: PromptImage[] = [],
+    cwd: string = process.env.HOME ?? "/tmp",
+  ): Promise<{ stopReason: string }> {
     // ACP agents take content blocks; the dsh bridges take a plain string.
     // Muse Code rejects a bare string ("Invalid params"), so the code
     // engines get the block form every time.
@@ -640,11 +732,22 @@ class Bridge {
       }
       prompt = blocks;
     } else if (images.length > 0) {
-      // The dsh bridges have no image block: name the files instead, and
-      // let the agent open them with its own read tool.
-      const names = images.map((image) => image.name).filter(Boolean);
-      if (names.length > 0) {
-        prompt = `${text}\n\n${names.map((name) => `<attached-image path="${name}" />`).join("\n")}`;
+      // The dsh bridges have no image block.  Their contract is an image
+      // materialized to a file, with the path appended to the text, so the
+      // agent opens the file with its own read tool.  Naming a file that
+      // does not exist would lose the attachment entirely.
+      const written: string[] = [];
+      for (const [index, image] of images.entries()) {
+        const file = await materializeAttachment({
+          root: attachmentRoot(),
+          sessionId,
+          image,
+          index,
+        });
+        if (file) written.push(file);
+      }
+      if (written.length > 0) {
+        prompt = `${text}\n\n${written.map((file) => `<attached-image path="${file}" />`).join("\n")}`;
       }
     }
     return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;
@@ -1192,7 +1295,7 @@ async function main(): Promise<void> {
           const applied = await applySessionChoices(bridge, active, await catalog());
           log(`chat choices session=${chatId} model=${applied.modelApplied} effort=${applied.effortApplied}`);
         }
-        const result = await bridge.prompt(active.bridgeSessionId, prompt, images);
+        const result = await bridge.prompt(active.bridgeSessionId, prompt, images, active.cwd);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);
         if (sink) {
           try {
