@@ -99,7 +99,7 @@ private struct HostRow: View {
                     Text(host.name)
                         .font(.body.weight(.semibold))
                     if host.isMiniMaxCodeOnly {
-                        Text("MiniMax Code Server")
+                        Text(host.kindLabel)
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 5)

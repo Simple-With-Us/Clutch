@@ -8,8 +8,9 @@ import Foundation
 public struct PairingPayload: Equatable {
     public var name: String
     public var origin: URL
-    /// `.miniMaxCode` for a server host paired with `kind=mcode` (chat
-    /// sidecar only, no clutch web).  Nil keeps whatever a re-pair refreshes.
+    /// `.codeServer` for a server host paired with `kind=mcode` or
+    /// `kind=muse` (chat sidecar only, no clutch web).  Nil keeps whatever a
+    /// re-pair refreshes.
     public var kind: HostKind? = nil
     public var launchToken: String?
     /// The chat-bridge auth token (`&chat=`), minted by the SSE sidecar and
@@ -97,7 +98,7 @@ public enum PairingLink {
         // A MiniMax Code server host has no web port at all, so its origin
         // port is the chat port: that is the only port behind the name.
         let chatPort = value("chatPort").flatMap(Int.init)
-        let port = value("port", "p").flatMap(Int.init) ?? (kind == .miniMaxCode ? chatPort : nil) ?? defaultPort
+        let port = value("port", "p").flatMap(Int.init) ?? (kind == .codeServer ? chatPort : nil) ?? defaultPort
         let tlsRaw = (value("tls") ?? "0").lowercased()
         let useTLS = tlsRaw == "1" || tlsRaw == "true"
         var origin = URLComponents()
@@ -109,9 +110,14 @@ public enum PairingLink {
     }
 
     /// The `kind=` / `mode=` pairing value as a host kind, when it names one.
+    ///
+    /// `mcode` and `muse` both mean a code server: the sidecar behind them
+    /// decides which engines it actually runs, and the app reads that from
+    /// the host's engine catalog.
     static func hostKind(_ raw: String?) -> HostKind? {
         switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "mcode", "minimax-code", "minimaxcode": return .miniMaxCode
+        case "mcode", "muse", "minimax-code", "minimaxcode", "muse-code", "musecode":
+            return .codeServer
         case "web": return .web
         default: return nil
         }

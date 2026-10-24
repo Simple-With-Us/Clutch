@@ -114,7 +114,12 @@ public final class DictationController: ObservableObject {
         #if os(macOS)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
-        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    continuation.resume(returning: granted)
+                }
+            }
         default: return false
         }
         #else
@@ -122,7 +127,9 @@ public final class DictationController: ObservableObject {
         case .granted: return true
         case .undetermined:
             return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
+                AVAudioApplication.requestRecordPermission { granted in
+                    continuation.resume(returning: granted)
+                }
             }
         default: return false
         }

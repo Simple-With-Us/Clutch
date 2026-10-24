@@ -30,12 +30,22 @@ public enum HostStatus: String, Codable, Equatable {
 }
 
 /// What a paired host actually runs.  A `web` host is the full clutch stack
-/// (dsh web plus the chat sidecar); a `miniMaxCode` host runs only the chat
-/// sidecar in front of `mcode acp` — a Linux server, typically — so it has
-/// MiniMax Code threads but no web canvas and no dsh host contract.
+/// (dsh web plus the chat sidecar); a `codeServer` host runs only the chat
+/// sidecar in front of a code engine — `mcode` (MiniMax Code) or `muse`
+/// (Muse Code) — typically a Linux server.  Such a host has code threads but
+/// no web canvas and no dsh host contract.
 public enum HostKind: String, Codable, Equatable, Hashable, Sendable {
     case web
-    case miniMaxCode
+    case codeServer
+
+    /// The kind stored in an archive, mapping the retired `miniMaxCode`
+    /// spelling onto a code server so old pairings keep working.
+    public static func fromStored(_ raw: String) -> HostKind {
+        switch raw {
+        case "codeServer", "miniMaxCode": return .codeServer
+        default: return .web
+        }
+    }
 }
 
 /// One clutch web deployment the app can show — a Mac over Tailscale, or
@@ -89,8 +99,9 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
-        // Hosts paired before server hosts existed are web hosts.
-        kind = try c.decodeIfPresent(HostKind.self, forKey: .kind) ?? .web
+        // Hosts paired before server hosts existed are web hosts; the retired
+        // `miniMaxCode` spelling still reads as a code server.
+        kind = try c.decodeIfPresent(String.self, forKey: .kind).map(HostKind.fromStored) ?? .web
         origin = try c.decode(URL.self, forKey: .origin)
         pendingLaunchToken = try c.decodeIfPresent(String.self, forKey: .pendingLaunchToken)
         chatToken = try c.decodeIfPresent(String.self, forKey: .chatToken)
@@ -116,9 +127,17 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         self.init(name: pairing.name, origin: pairing.origin, kind: pairing.kind ?? .web, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
     }
 
-    /// True for a MiniMax Code server host: MiniMax Code threads only, no
-    /// web canvas and no dsh host contract behind it.
-    public var isMiniMaxCodeOnly: Bool { kind == .miniMaxCode }
+    /// True for a code server host: code-engine threads only, no web canvas
+    /// and no dsh host contract behind it.
+    public var isMiniMaxCodeOnly: Bool { kind == .codeServer }
+
+    /// The owner-facing label for the host kind.
+    public var kindLabel: String {
+        switch kind {
+        case .web: return "Clutch Host"
+        case .codeServer: return "Code Server"
+        }
+    }
 
     /// `host[:port]` for display.
     public var address: String {

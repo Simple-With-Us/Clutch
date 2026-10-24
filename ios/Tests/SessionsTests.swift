@@ -131,6 +131,31 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertEqual(groups.last?.sessions.map(\.sessionId), ["undated"])
     }
 
+    func testEngineCatalogDecodesTheSidecarCatalog() throws {
+        let json = """
+        {"engines":[
+          {"id":"muse","label":"Muse Code","available":true,
+           "models":[{"id":"muse-wonder-1.0","label":"muse-wonder-1.0","value":"muse-wonder-1.0","contextWindow":1007997}],
+           "effortLevels":["none","high"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
+          {"id":"mcode","label":"MiniMax Code","available":false,"models":[],"effortLevels":[],"effortConfigId":"thinkingEffort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        XCTAssertEqual(catalog.engines.count, 2)
+        XCTAssertEqual(catalog.availableEngines.map(\.id), ["muse"])
+        XCTAssertEqual(catalog.defaultEngineId, "muse")
+
+        let muse = try XCTUnwrap(catalog.descriptor("muse"))
+        XCTAssertTrue(muse.supportsThreads)
+        XCTAssertEqual(muse.models.map(\.id), ["muse-wonder-1.0"])
+        XCTAssertEqual(muse.models[0].contextSummary, "1.0M")
+        XCTAssertEqual(muse.effortLevels, ["none", "high"])
+
+        let mcode = try XCTUnwrap(catalog.descriptor("mcode"))
+        XCTAssertFalse(mcode.available)
+        XCTAssertTrue(mcode.supportsThreads)
+    }
+
     func testPinStoreTogglesPerHost() {
         let name = "PinStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
