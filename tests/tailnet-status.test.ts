@@ -38,6 +38,15 @@ describe("readTailnetStatus", () => {
     const cli = fakeTailscale(`echo '{"Self":{"DNSName":"box.ts.net."}}'`);
     await expect(readTailnetStatus(5000, cli)).resolves.toEqual({ Self: { DNSName: "box.ts.net." } });
   });
+
+  it("waits for the output stream to close, not just for the process to exit", async () => {
+    // A background child keeps the pipe open after the shell itself is gone,
+    // so a reader that settles on "exit" resolves before the output drained.
+    const cli = fakeTailscale(`echo '{"Self":{"DNSName":"box.ts.net."}}'; (sleep 0.3) &`);
+    const started = Date.now();
+    await expect(readTailnetStatus(5000, cli)).resolves.toEqual({ Self: { DNSName: "box.ts.net." } });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+  });
 });
 
 describe("web launcher tailnet wiring", () => {

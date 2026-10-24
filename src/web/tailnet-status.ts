@@ -38,7 +38,11 @@ export function readTailnetStatus(
       out += chunk.toString("utf8");
     });
     child.on("error", () => settle(null));
-    child.on("exit", () => {
+    // "close", not "exit": the process can be gone while its stdout pipe still
+    // holds unread bytes, and "exit" fires before the last chunk is delivered.
+    // Settling there parses an empty buffer and reports "no tailnet" for a
+    // perfectly healthy machine.
+    child.on("close", () => {
       try {
         settle(JSON.parse(out));
       } catch {
