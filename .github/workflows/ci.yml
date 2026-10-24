@@ -57,9 +57,37 @@ jobs:
           set -o pipefail
           cd ios
           xcodegen generate
+          # Pick the simulator at run time instead of naming one.  The macos-26
+          # image dropped "iPhone 16 Pro" in 20261021.0445, so a hardcoded
+          # device name turns this step into a permanent red that resolves no
+          # device and runs no test at all.  Prefer the newest iPhone Pro that
+          # exists, fall back to any iPhone, and select by UUID so a shared
+          # display name cannot be ambiguous.
+          sim_id=$(
+            xcrun simctl list devices available \
+              | awk -F '[()]' '
+                  /iPhone 17 Pro/ && /Booted/ { booted17 = $2 }
+                  /iPhone 17 Pro/ && p17 == "" { p17 = $2 }
+                  /iPhone 16 Pro/ && p16 == "" { p16 = $2 }
+                  /iPhone / && first == "" { first = $2 }
+                  END {
+                    if (booted17 != "") print booted17
+                    else if (p17 != "") print p17
+                    else if (p16 != "") print p16
+                    else print first
+                  }
+                '
+          )
+          if [ -z "$sim_id" ]; then
+            echo "::error::No available iPhone simulator on this runner."
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Using simulator ID: $sim_id"
+          xcrun simctl boot "$sim_id" 2>/dev/null || true
           xcodebuild -project Clutch.xcodeproj \
             -scheme Clutch \
-            -destination "platform=iOS Simulator,name=iPhone 16 Pro" \
+            -destination "platform=iOS Simulator,id=$sim_id" \
             -only-testing:ClutchUITests/ClutchThreadSurfaceUITests \
             -resultBundlePath "$RUNNER_TEMP/clutch-ios-ui.xcresult" \
             test
