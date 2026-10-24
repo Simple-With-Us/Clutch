@@ -67,7 +67,26 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-ship-clutch
+  # The group MUST separate pull_request runs from main runs.
+  #
+  # This workflow is triggered by push, schedule AND pull_request, and the
+  # ship job is skipped on pull_request, so a PR run contributes nothing to
+  # TestFlight.  While PR runs shared one group with the push-to-main ship,
+  # they silently destroyed it: when a newer run enters a concurrency group,
+  # GitHub cancels the run already pending in it, so a PR run evicted the
+  # pending main ship and that merge never reached TestFlight.
+  #
+  # 2026-10-24, twice in 70 minutes:
+  #   - PR #195 (merge 6b3487f2) ship run 40075066124 was cancelled at
+  #     07:48:58Z by PR run 40075616002 on another branch (jobs: [], never
+  #     dispatched).
+  #   - push ed510c85 ship run 40070842392 was cancelled the same way.
+  #
+  # Keying the group on the event keeps every PR dry-run in its own group and
+  # leaves push + schedule serialised against each other in the 'main' group,
+  # so a cron tick and a push can never upload two builds for the same HEAD.
+  # Same shape as Usage-Monitor's mac-release.yml.
+  group: ios-ship-clutch-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
