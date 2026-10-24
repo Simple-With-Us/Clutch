@@ -1,10 +1,15 @@
 import SwiftUI
 import Foundation
+#if os(macOS)
+import AppKit
+#elseif canImport(UIKit)
+import UIKit
+#endif
 
 /// The thread rail, shared by the Mac chat surface and the iPhone/iPad
 /// dashboard so both platforms show one thread list.
 ///
-/// On macOS this is a pinned 232pt rail beside the transcript.  On iOS it is
+/// On macOS this is a pinned 248pt rail beside the transcript.  On iOS it is
 /// the sidebar column of a `NavigationSplitView`, where the system sizes the
 /// column and a tap pushes the thread instead of swapping the pane — so
 /// `fixedWidth` is nil there.
@@ -14,8 +19,8 @@ import Foundation
 /// be assigned to a branch that was unreachable once the list had loaded, so
 /// tapping a thread looked like it did nothing at all.
 struct ThreadSidebar: View {
-    /// Thread list as handed over; this view sorts it newest-first itself
-    /// (see `ordered`), so the caller may pass the sidecar's raw order.
+    /// Thread list as handed over; this view sorts and groups it itself
+    /// (see `visibleGroups`), so the caller may pass the sidecar's raw order.
     var sessions: [AcpSessionInfo]
     var selectedId: String?
     var loading: Bool
@@ -26,11 +31,14 @@ struct ThreadSidebar: View {
     var onRefresh: () -> Void
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
-    var fixedWidth: CGFloat? = 232
+    var fixedWidth: CGFloat? = 248
+
+    @State private var query: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            searchField
             Divider()
 
             if let errorText, !errorText.isEmpty {
@@ -56,30 +64,44 @@ struct ThreadSidebar: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if ordered.isEmpty {
+                emptyState
+            } else if visibleGroups.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 24))
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 22))
                         .foregroundStyle(.tertiary)
-                    Text("No Threads Yet")
+                    Text("No Threads Match")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("Start One With The Button Above.")
+                    Text("Nothing here matches \u{201C}\(query)\u{201D}.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                    Button("Clear Filter") { query = "" }
+                        .font(.system(size: 11, weight: .semibold))
                 }
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(ordered) { session in
-                            row(session)
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(visibleGroups) { group in
+                            Text(group.title.uppercased())
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 8)
+                                .padding(.top, 10)
+                                .padding(.bottom, 2)
+                            ForEach(group.sessions) { session in
+                                row(session)
+                            }
                         }
                     }
                     .padding(.horizontal, 6)
-                    .padding(.vertical, 6)
+                    .padding(.bottom, 6)
                 }
             }
+
+            footer
         }
         .frame(width: fixedWidth)
         .frame(maxHeight: .infinity)
@@ -95,12 +117,22 @@ struct ThreadSidebar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("New Thread")
             #if os(macOS)
-            .help("New Thread")
+            .help("New Thread (⌘N)")
+            .keyboardShortcut("n", modifiers: .command)
             #endif
 
             Text("Threads")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
+
+            if !ordered.isEmpty {
+                Text("\(ordered.count)")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Color.clutchSecondaryBackground, in: Capsule())
+            }
 
             Spacer(minLength: 0)
 
@@ -118,12 +150,80 @@ struct ThreadSidebar: View {
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Refresh Threads")
                 #if os(macOS)
-                .help("Refresh Threads")
+                .help("Refresh Threads (⌘R)")
+                .keyboardShortcut("r", modifiers: .command)
                 #endif
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            TextField("Filter Threads", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+            if !query.isEmpty {
+                Button {
+                    query = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear Filter")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 24))
+                .foregroundStyle(.tertiary)
+            Text("No Threads Yet")
+                .font(.system(size: 12, weight: .semibold))
+            Text("Start One With The Button Above.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        if let selected = ordered.first(where: { $0.sessionId == selectedId }), let cwd = selected.cwd, !cwd.isEmpty {
+            Divider()
+            HStack(spacing: 5) {
+                Image(systemName: "folder")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                Text(cwd)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            #if os(macOS)
+            .help(cwd)
+            #endif
+        }
     }
 
     private func row(_ session: AcpSessionInfo) -> some View {
@@ -141,6 +241,10 @@ struct ThreadSidebar: View {
     /// order — a malformed date can never scramble or trap the list.
     private var ordered: [AcpSessionInfo] {
         AcpSessionInfo.newestFirst(sessions)
+    }
+
+    private var visibleGroups: [AcpSessionInfo.Group] {
+        AcpSessionInfo.grouped(AcpSessionInfo.filtered(ordered, query: query))
     }
 }
 
@@ -167,16 +271,20 @@ struct ThreadSidebarRow: View {
                         .lineLimit(1)
                     HStack(spacing: 4) {
                         if let cwd = session.cwd, !cwd.isEmpty {
-                            Text(cwd)
+                            Image(systemName: "folder")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.tertiary)
+                            Text((cwd as NSString).lastPathComponent)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
-                                .truncationMode(.head)
                         }
-                        if let when = session.updated {
+                        if session.cwd?.isEmpty == false, session.updated != nil {
                             Text("·")
                                 .font(.system(size: 10))
                                 .foregroundStyle(.tertiary)
+                        }
+                        if let when = session.updated {
                             Text(when, style: .relative)
                                 .font(.system(size: 10))
                                 .foregroundStyle(.tertiary)
@@ -206,8 +314,23 @@ struct ThreadSidebarRow: View {
         .accessibilityLabel("Thread, \(session.displayTitle)")
         #if os(macOS)
         .help(session.cwd ?? session.sessionId)
+        .contextMenu {
+            Button("Open Thread") { onSelect(session) }
+            Divider()
+            Button("Copy Session ID") { copy(session.sessionId) }
+            if let cwd = session.cwd, !cwd.isEmpty {
+                Button("Copy Working Directory") { copy(cwd) }
+            }
+        }
         #endif
     }
+
+    #if os(macOS)
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+    #endif
 }
 
 extension AcpSessionInfo {

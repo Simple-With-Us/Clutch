@@ -29,11 +29,21 @@ public enum HostStatus: String, Codable, Equatable {
     }
 }
 
+/// What a paired host actually runs.  A `web` host is the full clutch stack
+/// (dsh web plus the chat sidecar); a `miniMaxCode` host runs only the chat
+/// sidecar in front of `mcode acp` — a Linux server, typically — so it has
+/// MiniMax Code threads but no web canvas and no dsh host contract.
+public enum HostKind: String, Codable, Equatable, Hashable, Sendable {
+    case web
+    case miniMaxCode
+}
+
 /// One clutch web deployment the app can show — a Mac over Tailscale, or
 /// `127.0.0.1:3180` when running in the Simulator on that Mac.
 public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     public var id: UUID
     public var name: String
+    public var kind: HostKind
     /// `scheme://host[:port]` with no path.
     public var origin: URL
     /// The launch token from the pairing link.  Cleared once clutch web has
@@ -51,6 +61,7 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         id: UUID = UUID(),
         name: String,
         origin: URL,
+        kind: HostKind = .web,
         pendingLaunchToken: String? = nil,
         chatToken: String? = nil,
         chatPort: Int = 3181,
@@ -59,6 +70,7 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     ) {
         self.id = id
         self.name = name
+        self.kind = kind
         self.origin = origin
         self.pendingLaunchToken = pendingLaunchToken
         self.chatToken = chatToken
@@ -70,13 +82,15 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     // MARK: - Codable (chatToken/chatPort decode to defaults from pre-chat archives)
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, origin, pendingLaunchToken, chatToken, chatPort, status, lastChecked
+        case id, name, kind, origin, pendingLaunchToken, chatToken, chatPort, status, lastChecked
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
+        // Hosts paired before server hosts existed are web hosts.
+        kind = try c.decodeIfPresent(HostKind.self, forKey: .kind) ?? .web
         origin = try c.decode(URL.self, forKey: .origin)
         pendingLaunchToken = try c.decodeIfPresent(String.self, forKey: .pendingLaunchToken)
         chatToken = try c.decodeIfPresent(String.self, forKey: .chatToken)
@@ -89,6 +103,7 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
+        try c.encode(kind, forKey: .kind)
         try c.encode(origin, forKey: .origin)
         try c.encodeIfPresent(pendingLaunchToken, forKey: .pendingLaunchToken)
         try c.encodeIfPresent(chatToken, forKey: .chatToken)
@@ -98,8 +113,12 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     }
 
     public init(pairing: PairingPayload) {
-        self.init(name: pairing.name, origin: pairing.origin, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
+        self.init(name: pairing.name, origin: pairing.origin, kind: pairing.kind ?? .web, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
     }
+
+    /// True for a MiniMax Code server host: MiniMax Code threads only, no
+    /// web canvas and no dsh host contract behind it.
+    public var isMiniMaxCodeOnly: Bool { kind == .miniMaxCode }
 
     /// `host[:port]` for display.
     public var address: String {

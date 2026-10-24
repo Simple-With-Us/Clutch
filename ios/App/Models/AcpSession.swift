@@ -39,6 +39,56 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
     }
 
     public var updated: Date? { Self.updatedDate(updatedAt) }
+
+    /// Case-insensitive filter over title, working directory, and session
+    /// id — the three things a person actually remembers about a thread.
+    /// An empty query keeps the list untouched.
+    public static func filtered(_ sessions: [AcpSessionInfo], query: String) -> [AcpSessionInfo] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return sessions }
+        return sessions.filter { session in
+            [session.title ?? "", session.cwd ?? "", session.sessionId]
+                .joined(separator: " ")
+                .lowercased()
+                .contains(needle)
+        }
+    }
+
+    /// One date bucket of threads for a grouped sidebar.
+    public struct Group: Identifiable, Equatable, Sendable {
+        public var title: String
+        public var sessions: [AcpSessionInfo]
+        public var id: String { title }
+
+        public init(title: String, sessions: [AcpSessionInfo]) {
+            self.title = title
+            self.sessions = sessions
+        }
+    }
+
+    /// Newest-first sessions bucketed as Today / Yesterday / Previous 7 Days
+    /// / Older / Undated, empty buckets dropped.  Undated threads go last:
+    /// they still work, they just cannot claim a place in the timeline.
+    public static func grouped(_ sessions: [AcpSessionInfo], now: Date = Date(), calendar: Calendar = .current) -> [Group] {
+        let ordered = newestFirst(sessions)
+        let startOfToday = calendar.startOfDay(for: now)
+        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        let startOfWeek = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfYesterday
+        var buckets: [(String, [AcpSessionInfo])] = [
+            ("Today", []), ("Yesterday", []), ("Previous 7 Days", []), ("Older", []), ("Undated", []),
+        ]
+        for session in ordered {
+            guard let date = session.updated else {
+                buckets[4].1.append(session)
+                continue
+            }
+            if date >= startOfToday { buckets[0].1.append(session) }
+            else if date >= startOfYesterday { buckets[1].1.append(session) }
+            else if date >= startOfWeek { buckets[2].1.append(session) }
+            else { buckets[3].1.append(session) }
+        }
+        return buckets.filter { !$0.1.isEmpty }.map { Group(title: $0.0, sessions: $0.1) }
+    }
 }
 
 /// One replayed update from `POST /clutch/v1/sessions/load`.
@@ -54,17 +104,21 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     }
 
     /// Sidecar kinds that are user- or assistant-visible; tool chatter and
-    /// progress notices are dropped so the transcript stays readable.
+    /// progress notices are dropped so the transcript stays readable.  The
+    /// chunk spellings are the ones the sidecar actually replays
+    /// (`agent_message_chunk` / `user_message_chunk` from ACP
+    /// `session/update`); the short spellings stay for older replays.
     public var isVisible: Bool {
         switch kind {
-        case "user_message", "assistant_message", "user", "assistant", "message", "text": true
+        case "user_message_chunk", "agent_message_chunk",
+             "user_message", "assistant_message", "user", "assistant", "message", "text": true
         default: false
         }
     }
 
     public var isUser: Bool {
         switch kind {
-        case "user_message", "user": true
+        case "user_message_chunk", "user_message", "user": true
         default: false
         }
     }

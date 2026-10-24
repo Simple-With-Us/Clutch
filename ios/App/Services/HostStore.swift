@@ -40,6 +40,7 @@ public final class HostStore {
             if let token = payload.launchToken { hosts[index].pendingLaunchToken = token }
             if let chat = payload.chatToken { hosts[index].chatToken = chat }
             if let port = payload.chatPort { hosts[index].chatPort = port }
+            if let kind = payload.kind { hosts[index].kind = kind }
             activeHostID = hosts[index].id
             loadGeneration += 1
             save()

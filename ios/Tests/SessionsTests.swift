@@ -54,6 +54,48 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(entry("assistant_message").isUser)
     }
 
+    /// The sidecar replays ACP chunk kinds; if those are filtered out the
+    /// phone transcript renders blank even though the thread loaded.
+    func testHistoryVisibilityAcceptsReplayedChunkKinds() {
+        func entry(_ kind: String) -> AcpHistoryEntry {
+            AcpHistoryEntry(sessionId: "s", kind: kind, text: "t")
+        }
+        XCTAssertTrue(entry("user_message_chunk").isVisible)
+        XCTAssertTrue(entry("agent_message_chunk").isVisible)
+        XCTAssertTrue(entry("user_message_chunk").isUser)
+        XCTAssertFalse(entry("agent_message_chunk").isUser)
+        XCTAssertFalse(entry("agent_thought_chunk").isVisible)
+    }
+
+    func testFilteredMatchesTitleCwdAndIdCaseInsensitively() {
+        let a = AcpSessionInfo(sessionId: "s-1", cwd: "/srv/Clutch", title: "Fix Login")
+        let b = AcpSessionInfo(sessionId: "s-2", cwd: "/srv/other", title: "Write Docs")
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "login").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "CLUTCH").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "s-2").map(\.sessionId), ["s-2"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "  ").count, 2)
+        XCTAssertTrue(AcpSessionInfo.filtered([a, b], query: "nope").isEmpty)
+    }
+
+    func testGroupedBucketsByRecencyAndSinksUndated() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let now = try XCTUnwrap(AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z"))
+        func session(_ id: String, _ stamp: String?) -> AcpSessionInfo {
+            AcpSessionInfo(sessionId: id, updatedAt: stamp)
+        }
+        let groups = AcpSessionInfo.grouped([
+            session("older", "2026-09-01T12:00:00Z"),
+            session("today", "2026-10-16T08:00:00Z"),
+            session("undated", nil),
+            session("week", "2026-10-12T12:00:00Z"),
+            session("yesterday", "2026-10-15T12:00:00Z"),
+        ], now: now, calendar: calendar)
+        XCTAssertEqual(groups.map(\.title), ["Today", "Yesterday", "Previous 7 Days", "Older", "Undated"])
+        XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["today"])
+        XCTAssertEqual(groups.last?.sessions.map(\.sessionId), ["undated"])
+    }
+
     /// The Mac rail and the iOS sidebar share this ordering, so a thread must
     /// land in the same slot on both platforms.
     func testNewestFirstOrdersDatedRowsAndSinksUnreadableStamps() {

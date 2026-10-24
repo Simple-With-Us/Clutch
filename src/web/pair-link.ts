@@ -98,6 +98,34 @@ export function minimaxShellUrl(options: { origin: string; chatToken: string }):
   return target.toString();
 }
 /**
+ * The link that pairs the app with a MiniMax Code server host — a machine
+ * that runs only the chat sidecar (`mcode acp` behind
+ * `/clutch/v1/sessions`), with no `dsh web` and therefore no launch token:
+ * `clutch://pair?h=<tailnet-name>&tls=1&kind=mcode&chat=<t>&chatPort=<p>`.
+ * The app stores it as a `miniMaxCode` host and talks to the sidecar
+ * directly; the web-canvas and dsh-host surfaces do not apply to it.
+ */
+export function serverPairingLink(options: {
+  host: string;
+  name?: string;
+  chatToken: string;
+  chatPort?: string | undefined;
+  tls?: boolean;
+}): string {
+  const host = options.host.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  if (!host) throw new Error("host is required; is tailscale up on the server?");
+  if (!options.chatToken) throw new Error("chat token is required; is the chat sidecar running on the server?");
+  const link = new URL("clutch://pair");
+  link.searchParams.set("h", host);
+  link.searchParams.set("tls", options.tls === false ? "0" : "1");
+  link.searchParams.set("kind", "mcode");
+  link.searchParams.set("chat", options.chatToken);
+  if (options.chatPort) link.searchParams.set("chatPort", options.chatPort);
+  if (options.name) link.searchParams.set("name", options.name);
+  return link.toString();
+}
+
+/**
  * The link the iOS app pairs from:
  * `clutch://pair?url=<origin>/?token=<t>&name=<label>`.
  * `origin` is where the phone reaches clutch web, e.g.

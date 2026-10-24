@@ -19,19 +19,27 @@
  *                                 chat sidecar running; on this Mac use
  *                                 http://127.0.0.1:<chatPort>/minimax-code/
  *                                 with the same token)
+ *   clutch-pair-ios --server [--print]
+ *                                 pair this machine as a MiniMax Code server
+ *                                 host (chat sidecar only, no clutch web —
+ *                                 the Linux server case).  The link carries
+ *                                 the sidecar token and `kind=mcode`; off
+ *                                 macOS it is saved to
+ *                                 `$CLUTCH_HOME/server-pairing-link.txt`
+ *                                 (mode 600) instead of the clipboard.
  *
  * The link stays valid until clutch web restarts; the cookie it mints on the
  * phone lasts 30 days.  The token is never printed unless --print is given.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { clutchChatPort, clutchWebPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { LEGACY_TAILNET_HOST, minimaxShellUrl, pairingLink, tailnetDnsName } from "./pair-link.ts";
+import { LEGACY_TAILNET_HOST, minimaxShellUrl, pairingLink, serverPairingLink, tailnetDnsName } from "./pair-link.ts";
 
 // Infisical is the sole source of truth for app settings (see INFISICAL.md).
 await initClutchSettings();
@@ -74,6 +82,10 @@ function run(cmd: string, args: string[], input?: string): boolean {
 }
 
 function showQr(link: string): void {
+  if (process.platform !== "darwin") {
+    log("QR rendering is macOS-only; use --print or the saved pairing-link file instead.");
+    return;
+  }
   const dir = mkdtempSync(join(tmpdir(), "clutch-pair-"));
   const png = join(dir, "clutch-pairing-code.png");
   const script = join(ROOT, "scripts", "qr-png.swift");
@@ -86,16 +98,34 @@ function showQr(link: string): void {
   log(`opened the pairing code: ${png}`);
 }
 
+/**
+ * Hand a link to the operator without ever printing the token by default:
+ * clipboard + QR on macOS, an owner-only file everywhere else (a headless
+ * Linux server has neither a clipboard nor a screen to scan from).
+ */
+function deliverLink(link: string, fileName: string): void {
+  if (process.platform === "darwin" && run("/usr/bin/pbcopy", [], link)) {
+    log("copied the pairing link to the clipboard — on the iPhone, open Clutch and tap Paste Pairing Link.");
+    showQr(link);
+    return;
+  }
+  const file = join(CLUTCH_HOME, fileName);
+  writeFileSync(file, `${link}\n`, { mode: 0o600 });
+  log(`saved the pairing link to ${file} (mode 600) — copy its contents into Clutch on the phone or Mac.`);
+}
+
 function main(): void {
   const args = new Set(process.argv.slice(2));
   if (args.has("-h") || args.has("--help")) {
     process.stdout.write(
       [
-        "usage: clutch-pair-ios [--simulator | --print | --shell [--print]]",
+        "usage: clutch-pair-ios [--simulator | --print | --shell [--print] | --server [--print]]",
         "  (default)    copy the pairing link to the clipboard and open a QR code for the Clutch iOS app",
         "  --simulator  open the pairing link in the booted iOS Simulator (http://127.0.0.1:<port>)",
-        "  --print      print the pairing link (contains the launch token)",
+        "  --print      print the pairing link (contains a token)",
         "  --shell      copy/open a QR for the MiniMax Code remote shell (needs the chat sidecar)",
+        "  --server     pair a MiniMax Code server host: a machine running only the chat",
+        "               sidecar (no clutch web).  Saves the link owner-only off macOS.",
         "",
       ].join("\n"),
     );
@@ -103,6 +133,10 @@ function main(): void {
   }
   if (args.has("--shell")) {
     pairShell(args);
+    return;
+  }
+  if (args.has("--server")) {
+    pairServer(args);
     return;
   }
   const launchUrl = readLaunchUrl();
@@ -128,11 +162,36 @@ function main(): void {
     log(`paired the booted simulator with ${origin}.`);
     return;
   }
-  if (run("/usr/bin/pbcopy", [], link)) {
-    log("copied the pairing link to the clipboard — on the iPhone, open Clutch and tap Paste Pairing Link.");
-  }
-  showQr(link);
+  deliverLink(link, "pairing-link.txt");
   log(`the app will open ${origin} over Tailscale; the link works until clutch web restarts.`);
+}
+
+/**
+ * Pair a MiniMax Code server host: this machine runs the chat sidecar only
+ * (a Linux server with `mcode` installed and signed in), so the link carries
+ * the sidecar's Bearer token and no web launch token at all.  The app stores
+ * it as a MiniMax Code host and opens on the Code surface.
+ */
+function pairServer(args: Set<string>): void {
+  const chatTokenFile = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat-token");
+  if (!existsSync(chatTokenFile)) {
+    log(`${chatTokenFile} not found — start the chat sidecar first (scripts/chat-bridge.sh, or the systemd unit from scripts/install-server-bridge.sh).`);
+    process.exit(2);
+  }
+  const chatToken = readFileSync(chatTokenFile, "utf8").trim();
+  if (!chatToken) {
+    log(`${chatTokenFile} is empty — restart the chat sidecar.`);
+    process.exit(2);
+  }
+  const host = detectTailnetHost();
+  const name = hostname().replace(/\.local$/, "");
+  const link = serverPairingLink({ host, name, chatToken, chatPort: clutchChatPort() });
+  if (args.has("--print")) {
+    process.stdout.write(`${link}\n`);
+    return;
+  }
+  deliverLink(link, "server-pairing-link.txt");
+  log(`the app will reach the MiniMax Code sidecar at https://${host}:${clutchChatPort()} over Tailscale.`);
 }
 
 /**
@@ -157,10 +216,7 @@ function pairShell(args: Set<string>): void {
     process.stdout.write(`${shellUrl}\n`);
     return;
   }
-  if (run("/usr/bin/pbcopy", [], shellUrl)) {
-    log("copied the MiniMax Code shell link to the clipboard.");
-  }
-  showQr(shellUrl);
+  deliverLink(shellUrl, "minimax-shell-link.txt");
   log(`the shell opens over Tailscale; on this Mac use http://127.0.0.1:${chatPort}/minimax-code/ with the same token.`);
 }
 

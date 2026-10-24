@@ -40,6 +40,8 @@ final class SessionThreadModel {
     var thoughtLine: String?
     var sendError: String?
 
+    private var sendTask: Task<Void, Never>?
+
     init(host: ClutchHost, session: AcpSessionInfo) {
         self.host = host
         self.client = SessionsClient(host: host)
@@ -103,7 +105,7 @@ final class SessionThreadModel {
         )
         let replyId = UUID().uuidString
         var reply = ""
-        Task {
+        sendTask = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
@@ -128,6 +130,21 @@ final class SessionThreadModel {
             thoughtLine = nil
             isSending = false
         }
+    }
+
+    /// Stop the in-flight turn: cancel on the sidecar, then drop the local
+    /// stream.  A partial reply already on screen stays — it is what the
+    /// agent had said when the stop landed.
+    func stop() {
+        guard isSending else { return }
+        if let chatId {
+            let host = self.host
+            Task { await ChatSessionClient.cancel(host: host, sessionId: chatId) }
+        }
+        sendTask?.cancel()
+        sendTask = nil
+        thoughtLine = nil
+        isSending = false
     }
 
     /// Streaming rewrites the tail bubble on every event, so match on the id
@@ -232,14 +249,25 @@ public struct SessionThreadView: View {
                 .background(Color.clutchSecondaryBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .disabled(model.isSending)
-            Button {
-                model.send()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
+            if model.isSending {
+                Button {
+                    model.stop()
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.red)
+                }
+                .accessibilityLabel("Stop")
+            } else {
+                Button {
+                    model.send()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Send Message")
             }
-            .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
-            .accessibilityLabel("Send Message")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
