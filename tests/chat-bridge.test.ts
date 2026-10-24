@@ -259,6 +259,16 @@ describe("normalizeSessionUpdate", () => {
   });
 });
 
+describe("attachments on the dsh bridges", () => {
+  it("writes the image bytes where the agent can open them", () => {
+    // The dsh bridges take a plain string, so an attachment has to become a
+    // real file; naming a path that does not exist loses the image.
+    const source = readFileSync(join(ROOT, "src", "web", "chat-bridge.ts"), "utf8");
+    expect(source).toContain("writeFileSync(file, Buffer.from(image.data, \"base64\"))");
+    expect(source).toContain("<attached-image path=");
+  });
+});
+
 describe("parseAcpMessage", () => {
   it("keeps only the fields it understands", () => {
     const message = parseAcpMessage(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "x", result: { sessionId: "s" } }));

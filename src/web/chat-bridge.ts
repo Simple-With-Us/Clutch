@@ -445,6 +445,8 @@ class Bridge {
   constructor(
     readonly engine: Engine,
     private env: NodeJS.ProcessEnv,
+    /** The session's working directory, where attachments are written. */
+    private cwd: string = process.env.HOME ?? "/tmp",
   ) {}
 
   setUpdateHandler(fn: (u: AcpUpdate) => void): void {
@@ -574,6 +576,7 @@ class Bridge {
     if (typeof result?.sessionId !== "string" || result.sessionId.length === 0) {
       throw new Error("bridge returned no sessionId");
     }
+    this.cwd = cwd;
     return result.sessionId;
   }
 
@@ -625,6 +628,7 @@ class Bridge {
   }
 
   loadSession(sessionId: string, cwd: string): Promise<unknown> {
+    this.cwd = cwd;
     return this.send("session/load", { sessionId, cwd, mcpServers: [] });
   }
 
@@ -640,11 +644,26 @@ class Bridge {
       }
       prompt = blocks;
     } else if (images.length > 0) {
-      // The dsh bridges have no image block: name the files instead, and
-      // let the agent open them with its own read tool.
-      const names = images.map((image) => image.name).filter(Boolean);
-      if (names.length > 0) {
-        prompt = `${text}\n\n${names.map((name) => `<attached-image path="${name}" />`).join("\n")}`;
+      // The dsh bridges have no image block.  Their contract is an image
+      // materialized to a file under the session's working directory, with
+      // the path appended to the text, so the bytes are written here and
+      // the agent opens the file with its own read tool.  Naming a file
+      // that does not exist would lose the attachment entirely.
+      const written = images
+        .map((image, index) => {
+          const name = image.name && image.name.length > 0 ? image.name : `attachment-${index + 1}`;
+          const file = join(this.cwd, name);
+          try {
+            mkdirSync(dirname(file), { recursive: true });
+            writeFileSync(file, Buffer.from(image.data, "base64"));
+            return file;
+          } catch {
+            return null;
+          }
+        })
+        .filter((file): file is string => file !== null);
+      if (written.length > 0) {
+        prompt = `${text}\n\n${written.map((file) => `<attached-image path="${file}" />`).join("\n")}`;
       }
     }
     return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;

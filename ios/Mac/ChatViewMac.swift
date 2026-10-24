@@ -162,9 +162,11 @@ public struct ChatView: View {
     /// The host's engine catalog: which engines it runs, which models each
     /// offers, and which effort levels it accepts.
     @State private var catalog: EngineCatalog?
-    /// The picked model id, for the engine in the picker.
-    @State private var selectedModel = ""
-    /// The picked reasoning effort.
+    /// The model the owner picked, if any.  Nil means "the engine's own
+    /// default": a thread keeps the model it was created with unless the
+    /// owner picks another one.
+    @State private var selectedModel: String?
+    /// The reasoning effort the owner picked, if any.
     @State private var selectedEffort: String?
 
     struct LiveTool: Identifiable, Equatable {
@@ -212,22 +214,31 @@ public struct ChatView: View {
         catalog?.descriptor(engine.sidecarId)?.effortLevels ?? []
     }
 
-    /// Load the host's catalog and pick the model and effort from it.
+    /// Load the host's catalog.
+    ///
+    /// The catalog's first row is only what the picker shows by default; it
+    /// is not sent with a turn unless the owner picked it, because a
+    /// resumed thread keeps the model and effort it was created with.
     private func loadCatalog() async {
         guard let host = activeHost else { return }
         let loaded = try? await EngineCatalogClient(host: host).fetch()
         catalog = loaded
         guard let loaded else { return }
-        let models = loaded.descriptor(engine.sidecarId)?.models ?? []
-        if !models.contains(where: { $0.id == selectedModel }) {
-            selectedModel = models.first?.id ?? ""
+        // A choice that the new host does not offer is dropped rather than
+        // sent and refused.
+        if let selectedModel, !loaded.descriptor(engine.sidecarId)?.models.contains(where: { $0.id == selectedModel }) == true {
+            self.selectedModel = nil
         }
-        let efforts = loaded.descriptor(engine.sidecarId)?.effortLevels ?? []
-        if let selectedEffort, !efforts.contains(selectedEffort) {
-            self.selectedEffort = efforts.first
-        } else if selectedEffort == nil {
-            selectedEffort = efforts.first
+        if let selectedEffort, !loaded.descriptor(engine.sidecarId)?.effortLevels.contains(selectedEffort) == true {
+            self.selectedEffort = nil
         }
+    }
+
+    /// What the model picker shows when the owner has not picked one: the
+    /// engine's own default, named but not sent.
+    private var displayModel: String {
+        if let selectedModel { return selectedModel }
+        return engineModels.first?.displayLabel ?? engine.label
     }
 
     private var rows: [Row] {
@@ -612,7 +623,7 @@ public struct ChatView: View {
                         }
                     }
                 } label: {
-                    pickerLabel(entryLabel: selectedModel.isEmpty ? engine.label : selectedModel, symbol: "cpu")
+                    pickerLabel(entryLabel: displayModel, symbol: "cpu")
                 }
             }
 
@@ -747,9 +758,9 @@ public struct ChatView: View {
             Task { await prepare() }
             return
         }
-        // The agent engines keep their own model names; the catalog picks the
-        // default for the engine that was just chosen.
-        selectedModel = ""
+        // The agent engines keep their own model names; a model chosen for
+        // another engine does not carry over.
+        selectedModel = nil
         Task {
             await loadCatalog()
             await prepare()
@@ -949,7 +960,7 @@ public struct ChatView: View {
                     sessionId: session.sessionId,
                     cwd: session.cwd,
                     engine: target.sidecarId,
-                    model: selectedModel.isEmpty ? nil : selectedModel,
+                    model: selectedModel,
                     effort: selectedEffort
                 )
                 adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target)
@@ -1115,7 +1126,7 @@ public struct ChatView: View {
         }
         let client = ChatSessionClient(
             host: host,
-            model: selectedModel,
+            model: selectedModel ?? "",
             sessionId: engine.supportsThreads ? codeChatId : sessionId,
             relayReceiverUid: deviceUid,
             engine: engine.supportsThreads ? engine.sidecarId : nil,
@@ -1164,7 +1175,7 @@ public struct ChatView: View {
                             sessionId = id
                         }
                         liveTools = []
-                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : selectedModel)
+                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : (selectedModel ?? engine.label))
                         sending = false
                         streamingText = ""
                         thoughtLine = nil
@@ -1179,7 +1190,7 @@ public struct ChatView: View {
                         thoughtLine = nil
                         sendError = message
                         liveTools = []
-                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? engine.label : selectedModel, failed: true)
+                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? engine.label : (selectedModel ?? engine.label), failed: true)
                     }
                 }
                 sending = false
@@ -1201,7 +1212,7 @@ public struct ChatView: View {
         }
         let title = engine.supportsThreads
             ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? "\(engine.label) Thread")
-            : "\(selectedModel) Thread"
+            : "\(selectedModel ?? engine.label) Thread"
         return TranscriptExport.markdown(title: title, cwd: engine.supportsThreads ? displayCwd : nil, entries: entries)
     }
 

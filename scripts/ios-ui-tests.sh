@@ -24,11 +24,17 @@ log() { printf 'ios-ui-tests: %s\n' "$1" >&2; }
 available_devices() {
   # "iPhone 16 Pro (UDID) (Shutdown)" lines, reduced to "UDID<TAB>name".
   # The UDID is what xcodebuild wants: a name is ambiguous when two runtimes
-  # offer a device with the same name.
+  # offer a device with the same name.  The parsing is plain awk, so it works
+  # the same on macOS's BSD tools and on GNU ones.
   xcrun simctl list devices available 2>/dev/null \
-    | grep -E '^[[:space:]]+iPhone' \
-    | sed -E 's/^[[:space:]]+//; s/ \(([^)]*)\) \([^)]*\)$/\t\1/' \
-    | awk -F '\t' 'NF == 2 { print $2 "\t" $1 }' \
+    | awk '
+        /^[[:space:]]+iPhone/ {
+          name = $1
+          for (i = 2; i <= NF; i++) {
+            if ($i ~ /^\(/) { gsub(/[()]/, "", $i); print $i "\t" name; break }
+          }
+        }
+      ' \
     | head -20
 }
 
@@ -51,9 +57,11 @@ download_runtime() {
     log "the platform download failed (see $log_file); skipping the UI tests"
     return 1
   }
-  # A downloaded runtime needs a device of its own.
+  # A downloaded runtime needs a device of its own.  `simctl list runtimes`
+  # prints "iOS 18.2 (18.2 - 22C150) - com.apple.CoreSimulator.SimRuntime.iOS-18-2",
+  # and `simctl create` wants that last identifier, not the version label.
   local runtime
-  runtime="$(xcrun simctl list runtimes 2>/dev/null | awk -F '[()]' '/iOS/ { print $2; exit }')"
+  runtime="$(xcrun simctl list runtimes 2>/dev/null | awk '/iOS/ && /com.apple.CoreSimulator.SimRuntime/ { print $NF; exit }')"
   [ -n "$runtime" ] || return 1
   local identifier
   identifier="$(xcrun simctl list devicetypes 2>/dev/null | awk -F '[()]' '/iPhone 16 Pro/ { print $2; exit }')"
