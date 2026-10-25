@@ -76,6 +76,11 @@ struct DshHostView: View {
                 }
             }
             .navigationTitle("Host")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    HostSwitcher(host: host, store: HostStore.shared)
+                }
+            }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

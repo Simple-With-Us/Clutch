@@ -136,6 +136,9 @@ public struct SessionsView: View {
             engineBar
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                HostSwitcher(host: host, store: HostStore.shared)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     selectedId = nil
