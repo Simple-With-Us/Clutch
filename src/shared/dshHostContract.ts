@@ -271,8 +271,8 @@ export function dshHostEndpointURL(baseOrigin: string, endpoint: string): string
   if (!isValidDshHostEndpoint(endpoint)) {
     throw new DshHostContractError(`invalid RPC endpoint ${JSON.stringify(endpoint)}`);
   }
-  const base = dshHostApiURL(baseOrigin);
-  return `${base}${endpoint}`;
+  const base = dshHostApiURL(baseOrigin).replace(/\/+$/, "");
+  return `${base}/${endpoint}`;
 }
 
 /**

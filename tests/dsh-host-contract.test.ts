@@ -11,6 +11,7 @@ import {
   dshHostApiURL,
   dshHostAuthority,
   dshHostEndpointNamespace,
+  dshHostEndpointURL,
   dshHostMuxURL,
   isKnownDshHostEndpoint,
   parseDshHostServerResponse,
@@ -188,6 +189,22 @@ describe("dsh host contract — endpoint names", () => {
   it("rejects a malformed name even when the namespace is known", () => {
     expect(isKnownDshHostEndpoint("session/../secret")).toBe(false);
     expect(isKnownDshHostEndpoint("/list")).toBe(false);
+  });
+
+  it("builds the endpoint URL the host serves", () => {
+    expect(dshHostEndpointURL("http://127.0.0.1:3180", "session/list")).toBe(
+      "http://127.0.0.1:3180/api/session/list",
+    );
+    expect(dshHostEndpointURL("http://127.0.0.1:3180/", "session/list")).toBe(
+      "http://127.0.0.1:3180/api/session/list",
+    );
+  });
+
+  it("refuses to build a URL for an endpoint the host will not accept", () => {
+    expect(() => dshHostEndpointURL("http://127.0.0.1:3180", "session/../secret")).toThrow(
+      DshHostContractError,
+    );
+    expect(() => dshHostEndpointURL("http://127.0.0.1:3180", "/list")).toThrow(DshHostContractError);
   });
 
   it("declares every namespace exactly once", () => {
