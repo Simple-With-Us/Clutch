@@ -11,6 +11,7 @@ import {
   dshHostApiURL,
   dshHostAuthority,
   dshHostEndpointNamespace,
+  dshHostEndpointURL,
   dshHostMuxURL,
   isKnownDshHostEndpoint,
   parseDshHostServerResponse,
@@ -192,5 +193,21 @@ describe("dsh host contract — endpoint names", () => {
 
   it("declares every namespace exactly once", () => {
     expect(new Set(DSH_HOST_ENDPOINT_NAMESPACES).size).toBe(DSH_HOST_ENDPOINT_NAMESPACES.length);
+  });
+
+  it("builds the endpoint URL the host serves", () => {
+    expect(dshHostEndpointURL("http://127.0.0.1:3180", "session/list")).toBe(
+      "http://127.0.0.1:3180/api/session/list",
+    );
+    expect(dshHostEndpointURL("http://127.0.0.1:3180/", "session/list")).toBe(
+      "http://127.0.0.1:3180/api/session/list",
+    );
+  });
+
+  it("refuses to build a URL for an endpoint the host will not accept", () => {
+    expect(() => dshHostEndpointURL("http://127.0.0.1:3180", "session/../secret")).toThrow(
+      DshHostContractError,
+    );
+    expect(() => dshHostEndpointURL("http://127.0.0.1:3180", "/list")).toThrow(DshHostContractError);
   });
 });

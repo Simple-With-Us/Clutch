@@ -1,12 +1,13 @@
 import Foundation
 
-/// Client for the sidecar's MiniMax Code session endpoints (see
+/// Client for the sidecar's session endpoints (see
 /// `src/web/chat-bridge.ts`).  Same chat-token gate as the send path; the
 /// token never leaves the device.
 ///
-/// Only `mcode` is discoverable today: the sidecar answers
-/// `GET /clutch/v1/sessions` with a 400 for any other engine, because the
-/// DeepSeek and MiniMax bridges keep no resumable session list of their own.
+/// Every engine is discoverable: the code engines through their own ACP
+/// bridge, and the dsh-hosted engines (DeepSeek, MiniMax) through the dsh
+/// host that owns their session log.  The sidecar answers both with the same
+/// shape, so the client does not branch on the engine.
 public struct SessionsClient {
     public var host: ClutchHost
 
