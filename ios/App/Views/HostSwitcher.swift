@@ -68,14 +68,13 @@ public struct HostSwitcher: View {
         // One sheet, not two: SwiftUI honours only the last sheet modifier on
         // a view, so the picker picks which one to present.
         .sheet(item: $sheet) { item in
-            switch item {
-            case .addHost:
+            if item == .addHost {
                 NavigationStack {
                     PairView(showsIntro: false) { payload in
                         store.pair(payload)
                     }
                 }
-            case .hosts:
+            } else {
                 HostsSheet(store: store)
             }
         }

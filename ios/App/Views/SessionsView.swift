@@ -136,9 +136,6 @@ public struct SessionsView: View {
             engineBar
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                HostSwitcher(host: host, store: HostStore.shared)
-            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     selectedId = nil
@@ -190,6 +187,9 @@ public struct SessionsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            // The server picker sits beside the engine picker: both answer
+            // "which threads am I looking at".
+            HostSwitcher(host: host, store: HostStore.shared, compact: true)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
