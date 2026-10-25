@@ -76,7 +76,7 @@ A `POST` to `/api/<endpoint>`.  The body is the client-request envelope, and
 the answer is the server-response envelope.
 
 ```json
-{ "type": "client-request", "rpcId": "clutch-1", "method": "remote.session", "payload": { "args": {} } }
+{ "type": "client-request", "rpcId": "clutch-1", "method": "session/list", "payload": { "args": {} } }
 ```
 
 ```json
@@ -90,10 +90,16 @@ A failure carries a typed error instead of a value:
 ```
 
 Endpoint names are one or more `/`-separated segments, each matching
-`[A-Za-z0-9_$.-]+`, with no empty, `.` or `..` segment.  Upstream namespaces
-them by domain: `remote.session`, `remote.commands`, `remote.terminal`,
-`remote.workspace`, `remote.subagents`, `remote.job`, `remote.remotes`,
-`credentials.describe`.
+`[A-Za-z0-9_$.-]+`, with no empty, `.` or `..` segment.  Upstream joins a
+namespace to its method with a slash: `session/list`, `commands/list`,
+`workspace/create`, `subagents/list`, `credentials/describe`.Â  A dot is
+allowed inside a segment but it is not the separatorÂ  `remote.session` is a
+Context service key, not a wire endpoint, and the host answers it with
+`gateway/method-unavailable`.Â  There is no `terminal`, `job` or `remotes`
+namespace: a terminal in the web canvas is a tool card rendered from a tool
+call, and background jobs ride the session controller.Â  The namespace list
+is pinned against the installed dsh build by
+`tests/dsh-host-pinned.test.ts`.
 
 ### Streams
 
@@ -101,6 +107,12 @@ The WebSocket mux lives at `/api/remote.mux` and carries every Remote stream.
 The cordis event stream is the logical stream `$events`; `$events/result` is
 the unary endpoint that returns one event outcome.  The mux is **not** the
 unary path — unary calls go over HTTP.
+
+The mux frames are `open` and `cancel` from the client, and `item`, `error`
+and `end` from the host, each carrying the `streamId` it belongs to.Â  A
+client opens a logical stream by sending `open` with the endpoint it wants, and
+without that frame the host serves no stream at all.Â  The frame union is
+pinned against the installed build by `tests/dsh-host-pinned.test.ts`.
 
 ### Authentication
 

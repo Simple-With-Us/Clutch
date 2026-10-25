@@ -64,12 +64,46 @@ export const DSH_HOST_EVENT_RESULT_ENDPOINT = "$events/result";
 export const DSH_HOST_ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/;
 
 /**
+ * The endpoint namespaces the installed dsh build declares.
+ *
+ * The host dispatches on `namespace/method`, and the namespace set is
+ * generated from the Typert descriptors the installed build ships.  There is no
+ * `terminal`, `job` or `remotes` namespace: a terminal in the web canvas is a
+ * tool card rendered from a tool call, and background jobs ride the session
+ * controller.  A dsh bump can rename a namespace or drop one, so this list is
+ * pinned against the installed package by `tests/dsh-host-pinned.test.ts` — a
+ * bump that moves the contract fails there rather than on a phone.
+ */
+export const DSH_HOST_ENDPOINT_NAMESPACES = [
+  "agentPresets",
+  "commands",
+  "credentials",
+  "directoryPicker",
+  "dynamicCordisRunner",
+  "fileReferences",
+  "fileUploads",
+  "goals",
+  "llm",
+  "messageFeedback",
+  "pluginInventory",
+  "session",
+  "sessionFeedback",
+  "sessionReferenceResolver",
+  "settings",
+  "skills",
+  "subagents",
+  "workspace",
+  "workspaceFiles",
+] as const;
+
+/**
  * Whether an endpoint name is one the host will accept.
  *
- * Upstream namespaces endpoints by domain — `remote.session`,
- * `remote.commands`, `remote.terminal`, `remote.workspace`,
- * `remote.subagents`, `remote.job`, `remote.remotes` — and the separator is a
- * dot, which this pattern allows.
+ * Upstream namespaces endpoints by domain and joins the namespace to the
+ * method with a slash — `session/list`, `commands/list`, `workspace/create`,
+ * `subagents/list`, `credentials/describe`.  A dot is legal inside a segment
+ * but it is not the separator: `remote.session` is a Context service key, not
+ * a wire endpoint, and the host answers it with `gateway/method-unavailable`.
  */
 export function isValidDshHostEndpoint(endpoint: string): boolean {
   if (endpoint.length === 0) return false;
@@ -81,6 +115,26 @@ export function isValidDshHostEndpoint(endpoint: string): boolean {
       segment !== ".." &&
       DSH_HOST_ENDPOINT_SEGMENT_PATTERN.test(segment),
   );
+}
+
+/** The namespace part of an endpoint name, or null when it has no slash. */
+export function dshHostEndpointNamespace(endpoint: string): string | null {
+  const separator = endpoint.indexOf("/");
+  if (separator <= 0) return null;
+  return endpoint.slice(0, separator);
+}
+
+/**
+ * Whether an endpoint names a namespace the installed dsh build declares.
+ *
+ * This is a narrower check than `isValidDshHostEndpoint`: the name is
+ * well-formed, but it is also one the host can actually dispatch.
+ */
+export function isKnownDshHostEndpoint(endpoint: string): boolean {
+  if (!isValidDshHostEndpoint(endpoint)) return false;
+  const namespace = dshHostEndpointNamespace(endpoint);
+  if (!namespace) return false;
+  return (DSH_HOST_ENDPOINT_NAMESPACES as readonly string[]).includes(namespace);
 }
 
 /** The generic endpoint failure carried in a response envelope. */
@@ -113,11 +167,10 @@ export interface DshHostServerResponse {
 /**
  * Build one client request envelope.
  *
- * `method` is the endpoint name — upstream namespaces them by domain, for
- * example `remote.session`, `remote.commands`, `remote.terminal`,
- * `remote.workspace`, `remote.subagents`, `remote.job` and
- * `credentials.describe`.  `payload` is the endpoint's own argument object;
- * the gateway carries it as `{ args: … }`.
+ * `method` is the endpoint name — upstream namespaces them by domain and
+ * joins the two with a slash, for example `session/list`, `commands/list`,
+ * `workspaceFiles/list` and `credentials/describe`.  `payload` is the
+ * endpoint's own argument object; the gateway carries it as `{ args: … }`.
  */
 export function buildDshHostRequest(
   rpcId: string,

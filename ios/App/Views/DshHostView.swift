@@ -15,7 +15,7 @@ struct DshHostView: View {
     let host: ClutchHost
 
     @State private var client = DshHostClient()
-    @State private var endpoint: String = "remote.session"
+    @State private var endpoint: String = "session/list"
     @State private var resultText: String = ""
     @State private var errorMessage: String?
     @State private var isCalling = false
