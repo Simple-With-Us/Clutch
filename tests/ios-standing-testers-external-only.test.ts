@@ -102,7 +102,7 @@ describe("deleteInternalGroups behavior", () => {
       if (method === "DELETE") { deleted.push(path); return { ok: true, status: 204, parsed: {} }; }
       throw new Error(`unexpected ${method} ${path}`);
     });
-    const out = await deleteInternalGroups({ api, appId: "1", log, warn });
+    const out = await deleteInternalGroups({ api, appId: "6817951255", log, warn });
     expect(out).toEqual({ deleted: 1, failed: 0 });
     expect(deleted).toEqual(["/v1/betaGroups/g-int"]);
   });
@@ -110,14 +110,21 @@ describe("deleteInternalGroups behavior", () => {
   it("treats an already-gone group (404) as deleted", async () => {
     const api = vi.fn(async (method) =>
       method === "GET" ? listRes([group("g1", "Internal Testers", true)]) : { ok: false, status: 404, parsed: {} });
-    const out = await deleteInternalGroups({ api, appId: "1", log, warn });
+    const out = await deleteInternalGroups({ api, appId: "6817951255", log, warn });
     expect(out).toEqual({ deleted: 1, failed: 0 });
+  });
+
+  it("leaves every group alone for an app outside the external-only set", async () => {
+    const api = vi.fn(async () => { throw new Error("must not be called"); });
+    const out = await deleteInternalGroups({ api, appId: "6798076688", log, warn });
+    expect(out).toEqual({ deleted: 0, failed: 0 });
+    expect(api).not.toHaveBeenCalled();
   });
 
   it("warns instead of throwing when the delete fails", async () => {
     const api = vi.fn(async (method) =>
       method === "GET" ? listRes([group("g1", "Internal Testers", true)]) : { ok: false, status: 500, parsed: { errors: [{ detail: "boom" }] } });
-    const out = await deleteInternalGroups({ api, appId: "1", log, warn });
+    const out = await deleteInternalGroups({ api, appId: "6817951255", log, warn });
     expect(out).toEqual({ deleted: 0, failed: 1 });
   });
 });
