@@ -835,7 +835,14 @@ public struct ChatView: View {
     private func selectEngine(_ next: ChatEngine) {
         guard next != engine else { return }
         engine = next
-        MacEngineStore.save(next)
+        // Each surface keeps its own engine: the workspace's choice is what
+        // a relaunch returns to, and the agent chat's choice never
+        // overwrites it.
+        if isWorkspace {
+            MacEngineStore.save(next)
+        } else {
+            MacAgentEngineStore.save(next)
+        }
         resetTurnState()
         sessionId = nil
         if isWorkspace {
@@ -856,7 +863,7 @@ public struct ChatView: View {
             codeCwd = nil
             codeLoaded = []
             codePending = []
-            Task { await prepare() }
+            Task { await prepare(preferredEngine: next) }
             return
         }
         // The agent engines keep their own model names; a model chosen for
@@ -864,14 +871,16 @@ public struct ChatView: View {
         selectedModel = nil
         Task {
             await loadCatalog()
-            await prepare()
+            await prepare(preferredEngine: next)
         }
     }
 
     /// Show the other conversation.
     ///
     /// The two surfaces keep their own state, so moving between them does
-    /// not lose the open thread or the agent bubbles.
+    /// not lose the open thread or the agent bubbles.  A switch is also not
+    /// a reload: the host and the engine did not change, so the open thread
+    /// is not replayed and only the part being shown is read.
     private func selectSurface(_ next: MacSurface) {
         guard next != surface else { return }
         surface = next
@@ -880,14 +889,20 @@ public struct ChatView: View {
         // has to offer one of those.
         if !isWorkspace, !offeredEngines.contains(engine), let first = offeredEngines.first {
             engine = first
-            MacEngineStore.save(first)
+            // The agent chat's engine is its own choice: writing it into the
+            // workspace's store would overwrite the workspace's engine.
+            MacAgentEngineStore.save(first)
             selectedModel = nil
         }
         Task {
-            await prepare()
-            // The workspace shows the thread rail, and the list belongs to
-            // the engine rather than to the surface, so it is read again.
-            if isWorkspace { await loadSidebarSessions() }
+            if isWorkspace {
+                // The workspace shows the thread rail, and the list belongs
+                // to the engine rather than to the surface, so it is read
+                // again.  The open thread is left alone.
+                await loadSidebarSessions()
+            } else {
+                await refreshThread()
+            }
         }
     }
 
@@ -1191,17 +1206,20 @@ public struct ChatView: View {
         sendError = nil
     }
 
-    private func prepare() async {
+    private func prepare(preferredEngine: ChatEngine? = nil) async {
         guard let host = activeHost else { return }
         pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
         // The catalog can take a while on a cold server, so the thread list
         // and the health check do not wait for it.
         async let catalogTask = loadCatalog()
         await checkSidecar()
-        // The saved engine wins, so a relaunch returns to the thread the
-        // owner was working in instead of an empty tab.  Whether the host
-        // actually runs it is settled once the catalog lands.
-        if let saved = MacEngineStore.load() {
+        // The engine the owner picked wins, so a relaunch returns to the
+        // thread the owner was working in instead of an empty tab.  Each
+        // surface keeps its own engine: the agent chat's choice never
+        // overwrites the workspace's.
+        if let preferred = preferredEngine {
+            engine = preferred
+        } else if let saved = isWorkspace ? MacEngineStore.load() : MacAgentEngineStore.load() {
             engine = saved
         }
         _ = await catalogTask
@@ -1841,6 +1859,25 @@ enum MacMcodeStore {
 /// thread instead of dropping back to an empty DeepSeek tab.
 enum MacEngineStore {
     private static let key = "codes.clutch.mac-engine.v1"
+
+    static func save(_ engine: ChatEngine) {
+        UserDefaults.standard.set(engine.rawValue, forKey: key)
+    }
+
+    static func load() -> ChatEngine? {
+        guard let raw = UserDefaults.standard.string(forKey: key) else { return nil }
+        return ChatEngine(rawValue: raw)
+    }
+}
+
+/// The agent chat's engine, kept apart from the workspace's.
+///
+/// The two surfaces are separate conversations, so the engine the owner
+/// picks for one is not the engine of the other: the agent chat runs on the
+/// hosted engines, and writing its choice into the workspace's record would
+/// silently move the workspace to another engine.
+enum MacAgentEngineStore {
+    private static let key = "codes.clutch.mac-agent-engine.v1"
 
     static func save(_ engine: ChatEngine) {
         UserDefaults.standard.set(engine.rawValue, forKey: key)
