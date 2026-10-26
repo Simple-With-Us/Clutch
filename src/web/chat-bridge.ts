@@ -476,7 +476,31 @@ export function safeAttachmentName(raw: string | undefined, index: number): stri
  * The resolved path is checked against the root before the write, so a
  * crafted name cannot escape.
  */
+let attachmentWork: Promise<void> = Promise.resolve();
+
+/** Serialize scan/delete and image writes so pruning cannot invalidate a returned path. */
+async function withAttachmentWork<T>(work: () => Promise<T>): Promise<T> {
+  const previous = attachmentWork;
+  let release!: () => void;
+  attachmentWork = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
 export async function materializeAttachment(options: {
+  root: string;
+  sessionId: string;
+  image: PromptImage;
+  index: number;
+}): Promise<string | null> {
+  return withAttachmentWork(() => materializeAttachmentUnlocked(options));
+}
+
+async function materializeAttachmentUnlocked(options: {
   root: string;
   sessionId: string;
   image: PromptImage;
@@ -519,14 +543,18 @@ export async function materializeAttachment(options: {
 
 /** Prepare every image before a turn can be sent. Never silently drop one. */
 export async function prepareAttachedPrompt(root: string, sessionId: string, text: string, images: PromptImage[]): Promise<string> {
+  return withAttachmentWork(() => prepareAttachedPromptUnlocked(root, sessionId, text, images));
+}
+
+async function prepareAttachedPromptUnlocked(root: string, sessionId: string, text: string, images: PromptImage[]): Promise<string> {
   // Old attachment directories are pruned while a new batch is written: the
   // sidecar has no background loop to hang this on, and a write is the moment
   // a stale directory can be noticed.
-  await pruneAttachments(root, 24 * 60 * 60 * 1000, sessionId);
+  await pruneAttachmentsUnlocked(root, 24 * 60 * 60 * 1000, sessionId);
   const written: string[] = [];
   try {
     for (const [index, image] of images.entries()) {
-      const file = await materializeAttachment({ root, sessionId, image, index });
+      const file = await materializeAttachmentUnlocked({ root, sessionId, image, index });
       if (!file) throw new Error("An attachment could not be saved. The turn was not sent. Please try again.");
       written.push(file);
     }
@@ -552,6 +580,10 @@ export async function pruneAttachments(
   maxAgeMs = 24 * 60 * 60 * 1000,
   keepSessionId?: string,
 ): Promise<void> {
+  return withAttachmentWork(() => pruneAttachmentsUnlocked(root, maxAgeMs, keepSessionId));
+}
+
+async function pruneAttachmentsUnlocked(root: string, maxAgeMs: number, keepSessionId?: string): Promise<void> {
   let entries: string[];
   try {
     entries = await readdir(root);
