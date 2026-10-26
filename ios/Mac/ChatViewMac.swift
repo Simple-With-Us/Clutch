@@ -1088,6 +1088,9 @@ public struct ChatView: View {
         codeCwd = nil
         codeLoaded = []
         codePending = []
+        // The plan belongs to the thread that was open, so a new thread
+        // starts without one.
+        plan = []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.clear(for: host)
@@ -1110,6 +1113,10 @@ public struct ChatView: View {
         codeCwd = cwd
         codeLoaded = history
         codePending = []
+        // The plan belongs to the thread that was open, so the thread being
+        // adopted brings its own: the last one the engine reported in that
+        // thread's history, and none when that thread never had one.
+        plan = history.last(where: { $0.isPlan })?.plan ?? []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.save(remoteId: remoteId, cwd: cwd, engine: engine.sidecarId, for: host)

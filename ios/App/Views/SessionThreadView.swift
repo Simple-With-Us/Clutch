@@ -155,7 +155,12 @@ final class SessionThreadModel {
             }
             // The plan is a state, not a line of the transcript: the last
             // plan the thread carried is the one the engine last reported.
-            plan = loaded.history.last(where: { $0.isPlan })?.plan ?? []
+            // A reload that carries no plan keeps the one on screen: the
+            // transcript is a tail slice, and a plan written before it
+            // would otherwise vanish from under the owner.
+            if let carried = loaded.history.last(where: { $0.isPlan })?.plan {
+                plan = carried
+            }
             phase = .ready
         } catch {
             phase = .failed(error.localizedDescription)

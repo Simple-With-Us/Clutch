@@ -396,7 +396,12 @@ export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
   if (kind === "plan" || kind === "plan_update" || kind === "plan_removed") {
     // The engine sends the whole plan every time it changes, so the client
     // replaces the list it has rather than patching it.
-    return { sessionId: row.sessionId, kind: "plan", text: "", plan: readPlanEntries(update) };
+    const entries = readPlanEntries(update, kind);
+    // A plan the sidecar cannot read is dropped rather than emptied.  A shape
+    // it does not know is not a plan the engine removed, and emptying the
+    // list would wipe the plan the owner is looking at.
+    if (entries === null) return null;
+    return { sessionId: row.sessionId, kind: "plan", text: "", plan: entries };
   }
   return null;
 }
@@ -408,15 +413,20 @@ export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
  * what shape they are in.  Only the item shape is a list the clients can
  * show, so the others are dropped rather than guessed at, and a plan that
  * was removed arrives as an empty list.
+ *
+ * Null means the shape was not one this sidecar reads: the caller keeps
+ * what it has rather than treating the plan as gone.
  */
-function readPlanEntries(update: Record<string, unknown>): PlanEntry[] {
+function readPlanEntries(update: Record<string, unknown>, kind: string): PlanEntry[] | null {
+  // A removed plan is an empty list, not a missing one.
+  if (kind === "plan_removed") return [];
   const content = update.content;
   const nested =
     typeof content === "object" && content !== null
       ? (content as Record<string, unknown>).entries
       : undefined;
   const raw = Array.isArray(update.entries) ? update.entries : nested;
-  if (!Array.isArray(raw)) return [];
+  if (!Array.isArray(raw)) return null;
   const entries: PlanEntry[] = [];
   for (const item of raw) {
     if (typeof item !== "object" || item === null) continue;

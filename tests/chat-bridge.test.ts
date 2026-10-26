@@ -296,6 +296,22 @@ describe("normalizeSessionUpdate", () => {
     });
   });
 
+  it("drops a plan whose shape it cannot read, rather than emptying it", () => {
+    // An empty list tells the client to remove the plan, so a shape the
+    // sidecar does not understand must not become one.
+    expect(normalizeSessionUpdate({
+      sessionId: "s1",
+      update: { sessionUpdate: "plan_update", content: { type: "text", text: "working on it" } },
+    })).toBe(null);
+  });
+
+  it("reads a removed plan as an empty list", () => {
+    expect(normalizeSessionUpdate({
+      sessionId: "s1",
+      update: { sessionUpdate: "plan_removed" },
+    })).toEqual({ sessionId: "s1", kind: "plan", text: "", plan: [] });
+  });
+
   it("drops updates the clients do not render", () => {
     expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "current_mode_update", currentModeId: "code" } })).toBe(null);
     expect(normalizeSessionUpdate({ update: { sessionUpdate: "agent_message_chunk", content: { text: "x" } } })).toBe(null);

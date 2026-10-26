@@ -330,7 +330,11 @@ public struct SessionsView: View {
     @ViewBuilder
     private var detail: some View {
         if let session = selectedSession {
+            // Each thread gets its own view, so switching threads starts the
+            // new one clean: the transcript, the plan and the pending
+            // questions belong to the thread they were raised in.
             SessionThreadView(host: host, session: session, engine: engine)
+                .id(session.sessionId)
         } else {
             ContentUnavailableView(
                 "Select A Thread",
