@@ -152,6 +152,31 @@ describe("externalInstallability behavior", () => {
     expect(out).toMatchObject({ ok: true, installable: false });
   });
 
+  it("sees a later group's public link even when another group's tester read fails", async () => {
+    const api = vi.fn(async (method, path) => {
+      if (path.includes("/betaTesters")) return { ok: false, status: 500, parsed: { errors: [{ detail: "boom" }] } };
+      return listRes([group("g-bad", "Public Beta", false, false), group("g-link", "Beta Link", false, true)]);
+    });
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: true, installable: true });
+    expect(out.detail).toContain("Beta Link");
+  });
+
+  it("counts a group with a missing isInternalGroup flag as external", async () => {
+    const api = vi.fn(async () => listRes([{ id: "g1", attributes: { name: "Public Beta", publicLinkEnabled: true } }]));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: true, installable: true });
+  });
+
+  it("reports ok:false when every tester read fails and no public link exists", async () => {
+    const api = vi.fn(async (method, path) =>
+      path.includes("/betaTesters")
+        ? { ok: false, status: 500, parsed: { errors: [{ detail: "boom" }] } }
+        : listRes([group("g1", "Public Beta", false, false)]));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: false, installable: false });
+  });
+
   it("reports ok:false when the read fails, which is not the same as uninstallable", async () => {
     const api = vi.fn(async () => ({ ok: false, status: 401, parsed: { errors: [{ detail: "denied" }] } }));
     const out = await externalInstallability({ api, buildId: "b1" });
