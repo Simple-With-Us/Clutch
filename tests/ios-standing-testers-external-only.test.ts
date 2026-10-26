@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { deleteInternalGroups, externalInstallability } from "../scripts/ios-fleet/asc-api.mjs";
 
 const ROOT = join(__dirname, "..");
 const read = (rel: string): string => readFileSync(join(ROOT, rel), "utf8");
@@ -13,16 +14,21 @@ describe("standing testers sync is external-only", () => {
   it("never calls ensureInternalTesterGroup from ensure-standing-testers", () => {
     const mjs = read("scripts/ios-fleet/asc-api.mjs");
     const start = mjs.indexOf('method === "ensure-standing-testers"');
-    const end = mjs.indexOf('method === "ensure-tf-ready"');
+    const end = mjs.indexOf('method === "ensure-internal-testers"');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);
     expect(branch).not.toMatch(/await ensureInternalTesterGroup\(/);
   });
 
-  it("keeps ensureInternalTesterGroup exported for opt-in flows", () => {
+  it("exposes internal testing only as an opt-in CLI method the ship workflow never calls", () => {
+    // Deliberate retention with a real entry point (Kody #208 finding 3):
+    // ensure-internal-testers exists for apps that run internal testing on
+    // purpose (the Socratic Trade pattern); the ship workflow must not use it.
     const mjs = read("scripts/ios-fleet/asc-api.mjs");
-    expect(mjs).toMatch(/export async function ensureInternalTesterGroup\(/);
+    expect(mjs).toMatch(/method === "ensure-internal-testers"/);
+    const yml = read(".github/workflows/ios-ship.yml");
+    expect(yml).not.toMatch(/ensure-internal-testers/);
   });
 
   it("deletes leftover internal groups during the sync", () => {
@@ -32,12 +38,13 @@ describe("standing testers sync is external-only", () => {
     // deletes the testers themselves.
     const mjs = read("scripts/ios-fleet/asc-api.mjs");
     const start = mjs.indexOf('method === "ensure-standing-testers"');
-    const end = mjs.indexOf('method === "ensure-tf-ready"');
+    const end = mjs.indexOf('method === "ensure-internal-testers"');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);
-    expect(branch).toMatch(/isInternalGroup === true/);
-    expect(branch).toMatch(/api\("DELETE", `\/v1\/betaGroups\/\$\{g\.id\}`\)/);
+    expect(branch).toMatch(/await deleteInternalGroups\(/);
+    expect(mjs).toMatch(/export async function deleteInternalGroups\(/);
+    expect(mjs).toMatch(/api\("DELETE", `\/v1\/betaGroups\/\$\{g\.id\}`\)/);
   });
 });
 
@@ -54,15 +61,94 @@ describe("ensure-tf-ready readiness is external-only", () => {
     expect(branch).toMatch(/externalInstallability\(/);
   });
 
-  it("keeps countInternalTesters exported for opt-in flows", () => {
-    const mjs = read("scripts/ios-fleet/asc-api.mjs");
-    expect(mjs).toMatch(/export async function countInternalTesters\(/);
-  });
+
 
   it("ship-testflight.sh no longer claims internal testers can install", () => {
     const sh = read("scripts/ios-fleet/ship-testflight.sh");
     expect(sh).not.toMatch(/TestFlight internal testers can install this build/);
     expect(sh).toMatch(/TestFlight external testers can install this build after Beta App Review/);
     expect(sh).not.toMatch(/has no internal TestFlight tester/);
+  });
+});
+
+// Behavior tests against a mock App Store Connect API.  These exercise the
+// actual delete/readiness logic against external-group and public-link state,
+// not string assertions.
+const group = (id, name, internal, publicLink = false) => ({
+  id,
+  attributes: { name, isInternalGroup: internal, publicLinkEnabled: publicLink }
+});
+const listRes = (data) => ({ ok: true, status: 200, parsed: { data } });
+
+describe("deleteInternalGroups behavior", () => {
+  const logs = [];
+  const log = (m) => logs.push(m);
+  const warn = (m) => logs.push("WARN " + m);
+
+  it("deletes every internal group and leaves external groups alone", async () => {
+    const deleted = [];
+    const api = vi.fn(async (method, path) => {
+      if (method === "GET") return listRes([
+        group("g-int", "Internal Testers", true),
+        group("g-ext", "Public Beta", false)
+      ]);
+      if (method === "DELETE") { deleted.push(path); return { ok: true, status: 204, parsed: {} }; }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+    const out = await deleteInternalGroups({ api, appId: "1", log, warn });
+    expect(out).toEqual({ deleted: 1, failed: 0 });
+    expect(deleted).toEqual(["/v1/betaGroups/g-int"]);
+  });
+
+  it("treats an already-gone group (404) as deleted", async () => {
+    const api = vi.fn(async (method) =>
+      method === "GET" ? listRes([group("g1", "Internal Testers", true)]) : { ok: false, status: 404, parsed: {} });
+    const out = await deleteInternalGroups({ api, appId: "1", log, warn });
+    expect(out).toEqual({ deleted: 1, failed: 0 });
+  });
+
+  it("warns instead of throwing when the delete fails", async () => {
+    const api = vi.fn(async (method) =>
+      method === "GET" ? listRes([group("g1", "Internal Testers", true)]) : { ok: false, status: 500, parsed: { errors: [{ detail: "boom" }] } });
+    const out = await deleteInternalGroups({ api, appId: "1", log, warn });
+    expect(out).toEqual({ deleted: 0, failed: 1 });
+  });
+});
+
+describe("externalInstallability behavior", () => {
+  it("is installable when an external group has a public link, even with zero testers", async () => {
+    const api = vi.fn(async () => listRes([group("g1", "Public Beta", false, true)]));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: true, installable: true });
+    expect(api).toHaveBeenCalledTimes(1); // public link short-circuits the tester read
+  });
+
+  it("is installable when an external group has testers but no public link", async () => {
+    const api = vi.fn(async (method, path) =>
+      path.includes("/betaTesters")
+        ? listRes([{ id: "t1", attributes: { email: "a@b.c" } }])
+        : listRes([group("g1", "Public Beta", false, false)]));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: true, installable: true });
+  });
+
+  it("is not installable when external groups have neither testers nor a public link", async () => {
+    const api = vi.fn(async (method, path) =>
+      path.includes("/betaTesters") ? listRes([]) : listRes([group("g1", "Public Beta", false, false)]));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: true, installable: false });
+  });
+
+  it("is not installable when the build is in no external group (internal groups do not count)", async () => {
+    const api = vi.fn(async () => listRes([group("g-int", "Internal Testers", true)]));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: true, installable: false });
+  });
+
+  it("reports ok:false when the read fails, which is not the same as uninstallable", async () => {
+    const api = vi.fn(async () => ({ ok: false, status: 401, parsed: { errors: [{ detail: "denied" }] } }));
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out.ok).toBe(false);
+    expect(out.installable).toBe(false);
   });
 });

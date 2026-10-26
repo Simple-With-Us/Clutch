@@ -555,6 +555,33 @@ export async function externalInstallability({ api, buildId }) {
   };
 }
 
+// Delete the app's internal beta groups.  Owner directive 2026-10-18 ("delete
+// internal group if that isn't problem to do"), made automatic 2026-10-19:
+// covered apps carry no internal testing groups.  Deleting a beta group only
+// ends its access to the builds; it never deletes the testers from TestFlight.
+// Returns { deleted, failed }; a failed delete is a warning, never a throw.
+export async function deleteInternalGroups({ api, appId, log, warn }) {
+  const groupsRes = await api("GET", `/v1/apps/${appId}/betaGroups?limit=200&fields[betaGroups]=name,isInternalGroup`);
+  if (!groupsRes.ok) {
+    warn(`could not list groups for internal-group cleanup (${ascErrorText(groupsRes)})`);
+    return { deleted: 0, failed: 1 };
+  }
+  const internal = ascRows(groupsRes).filter((g) => g.attributes?.isInternalGroup === true);
+  let deleted = 0;
+  let failed = 0;
+  for (const g of internal) {
+    const del = await api("DELETE", `/v1/betaGroups/${g.id}`);
+    if (del.ok || del.status === 204 || del.status === 404) {
+      deleted += 1;
+      log(`deleted internal group "${g.attributes?.name}" id=${g.id} (owner directive 2026-10-18/19: external testing only)`);
+    } else {
+      failed += 1;
+      warn(`could not delete internal group "${g.attributes?.name}" id=${g.id} (${ascErrorText(del)})`);
+    }
+  }
+  return { deleted, failed };
+}
+
 // Make sure the app has an internal group with access to all builds, and that
 // every standing email that is an App Store Connect user is in it.  Idempotent,
 // ADD-ONLY (never removes a tester or a group), prints emails masked.  An
@@ -1493,15 +1520,12 @@ async function main() {
     //     make that automatic").  A group deleted here only ends its access to
     //     the builds; it never deletes the testers from TestFlight.  Failure
     //     to delete warns instead of failing the sync.
-    const internalLeft = rows(groupsRes).filter((g) => g.attributes?.isInternalGroup === true);
-    for (const g of internalLeft) {
-      const del = await api("DELETE", `/v1/betaGroups/${g.id}`);
-      if (del.ok || del.status === 204 || del.status === 404) {
-        console.error(`${prefix}: deleted internal group "${g.attributes?.name}" id=${g.id} (owner directive 2026-10-18/19: external testing only)`);
-      } else {
-        warn(`could not delete internal group "${g.attributes?.name}" id=${g.id} (${errText(del)})`);
-      }
-    }
+    await deleteInternalGroups({
+      api,
+      appId,
+      log: (m) => console.error(`${prefix}: ${m}`),
+      warn
+    });
 
     // 3) Build: the given CFBundleVersion, else the newest upload.
     const buildQuery = wantBuild
@@ -1550,6 +1574,33 @@ async function main() {
 
     console.error(`${prefix}: done (${emails.length} standing tester(s), ${warnings} warning(s))`);
     process.exit(warnings ? 3 : 0);
+  }
+
+  if (method === "ensure-internal-testers") {
+    // Opt-in only: for apps that run internal testing on purpose (e.g. the
+    // Socratic Trade pattern).  The ship workflow never calls this; covered
+    // apps follow the owner's 2026-10-18/19 external-only directive and the
+    // standing-testers sync deletes internal groups instead.
+    const prefix = "ensure-internal-testers";
+    if (!/^\d+$/.test(path)) {
+      console.error(`${prefix}: usage: node asc-api.mjs ensure-internal-testers <appleId>`);
+      process.exit(2);
+    }
+    const EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
+    const emails = [...new Set(String(process.env.ASC_STANDING_TESTERS || "").split(/[\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    if (!emails.length || emails.some((e) => !EMAIL_RE.test(e))) {
+      console.error(`${prefix}: ASC_STANDING_TESTERS is empty or malformed; nothing changed`);
+      process.exit(2);
+    }
+    const out = await ensureInternalTesterGroup({
+      api,
+      appId: path,
+      emails,
+      log: (m) => console.error(`${prefix}: ${m}`),
+      warn: (m) => console.error(`${prefix}: WARNING ${m}`)
+    });
+    console.error(`${prefix}: done (group=${out.groupId || "none"} created=${out.created} added=${out.added} alreadyIn=${out.alreadyIn} external=${out.external} testers=${out.testers} warnings=${out.warnings})`);
+    process.exit(out.warnings ? 3 : 0);
   }
 
   if (method === "ensure-tf-ready") {
