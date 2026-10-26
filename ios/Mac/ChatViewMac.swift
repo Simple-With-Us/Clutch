@@ -301,10 +301,12 @@ public struct ChatView: View {
     }
 
     /// What the model picker shows when the owner has not picked one: the
-    /// engine's own default, named but not sent.
+    /// engine itself.  Naming a model would claim the thread runs it, and
+    /// an untouched thread keeps whatever model it was created with —
+    /// which the client does not know.
     private var displayModel: String {
         if let selectedModel { return selectedModel }
-        return engineModels.first?.displayLabel ?? engine.label
+        return engine.label
     }
 
     private var rows: [Row] {
@@ -1050,6 +1052,10 @@ public struct ChatView: View {
         }
         MacEngineStore.save(engine)
         resetTurnState()
+        // The picked model and effort belong to the thread that was open, so
+        // a new thread starts on the engine's own defaults.
+        selectedModel = nil
+        selectedEffort = nil
         sessionId = nil
         codeChatId = nil
         codeRemoteId = nil
@@ -1068,6 +1074,11 @@ public struct ChatView: View {
         self.engine = engine
         MacEngineStore.save(engine)
         resetTurnState()
+        // The picked model and effort belong to the thread that was open,
+        // so they are cleared here: a new thread must not inherit the
+        // previous thread's choice.
+        selectedModel = nil
+        selectedEffort = nil
         codeChatId = chatId
         codeRemoteId = remoteId
         codeCwd = cwd
@@ -1089,15 +1100,17 @@ public struct ChatView: View {
             sidebarError = nil
         }
         let target = engine
+        // A resumed thread keeps the model and effort it was created with,
+        // so the load carries none.  The local picks are cleared only once
+        // the load succeeds (in `adopt`), so a failed load leaves the
+        // visible thread's choices untouched.
         Task {
             defer { if fromSidebar { sidebarLoadingId = nil } }
             do {
                 let loaded = try await SessionsClient(host: host).load(
                     sessionId: session.sessionId,
                     cwd: session.cwd,
-                    engine: target.sidecarId,
-                    model: selectedModel,
-                    effort: selectedEffort
+                    engine: target.sidecarId
                 )
                 adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target)
             } catch {

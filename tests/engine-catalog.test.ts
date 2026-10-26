@@ -121,10 +121,12 @@ describe("buildEngineCatalog", () => {
 
   it("notes when an engine advertised nothing", async () => {
     const catalog = await buildEngineCatalog({
+      // A launcher that does not exist here, so the probe answers nothing no
+      // matter which engines this machine really has installed.
       launchers: {
         deepseek: { command: "dsh", args: [] },
         minimax: { command: "minimax", args: [] },
-        mcode: { command: "mcode", args: ["acp"] },
+        mcode: { command: "/nonexistent/mcode", args: ["acp"] },
         muse: { command: "muse", args: [] },
       },
       available: { deepseek: true, minimax: true, mcode: true, muse: false },
