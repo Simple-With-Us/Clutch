@@ -431,7 +431,10 @@ export class DshHostClient {
     socket.onclose = () => settle();
 
     await new Promise<void>((resolve, reject) => {
-      socket.onopen = () => resolve();
+      socket.onopen = () => {
+        socket.onerror = () => settle(new DshHostTransportError("the dsh host mux connection failed"));
+        resolve();
+      };
       socket.onerror = () => reject(new DshHostHandshakeError("the dsh host mux connection failed"));
     });
 
