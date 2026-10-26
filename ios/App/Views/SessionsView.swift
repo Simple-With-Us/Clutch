@@ -20,6 +20,9 @@ final class SessionsModel {
     private let client: SessionsClient
     /// The engine whose threads are listed.
     var engine: String = "mcode"
+    /// Bumps on every engine switch, so a late answer for the previous
+    /// engine is discarded instead of displayed.
+    private var generation = 0
 
     var phase: Phase = .idle
 
@@ -31,11 +34,20 @@ final class SessionsModel {
     func load() async {
         guard phase != .loading else { return }
         phase = .loading
+        generation += 1
+        let ticket = generation
+        let wanted = engine
         do {
             // Newest first, with an unparseable stamp sinking below the dated
             // rows instead of scrambling the list.
-            phase = .loaded(AcpSessionInfo.newestFirst(try await client.list(engine: engine)))
+            let listed = try await client.list(engine: wanted)
+            // An engine switch that landed mid-flight starts its own load; a
+            // ticket pins this answer to its engine, so a late answer for the
+            // previous engine is dropped instead of displayed under the new one.
+            guard ticket == generation else { return }
+            phase = .loaded(AcpSessionInfo.newestFirst(listed))
         } catch {
+            guard ticket == generation else { return }
             phase = .failed(error.localizedDescription)
         }
     }
@@ -45,6 +57,15 @@ final class SessionsModel {
     func refresh() async {
         let previous = phase
         if case .loading = previous { return }
+        await load()
+    }
+
+    /// Reload for the newly picked engine, even when the previous engine's
+    /// list is still in flight: the in-flight answer carries a stale ticket
+    /// and is discarded, so the new engine's load is the one that lands.
+    func reloadForEngine() async {
+        generation += 1
+        if phase == .loading { phase = .idle }
         await load()
     }
 
@@ -104,13 +125,16 @@ public struct SessionsView: View {
             isSettling = false
             // The catalog says which engines this host runs, so the list
             // follows it: an engine that is not installed here cannot list
-            // its threads.  A MiniMax Code server runs one engine and serves
-            // no catalog, so it names the engine itself.
+            // its threads.  The catalog stays authoritative whenever one is
+            // served — a code server offering Muse Code must not be dragged
+            // back to MiniMax Code.  A MiniMax Code server runs one engine
+            // and serves no catalog, so only then does it name the engine
+            // itself.
             let wanted: String?
-            if host.isMiniMaxCodeOnly {
-                wanted = "mcode"
-            } else if let descriptor = catalog?.descriptor(engine), descriptor.available == false {
+            if let descriptor = catalog?.descriptor(engine), descriptor.available == false {
                 wanted = catalog?.availableEngines.first(where: { $0.supportsThreads })?.id
+            } else if host.isMiniMaxCodeOnly, catalog == nil {
+                wanted = "mcode"
             } else {
                 wanted = nil
             }
@@ -247,7 +271,7 @@ public struct SessionsView: View {
         engine = id
         model.engine = id
         selectedId = nil
-        Task { await model.refresh() }
+        Task { await model.reloadForEngine() }
     }
 
     /// The engines on this host whose threads can be listed.

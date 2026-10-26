@@ -839,9 +839,23 @@ public struct ChatView: View {
         resetTurnState()
         sessionId = nil
         if isWorkspace {
-            // Resume, not reset: prepare() reopens the last thread for this
-            // host.  Clearing it is what the sidebar's New Thread button is
-            // for (startMcodeThread).
+            // The saved thread belongs to the previous engine: restoring it
+            // would adopt its engine back over the choice just made, so it
+            // is dropped and prepare() starts the new engine empty.  Moving
+            // between surfaces keeps the thread (selectSurface), but moving
+            // between engines cannot — one slot holds one thread.  Clearing
+            // it is what the sidebar's New Thread button is for
+            // (startMcodeThread).
+            if let host = activeHost,
+               let saved = MacMcodeStore.load(for: host),
+               saved.engineId != next.sidecarId {
+                MacMcodeStore.clear(for: host)
+            }
+            codeChatId = nil
+            codeRemoteId = nil
+            codeCwd = nil
+            codeLoaded = []
+            codePending = []
             Task { await prepare() }
             return
         }
