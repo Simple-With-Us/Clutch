@@ -91,6 +91,15 @@ interface Launcher {
  */
 const CODE_ENGINES: Engine[] = ["mcode", "muse"];
 
+/**
+ * How long a failed connection to the dsh host is remembered.
+ *
+ * The host is a separate process from the sidecar, so it may start after the
+ * sidecar or restart under it; the failure is remembered only long enough to
+ * avoid hammering a host that is not there.
+ */
+const HOST_RETRY_COOLDOWN_MS = 30_000;
+
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
   join(homedir(), ".minimax-code", "bin", "mcode"),
@@ -812,6 +821,25 @@ const ProjectCreateSchema = z
   })
   .strict();
 
+/**
+ * The session-load request.
+ *
+ * Every engine is loadable, so the engine is one of the four Clutch runs
+ * rather than the code engines only.
+ */
+const SessionLoadSchema = z
+  .object({
+    engine: z.enum(ENGINE_ORDER as unknown as [Engine, ...Engine[]], {
+      error: `engine must be one of ${ENGINE_ORDER.join(", ")}`,
+    }),
+    sessionId: z.string({ error: "sessionId is required" }).min(1, "sessionId is required"),
+    cwd: z.string().optional(),
+    limit: z.union([z.number(), z.string()]).optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+  })
+  .strict();
+
 function readJsonBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -924,17 +952,21 @@ async function main(): Promise<void> {
    * only the code engines never opens a connection to it.
    */
   let hostClient: DshHostClient | null = null;
-  let hostClientFailed = false;
+  let hostClientFailedAt = 0;
   async function dshHost(): Promise<DshHostClient> {
     if (hostClient) return hostClient;
-    if (hostClientFailed) {
+    // A failed connect is remembered only briefly: the host is a separate
+    // process, so it may start later or be restarted, and the sidecar must
+    // not be stuck with the first failure for the life of the process.
+    if (hostClientFailedAt && Date.now() - hostClientFailedAt < HOST_RETRY_COOLDOWN_MS) {
       throw new Error("the dsh host is not reachable");
     }
     try {
       hostClient = await DshHostClient.connect();
+      hostClientFailedAt = 0;
       return hostClient;
     } catch (err) {
-      hostClientFailed = true;
+      hostClientFailedAt = Date.now();
       throw err;
     }
   }
@@ -951,7 +983,11 @@ async function main(): Promise<void> {
     limit: number,
   ): Promise<SessionSummary[]> {
     if (isDshHostedEngine(engine)) {
-      const listed = await listDshHostSessions(await dshHost(), { limit, ...(cwd ? { cwd } : {}) });
+      const listed = await listDshHostSessions(await dshHost(), {
+        engine,
+        limit,
+        ...(cwd ? { cwd } : {}),
+      });
       return sortSessionsByUpdated(listed);
     }
     const bridge = bridgeFor(engine);
@@ -1155,23 +1191,21 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "POST" && url.pathname === "/clutch/v1/sessions/load") {
-      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown; limit?: unknown; model?: unknown; effort?: unknown };
+      let raw: unknown;
       try {
-        body = (await readJsonBody(req)) as typeof body;
+        raw = await readJsonBody(req);
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
-      if (typeof body !== "object" || body === null || Array.isArray(body)) {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
-        return;
-      }
-      if (!isEngine(body.engine) || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+      const parsedLoad = SessionLoadSchema.safeParse(raw);
+      if (!parsedLoad.success) {
         res.writeHead(400, { "content-type": "application/json" }).end(
-          JSON.stringify({ error: `engine must be one of ${ENGINE_ORDER.join(", ")} and sessionId is required` }),
+          JSON.stringify({ error: parsedLoad.error.issues[0]?.message ?? "invalid request body" }),
         );
         return;
       }
+      const body = parsedLoad.data;
       const loadEngine = body.engine;
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
       const historyLimit =
@@ -1525,7 +1559,10 @@ async function main(): Promise<void> {
         const bridge = bridgeFor(engine);
         await bridge.initialize();
         if (!active.bridgeSessionId) {
-          if (CODE_ENGINES.includes(engine) && active.resumeSessionId) {
+          // A thread the client resumed keeps its own session id, whichever
+          // engine owns it: the dsh-hosted engines resume by that id too, and
+          // dropping it would start a different thread after a restart.
+          if (active.resumeSessionId) {
             await bridge.loadSession(active.resumeSessionId, active.cwd);
             active.bridgeSessionId = active.resumeSessionId;
           } else {

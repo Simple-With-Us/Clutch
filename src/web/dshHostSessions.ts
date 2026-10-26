@@ -14,7 +14,7 @@
  */
 
 import type { SessionUpdate } from "./sessionUpdates.ts";
-import type { DshHostClient } from "./dshHostClient.ts";
+import { DshHostTransportError, HOST_SNAPSHOT_TIMEOUT_MS, type DshHostClient } from "./dshHostClient.ts";
 
 /** One thread as the clients see it, whatever engine owns it. */
 export interface SessionSummary {
@@ -22,6 +22,8 @@ export interface SessionSummary {
   readonly cwd?: string;
   readonly title?: string;
   readonly updatedAt?: string;
+  /** The model provider the thread last used, when the host knows one. */
+  readonly provider?: string;
 }
 
 /** Read one property of an object, or null when it is not an object. */
@@ -55,12 +57,33 @@ function titleFromProjections(projections: unknown): string | undefined {
 }
 
 /**
+ * The provider a session last used, when the host knows one.
+ *
+ * The dsh-hosted engines share one session store, so the store alone cannot
+ * say which engine a thread belongs to.  The model selection projection can:
+ * a DeepSeek thread last used a DeepSeek provider.
+ */
+function providerFromProjections(projections: unknown): string | undefined {
+  const hints = readRecord(projections);
+  const values = readRecord(hints?.["values"]);
+  const selection = readRecord(values?.["modelSelection"]);
+  const lastUsed = readRecord(selection?.["lastUsed"]);
+  const provider = lastUsed?.["provider"];
+  if (typeof provider !== "string") return undefined;
+  const model = lastUsed?.["model"];
+  const trimmed = provider.trim();
+  if (trimmed.length === 0) return undefined;
+  return typeof model === "string" ? `${trimmed}/${model}` : trimmed;
+}
+
+/**
  * Normalize the host's `session/list` value into the summary shape.
  *
- * The host returns every visible session and ignores the cursor, so the list
- * is capped here rather than on the wire.
+ * The host returns every visible session and ignores the cursor, so the whole
+ * list comes back and is filtered and capped by the caller.  Capping here
+ * would drop the newest rows before the caller's filters ever ran.
  */
-export function dshHostSessionSummaries(value: unknown, limit = 100): SessionSummary[] {
+export function dshHostSessionSummaries(value: unknown): SessionSummary[] {
   const items = readRecord(value)?.["items"];
   if (!Array.isArray(items)) return [];
   const out: SessionSummary[] = [];
@@ -71,13 +94,14 @@ export function dshHostSessionSummaries(value: unknown, limit = 100): SessionSum
     const cwd = row?.["cwd"];
     const title = titleFromProjections(row?.["projections"]);
     const updatedAt = isoFromEpochMs(row?.["updatedAt"]);
+    const provider = providerFromProjections(row?.["projections"]);
     out.push({
       sessionId,
       ...(typeof cwd === "string" && cwd.length > 0 ? { cwd } : {}),
       ...(title !== undefined ? { title } : {}),
       ...(updatedAt !== null ? { updatedAt } : {}),
+      ...(provider !== undefined ? { provider } : {}),
     });
-    if (out.length >= limit) break;
   }
   return out;
 }
@@ -161,7 +185,9 @@ export function dshHostEventToUpdate(
       sessionId,
       kind: "tool_call_update",
       // An empty title tells the client to keep the name it already shows.
-      text: result.text.slice(0, 500),
+      // A result that arrives without its call would otherwise replace the
+      // tool's name with its output.
+      text: "",
       toolCallId: callId,
       toolStatus: result.failed ? "failed" : "completed",
     };
@@ -188,16 +214,45 @@ export function dshHostHistoryUpdates(sessionId: string, records: unknown): Sess
   return out;
 }
 
-/** List the host's threads. */
+/**
+ * The provider names an engine's threads carry.
+ *
+ * The dsh-hosted engines share one session store, so without this the
+ * DeepSeek tab and the MiniMax tab would show each other's threads, and
+ * resuming one could silently continue the other engine's session.
+ */
+const ENGINE_PROVIDER_PATTERN: Record<string, RegExp> = {
+  deepseek: /deepseek/i,
+  minimax: /minimax/i,
+};
+
+/** List the host's threads for one engine. */
 export async function listDshHostSessions(
   client: DshHostClient,
-  options: { readonly limit?: number; readonly cwd?: string } = {},
+  options: { readonly engine?: string; readonly limit?: number; readonly cwd?: string } = {},
 ): Promise<SessionSummary[]> {
+  // The host's own argument is `_request`, and its request type has one
+  // optional field, so the empty request is the documented call.
   const value = await client.call("session/list", { _request: {} });
-  const limit = options.limit ?? 100;
-  const summaries = dshHostSessionSummaries(value, limit);
-  if (!options.cwd) return summaries;
-  return summaries.filter((row) => row.cwd === options.cwd);
+  const all = dshHostSessionSummaries(value);
+
+  const pattern = options.engine ? ENGINE_PROVIDER_PATTERN[options.engine] : undefined;
+  const filtered = all.filter((row) => {
+    if (options.cwd && row.cwd !== options.cwd) return false;
+    // A session the host cannot attribute to a provider is left out when the
+    // engine is known: showing another engine's thread is worse than showing
+    // nothing.
+    if (pattern && !row.provider) return false;
+    if (pattern && !pattern.test(row.provider ?? "")) return false;
+    return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    const left = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+    const right = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+    return right - left;
+  });
+  return sorted.slice(0, options.limit ?? 100);
 }
 
 /**
@@ -217,11 +272,46 @@ export async function loadDshHostHistory(
     address: { kind: "session", sessionId: options.sessionId },
     maxMessages,
   });
-  for await (const frame of stream) {
-    const row = readRecord(frame);
-    if (row?.["type"] !== "snapshot") continue;
-    const records = row["records"];
-    return dshHostHistoryUpdates(options.sessionId, records);
+  // The host opens the stream with a snapshot and then keeps it open for live
+  // events, so the wait for that snapshot is bounded: a host that never
+  // sends one must not hold the request open forever.
+  const deadline = Date.now() + HOST_SNAPSHOT_TIMEOUT_MS;
+  const iterator = stream[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new DshHostTransportError(
+          `the host sent no session snapshot within ${HOST_SNAPSHOT_TIMEOUT_MS} ms`,
+        );
+      }
+      const step = await withDeadline(iterator.next(), remaining);
+      if (step === null) {
+        throw new DshHostTransportError(
+          `the host sent no session snapshot within ${HOST_SNAPSHOT_TIMEOUT_MS} ms`,
+        );
+      }
+      if (step.done) return [];
+      const row = readRecord(step.value);
+      if (row?.["type"] !== "snapshot") continue;
+      return dshHostHistoryUpdates(options.sessionId, row["records"]);
+    }
+  } finally {
+    // Cancels the stream: the host is told the logical stream is no longer
+    // wanted, which is what stops it holding the session open.
+    await iterator.return?.();
   }
-  return [];
+}
+
+/** A promise's answer, or null when it takes longer than the deadline. */
+async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  const expiry = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  try {
+    return await Promise.race([promise, expiry]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

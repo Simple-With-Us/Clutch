@@ -55,6 +55,12 @@ export class DshHostTransportError extends Error {
   }
 }
 
+/** How long one host request may take before it is given up on. */
+const HOST_REQUEST_TIMEOUT_MS = 30_000;
+
+/** How long a stream may wait for its opening snapshot. */
+export const HOST_SNAPSHOT_TIMEOUT_MS = 30_000;
+
 /** How the client reaches the host; injected in tests. */
 export interface DshHostClientOptions {
   /** The host's origin. Derived from the launch URL when one is available. */
@@ -63,6 +69,8 @@ export interface DshHostClientOptions {
   readonly launchUrl?: string | null | undefined;
   /** Injected in tests. */
   readonly readFileImpl?: ((path: string) => Promise<string>) | undefined;
+  /** Injected in tests. */
+  readonly env?: NodeJS.ProcessEnv | undefined;
 }
 
 /** One HTTP answer: the status, the headers, and the body as text. */
@@ -88,6 +96,11 @@ export async function readLaunchUrl(options: DshHostClientOptions = {}): Promise
     const explicit = options.launchUrl?.trim();
     return explicit && explicit.length > 0 ? explicit : null;
   }
+  // The environment comes first: a value the operator set explicitly is
+  // their choice, and the owner-only file is the fallback.
+  const env = options.env ?? process.env;
+  const fromEnv = env.DSH_HOST_LAUNCH_URL?.trim();
+  if (fromEnv) return fromEnv;
   const read = options.readFileImpl ?? ((path: string) => readFile(path, "utf8"));
   try {
     const raw = await read(launchUrlPath());
@@ -105,6 +118,10 @@ export async function readLaunchUrl(options: DshHostClientOptions = {}): Promise
  * URL with a redirect that carries the signed cookie, and a fetch that follows
  * redirects internally would drop that header.  Every hop's `set-cookie` is
  * collected, so the cookie is found wherever the host put it.
+ *
+ * A redirect that leaves the origin is refused rather than followed: the
+ * cookie is bound to the host, and handing it to another origin would leak
+ * the session.
  */
 async function httpWithRedirects(
   url: string,
@@ -113,6 +130,7 @@ async function httpWithRedirects(
 ): Promise<{ readonly answer: HttpAnswer; readonly cookies: string[] }> {
   const cookies: string[] = [];
   let current = url;
+  const origin = new URL(url).origin;
 
   for (let hop = 0; hop <= maxHops; hop += 1) {
     const answer = await httpOnce(current, init);
@@ -123,9 +141,27 @@ async function httpWithRedirects(
     const location = firstHeader(answer.headers, "location");
     const isRedirect = answer.status >= 300 && answer.status < 400 && location;
     if (!isRedirect) return { answer, cookies };
-    current = new URL(location, current).toString();
+    const next = new URL(location, current);
+    if (next.origin !== origin) {
+      throw new DshHostTransportError("refused a redirect that leaves the host's origin");
+    }
+    current = next.toString();
   }
-  throw new DshHostTransportError(`too many redirects from ${url}`);
+  throw new DshHostTransportError(`too many redirects from ${redactUrl(url)}`);
+}
+
+/** A URL without its query, fragment or credentials, safe to log. */
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.search = "";
+    parsed.hash = "";
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return "the host URL";
+  }
 }
 
 /** One HTTP round trip, with no redirect handling. */
@@ -149,6 +185,12 @@ function httpOnce(
         headers: init.headers ?? {},
       },
       (res) => {
+        // A response that dies mid-stream emits `error`; without a listener
+        // that becomes an unhandled error event, which can take the whole
+        // sidecar down with every in-flight session on it.
+        res.on("error", (err: Error) => {
+          reject(new DshHostTransportError(err.message));
+        });
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
@@ -161,6 +203,10 @@ function httpOnce(
       },
     );
     req.on("error", (err: Error) => reject(new DshHostTransportError(err.message)));
+    // A host that stops answering must not hold the request open forever.
+    req.setTimeout(HOST_REQUEST_TIMEOUT_MS, () => {
+      req.destroy(new Error(`the host did not answer within ${HOST_REQUEST_TIMEOUT_MS} ms`));
+    });
     if (init.body !== undefined) req.write(init.body);
     req.end();
   });

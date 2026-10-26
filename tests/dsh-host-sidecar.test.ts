@@ -42,6 +42,12 @@ beforeEach(async () => {
       const body = Buffer.concat(chunks).toString("utf8");
       calls.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body });
 
+      if (req.url?.startsWith("/launch-away")) {
+        res.writeHead(302, { location: "http://elsewhere.invalid/api/session/list" });
+        res.end();
+        return;
+      }
+
       if (req.url === "/launched") {
         res.writeHead(200, { "content-type": "text/html" }).end("ok");
         return;
@@ -130,6 +136,14 @@ describe("readLaunchUrl", () => {
       readFileImpl: async () => "http://example.test/launch?token=from-file",
     });
     expect(url).toBe("http://example.test/launch?token=explicit");
+  });
+
+  it("prefers the environment over the file", async () => {
+    const url = await readLaunchUrl({
+      env: { DSH_HOST_LAUNCH_URL: "http://example.test/launch?token=from-env" },
+      readFileImpl: async () => "http://example.test/launch?token=from-file",
+    });
+    expect(url).toBe("http://example.test/launch?token=from-env");
   });
 
   it("resolves the launch URL file under CLUTCH_HOME", () => {
@@ -230,6 +244,21 @@ describe("DshHostClient", () => {
     ).rejects.toBeInstanceOf(DshHostTransportError);
   });
 
+  it("refuses a redirect that leaves the host's origin", async () => {
+    // The host answers with a redirect to another authority; the cookie is
+    // bound to this one, so the hop is refused rather than followed.
+    await expect(
+      DshHostClient.connect({ launchUrl: `${origin}/launch-away?token=secret` }),
+    ).rejects.toBeInstanceOf(DshHostTransportError);
+  });
+
+  it("keeps the token out of the error it reports", async () => {
+    const error = await DshHostClient.connect({
+      launchUrl: `${origin}/launch-away?token=super-secret`,
+    }).catch((err: unknown) => err as Error);
+    expect(error.message).not.toContain("super-secret");
+  });
+
   it("derives the origin from the launch URL when none is given", async () => {
     const client = await DshHostClient.connect({
       launchUrl: `${origin}/launch?token=secret`,
@@ -268,9 +297,11 @@ describe("DshHostClient mux", () => {
   }
 
   let sockets: FakeSocket[] = [];
+  let priorWebSocket: unknown;
 
   beforeEach(() => {
     sockets = [];
+    priorWebSocket = (globalThis as { WebSocket?: unknown }).WebSocket;
     (globalThis as { WebSocket?: unknown }).WebSocket = class extends FakeSocket {
       constructor(url: string, init?: { headers?: Record<string, string> }) {
         super(url, init);
@@ -281,7 +312,13 @@ describe("DshHostClient mux", () => {
   });
 
   afterEach(() => {
-    delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    // Restore what was there before, so another test in this process is not
+    // left with a fake socket.
+    if (priorWebSocket === undefined) {
+      delete (globalThis as { WebSocket?: unknown }).WebSocket;
+    } else {
+      (globalThis as { WebSocket?: unknown }).WebSocket = priorWebSocket;
+    }
   });
 
   it("opens the stream the host was asked for", async () => {

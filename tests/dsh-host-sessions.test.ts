@@ -4,7 +4,9 @@ import {
   dshHostEventToUpdate,
   dshHostHistoryUpdates,
   dshHostSessionSummaries,
+  listDshHostSessions,
 } from "../src/web/dshHostSessions.ts";
+import type { DshHostClient } from "../src/web/dshHostClient.ts";
 import { compactToolHistory } from "../src/web/sessionUpdates.ts";
 
 /**
@@ -65,9 +67,9 @@ describe("dshHostSessionSummaries", () => {
     expect(summaries.map((row) => row.sessionId)).toEqual(["session-ok"]);
   });
 
-  it("caps the list, because the host returns every session it knows", () => {
+  it("reads the whole list, because the host ignores the cursor", () => {
     const items = Array.from({ length: 50 }, (_, index) => ({ sessionId: `session-${index}` }));
-    expect(dshHostSessionSummaries({ items }, 10)).toHaveLength(10);
+    expect(dshHostSessionSummaries({ items })).toHaveLength(50);
   });
 
   it("answers with nothing when the host said nothing", () => {
@@ -146,6 +148,9 @@ describe("dshHostEventToUpdate", () => {
     expect(update?.kind).toBe("tool_call_update");
     expect(update?.toolCallId).toBe("call-1");
     expect(update?.toolStatus).toBe("completed");
+    // An empty title keeps the client's own name for the call; a result that
+    // carried its output would replace the tool's name with it.
+    expect(update?.text).toBe("");
   });
 
   it("marks a failed tool result as failed", () => {
@@ -209,7 +214,6 @@ describe("dshHostHistoryUpdates", () => {
     expect(dshHostHistoryUpdates("s", undefined)).toEqual([]);
     expect(dshHostHistoryUpdates("s", [])).toEqual([]);
   });
-
   it("produces a history the shared compactor can collapse", () => {
     const updates = dshHostHistoryUpdates("session-abc", [
       {
@@ -237,5 +241,91 @@ describe("dshHostHistoryUpdates", () => {
     expect(compacted).toHaveLength(1);
     expect(compacted[0]?.text).toBe("Bash");
     expect(compacted[0]?.toolStatus).toBe("completed");
+  });
+});
+
+describe("listDshHostSessions", () => {
+  /** A client that answers one endpoint with one value. */
+  function fakeClient(value: unknown): DshHostClient {
+    return { call: async () => value } as unknown as DshHostClient;
+  }
+
+  const host = {
+    items: [
+      {
+        sessionId: "session-deepseek",
+        updatedAt: 1_700_000_000_000,
+        cwd: "/work",
+        projections: {
+          asOfSeq: 3,
+          values: { modelSelection: { lastUsed: { provider: "deepseek", model: "v4-pro" } } },
+        },
+      },
+      {
+        sessionId: "session-minimax",
+        updatedAt: 1_800_000_000_000,
+        cwd: "/work",
+        projections: {
+          asOfSeq: 4,
+          values: { modelSelection: { lastUsed: { provider: "minimax", model: "m3" } } },
+        },
+      },
+      {
+        sessionId: "session-unknown",
+        updatedAt: 1_600_000_000_000,
+        cwd: "/work",
+        projections: { asOfSeq: 1, values: {} },
+      },
+    ],
+  };
+
+  it("keeps the host's own argument shape", async () => {
+    const seen: Array<[string, unknown]> = [];
+    const client = {
+      call: async (endpoint: string, args?: unknown) => {
+        seen.push([endpoint, args]);
+        return host;
+      },
+    } as unknown as DshHostClient;
+    await listDshHostSessions(client, { engine: "deepseek" });
+    // The host's request parameter is named `_request` on the wire; upstream's
+    // own connection layer reads `args._request`.
+    expect(seen[0]).toEqual(["session/list", { _request: {} }]);
+  });
+
+  it("keeps only the threads the engine owns", async () => {
+    const deepseek = await listDshHostSessions(fakeClient(host), { engine: "deepseek" });
+    expect(deepseek.map((row) => row.sessionId)).toEqual(["session-deepseek"]);
+
+    const minimax = await listDshHostSessions(fakeClient(host), { engine: "minimax" });
+    expect(minimax.map((row) => row.sessionId)).toEqual(["session-minimax"]);
+  });
+
+  it("leaves out a thread the host cannot attribute to an engine", async () => {
+    const listed = await listDshHostSessions(fakeClient(host), { engine: "deepseek" });
+    expect(listed.map((row) => row.sessionId)).not.toContain("session-unknown");
+  });
+
+  it("filters by working directory before it caps", async () => {
+    const listed = await listDshHostSessions(fakeClient(host), {
+      engine: "deepseek",
+      cwd: "/elsewhere",
+    });
+    expect(listed).toEqual([]);
+  });
+
+  it("sorts by the newest first", async () => {
+    const listed = await listDshHostSessions(fakeClient(host), { limit: 10 });
+    expect(listed.map((row) => row.sessionId)).toEqual([
+      "session-minimax",
+      "session-deepseek",
+      "session-unknown",
+    ]);
+  });
+
+  it("caps the list after the filters have run", async () => {
+    const listed = await listDshHostSessions(fakeClient(host), { engine: "minimax", limit: 1 });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.sessionId).toBe("session-minimax");
   });
 });
