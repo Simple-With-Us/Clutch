@@ -174,7 +174,9 @@ function httpOnce(
     try {
       parsed = new URL(url);
     } catch {
-      reject(new DshHostTransportError(`invalid host URL ${JSON.stringify(url)}`));
+      // The URL never parses, so nothing about it can be trusted or echoed
+      // back: a launch URL carries a token in its query.
+      reject(new DshHostTransportError("invalid host URL"));
       return;
     }
     const send = parsed.protocol === "https:" ? httpsRequest : httpRequest;
@@ -258,7 +260,9 @@ export class DshHostClient {
       try {
         origin = new URL(launchUrl).origin;
       } catch {
-        throw new DshHostTransportError(`invalid launch URL ${JSON.stringify(launchUrl)}`);
+        // A launch URL that does not parse may still carry a token in its
+        // text, so the URL itself never reaches the message.
+        throw new DshHostTransportError("invalid launch URL");
       }
     }
     if (origin.length === 0) {

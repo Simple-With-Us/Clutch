@@ -31,10 +31,12 @@ let server: Server;
 let origin: string;
 let calls: StubCall[];
 let launchRedirects = true;
+let launchLoop = false;
 
 beforeEach(async () => {
   calls = [];
   launchRedirects = true;
+  launchLoop = false;
   server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -56,6 +58,13 @@ beforeEach(async () => {
       if (req.url?.startsWith("/launch")) {
         // The real host may answer the launch URL with a redirect, and the
         // signed cookie rides on that hop rather than on the final page.
+        if (launchLoop) {
+          // A host that never stops redirecting has to be given up on, and
+          // the error must not quote the launch URL it kept being sent.
+          res.writeHead(302, { location: "/launch" });
+          res.end();
+          return;
+        }
         if (launchRedirects) {
           res.writeHead(302, {
             location: "/launched",
@@ -256,6 +265,24 @@ describe("DshHostClient", () => {
     const error = await DshHostClient.connect({
       launchUrl: `${origin}/launch-away?token=super-secret`,
     }).catch((err: unknown) => err as Error);
+    expect(error.message).not.toContain("super-secret");
+  });
+
+  it("keeps the token out of the error it reports when the host never stops redirecting", async () => {
+    launchLoop = true;
+    const error = await DshHostClient.connect({
+      launchUrl: `${origin}/launch?token=super-secret`,
+    }).catch((err: unknown) => err as Error);
+    expect(error).toBeInstanceOf(DshHostTransportError);
+    expect(error.message).not.toContain("super-secret");
+    expect(error.message).not.toContain("token=");
+  });
+
+  it("keeps the token out of the error it reports for a launch URL it cannot parse", async () => {
+    const error = await DshHostClient.connect({
+      launchUrl: "not a url?token=super-secret",
+    }).catch((err: unknown) => err as Error);
+    expect(error).toBeInstanceOf(DshHostTransportError);
     expect(error.message).not.toContain("super-secret");
   });
 
