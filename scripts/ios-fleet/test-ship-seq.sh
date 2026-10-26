@@ -44,7 +44,20 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SHIP="${HERE}/ship-testflight.sh"
+# Sections before 12 test the unchanged next-patch behaviour, so they run a copy
+# of the fleet dir whose apps.json carries no fixed-version keys.
+LEGACY_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ios-fleet-legacy.XXXXXX")"
+cp -R "$HERE/." "$LEGACY_DIR/"
+python3 - "$LEGACY_DIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+for a in d["apps"].values():
+    a.pop("fixedMarketingVersion", None)
+    a.pop("buildCountSeed", None)
+json.dump(d, open(p, "w"), indent=2)
+PY
+SHIP="${LEGACY_DIR}/ship-testflight.sh"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ship-seq-test.XXXXXX")"
 FAKE_HOME="${WORK}/home"
@@ -54,7 +67,7 @@ REPO="${WORK}/repo"
 mkdir -p "$FAKE_HOME" "$FAKE_BIN" "$STATE" "$REPO" "${WORK}/tmp"
 
 cleanup() {
-  rm -rf "$WORK"
+  rm -rf "$WORK" "$LEGACY_DIR"
 }
 trap cleanup EXIT
 
@@ -100,7 +113,7 @@ cmd=""
 for a in "$@"; do
   case "$a" in
     */asc-api.mjs) cmd="asc-api" ;;
-    latest-marketing-patch|build-floor)
+    latest-marketing-patch|build-floor|released-store-version|next-dotted-build)
       if [[ "$cmd" == "asc-api" ]]; then cmd="${cmd}:${a}"; fi
       ;;
   esac
@@ -112,6 +125,17 @@ case "$cmd" in
     [[ "${FAKE_ASC_PATCH:-}" == "auth" ]] && exit 4
     [[ -n "${FAKE_ASC_PATCH:-}" ]] || exit 2
     printf '%s\n' "$FAKE_ASC_PATCH"
+    exit 0
+    ;;
+  asc-api:released-store-version)
+    [[ "${FAKE_RELEASED:-}" == "fail" ]] && exit 2
+    printf '%s\n' "${FAKE_RELEASED:-}"
+    exit 0
+    ;;
+  asc-api:next-dotted-build)
+    [[ "${FAKE_DOTTED:-}" == "fail" ]] && exit 3
+    [[ -n "${FAKE_DOTTED:-}" ]] || exit 2
+    printf '%s\n' "$FAKE_DOTTED"
     exit 0
     ;;
   asc-api:build-floor)
@@ -211,6 +235,8 @@ run_ship() {
     IOS_FLEET_NODE="${FAKE_BIN}/node" \
     FAKE_ASC_PATCH="$FAKE_ASC_PATCH" \
     FAKE_ASC_FLOOR="$FAKE_ASC_FLOOR" \
+    FAKE_RELEASED="${FAKE_RELEASED:-}" \
+    FAKE_DOTTED="${FAKE_DOTTED:-}" \
     FAKE_ASC_TRAIN_FLOOR="${FAKE_ASC_TRAIN_FLOOR:-}" \
     FAKE_ASC_APP_FLOOR="${FAKE_ASC_APP_FLOOR:-}" \
     bash "$SHIP" "$APP_KEY" --repo-root "$REPO" "$@" 2>&1)
@@ -523,6 +549,56 @@ check "a rejected key fails the run (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || 
 check "says the key was rejected" "$(contains 'rejected the API key' && echo 0 || echo 1)"
 check "plans no version around it" "$(contains 'UNVERIFIED patch' && echo 1 || echo 0)"
 FAKE_ASC_PATCH=236
+echo
+
+echo "12. fixed marketing version + dotted build (apps.json fixedMarketingVersion)"
+FIXDIR="${WORK}/fleet-fixed"
+rm -rf "$FIXDIR"; cp -R "$HERE" "$FIXDIR"
+python3 - "$FIXDIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+a = d["apps"]
+for k in list(a)[:1]:
+    a[k]["fixedMarketingVersion"] = "1.1.2"
+    a[k].pop("buildCountSeed", None)
+json.dump(d, open(p, "w"), indent=2)
+PY
+FIXAPP="$APP_KEY"
+SHIP_REAL="$SHIP"; SHIP="${FIXDIR}/ship-testflight.sh"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+write_record "$FIXAPP" 5
+FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=2383; FAKE_RELEASED=""; FAKE_DOTTED="1.1.2"
+run_ship --dry-run
+planned_pair
+check "fixed: marketing stays 1.1.2 even though ASC holds patch 239 (got '${PLANNED_MARKETING}')" \
+  "$([[ "$PLANNED_MARKETING" == "1.1.2" ]] && echo 0 || echo 1)"
+check "fixed: an empty train plans the first build as the version (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "1.1.2" ]] && echo 0 || echo 1)"
+check "fixed: the integer floor and commit count play no part" \
+  "$(contains 'dotted build 1.1.2 for fixed version 1.1.2' && echo 0 || echo 1)"
+FAKE_DOTTED="1.1.3"
+run_ship --dry-run
+planned_pair
+check "fixed: a train holding 1.1.2 goes to 1.1.3 (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "1.1.3" ]] && echo 0 || echo 1)"
+FAKE_DOTTED="fail"
+run_ship --dry-run
+check "fixed: a train with a build of another shape stops the run, nothing guessed" \
+  "$(contains 'cannot work out the next dotted build' && echo 0 || echo 1)"
+FAKE_DOTTED=""
+run_ship --dry-run
+check "fixed: an unreadable train stops the run" \
+  "$(contains 'cannot work out the next dotted build' && echo 0 || echo 1)"
+FAKE_DOTTED="1.1.2"; FAKE_RELEASED="1.1.2"
+run_ship --dry-run
+check "fixed: a version at the released App Store version is refused, not bumped" \
+  "$(contains 'at or below the released App Store version 1.1.2' && echo 0 || echo 1)"
+FAKE_RELEASED="fail"
+run_ship --dry-run
+check "fixed: an unreadable released App Store version stops the run (fail closed)" \
+  "$(contains 'cannot read the released App Store version' && echo 0 || echo 1)"
+SHIP="$SHIP_REAL"; FAKE_ASC_FLOOR=0; FAKE_RELEASED=""; FAKE_DOTTED=""; FAKE_ASC_PATCH=236
 echo
 
 echo "passed=${PASS} failed=${FAIL}"
