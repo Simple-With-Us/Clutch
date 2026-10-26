@@ -19,6 +19,22 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(request.options[1].allows)
     }
 
+    func testDecodesThePlanFromTheStream() throws {
+        let payload = """
+        {"entries":[{"content":"Read the failing test","priority":"high","status":"in_progress"},
+                    {"content":"Fix it","priority":"medium","status":"pending"}]}
+        """
+        let event = ChatSessionClient.decode(event: "plan", payload: payload)
+        guard case .plan(let entries) = event else {
+            return XCTFail("expected a plan event, got \(String(describing: event))")
+        }
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries[0].content, "Read the failing test")
+        XCTAssertTrue(entries[0].isActive)
+        XCTAssertFalse(entries[0].isDone)
+        XCTAssertFalse(entries[1].isActive)
+    }
+
     func testPermissionHeadlineFallsBackToTheToolName() {
         let request = AcpPermissionRequest(
             requestId: "perm-1",

@@ -13,6 +13,8 @@ public enum ChatStreamEvent: Equatable {
     case usage(AcpSessionUsage)
     /// The engine is waiting for a permission request to be answered.
     case permission(AcpPermissionRequest)
+    /// The engine's execution plan, as it last reported it.
+    case plan([AcpPlanEntry])
     case failed(String)
 }
 
@@ -219,6 +221,19 @@ public struct ChatSessionClient {
             guard let requestData = try? JSONSerialization.data(withJSONObject: requestDict),
                   let request = try? JSONDecoder().decode(AcpPermissionRequest.self, from: requestData) else { return nil }
             return .permission(request)
+        case "plan":
+            // The plan is a state rather than a line of the transcript: the
+            // client shows the list the engine last reported.
+            guard let entries = json["entries"] as? [[String: Any]] else { return nil }
+            let plan = entries.compactMap { entry -> AcpPlanEntry? in
+                guard let content = entry["content"] as? String else { return nil }
+                return AcpPlanEntry(
+                    content: content,
+                    priority: (entry["priority"] as? String) ?? "medium",
+                    status: (entry["status"] as? String) ?? "pending"
+                )
+            }
+            return .plan(plan)
         case "error":
             return .failed((json["message"] as? String) ?? "unknown error")
         default:

@@ -23,6 +23,22 @@ const record = (entry) => {
 };
 
 const finishPrompt = ({ id, sessionId }) => {
+  // The engine reports the whole plan every time it changes, so the plan
+  // arrives before the answer.
+  send({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId,
+      update: {
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Read the failing test", priority: "high", status: "in_progress" },
+          { content: "Fix it", priority: "medium", status: "pending" },
+        ],
+      },
+    },
+  });
   send({
     jsonrpc: "2.0",
     method: "session/update",

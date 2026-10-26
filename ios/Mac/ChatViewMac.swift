@@ -189,8 +189,8 @@ public struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
-    /// The permission request the engine is waiting on, when it asked for
-    /// one.  The engine is blocked until this is answered.
+    /// The engine's execution plan, as it last reported it.
+    @State private var plan: [AcpPlanEntry] = []
     /// The permission requests the engine is waiting on, oldest first.
     ///
     /// The engine asks one question at a time, but a second request can land
@@ -481,8 +481,14 @@ public struct ChatView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
             }
-            // The permission card sits above the input bar, so the question
-            // the engine is asking is answered where the turn is written.
+            // The plan and the permission card sit above the input bar, so what the
+            // engine is doing and what it is asking are answered where the
+            // turn is written.
+            if !plan.isEmpty {
+                PlanPanel(entries: plan)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
             if let request = pendingPermission {
                 PermissionCard(request: request) { optionId in
                     answerPermission(optionId)
@@ -1082,6 +1088,9 @@ public struct ChatView: View {
         codeCwd = nil
         codeLoaded = []
         codePending = []
+        // The plan belongs to the thread that was open, so a new thread
+        // starts without one.
+        plan = []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.clear(for: host)
@@ -1104,6 +1113,10 @@ public struct ChatView: View {
         codeCwd = cwd
         codeLoaded = history
         codePending = []
+        // The plan belongs to the thread that was open, so the thread being
+        // adopted brings its own: the last one the engine reported in that
+        // thread's history, and none when that thread never had one.
+        plan = history.last(where: { $0.isPlan })?.plan ?? []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.save(remoteId: remoteId, cwd: cwd, engine: engine.sidecarId, for: host)
@@ -1400,6 +1413,8 @@ public struct ChatView: View {
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
                         pendingPermissions.append(request)
+                    case .plan(let entries):
+                        plan = entries
                     case .done(let stop, let id, let remoteId):
                         if isWorkspace {
                             codeChatId = id

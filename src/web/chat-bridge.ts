@@ -65,7 +65,7 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
-import { compactToolHistory, toolStatusOf, type SessionUpdate } from "./sessionUpdates.ts";
+import { compactToolHistory, toolStatusOf, type PlanEntry, type SessionUpdate } from "./sessionUpdates.ts";
 
 // Re-exported for the clients and the tests that already import them from
 // here; the implementations now live in the shared module.
@@ -393,7 +393,77 @@ export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
       toolStatus: toolStatusOf(update.status),
     };
   }
+  if (kind === "plan" || kind === "plan_update" || kind === "plan_removed") {
+    // The engine sends the whole plan every time it changes, so the client
+    // replaces the list it has rather than patching it.
+    const entries = readPlanEntries(update, kind);
+    // A plan the sidecar cannot read is dropped rather than emptied.  A shape
+    // it does not know is not a plan the engine removed, and emptying the
+    // list would wipe the plan the owner is looking at.
+    if (entries === null) return null;
+    return { sessionId: row.sessionId, kind: "plan", text: "", plan: entries };
+  }
   return null;
+}
+
+/**
+ * The plan entries an update carries.
+ *
+ * `plan_update` nests the entries under a content object whose type says
+ * what shape they are in.  Only the item shape is a list the clients can
+ * show, so the others are dropped rather than guessed at, and a plan that
+ * was removed arrives as an empty list.
+ *
+ * Null means the shape was not one this sidecar reads: the caller keeps
+ * what it has rather than treating the plan as gone.
+ */
+function readPlanEntries(update: Record<string, unknown>, kind: string): PlanEntry[] | null {
+  // A removed plan is an empty list, not a missing one.
+  if (kind === "plan_removed") return [];
+  const content = update.content;
+  const nested =
+    typeof content === "object" && content !== null
+      ? (content as Record<string, unknown>).entries
+      : undefined;
+  const raw = Array.isArray(update.entries) ? update.entries : nested;
+  if (!Array.isArray(raw)) return null;
+  const entries: PlanEntry[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item as Record<string, unknown>;
+    const content = typeof record.content === "string" ? record.content.trim() : "";
+    if (!content) continue;
+    entries.push({
+      content,
+      priority: planPriority(record.priority),
+      status: planStatus(record.status),
+    });
+  }
+  return entries;
+}
+
+/** The engine's priority for a plan entry, or the middle one it did not say. */
+function planPriority(raw: unknown): "high" | "medium" | "low" {
+  switch (raw) {
+    case "high":
+      return "high";
+    case "low":
+      return "low";
+    default:
+      return "medium";
+  }
+}
+
+/** Where a plan entry stands. */
+function planStatus(raw: unknown): "pending" | "in_progress" | "completed" {
+  switch (raw) {
+    case "completed":
+      return "completed";
+    case "in_progress":
+      return "in_progress";
+    default:
+      return "pending";
+  }
 }
 
 interface AcpSessionInfo {
@@ -1912,6 +1982,12 @@ async function main(): Promise<void> {
       active.stream = (u) => {
         if (u.kind === "tool_call" || u.kind === "tool_call_update") {
           sseSend(res, "tool", { id: u.toolCallId ?? "", name: u.text, status: u.toolStatus ?? "running" });
+          return;
+        }
+        if (u.kind === "plan") {
+          // The plan is a state, not a line of the transcript: the client
+          // shows the list the engine last reported.
+          sseSend(res, "plan", { entries: u.plan ?? [] });
           return;
         }
         const r = route(u);
