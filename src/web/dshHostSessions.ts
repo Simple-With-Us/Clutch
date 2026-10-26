@@ -14,6 +14,8 @@
  */
 
 import type { SessionUpdate } from "./sessionUpdates.ts";
+import { z } from "zod";
+
 import { DshHostTransportError, HOST_SNAPSHOT_TIMEOUT_MS, type DshHostClient } from "./dshHostClient.ts";
 
 /** One thread as the clients see it, whatever engine owns it. */
@@ -215,6 +217,32 @@ export function dshHostHistoryUpdates(sessionId: string, records: unknown): Sess
 }
 
 /**
+ * The host's `session/list` answer.
+ *
+ * The host is a separate program on a version of its own, so the shape is
+ * checked rather than trusted.  The rows carry more than the sidecar reads,
+ * so unknown fields pass through.
+ */
+const SessionListValueSchema = z
+  .object({
+    items: z
+      .array(
+        z
+          .object({
+            sessionId: z.string(),
+            updatedAt: z.number().optional(),
+            cwd: z.string().optional(),
+            parentSessionId: z.string().optional(),
+            origin: z.string().optional(),
+            projections: z.record(z.string(), z.unknown()).optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+  })
+  .passthrough();
+
+/**
  * The provider names an engine's threads carry.
  *
  * The dsh-hosted engines share one session store, so without this the
@@ -233,7 +261,7 @@ export async function listDshHostSessions(
 ): Promise<SessionSummary[]> {
   // The host's own argument is `_request`, and its request type has one
   // optional field, so the empty request is the documented call.
-  const value = await client.call("session/list", { _request: {} });
+  const value = await client.call("session/list", { _request: {} }, SessionListValueSchema);
   const all = dshHostSessionSummaries(value);
 
   const pattern = options.engine ? ENGINE_PROVIDER_PATTERN[options.engine] : undefined;

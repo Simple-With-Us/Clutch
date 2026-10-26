@@ -310,8 +310,16 @@ export class DshHostClient {
    *
    * A failure the host reported comes back as `DshHostRemoteError`, so the
    * caller can tell "the host refused" from "the host could not be reached".
+   *
+   * `schema` is checked against the answer when one is given.  The host is a
+   * separate program on a version of its own, so a caller that depends on the
+   * shape of an answer should say what it expects rather than trust it.
    */
-  async call<T = unknown>(endpoint: string, args: Record<string, unknown> = {}): Promise<T> {
+  async call<T = unknown>(
+    endpoint: string,
+    args: Record<string, unknown> = {},
+    schema?: { parse(value: unknown): T },
+  ): Promise<T> {
     if (!isValidDshHostEndpoint(endpoint)) {
       throw new DshHostTransportError(`invalid dsh host endpoint ${JSON.stringify(endpoint)}`);
     }
@@ -346,7 +354,7 @@ export class DshHostClient {
         envelope.result.error.details,
       );
     }
-    return envelope.result.value as T;
+    return schema ? schema.parse(envelope.result.value) : (envelope.result.value as T);
   }
 
   /**
