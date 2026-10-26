@@ -45,6 +45,11 @@ describe("standing testers sync is external-only", () => {
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);
     expect(branch).toMatch(/await deleteInternalGroups\(/);
+    // Standing testers join the external group with createFirst: an email
+    // whose only tester record belongs to another app of the team cannot be
+    // related to this app's group (409 STATE_ERROR, seen live 2026-10-09),
+    // so the external add must create this app's own betaTester record first.
+    expect(branch).toMatch(/createFirst: true/);
     expect(mjs).toMatch(/export async function deleteInternalGroups\(/);
     expect(mjs).toMatch(/api\("DELETE", `\/v1\/betaGroups\/\$\{g\.id\}`\)/);
   });
