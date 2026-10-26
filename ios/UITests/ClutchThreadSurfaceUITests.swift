@@ -3,7 +3,7 @@ import XCTest
 /// The thread surfaces, exercised against a local stub sidecar.
 ///
 /// The stub answers the sidecar's own routes (health, engines, sessions,
-/// load, chat), so the app's real code path runs: the Code tab lists the
+/// load, chat), so the app's real code path runs: the Workspace tab lists the
 /// stub's threads, a thread replays the stub's history, and the find bar
 /// highlights a match inside it.  Screenshots are kept as attachments named
 /// `ios-<state>`, which is the visual evidence the review rules ask for.
@@ -54,17 +54,17 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
             "clutch://pair?h=127.0.0.1&tls=0&kind=mcode&chat=\(StubSidecar.chatToken)&chatPort=\(stub.port)"))
         app.open(link)
 
-        let codeTab = app.tabBars.buttons["Code"]
-        XCTAssertTrue(codeTab.waitForExistence(timeout: 30))
-        codeTab.tap()
-        snap("ios-code-threads")
+        let workspaceTab = app.tabBars.buttons["Workspace"]
+        XCTAssertTrue(workspaceTab.waitForExistence(timeout: 30))
+        workspaceTab.tap()
+        snap("ios-workspace-threads")
 
         // Open the stub's one thread.
         let thread = app.staticTexts["Fix The Login Redirect"]
         if !thread.waitForExistence(timeout: 30) {
-            snap("ios-code-threads-missing")
-            dump("ios-code-threads-tree")
-            XCTFail("the stub's thread did not appear in the Code tab")
+            snap("ios-workspace-threads-missing")
+            dump("ios-workspace-threads-tree")
+            XCTFail("the stub's thread did not appear in the Workspace tab")
         }
         thread.tap()
         snap("ios-thread-open")

@@ -13,6 +13,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 interface CcCall {
@@ -28,6 +30,8 @@ let ccPort = 0;
 let sidecar: ChildProcess | null = null;
 let chatPort = 0;
 let tokenFile = "";
+/** Isolated so the loop test never writes the developer's real metadata. */
+let metaFile = "";
 const CHAT_TOKEN = `loop-test-token-${"x".repeat(48)}`;
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
@@ -88,6 +92,7 @@ beforeAll(async () => {
   const dir = mkdtempSync(join(tmpdir(), "chat-loop-"));
   tokenFile = join(dir, "chat-token");
   writeFileSync(tokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
+  metaFile = join(dir, "session-meta.json");
   chatPort = await freePort();
 
   sidecar = spawn(TSX, [BRIDGE], { env: sidecarEnv(tokenFile), stdio: ["ignore", "pipe", "pipe"] });
@@ -100,6 +105,8 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     ...process.env,
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
+    CLUTCH_SESSION_META_FILE: metaFile,
+    CLUTCH_DSH_HOME: join(tmpdir(), "chat-loop-absent-dsh-home"),
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
@@ -289,4 +296,135 @@ describe("chat sidecar full loop", () => {
       missingSidecar.kill("SIGKILL");
     }
   }, 60000);
+});
+
+describe("project and archive routes", () => {
+  const metaUrl = (): string => `http://127.0.0.1:${chatPort}/clutch/v1/session-meta`;
+  const projectsUrl = (): string => `http://127.0.0.1:${chatPort}/clutch/v1/projects`;
+
+  // Validate the sidecar's response envelopes before the test reads them:
+  // a shape change should fail here, at the boundary, not inside an expect.
+  const TestApiResponseSchema = z
+    .object({
+      projects: z.array(z.unknown()).optional(),
+      sessions: z.record(z.string(), z.unknown()).optional(),
+      project: z.record(z.string(), z.unknown()).optional(),
+      created: z.boolean().optional(),
+      entry: z.record(z.string(), z.unknown()).optional(),
+      ok: z.boolean().optional(),
+      error: z.string().optional(),
+    })
+    .strict();
+
+  async function meta(method: string, url: string, body?: unknown) {
+    const res = await fetch(url, {
+      method,
+      headers: chatHeaders(),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: res.status, json: TestApiResponseSchema.parse(await res.json()) };
+  }
+
+  it("starts empty and stays behind the chat token", async () => {
+    const anon = await fetch(metaUrl());
+    expect(anon.status).toBe(401);
+
+    const got = await meta("GET", metaUrl());
+    expect(got.status).toBe(200);
+    expect(got.json.projects).toEqual([]);
+    expect(got.json.sessions).toEqual({});
+  });
+
+  it("creates a project and assigns a thread to it", async () => {
+    const created = await meta("POST", projectsUrl(), { name: "  Clutch   Work  " });
+    expect(created.status).toBe(201);
+    const project = created.json.project as { id: string; name: string };
+    expect(project.name).toBe("Clutch Work");
+
+    const assigned = await meta("PUT", metaUrl(), { sessionId: "session-a", projectId: project.id });
+    expect(assigned.status).toBe(200);
+    const sessions = assigned.json.sessions as Record<string, { projectId?: string }>;
+    expect(sessions["session-a"]?.projectId).toBe(project.id);
+
+    // It survives a fresh read:  this is the point of the store existing.
+    const reread = await meta("GET", metaUrl());
+    const rereadSessions = reread.json.sessions as Record<string, { projectId?: string }>;
+    expect(rereadSessions["session-a"]?.projectId).toBe(project.id);
+  });
+
+  it("returns the same project for the same name instead of duplicating it", async () => {
+    const first = await meta("POST", projectsUrl(), { name: "Repeatable" });
+    const second = await meta("POST", projectsUrl(), { name: "repeatable" });
+    expect(first.json.created).toBe(true);
+    expect(second.json.created).toBe(false);
+    expect((second.json.project as { id: string }).id).toBe((first.json.project as { id: string }).id);
+  });
+
+  it("archives and then restores a thread", async () => {
+    const archived = await meta("PUT", metaUrl(), { sessionId: "session-archive", archived: true });
+    expect(archived.status).toBe(200);
+    expect((archived.json.entry as { archived?: boolean }).archived).toBe(true);
+
+    const restored = await meta("PUT", metaUrl(), { sessionId: "session-archive", archived: false });
+    const sessions = restored.json.sessions as Record<string, unknown>;
+    // Un-archiving clears the record entirely rather than leaving a tombstone.
+    expect(sessions["session-archive"]).toBeUndefined();
+  });
+
+  it("clears an assignment with an explicit null", async () => {
+    const projects = (await meta("GET", metaUrl())).json.projects as { id: string }[];
+    const id = projects[0]?.id;
+    expect(id).toBeTruthy();
+    const cleared = await meta("PUT", metaUrl(), { sessionId: "session-a", projectId: null });
+    const sessions = cleared.json.sessions as Record<string, { projectId?: string }>;
+    expect(sessions["session-a"]?.projectId).toBeUndefined();
+  });
+
+  it("rejects a dangling project, a bad body and an empty update", async () => {
+    expect((await meta("PUT", metaUrl(), { sessionId: "s", projectId: "prj_nope" })).status).toBe(400);
+    expect((await meta("PUT", metaUrl(), { projectId: "prj_nope" })).status).toBe(400);
+    expect((await meta("PUT", metaUrl(), { sessionId: "s" })).status).toBe(400);
+    expect((await meta("PUT", metaUrl(), { sessionId: "s", archived: "yes" })).status).toBe(400);
+    expect((await meta("POST", projectsUrl(), { name: "   " })).status).toBe(400);
+    expect((await meta("POST", projectsUrl(), {})).status).toBe(400);
+  });
+
+  it("answers a literal null body with 400 on every JSON route and stays up", async () => {
+    // `null` is valid JSON, so it passes the parse and used to reach a
+    // property read inside the async handler, which ended the bridge.
+    expect((await meta("PUT", metaUrl(), null)).status).toBe(400);
+    expect((await meta("POST", projectsUrl(), null)).status).toBe(400);
+    for (const path of ["/clutch/v1/sessions/load", "/clutch/v1/chat", "/clutch/v1/chat/cancel"]) {
+      for (const body of ["null", "[]", "7"]) {
+        const res = await fetch(`http://127.0.0.1:${chatPort}${path}`, {
+          method: "POST",
+          headers: chatHeaders(),
+          body,
+        });
+        expect(res.status, `${path} ${body}`).toBe(400);
+      }
+    }
+    const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
+    expect(health.status).toBe(200);
+  });
+
+  it("deleting a project clears the assignments that pointed at it", async () => {
+    const made = await meta("POST", projectsUrl(), { name: "Doomed" });
+    const id = (made.json.project as { id: string }).id;
+    await meta("PUT", metaUrl(), { sessionId: "session-doomed", projectId: id });
+
+    const res = await fetch(`${projectsUrl()}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: chatHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const json = TestApiResponseSchema.parse(await res.json());
+    expect(json.sessions?.["session-doomed"]).toBeUndefined();
+
+    const again = await fetch(`${projectsUrl()}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: chatHeaders(),
+    });
+    expect(again.status).toBe(404);
+  });
 });

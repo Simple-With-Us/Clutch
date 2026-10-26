@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   DSH_HOST_API_PATH,
+  DSH_HOST_ENDPOINT_NAMESPACES,
   DSH_HOST_EVENT_RESULT_ENDPOINT,
   DSH_HOST_EVENT_STREAM_ENDPOINT,
   DSH_HOST_MUX_PATH,
@@ -9,7 +10,10 @@ import {
   buildDshHostRequest,
   dshHostApiURL,
   dshHostAuthority,
+  dshHostEndpointNamespace,
+  dshHostEndpointURL,
   dshHostMuxURL,
+  isKnownDshHostEndpoint,
   parseDshHostServerResponse,
 } from "../src/shared/dshHostContract";
 
@@ -156,5 +160,54 @@ describe("dsh host contract — response envelope", () => {
       expect(parsed.result.error.message).toBe("");
       expect(parsed.result.error.details).toEqual({});
     }
+  });
+});
+
+describe("dsh host contract — endpoint names", () => {
+  it("joins a namespace to its method with a slash", () => {
+    expect(dshHostEndpointNamespace("session/list")).toBe("session");
+    expect(dshHostEndpointNamespace("session")).toBeNull();
+  });
+
+  it("accepts the endpoints the installed build dispatches", () => {
+    expect(isKnownDshHostEndpoint("session/list")).toBe(true);
+    expect(isKnownDshHostEndpoint("commands/execute")).toBe(true);
+    expect(isKnownDshHostEndpoint("workspaceFiles/list")).toBe(true);
+    expect(isKnownDshHostEndpoint("credentials/describe")).toBe(true);
+  });
+
+  it("rejects a Context service key as a wire endpoint", () => {
+    expect(isKnownDshHostEndpoint("remote.session")).toBe(false);
+  });
+
+  it("rejects the namespaces the host does not declare", () => {
+    expect(isKnownDshHostEndpoint("terminal/read")).toBe(false);
+    expect(isKnownDshHostEndpoint("job/list")).toBe(false);
+    expect(isKnownDshHostEndpoint("remotes/list")).toBe(false);
+  });
+
+  it("rejects a malformed name even when the namespace is known", () => {
+    expect(isKnownDshHostEndpoint("session/../secret")).toBe(false);
+    expect(isKnownDshHostEndpoint("/list")).toBe(false);
+  });
+
+  it("declares every namespace exactly once", () => {
+    expect(new Set(DSH_HOST_ENDPOINT_NAMESPACES).size).toBe(DSH_HOST_ENDPOINT_NAMESPACES.length);
+  });
+
+  it("builds the endpoint URL the host serves", () => {
+    expect(dshHostEndpointURL("http://127.0.0.1:3180", "session/list")).toBe(
+      "http://127.0.0.1:3180/api/session/list",
+    );
+    expect(dshHostEndpointURL("http://127.0.0.1:3180/", "session/list")).toBe(
+      "http://127.0.0.1:3180/api/session/list",
+    );
+  });
+
+  it("refuses to build a URL for an endpoint the host will not accept", () => {
+    expect(() => dshHostEndpointURL("http://127.0.0.1:3180", "session/../secret")).toThrow(
+      DshHostContractError,
+    );
+    expect(() => dshHostEndpointURL("http://127.0.0.1:3180", "/list")).toThrow(DshHostContractError);
   });
 });

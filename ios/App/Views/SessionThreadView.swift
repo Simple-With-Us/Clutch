@@ -189,6 +189,8 @@ final class SessionThreadModel {
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
+                    case .usage:
+                        break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
@@ -247,7 +249,7 @@ final class SessionThreadModel {
 
     /// The engine's owner-facing name, when the catalog has not loaded yet.
     var engineLabel: String {
-        catalog?.descriptor(engine)?.label ?? (engine == "muse" ? "Muse Code" : "MiniMax Code")
+        catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
     }
 }
 

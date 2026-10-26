@@ -10,6 +10,7 @@ public enum ChatStreamEvent: Equatable {
     /// One tool call the agent ran, or a status update to one already shown.
     case tool(id: String, name: String, status: String)
     case done(stopReason: String, sessionId: String, remoteSessionId: String?)
+    case usage(AcpSessionUsage)
     case failed(String)
 }
 
@@ -164,6 +165,14 @@ public struct ChatSessionClient {
                 sessionId: (json["sessionId"] as? String) ?? "",
                 remoteSessionId: json["remoteSessionId"] as? String
             )
+        case "usage":
+            // The sidecar pushes the engine's own accounting record as it
+            // writes it; without this case the event was dropped and the
+            // usage strip never left "not reported".
+            guard let usageDict = json["usage"] as? [String: Any],
+                  let usageData = try? JSONSerialization.data(withJSONObject: usageDict),
+                  let usage = try? JSONDecoder().decode(AcpSessionUsage.self, from: usageData) else { return nil }
+            return .usage(usage)
         case "error":
             return .failed((json["message"] as? String) ?? "unknown error")
         default:

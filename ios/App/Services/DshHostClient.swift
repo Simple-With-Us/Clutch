@@ -146,8 +146,9 @@ public final class DshHostClient {
 
     /// Call one endpoint on the host and return its value.
     ///
-    /// `method` is the endpoint name — upstream namespaces them by domain,
-    /// for example `remote.session`, `remote.commands` or `remote.terminal`.
+    /// `method` is the endpoint name — upstream joins a namespace to its
+    /// method with a slash, for example `session/list`, `commands/list` or
+    /// `workspaceFiles/list`.
     /// A typed failure comes back as `DshHostClientError.remote`, so the
     /// caller can tell "the host refused" from "the host could not be reached".
     @discardableResult
