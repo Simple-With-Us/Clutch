@@ -169,6 +169,32 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(mcode.supportsThreads)
     }
 
+    func testEngineCatalogReadsThePublishedThreadCapability() throws {
+        // The sidecar publishes which engines list their threads, so the app
+        // never hardcodes it.
+        let json = """
+        {"engines":[
+          {"id":"deepseek","label":"DeepSeek","available":true,"supportsThreads":true,
+           "models":[],"effortLevels":["high"],"effortConfigId":"reasoning_effort","modelConfigId":"model"},
+          {"id":"minimax","label":"MiniMax","available":true,"supportsThreads":false,
+           "models":[],"effortLevels":[],"effortConfigId":"reasoning_effort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        let deepseek = try XCTUnwrap(catalog.descriptor("deepseek"))
+        XCTAssertTrue(deepseek.supportsThreads)
+        let minimax = try XCTUnwrap(catalog.descriptor("minimax"))
+        XCTAssertFalse(minimax.supportsThreads)
+    }
+
+    func testEngineLabelsCoverEveryEngine() {
+        XCTAssertEqual(EngineLabels.label(for: "deepseek"), "DeepSeek")
+        XCTAssertEqual(EngineLabels.label(for: "minimax"), "MiniMax")
+        XCTAssertEqual(EngineLabels.label(for: "mcode"), "MiniMax Code")
+        XCTAssertEqual(EngineLabels.label(for: "muse"), "Muse Code")
+        XCTAssertEqual(EngineLabels.label(for: "something-new"), "something-new")
+    }
+
     func testPinStoreTogglesPerHost() {
         let name = "PinStoreTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!

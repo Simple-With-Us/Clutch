@@ -29,6 +29,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Engine } from "../shared/engine-types.ts";
+import { supportsThreads } from "../shared/engine-types.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
 export interface EngineModel {
@@ -58,6 +59,15 @@ export interface EngineDescriptor {
   label: string;
   /** False when the engine's launcher or host binary is missing here. */
   available: boolean;
+  /**
+   * True when this engine's threads can be listed and resumed.
+   *
+   * The catalog publishes the capability so a client does not hardcode which
+   * engines those are: the code engines keep their own session log and the
+   * dsh-hosted engines keep theirs in the dsh host, and the sidecar reads and
+   * resumes both through the same endpoint.
+   */
+  supportsThreads: boolean;
   models: EngineModel[];
   /** Reasoning-effort levels the engine accepts, ascending. */
   effortLevels: string[];
@@ -444,6 +454,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
       id: engine,
       label: engine === "mcode" ? "MiniMax Code" : engine === "muse" ? "Muse Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
       available,
+      supportsThreads: supportsThreads(engine),
       models,
       effortLevels,
       effortConfigId: EFFORT_CONFIG_IDS[engine] ?? "reasoning_effort",

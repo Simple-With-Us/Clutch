@@ -7,16 +7,11 @@ import CometChatSDK
 /// send path so prompts travel to the Mac sidecar (`POST /clutch/v1/chat`)
 /// instead of CometChat's cloud send, and the sidecar relays the turn back
 /// into the thread. Model strip and hold-to-record voice stay native.
+///
+/// The coding threads live in the Workspace tab, which covers every engine
+/// the host runs.  This tab is the agent conversation, which is a different
+/// kind of conversation rather than another engine.
 public struct ChatView: View {
-    /// Which surface the Chat tab shows: the CometChat agent thread, or the
-    /// host's MiniMax Code threads (the same split view as the Code tab, so
-    /// the two entry points can never drift apart).
-    enum Surface: Hashable {
-        case agent
-        case code
-    }
-
-    @State private var surface: Surface = .agent
     /// The paired-host store, so the chat surface can switch hosts the way
     /// the web canvas does.  The Mac app uses it to reach a code server.
     let store: HostStore?
@@ -42,35 +37,12 @@ public struct ChatView: View {
     }
 
     public var body: some View {
-        Group {
-            if surface == .code, let host = activeHost {
-                VStack(spacing: 0) {
-                    surfacePicker
-                    SessionsView(host: host)
-                }
-            } else {
-                agentBody
-            }
-        }
-        .onAppear {
-            if activeHost?.isMiniMaxCodeOnly == true { surface = .code }
-        }
-    }
-
-    private var surfacePicker: some View {
-        Picker("Chat Surface", selection: $surface) {
-            Text("Agent").tag(Surface.agent)
-            Text("MiniMax Code").tag(Surface.code)
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        agentBody
     }
 
     private var agentBody: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                surfacePicker
                 // Model header strip
                 HStack(spacing: 8) {
                     Menu {

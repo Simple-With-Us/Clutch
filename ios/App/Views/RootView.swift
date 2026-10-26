@@ -8,15 +8,19 @@ struct RootView: View {
         Group {
             if let host = store.activeHost {
                 TabView(selection: $selectedTab) {
-                    ChatView(activeHost: host, store: store)
+                    // One workspace for every engine the host runs: the
+                    // thread rail, the transcript and the engine picker are
+                    // one surface, so the phone and the Mac answer the same
+                    // question the same way.
+                    SessionsView(host: host)
                         .tabItem {
-                            Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                            Label("Workspace", systemImage: "terminal.fill")
                         }
                         .tag(0)
 
-                    SessionsView(host: host)
+                    ChatView(activeHost: host, store: store)
                         .tabItem {
-                            Label("Code", systemImage: "terminal.fill")
+                            Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
                         }
                         .tag(1)
 
@@ -45,7 +49,7 @@ struct RootView: View {
                     // A MiniMax Code server host has no chat relay or web
                     // canvas behind it; land on its threads, not an empty
                     // agent chat.
-                    if host.isMiniMaxCodeOnly, selectedTab == 0 { selectedTab = 1 }
+                    if host.isMiniMaxCodeOnly, selectedTab == 1 { selectedTab = 0 }
                 }
             } else {
                 PairView { payload in
