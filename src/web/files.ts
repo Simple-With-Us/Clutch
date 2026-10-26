@@ -11,7 +11,7 @@
  * engine, so the folder is read once, the same way, for all of them.
  */
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 
 /** One entry in a folder listing. */
@@ -72,7 +72,10 @@ export function resolveInside(root: string, relative: string): string | null {
   const base = resolve(root);
   const target = resolve(base, relative);
   if (target === base) return base;
-  if (!target.startsWith(base + sep)) return null;
+  // The base already ends in a separator at the filesystem root, so only
+  // add one when it is missing.
+  const prefix = base.endsWith(sep) ? base : base + sep;
+  if (!target.startsWith(prefix)) return null;
   return target;
 }
 
@@ -80,7 +83,8 @@ export function resolveInside(root: string, relative: string): string | null {
 function relativePath(root: string, absolute: string): string {
   const base = resolve(root);
   if (absolute === base) return "";
-  return absolute.slice(base.length + 1);
+  const start = base.endsWith(sep) ? base.length : base.length + 1;
+  return absolute.slice(start);
 }
 
 /**
@@ -93,6 +97,9 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
   const target = resolveInside(root, relative);
   if (!target) throw new FileAccessError("that path is outside the folder the thread works in");
   const names = await readdir(target);
+  // Sort before truncating so the entries that fall off the cap are the last
+  // by name rather than wherever the filesystem happened to list them.
+  names.sort((left, right) => left.localeCompare(right));
   const entries: FileEntry[] = [];
   for (const name of names) {
     if (entries.length >= LISTING_MAX_ENTRIES) break;
@@ -139,9 +146,23 @@ export async function readPreview(root: string, relative: string): Promise<FileP
   const info = await stat(target);
   if (info.isDirectory()) throw new FileAccessError("that is a folder, not a file");
   const bytes = info.size;
-  const handle = await readFile(target);
-  const truncated = handle.byteLength > PREVIEW_MAX_BYTES;
-  const slice = handle.subarray(0, PREVIEW_MAX_BYTES);
+  // Read only as far as the preview reaches: the whole file never lands in
+  // the sidecar's memory, no matter how large it is on disk.
+  const handle = await open(target, "r");
+  let read = 0;
+  let slice: Buffer;
+  try {
+    const probe = Buffer.alloc(PREVIEW_MAX_BYTES + 1);
+    while (read < probe.length) {
+      const { bytesRead } = await handle.read(probe, read, probe.length - read, null);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    slice = probe.subarray(0, Math.min(read, PREVIEW_MAX_BYTES));
+  } finally {
+    await handle.close();
+  }
+  const truncated = read > PREVIEW_MAX_BYTES;
   const isBinary = slice.includes(0);
   if (isBinary) {
     return {
