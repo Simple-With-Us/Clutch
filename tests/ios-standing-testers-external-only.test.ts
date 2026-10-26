@@ -14,19 +14,21 @@ describe("standing testers sync is external-only", () => {
   it("never calls ensureInternalTesterGroup from ensure-standing-testers", () => {
     const mjs = read("scripts/ios-fleet/asc-api.mjs");
     const start = mjs.indexOf('method === "ensure-standing-testers"');
-    const end = mjs.indexOf('method === "ensure-internal-testers"');
+    const end = mjs.indexOf('method === "ensure-tf-ready"');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);
     expect(branch).not.toMatch(/await ensureInternalTesterGroup\(/);
   });
 
-  it("exposes internal testing only as an opt-in CLI method the ship workflow never calls", () => {
-    // Deliberate retention with a real entry point (Kody #208 finding 3):
-    // ensure-internal-testers exists for apps that run internal testing on
-    // purpose (the Socratic Trade pattern); the ship workflow must not use it.
+  it("has no internal-group creation surface at all", () => {
+    // Kody #208 finding 3 resolved by removal (minimum correction): Clutch is
+    // external-only and had no consumer of ensureInternalTesterGroup, so the
+    // dead helper and any CLI route to it are gone rather than wired up.
     const mjs = read("scripts/ios-fleet/asc-api.mjs");
-    expect(mjs).toMatch(/method === "ensure-internal-testers"/);
+    expect(mjs).not.toMatch(/ensureInternalTesterGroup/);
+    expect(mjs).not.toMatch(/ensure-internal-testers/);
+    expect(mjs).not.toMatch(/INTERNAL_GROUP_NAME/);
     const yml = read(".github/workflows/ios-ship.yml");
     expect(yml).not.toMatch(/ensure-internal-testers/);
   });
@@ -38,7 +40,7 @@ describe("standing testers sync is external-only", () => {
     // deletes the testers themselves.
     const mjs = read("scripts/ios-fleet/asc-api.mjs");
     const start = mjs.indexOf('method === "ensure-standing-testers"');
-    const end = mjs.indexOf('method === "ensure-internal-testers"');
+    const end = mjs.indexOf('method === "ensure-tf-ready"');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);

@@ -401,7 +401,6 @@ function buildReleaseNotes({ marketing, displayName, title, subjects, iosPathPre
 //
 // These helpers take the caller's `api(method, path, jsonBody)` so a test can
 // drive them with a fake and so main() keeps one authenticated client.
-export const INTERNAL_GROUP_NAME = "Internal Testers";
 
 // A resource row is { id: <string>, attributes: <object>, ... }.  This client is
 // dependency-free on purpose (the hosted ios-ship workflow runs it with plain
@@ -508,25 +507,6 @@ export async function addTesterToGroup({ api, appId, groupId, email, createFirst
   return { ok: Boolean(res.ok || res.status === 204), existing: Boolean(existing), res };
 }
 
-// How many testers can install every build of the app without Beta App Review:
-// the members of internal groups that have access to all builds.  Never throws;
-// { ok:false } means the count could not be read, which is not the same as zero.
-export async function countInternalTesters({ api, appId }) {
-  const groupsRes = await api("GET", `/v1/apps/${appId}/betaGroups?limit=200&fields[betaGroups]=name,isInternalGroup,hasAccessToAllBuilds`);
-  if (!groupsRes.ok) return { ok: false, error: ascErrorText(groupsRes), groups: 0, testers: 0 };
-  const groups = ascRows(groupsRes).filter(
-    (g) => g.attributes?.isInternalGroup === true && g.attributes?.hasAccessToAllBuilds === true
-  );
-  // One Set across ALL groups: a tester in two all-builds groups is one person.
-  const seen = new Set();
-  for (const g of groups) {
-    const members = await ascAllRows({ api, url: `/v1/betaGroups/${g.id}/betaTesters?limit=200&fields[betaTesters]=email` });
-    if (!members.ok) return { ok: false, error: members.error, groups: groups.length, testers: seen.size };
-    for (const t of members.rows) seen.add(String(t.attributes?.email || "").toLowerCase());
-  }
-  return { ok: true, groups: groups.length, testers: seen.size };
-}
-
 // Whether a processed build can reach anyone through external testing: it is
 // assigned to at least one external group that has testers or an enabled
 // public link.  Under the owner's external-only policy (2026-10-18/19) this
@@ -580,84 +560,6 @@ export async function deleteInternalGroups({ api, appId, log, warn }) {
     }
   }
   return { deleted, failed };
-}
-
-// Make sure the app has an internal group with access to all builds, and that
-// every standing email that is an App Store Connect user is in it.  Idempotent,
-// ADD-ONLY (never removes a tester or a group), prints emails masked.  An
-// existing all-builds internal group is reused whatever its name.  Emails that
-// are not ASC users stay external-only: Apple refuses them in an internal group.
-// Returns { groupId, created, added, alreadyIn, external, testers, warnings }.
-export async function ensureInternalTesterGroup({ api, appId, emails, log, warn }) {
-  const out = { groupId: null, created: false, added: 0, alreadyIn: 0, external: 0, testers: 0, warnings: 0 };
-  const fail = (msg) => { out.warnings += 1; warn(msg); return out; };
-
-  const groupsRes = await api("GET", `/v1/apps/${appId}/betaGroups?limit=200&fields[betaGroups]=name,isInternalGroup,hasAccessToAllBuilds`);
-  if (!groupsRes.ok) return fail(`internal group list failed (${ascErrorText(groupsRes)})`);
-  let group = ascRows(groupsRes).find(
-    (g) => g.attributes?.isInternalGroup === true && g.attributes?.hasAccessToAllBuilds === true
-  );
-  if (group) {
-    log(`reusing internal group "${group.attributes?.name}" id=${group.id}`);
-  } else {
-    const created = await api("POST", "/v1/betaGroups", JSON.stringify({
-      data: {
-        type: "betaGroups",
-        attributes: { name: INTERNAL_GROUP_NAME, isInternalGroup: true, hasAccessToAllBuilds: true, feedbackEnabled: true },
-        relationships: { app: { data: { type: "apps", id: appId } } }
-      }
-    }));
-    if (!created.ok) {
-      return fail(`could not create internal group "${INTERNAL_GROUP_NAME}" (${ascErrorText(created)}); create it by hand in App Store Connect > TestFlight > Internal Testing`);
-    }
-    group = created.parsed.data;
-    out.created = true;
-    log(`created internal group "${INTERNAL_GROUP_NAME}" id=${group.id} (all builds)`);
-  }
-  out.groupId = group.id;
-
-  // Internal testers must be App Store Connect users.  Read the team's users to
-  // know which standing emails qualify; when the list is unreadable, try them
-  // all and let Apple answer.  Paginate so teams with >200 users are not silently
-  // truncated (GH #1018: the internal group must hold every ASC standing email).
-  // A failure on ANY page (or an oversized list) makes the list incomplete, so it
-  // reads as unreadable (try every standing email), never as "everyone else is
-  // not a user".
-  const users = await ascAllRows({ api, url: "/v1/users?limit=200&fields[users]=username" });
-  const usersReadable = users.ok;
-  const ascUsers = new Set(users.rows.map((u) => String(u.attributes?.username || "").toLowerCase()));
-  if (!usersReadable) log(`could not read App Store Connect users; trying every standing email`);
-
-  const members = await ascAllRows({ api, url: `/v1/betaGroups/${group.id}/betaTesters?limit=200&fields[betaTesters]=email` });
-  if (!members.ok) return fail(`could not list testers in internal group (${members.error}); not re-adding anyone`);
-  const inGroup = new Set(members.rows.map((t) => String(t.attributes?.email || "").toLowerCase()));
-
-  for (const email of emails) {
-    const key = email.toLowerCase();
-    if (inGroup.has(key)) {
-      out.alreadyIn += 1;
-      log(`${maskEmail(email)} already in internal group`);
-      continue;
-    }
-    if (usersReadable && !ascUsers.has(key)) {
-      out.external += 1;
-      log(`${maskEmail(email)} is not an App Store Connect user; external group only`);
-      continue;
-    }
-    const added = await addTesterToGroup({ api, appId, groupId: group.id, email, createFirst: true });
-    if (added.ok) {
-      out.added += 1;
-      inGroup.add(key);
-      log(`added ${maskEmail(email)} to internal group`);
-    } else {
-      fail(`could not add ${maskEmail(email)} to internal group (${ascErrorText(added.res)})`);
-    }
-  }
-  out.testers = inGroup.size;
-  if (out.testers === 0) {
-    fail("the internal group has no tester: none of the standing emails is an App Store Connect user, so nobody can install builds without Beta App Review.  Add an App Store Connect user to ASC_STANDING_TESTERS or to TestFlight > Internal Testing by hand");
-  }
-  return out;
 }
 
 async function setWhatToTest({ api, buildId, appId, marketing }) {
@@ -1247,10 +1149,11 @@ async function main() {
   //
   // Exit codes: 0 ready | 2 usage/API error | 3 readiness timeout (build found,
   // still processing) | 4 the uploaded build never appeared within the discovery
-  // budget, so compliance was NOT declared on it | 5 the build is ready but the
-  // app has no internal tester who could install it (see countInternalTesters) |
-  // 6 the build is ready but the internal-tester count could not be read, so
-  // whether anyone can install it is unverified.
+  // budget, so compliance was NOT declared on it | 5 the build is ready but no
+  // external group with testers or a public link can install it (see
+  // externalInstallability) | 6 the build is ready but the external
+  // installability could not be read, so whether anyone can install it is
+  // unverified.
   if (method === "ensure-appstore-profiles") {
     const mapPath = path;
     if (!mapPath) {
@@ -1511,8 +1414,8 @@ async function main() {
 
     // 2b) Internal group: NOT created here.  Owner directive 2026-10-18/19:
     //     public external testing only, so a ship must not re-create the
-    //     internal "Internal Testers" group.  ensureInternalTesterGroup
-    //     stays available for flows that need an internal group on purpose.
+    //     internal "Internal Testers" group.  The creation helper was removed
+    //     with it: this repo has no internal-testing flow.
 
     // 2c) Internal groups that DO exist: delete them.  Owner directive
     //     2026-10-18 ("delete internal group if that isn't problem to do")
@@ -1574,33 +1477,6 @@ async function main() {
 
     console.error(`${prefix}: done (${emails.length} standing tester(s), ${warnings} warning(s))`);
     process.exit(warnings ? 3 : 0);
-  }
-
-  if (method === "ensure-internal-testers") {
-    // Opt-in only: for apps that run internal testing on purpose (e.g. the
-    // Socratic Trade pattern).  The ship workflow never calls this; covered
-    // apps follow the owner's 2026-10-18/19 external-only directive and the
-    // standing-testers sync deletes internal groups instead.
-    const prefix = "ensure-internal-testers";
-    if (!/^\d+$/.test(path)) {
-      console.error(`${prefix}: usage: node asc-api.mjs ensure-internal-testers <appleId>`);
-      process.exit(2);
-    }
-    const EMAIL_RE = /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/;
-    const emails = [...new Set(String(process.env.ASC_STANDING_TESTERS || "").split(/[\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))];
-    if (!emails.length || emails.some((e) => !EMAIL_RE.test(e))) {
-      console.error(`${prefix}: ASC_STANDING_TESTERS is empty or malformed; nothing changed`);
-      process.exit(2);
-    }
-    const out = await ensureInternalTesterGroup({
-      api,
-      appId: path,
-      emails,
-      log: (m) => console.error(`${prefix}: ${m}`),
-      warn: (m) => console.error(`${prefix}: WARNING ${m}`)
-    });
-    console.error(`${prefix}: done (group=${out.groupId || "none"} created=${out.created} added=${out.added} alreadyIn=${out.alreadyIn} external=${out.external} testers=${out.testers} warnings=${out.warnings})`);
-    process.exit(out.warnings ? 3 : 0);
   }
 
   if (method === "ensure-tf-ready") {
