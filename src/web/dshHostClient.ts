@@ -55,6 +55,9 @@ export class DshHostTransportError extends Error {
   }
 }
 
+/** The mux upgrade failed before a stream opened; HTTP status is unavailable. */
+export class DshHostHandshakeError extends DshHostTransportError {}
+
 /** How long one host request may take before it is given up on. */
 const HOST_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -429,7 +432,7 @@ export class DshHostClient {
 
     await new Promise<void>((resolve, reject) => {
       socket.onopen = () => resolve();
-      socket.onerror = () => reject(new DshHostTransportError("the dsh host mux connection failed"));
+      socket.onerror = () => reject(new DshHostHandshakeError("the dsh host mux connection failed"));
     });
 
     socket.send(

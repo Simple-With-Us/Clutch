@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DshHostClientCache } from "../src/web/dshHostClientCache.ts";
-import { DshHostTransportError } from "../src/web/dshHostClient.ts";
+import { DshHostHandshakeError, DshHostTransportError } from "../src/web/dshHostClient.ts";
 
 describe("host client identity cache", () => {
   for (const status of [401, 404]) {
@@ -50,5 +50,48 @@ describe("route integration", () => {
     expect(source).toContain("hostClient.run((client) => listDshHostSessions(client");
     expect(source).toContain("hostClient.run((client) => loadDshHostHistory(client");
     expect(source).not.toContain("await dshHost()");
+  });
+});
+
+describe("recovery limits", () => {
+  it("shares an in-flight identity exchange", async () => {
+    let release!: (value: object) => void;
+    const connect = vi.fn(() => new Promise<object>((resolve) => { release = resolve; }));
+    const cache = new DshHostClientCache(connect);
+    const first = cache.run(async (client) => client);
+    const second = cache.run(async (client) => client);
+    const client = {};
+    release(client);
+    expect(await first).toBe(client);
+    expect(await second).toBe(client);
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("permits one immediate identity refresh, then cools down repeated refusals", async () => {
+    let now = 0;
+    const connect = vi.fn().mockResolvedValue({});
+    const cache = new DshHostClientCache(connect, () => now);
+    const refuse = async () => { throw new DshHostTransportError("fixture", 401); };
+    await expect(cache.run(refuse)).rejects.toThrow("fixture");
+    await expect(cache.run(refuse)).rejects.toThrow("fixture");
+    await expect(cache.run(async () => true)).rejects.toThrow("not reachable");
+    expect(connect).toHaveBeenCalledTimes(2);
+    now = 30_000;
+    expect(await cache.run(async () => true)).toBe(true);
+    expect(connect).toHaveBeenCalledTimes(3);
+  });
+});
+
+
+describe("mux failure boundary", () => {
+  it("invalidates a failed upgrade but not a snapshot timeout", async () => {
+    const connect = vi.fn().mockResolvedValue({});
+    const cache = new DshHostClientCache(connect);
+    await expect(cache.run(async () => { throw new DshHostHandshakeError("fixture handshake"); })).rejects.toThrow();
+    await cache.run(async () => true);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await expect(cache.run(async () => { throw new DshHostTransportError("snapshot timeout"); })).rejects.toThrow();
+    await cache.run(async () => true);
+    expect(connect).toHaveBeenCalledTimes(2);
   });
 });
