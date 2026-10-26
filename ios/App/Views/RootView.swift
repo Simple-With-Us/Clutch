@@ -71,7 +71,6 @@ struct ClutchScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var webState: WebSurfaceState = .loading
     @State private var isShowingHosts = false
-    @State private var isShowingAddHost = false
     @State private var isShowingSessions = false
 
     var body: some View {
@@ -114,24 +113,6 @@ struct ClutchScreen: View {
                 SessionsView(host: host)
             }
             #endif
-            .sheet(isPresented: $isShowingAddHost) {
-                NavigationStack {
-                    PairView(showsIntro: false) { payload in
-                        store.pair(payload)
-                        isShowingAddHost = false
-                    }
-                    .padding(.top, 16)
-                    .navigationTitle("Add Host")
-                    #if os(iOS)
-                    .navigationBarTitleDisplayMode(.inline)
-                    #endif
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { isShowingAddHost = false }
-                        }
-                    }
-                }
-            }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -170,49 +151,19 @@ struct ClutchScreen: View {
     }
 
     private var hostMenu: some View {
-        Menu {
-            ForEach(store.hosts) { candidate in
-                Button {
-                    store.activate(candidate)
-                } label: {
-                    if candidate.id == host.id {
-                        Label(candidate.name, systemImage: "checkmark")
-                    } else {
-                        Text(candidate.name)
-                    }
-                }
-            }
-            Divider()
-            Button {
-                isShowingAddHost = true
-            } label: {
-                Label("Add Host", systemImage: "plus")
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
-                    // The menu already reads as "Host: <name>"; a bare colour
-                    // swatch would otherwise be announced as an unknown element.
-                    .accessibilityHidden(true)
-                Text(host.name)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .accessibilityLabel("Host: \(host.name)")
+        // The canvas knows more than the probe does: a host can answer and
+        // still be asking for a fresh pairing code, and the picker must not
+        // say green in that case.
+        HostSwitcher(host: host, store: store, status: canvasStatus)
     }
 
-    private var statusColor: Color {
+    /// What the embedded canvas is doing, as a host state.
+    private var canvasStatus: HostStatus {
         switch webState {
-        case .ready: return .green
-        case .loading: return host.status == .offline ? .orange : .gray
-        case .needsPairing: return .orange
-        case .failed: return .red
+        case .ready: return .online
+        case .loading: return host.status == .offline ? .notClutch : .unknown
+        case .needsPairing: return .notClutch
+        case .failed: return .offline
         }
     }
 

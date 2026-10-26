@@ -98,14 +98,7 @@ public struct ChatView: View {
                     Spacer()
 
                     if let host = activeHost {
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(host.status == .online ? Color.green : Color.orange)
-                                .frame(width: 6, height: 6)
-                            Text(host.name)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(.secondary)
-                        }
+                        HostSwitcher(host: host, store: store ?? HostStore.shared, compact: true)
                     }
                 }
                 .padding(.horizontal, 12)

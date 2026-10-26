@@ -78,7 +78,13 @@ public struct SessionsView: View {
         } detail: {
             detail
         }
-        .task {
+        .task(id: host.id) {
+            // A different server means a different thread list, and the model
+            // holds the host it was built for, so it is rebuilt rather than
+            // reused: otherwise the list keeps showing the previous host's
+            // threads.
+            model = SessionsModel(host: host)
+            selectedId = nil
             pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
             // The catalog can take a while on a cold server, so the thread
             // list does not wait for it.
@@ -187,6 +193,9 @@ public struct SessionsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            // The server picker sits beside the engine picker: both answer
+            // "which threads am I looking at".
+            HostSwitcher(host: host, store: HostStore.shared, compact: true)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

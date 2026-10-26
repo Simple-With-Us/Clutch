@@ -211,9 +211,6 @@ public struct ChatView: View {
     /// server running Muse Code, for example — instead of only this Mac.
     let store: HostStore?
 
-    @State private var isShowingHosts = false
-    @State private var isShowingAddHost = false
-
     public init(activeHost: ClutchHost? = nil, store: HostStore? = nil) {
         self.activeHost = activeHost
         self.store = store
@@ -390,26 +387,6 @@ public struct ChatView: View {
             if let host = activeHost {
                 MacSessionsSheet(host: host, engine: engine.sidecarId) { _, chatId, remoteId, cwd, history in
                     adopt(chatId: chatId, remoteId: remoteId, cwd: cwd, history: history, for: engine)
-                }
-            }
-        }
-        .sheet(isPresented: $isShowingHosts) {
-            if let store {
-                HostsSheet(store: store)
-            }
-        }
-        .sheet(isPresented: $isShowingAddHost) {
-            NavigationStack {
-                PairView(showsIntro: false) { payload in
-                    store?.pair(payload)
-                    isShowingAddHost = false
-                }
-                .padding(.top, 16)
-                .navigationTitle("Add Host")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { isShowingAddHost = false }
-                    }
                 }
             }
         }
@@ -715,53 +692,14 @@ public struct ChatView: View {
                 .help("Refresh Threads")
             }
 
-            if let host = activeHost {
-                // The host menu: the Mac pairs and switches hosts the way
-                // the phone does, so a code server on another machine is one
-                // click away.
-                Menu {
-                    if let store {
-                        ForEach(store.hosts) { candidate in
-                            Button {
-                                store.activate(candidate)
-                            } label: {
-                                if candidate.id == host.id {
-                                    Label(candidate.name, systemImage: "checkmark")
-                                } else {
-                                    Text(candidate.name)
-                                }
-                            }
-                        }
-                        Divider()
-                        Button {
-                            isShowingAddHost = true
-                        } label: {
-                            Label("Add Host…", systemImage: "plus")
-                        }
-                        Button {
-                            isShowingHosts = true
-                        } label: {
-                            Label("Hosts and Settings…", systemImage: "gearshape")
-                        }
-                    } else {
-                        Text(host.name)
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(statusColor(for: host))
-                            .frame(width: 6, height: 6)
-                        Text(host.name)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.secondary)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help(statusHelp(for: host))
+            if let host = activeHost, let store {
+                // The shared host picker: the Mac and the phone pick a server
+                // the same way, so a code server on another machine is one
+                // click away on either.
+                HostSwitcher(host: host, store: store, compact: true)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help(statusHelp(for: host))
             }
         }
         .padding(.horizontal, 12)
@@ -853,11 +791,6 @@ public struct ChatView: View {
             await loadCatalog()
             await prepare()
         }
-    }
-
-    private func statusColor(for host: ClutchHost) -> Color {
-        if let reachable = sidecarReachable { return reachable ? .green : .red }
-        return host.status == .online ? .green : .orange
     }
 
     private func statusHelp(for host: ClutchHost) -> String {
