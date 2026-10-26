@@ -24,6 +24,9 @@ public struct ChatView: View {
     @State private var sending: Bool = false
     @State private var thoughtLine: String?
     @State private var sendError: String?
+    /// The permission request the engine is waiting on, when it asked for
+    /// one.  The engine is blocked until this is answered.
+    @State private var pendingPermission: AcpPermissionRequest?
     @State private var cardAlert: String?
     @State private var isTranscribingVoice: Bool = false
     @State private var voiceStatusMessage: String?
@@ -141,6 +144,16 @@ public struct ChatView: View {
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 4)
                             }
+                            // The permission card sits above the composer, so
+                            // the question the engine is asking is answered
+                            // where the turn is written.
+                            if let request = pendingPermission {
+                                PermissionCard(request: request) { optionId in
+                                    answerPermission(optionId)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
+                            }
                             ChatInputBar(
                                 draft: $draft,
                                 sending: sending,
@@ -181,6 +194,25 @@ public struct ChatView: View {
         }
     }
 
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.
+    private func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermission, let host = activeHost, let sessionId else { return }
+        pendingPermission = nil
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: sessionId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if !answered {
+                sendError = "The permission answer did not reach the engine."
+            }
+        }
+    }
+
     private func send(_ text: String) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !sending else { return }
@@ -201,10 +233,15 @@ public struct ChatView: View {
                         thoughtLine = String(text.prefix(220))
                     case .tool:
                         break
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermission = request
                     case .done(let stop, let id, _):
                         sessionId = id
                         sending = false
                         thoughtLine = nil
+                        pendingPermission = nil
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         if stop != "endTurn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
@@ -214,6 +251,7 @@ public struct ChatView: View {
                     case .failed(let message):
                         sending = false
                         thoughtLine = nil
+                        pendingPermission = nil
                         sendError = message
                     }
                 }
