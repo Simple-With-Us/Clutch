@@ -9,8 +9,8 @@
  *   POST /clutch/v1/chat/cancel {sessionId} → stop one in-flight turn
  *   GET  /clutch/v1/thread?uid=<deviceUid>&limit=<n> → agent thread bubbles
  *   GET  /clutch/v1/health  liveness, engines, and MiniMax Code availability
- *   GET  /clutch/v1/sessions?engine=mcode → MiniMax Code's own threads
- *   POST /clutch/v1/sessions/load          → replay one mcode thread
+ *   GET  /clutch/v1/sessions?engine=<engine> → that engine's threads
+ *   POST /clutch/v1/sessions/load          → replay one thread of any engine
  *
  * SSE events: `message` {text}, `thought` {text}, `tool`
  * {id, name, status}, `done` {stopReason, sessionId}.  Each turn runs a real coding session through
@@ -41,7 +41,7 @@ import { z } from "zod";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { ENGINE_ORDER, isEngine, type Engine } from "../shared/engine-types.ts";
+import { ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
 import { engineCatalog, resolveModelAltValue, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
 import { readTailnetStatus } from "./tailnet-status.ts";
@@ -60,6 +60,13 @@ import {
   upsertSession,
   type SessionMetaFile,
 } from "./session-meta.ts";
+import { DshHostClient } from "./dshHostClient.ts";
+import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
+import { compactToolHistory, toolStatusOf, type SessionUpdate } from "./sessionUpdates.ts";
+
+// Re-exported for the clients and the tests that already import them from
+// here; the implementations now live in the shared module.
+export { compactToolHistory, toolStatusOf };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOST = "127.0.0.1";
@@ -76,13 +83,22 @@ interface Launcher {
 }
 
 /**
- * Engines whose threads the native clients can list and resume.
+ * The engines whose threads their own ACP bridge keeps and resumes.
  *
- * The dsh bridges (DeepSeek, MiniMax) keep no resumable session list of
- * their own, so discovery only makes sense for the code engines: MiniMax
- * Code and Muse Code, both of which speak ACP `session/list`.
+ * The dsh-hosted engines (DeepSeek, MiniMax) are not here: the dsh host owns
+ * their session log, and the sidecar reads it through the host while the
+ * bridge only carries the turns.
  */
 const CODE_ENGINES: Engine[] = ["mcode", "muse"];
+
+/**
+ * How long a failed connection to the dsh host is remembered.
+ *
+ * The host is a separate process from the sidecar, so it may start after the
+ * sidecar or restart under it; the failure is remembered only long enough to
+ * avoid hammering a host that is not there.
+ */
+const HOST_RETRY_COOLDOWN_MS = 30_000;
 
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
@@ -315,22 +331,8 @@ function bearerOk(req: IncomingMessage, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-interface AcpUpdate {
-  sessionId: string;
-  kind: "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk" | "tool_call" | "tool_call_update";
-  text: string;
-  toolCallId?: string;
-  toolStatus?: "running" | "completed" | "failed";
-}
-
-/** ACP tool-call status as the clients render it. */
-export function toolStatusOf(raw: unknown): "running" | "completed" | "failed" {
-  switch (raw) {
-    case "completed": return "completed";
-    case "failed": return "failed";
-    default: return "running"; // pending, in_progress, missing — still in flight
-  }
-}
+/** One replayed transcript entry; the shape both engine backends speak. */
+type AcpUpdate = SessionUpdate;
 
 function toolContentText(content: unknown): string {
   if (!Array.isArray(content)) return "";
@@ -380,36 +382,6 @@ export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
     };
   }
   return null;
-}
-
-/**
- * Collapse a replayed history's tool updates into one entry per call: the
- * first `tool_call` keeps its name, later updates only move its status.
- * Without this a single file write replays as a stack of identical cards.
- */
-export function compactToolHistory(history: readonly AcpUpdate[]): AcpUpdate[] {
-  const out: AcpUpdate[] = [];
-  const byId = new Map<string, number>();
-  for (const entry of history) {
-    if (entry.kind === "tool_call" || entry.kind === "tool_call_update") {
-      const id = entry.toolCallId ?? "";
-      const existing = id ? byId.get(id) : undefined;
-      const kept = existing !== undefined ? out[existing] : undefined;
-      if (existing !== undefined && kept) {
-        out[existing] = {
-          ...kept,
-          text: kept.text || entry.text,
-          toolStatus: entry.toolStatus ?? kept.toolStatus ?? "running",
-        };
-        continue;
-      }
-      if (id) byId.set(id, out.length);
-      out.push(entry);
-      continue;
-    }
-    out.push(entry);
-  }
-  return out;
 }
 
 interface AcpSessionInfo {
@@ -849,6 +821,25 @@ const ProjectCreateSchema = z
   })
   .strict();
 
+/**
+ * The session-load request.
+ *
+ * Every engine is loadable, so the engine is one of the four Clutch runs
+ * rather than the code engines only.
+ */
+const SessionLoadSchema = z
+  .object({
+    engine: z.enum(ENGINE_ORDER as unknown as [Engine, ...Engine[]], {
+      error: `engine must be one of ${ENGINE_ORDER.join(", ")}`,
+    }),
+    sessionId: z.string({ error: "sessionId is required" }).min(1, "sessionId is required"),
+    cwd: z.string().optional(),
+    limit: z.union([z.number(), z.string()]).optional(),
+    model: z.string().optional(),
+    effort: z.string().optional(),
+  })
+  .strict();
+
 function readJsonBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -952,6 +943,56 @@ async function main(): Promise<void> {
       bridges.set(engine, b);
     }
     return b;
+  }
+
+  /**
+   * The dsh host client, created on first use.
+   *
+   * The host is only needed for the engines it owns, so a machine that runs
+   * only the code engines never opens a connection to it.
+   */
+  let hostClient: DshHostClient | null = null;
+  let hostClientFailedAt = 0;
+  async function dshHost(): Promise<DshHostClient> {
+    if (hostClient) return hostClient;
+    // A failed connect is remembered only briefly: the host is a separate
+    // process, so it may start later or be restarted, and the sidecar must
+    // not be stuck with the first failure for the life of the process.
+    if (hostClientFailedAt && Date.now() - hostClientFailedAt < HOST_RETRY_COOLDOWN_MS) {
+      throw new Error("the dsh host is not reachable");
+    }
+    try {
+      hostClient = await DshHostClient.connect();
+      hostClientFailedAt = 0;
+      return hostClient;
+    } catch (err) {
+      hostClientFailedAt = Date.now();
+      throw err;
+    }
+  }
+
+  /**
+   * The threads one engine owns, newest first.
+   *
+   * The dsh-hosted engines are read from the host, which owns their session
+   * log; the code engines are read from their own ACP bridge.
+   */
+  async function listSessionsFor(
+    engine: Engine,
+    cwd: string | undefined,
+    limit: number,
+  ): Promise<SessionSummary[]> {
+    if (isDshHostedEngine(engine)) {
+      const listed = await listDshHostSessions(await dshHost(), {
+        engine,
+        limit,
+        ...(cwd ? { cwd } : {}),
+      });
+      return sortSessionsByUpdated(listed);
+    }
+    const bridge = bridgeFor(engine);
+    await bridge.initialize();
+    return sortSessionsByUpdated(await bridge.listSessions(cwd, limit));
   }
 
   /**
@@ -1118,24 +1159,22 @@ async function main(): Promise<void> {
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/sessions") {
       const requestedEngine = url.searchParams.get("engine");
-      if (!isEngine(requestedEngine) || !CODE_ENGINES.includes(requestedEngine)) {
+      if (!isEngine(requestedEngine)) {
         res.writeHead(400, { "content-type": "application/json" }).end(
-          JSON.stringify({ error: `session discovery requires engine to be one of ${CODE_ENGINES.join(", ")}` }),
+          JSON.stringify({ error: `session discovery requires engine to be one of ${ENGINE_ORDER.join(", ")}` }),
         );
         return;
       }
       const listEngine = requestedEngine;
+      const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
+      const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
       try {
-        const bridge = bridgeFor(listEngine);
-        await bridge.initialize();
-        const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
-        const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
         const includeArchived = url.searchParams.get("archived") === "include";
         // Archived threads are dropped after listing, so over-fetch candidates
         // (capped well past the page size) to keep `limit` visible rows when
         // possible, then trim back to the requested page size after filtering.
         const fetchLimit = includeArchived ? limit : Math.max(limit, 500);
-        const listed = sortSessionsByUpdated(await bridge.listSessions(requestedCwd, fetchLimit));
+        const listed = await listSessionsFor(listEngine, requestedCwd, fetchLimit);
         const page = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived).slice(0, limit);
         // Reading usage means a synchronous zstd log read per session, so cap
         // how many rows get enriched in one request; rows past the cap simply
@@ -1152,23 +1191,21 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "POST" && url.pathname === "/clutch/v1/sessions/load") {
-      let body: { engine?: unknown; sessionId?: unknown; cwd?: unknown; limit?: unknown; model?: unknown; effort?: unknown };
+      let raw: unknown;
       try {
-        body = (await readJsonBody(req)) as typeof body;
+        raw = await readJsonBody(req);
       } catch {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
-      if (typeof body !== "object" || body === null || Array.isArray(body)) {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
-        return;
-      }
-      if (!isEngine(body.engine) || !CODE_ENGINES.includes(body.engine) || typeof body.sessionId !== "string" || body.sessionId.length === 0) {
+      const parsedLoad = SessionLoadSchema.safeParse(raw);
+      if (!parsedLoad.success) {
         res.writeHead(400, { "content-type": "application/json" }).end(
-          JSON.stringify({ error: `engine must be one of ${CODE_ENGINES.join(", ")} and sessionId is required` }),
+          JSON.stringify({ error: parsedLoad.error.issues[0]?.message ?? "invalid request body" }),
         );
         return;
       }
+      const body = parsedLoad.data;
       const loadEngine = body.engine;
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
       const historyLimit =
@@ -1193,16 +1230,28 @@ async function main(): Promise<void> {
       try {
         const bridge = bridgeFor(loadEngine);
         await bridge.initialize();
+        // Every engine registers the thread's working directory with its
+        // bridge here, so the next turn runs where the thread was started.
         await bridge.loadSession(body.sessionId, cwd);
-        // A resumed thread keeps the model it was created with unless the
-        // client asks for another one, so the choices land after the load.
-        if (session.model || session.effort) {
+        if (isDshHostedEngine(loadEngine)) {
+          // The host owns this thread's log, so its history is read there.
+          // The next turn still goes through the ACP bridge, which resumes
+          // the host's own session id, so the thread continues where it left
+          // off rather than starting a new one.
+          const updates = await loadDshHostHistory(await dshHost(), {
+            sessionId: body.sessionId,
+            limit: historyLimit,
+          });
+          history.push(...updates);
+        } else if (session.model || session.effort) {
+          // A resumed thread keeps the model it was created with unless the
+          // client asks for another one, so the choices land after the load.
           await applySessionChoices(bridge, session, await catalog());
         }
         session.busy = false;
         session.stream = null;
         res.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, history: sliceThreadHistory(compactToolHistory(history), historyLimit) }),
+          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, cwd, history: sliceThreadHistory(compactToolHistory(history), historyLimit) }),
         );
       } catch (err) {
         sessions.delete(chatId);
@@ -1510,7 +1559,10 @@ async function main(): Promise<void> {
         const bridge = bridgeFor(engine);
         await bridge.initialize();
         if (!active.bridgeSessionId) {
-          if (CODE_ENGINES.includes(engine) && active.resumeSessionId) {
+          // A thread the client resumed keeps its own session id, whichever
+          // engine owns it: the dsh-hosted engines resume by that id too, and
+          // dropping it would start a different thread after a restart.
+          if (active.resumeSessionId) {
             await bridge.loadSession(active.resumeSessionId, active.cwd);
             active.bridgeSessionId = active.resumeSessionId;
           } else {

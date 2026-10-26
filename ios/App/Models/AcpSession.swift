@@ -75,10 +75,11 @@ public struct AcpSessionUsage: Decodable, Equatable, Sendable {
     }
 }
 
-/// One MiniMax Code session from `GET /clutch/v1/sessions`.
+/// One session from `GET /clutch/v1/sessions`.
 ///
 /// Shared by the Mac chat surface and the iOS dashboard so both read the same
-/// wire shape; the sidecar is the only source.
+/// wire shape; the sidecar is the only source, and it answers every engine
+/// with this shape.
 public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
     public var sessionId: String
     public var cwd: String?
