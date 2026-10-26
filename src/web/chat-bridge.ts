@@ -675,7 +675,8 @@ export interface PermissionRequest {
   options: PermissionOption[];
 }
 
-/** Read one string field out of an unknown value, or null. */function readString(value: unknown): string | null {
+/** Read one string field out of an unknown value, or null. */
+function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
