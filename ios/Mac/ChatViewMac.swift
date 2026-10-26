@@ -189,6 +189,9 @@ public struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
+    /// The permission request the engine is waiting on, when it asked for
+    /// one.  The engine is blocked until this is answered.
+    @State private var pendingPermission: AcpPermissionRequest?
     /// nil until the first health check lands; drives the header status dot.
     @State private var sidecarReachable: Bool?
     @State private var mcodeAvailable: Bool = true
@@ -469,6 +472,15 @@ public struct ChatView: View {
                     .foregroundColor(.red)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
+            }
+            // The permission card sits above the input bar, so the question
+            // the engine is asking is answered where the turn is written.
+            if let request = pendingPermission {
+                PermissionCard(request: request) { optionId in
+                    answerPermission(optionId)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
             MacChatInputBar(
                 draft: $draft,
@@ -1376,6 +1388,10 @@ public struct ChatView: View {
                         } else {
                             liveTools.append(LiveTool(id: key, name: name.isEmpty ? "Tool call" : name, status: status))
                         }
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermission = request
                     case .done(let stop, let id, let remoteId):
                         if isWorkspace {
                             codeChatId = id
@@ -1393,6 +1409,7 @@ public struct ChatView: View {
                             sessionId = id
                         }
                         liveTools = []
+                        pendingPermission = nil
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : (selectedModel ?? engine.label))
                         sending = false
                         streamingText = ""
@@ -1410,6 +1427,7 @@ public struct ChatView: View {
                         thoughtLine = nil
                         sendError = message
                         liveTools = []
+                        pendingPermission = nil
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? engine.label : (selectedModel ?? engine.label), failed: true)
                     }
                 }
@@ -1455,6 +1473,28 @@ public struct ChatView: View {
     /// then drop the local stream (whose close cancels a second time on the
     /// server, harmlessly).  The partial reply stays out of the transcript —
     /// a stopped turn is not a finished answer.
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.  The
+    /// card is cleared either way: a request the sidecar could not answer
+    /// is not one the engine will take an answer for later.
+    private func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermission, let host = activeHost else { return }
+        let chatId = isWorkspace ? codeChatId : sessionId
+        pendingPermission = nil
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId ?? "",
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if !answered {
+                sendError = "The permission answer did not reach the engine."
+            }
+        }
+    }
+
     private func stop() {
         guard sending else { return }
         if let host = activeHost, let chatId = isWorkspace ? codeChatId : sessionId {

@@ -239,6 +239,74 @@ describe("chat sidecar full loop", () => {
     expect(puts[puts.length - 1]?.path).toBe("/v3/messages/101");
   }, 60000);
 
+  it("waits for the client's answer to a permission request", async () => {
+    // The code engines send their prompt as content blocks, and the stub
+    // bridge asks for a permission before it answers.  The sidecar has to
+    // hold that request until the client answers it, rather than answering
+    // it on the owner's behalf.
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    expect(reader).toBeTruthy();
+    const decoder = new TextDecoder();
+    let seen = "";
+    let requestId = "";
+    let chatId = "";
+    while (!seen.includes("event: permission")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+      const start = /event: start\ndata: (\{.*\})/.exec(seen);
+      if (start) chatId = (JSON.parse(start[1]) as { sessionId: string }).sessionId;
+      const permission = /event: permission\ndata: (\{.*\})/.exec(seen);
+      if (permission) {
+        requestId = (JSON.parse(permission[1]) as { requestId: string }).requestId;
+      }
+    }
+    expect(chatId).not.toBe("");
+    expect(requestId).not.toBe("");
+    expect(seen).toContain("allow-once");
+
+    const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answered.status).toBe(200);
+    expect(await answered.json()).toEqual({ ok: true });
+
+    // The stub only finishes the turn when the answer says allow-once, so
+    // the answer really did reach the engine.
+    let rest = "";
+    while (!rest.includes("event: done")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      rest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(rest).toContain("stub-answer");
+    expect(rest).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
+  it("refuses an answer for a request that is not there", async () => {
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: "no-such-session", requestId: "perm-999", optionId: "allow-once" }),
+    });
+    expect(res.status).toBe(404);
+
+    const missing = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ requestId: "perm-999" }),
+    });
+    expect(missing.status).toBe(400);
+  });
+
   it("a second bridge on the same port yields quietly", async () => {
     // start-web.sh and start-web.ts both launch the sidecar; the loser of
     // the bind must exit 0 without disturbing the winner.

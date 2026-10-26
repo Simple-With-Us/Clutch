@@ -45,6 +45,9 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
+    /// The permission request the engine is waiting on, when it asked for
+    /// one.  The engine is blocked until this is answered.
+    var pendingPermission: AcpPermissionRequest?
     /// Images attached to the next turn, the way the web canvas attaches
     /// files to a message.
     var attachments: [ChatAttachment] = []
@@ -187,13 +190,19 @@ final class SessionThreadModel {
                         thoughtLine = text
                     case .tool(let id, let name, let status):
                         upsertTool(id: id, name: name, status: status)
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermission = request
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
+                        pendingPermission = nil
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                     case .usage:
                         break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
+                        pendingPermission = nil
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
@@ -203,6 +212,27 @@ final class SessionThreadModel {
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
             isSending = false
+        }
+    }
+
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.  The
+    /// card is cleared either way: a request the sidecar could not answer
+    /// is not one the engine will take an answer for later.
+    func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermission, let chatId else { return }
+        pendingPermission = nil
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if !answered {
+                sendError = "The permission answer did not reach the engine."
+            }
         }
     }
 
@@ -278,6 +308,16 @@ public struct SessionThreadView: View {
             }
             transcript
             Divider()
+            // The permission card sits above the composer, so the question
+            // the engine is asking is answered in the same place the turn
+            // is written.
+            if let request = model.pendingPermission {
+                PermissionCard(request: request) { optionId in
+                    model.answerPermission(optionId)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
             composer
         }
         .navigationTitle(session.displayTitle)

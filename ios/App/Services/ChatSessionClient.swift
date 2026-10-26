@@ -11,6 +11,8 @@ public enum ChatStreamEvent: Equatable {
     case tool(id: String, name: String, status: String)
     case done(stopReason: String, sessionId: String, remoteSessionId: String?)
     case usage(AcpSessionUsage)
+    /// The engine is waiting for a permission request to be answered.
+    case permission(AcpPermissionRequest)
     case failed(String)
 }
 
@@ -80,6 +82,10 @@ public struct ChatSessionClient {
                         "prompt": prompt,
                         "model": model,
                         "relay": ["receiver": relayReceiverUid, "receiverType": "user"],
+                        // The sidecar holds a permission request until the
+                        // answer comes back, so the engine asks this client
+                        // rather than answering for itself.
+                        "permissions": "ask",
                     ]
                     if let sessionId { body["sessionId"] = sessionId }
                     if let engine { body["engine"] = engine }
@@ -140,6 +146,39 @@ public struct ChatSessionClient {
         _ = try? await URLSession.shared.data(for: req)
     }
 
+    /// Answer a permission request the engine is waiting on
+    /// (`POST /clutch/v1/permissions`).
+    ///
+    /// The option id is the one the engine offered.  A nil option cancels the
+    /// request, which is what a "deny" answer amounts to when the engine
+    /// offered no reject option of its own.
+    @discardableResult
+    public static func answerPermission(
+        host: ClutchHost,
+        sessionId: String,
+        requestId: String,
+        optionId: String?
+    ) async -> Bool {
+        guard let token = host.chatToken, !token.isEmpty else { return false }
+        var comps = URLComponents()
+        comps.scheme = host.origin.scheme
+        comps.host = host.origin.host
+        comps.port = host.chatPort
+        comps.path = "/clutch/v1/permissions"
+        guard let url = comps.url else { return false }
+        var payload: [String: Any] = ["sessionId": sessionId, "requestId": requestId]
+        if let optionId { payload["optionId"] = optionId }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        req.timeoutInterval = 15
+        guard let (_, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse else { return false }
+        return http.statusCode == 200
+    }
+
     static func decode(event: String, payload: String) -> ChatStreamEvent? {
         guard let data = payload.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
@@ -173,6 +212,13 @@ public struct ChatSessionClient {
                   let usageData = try? JSONSerialization.data(withJSONObject: usageDict),
                   let usage = try? JSONDecoder().decode(AcpSessionUsage.self, from: usageData) else { return nil }
             return .usage(usage)
+        case "permission":
+            // The engine is blocked on this request until the answer goes
+            // back, so it is carried with the turn rather than dropped.
+            guard let requestDict = json as? [String: Any] else { return nil }
+            guard let requestData = try? JSONSerialization.data(withJSONObject: requestDict),
+                  let request = try? JSONDecoder().decode(AcpPermissionRequest.self, from: requestData) else { return nil }
+            return .permission(request)
         case "error":
             return .failed((json["message"] as? String) ?? "unknown error")
         default:
