@@ -430,13 +430,18 @@ export class DshHostClient {
     socket.onerror = () => settle(new DshHostTransportError("the dsh host mux connection failed"));
     socket.onclose = () => settle();
 
-    await new Promise<void>((resolve, reject) => {
-      socket.onopen = () => {
-        socket.onerror = () => settle(new DshHostTransportError("the dsh host mux connection failed"));
-        resolve();
-      };
-      socket.onerror = () => reject(new DshHostHandshakeError("the dsh host mux connection failed"));
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.onopen = () => {
+          socket.onerror = () => settle(new DshHostTransportError("the dsh host mux connection failed"));
+          resolve();
+        };
+        socket.onerror = () => reject(new DshHostHandshakeError("the dsh host mux connection failed"));
+      });
+    } catch (error) {
+      socket.close();
+      throw error;
+    }
 
     socket.send(
       JSON.stringify({ type: "open", streamId, endpoint, payload: { args } }),

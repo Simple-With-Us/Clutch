@@ -349,6 +349,19 @@ describe("DshHostClient mux", () => {
     }
   });
 
+  it("closes the socket when the mux handshake fails", async () => {
+    (globalThis as { WebSocket?: unknown }).WebSocket = class extends FakeSocket {
+      constructor(url: string, init?: { headers?: Record<string, string> }) {
+        super(url, init);
+        sockets.push(this);
+        setTimeout(() => this.onerror?.({}), 0);
+      }
+    };
+    const client = await DshHostClient.connect({ launchUrl: `${origin}/launch?token=secret` });
+    await expect(client.stream("session/follow").next()).rejects.toBeInstanceOf(DshHostHandshakeError);
+    expect(sockets[0]?.closed).toBe(true);
+  });
+
   it("propagates an error after the mux handshake instead of returning empty history", async () => {
     const client = await DshHostClient.connect({ launchUrl: `${origin}/launch?token=secret` });
     const reading = client.stream("session/follow").next().catch((error: unknown) => error);
