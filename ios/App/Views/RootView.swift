@@ -151,7 +151,20 @@ struct ClutchScreen: View {
     }
 
     private var hostMenu: some View {
-        HostSwitcher(host: host, store: store)
+        // The canvas knows more than the probe does: a host can answer and
+        // still be asking for a fresh pairing code, and the picker must not
+        // say green in that case.
+        HostSwitcher(host: host, store: store, status: canvasStatus)
+    }
+
+    /// What the embedded canvas is doing, as a host state.
+    private var canvasStatus: HostStatus {
+        switch webState {
+        case .ready: return .online
+        case .loading: return host.status == .offline ? .notClutch : .unknown
+        case .needsPairing: return .notClutch
+        case .failed: return .offline
+        }
     }
 
     @ViewBuilder

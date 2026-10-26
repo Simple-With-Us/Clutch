@@ -11,6 +11,8 @@ public struct HostSwitcher: View {
     let store: HostStore
     /// Whether the label is sized for a header strip rather than a toolbar.
     let compact: Bool
+    /// The state to show, when the surface knows better than the probe does.
+    let status: HostStatus?
 
     /// The sheet the picker can open.
     private enum Sheet: String, Identifiable {
@@ -21,10 +23,16 @@ public struct HostSwitcher: View {
 
     @State private var sheet: Sheet?
 
-    public init(host: ClutchHost, store: HostStore, compact: Bool = false) {
+    public init(
+        host: ClutchHost,
+        store: HostStore,
+        compact: Bool = false,
+        status: HostStatus? = nil
+    ) {
         self.host = host
         self.store = store
         self.compact = compact
+        self.status = status
     }
 
     public var body: some View {
@@ -56,6 +64,10 @@ public struct HostSwitcher: View {
                 Circle()
                     .fill(statusColor)
                     .frame(width: compact ? 6 : 8, height: compact ? 6 : 8)
+                    // The menu already reads as "Host: <name>"; a bare colour
+                    // swatch would otherwise be announced as an unknown
+                    // element.
+                    .accessibilityHidden(true)
                 Text(host.name)
                     .font(compact ? .system(size: 11, weight: .semibold) : .subheadline.weight(.semibold))
                     .lineLimit(1)
@@ -72,6 +84,18 @@ public struct HostSwitcher: View {
                 NavigationStack {
                     PairView(showsIntro: false) { payload in
                         store.pair(payload)
+                        sheet = nil
+                    }
+                    .padding(.top, 16)
+                    .navigationTitle("Add Host")
+                    #if os(iOS)
+                    .navigationBarTitleDisplayMode(.inline)
+                    #endif
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            // A Mac sheet has no way out without this.
+                            Button("Cancel") { sheet = nil }
+                        }
                     }
                 }
             } else {
@@ -80,9 +104,9 @@ public struct HostSwitcher: View {
         }
     }
 
-    /// The host's probe result, as one colour.
+    /// The host's probe result, as one colour, unless the surface knows more.
     private var statusColor: Color {
-        switch host.status {
+        switch status ?? host.status {
         case .online: return .green
         case .notClutch: return .orange
         case .offline: return .red
