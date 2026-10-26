@@ -39,6 +39,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { z } from "zod";
 
+import { DshHostClientCache } from "./dshHostClientCache.ts";
+
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
@@ -90,15 +92,6 @@ interface Launcher {
  * bridge only carries the turns.
  */
 const CODE_ENGINES: Engine[] = ["mcode", "muse"];
-
-/**
- * How long a failed connection to the dsh host is remembered.
- *
- * The host is a separate process from the sidecar, so it may start after the
- * sidecar or restart under it; the failure is remembered only long enough to
- * avoid hammering a host that is not there.
- */
-const HOST_RETRY_COOLDOWN_MS = 30_000;
 
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
@@ -951,25 +944,7 @@ async function main(): Promise<void> {
    * The host is only needed for the engines it owns, so a machine that runs
    * only the code engines never opens a connection to it.
    */
-  let hostClient: DshHostClient | null = null;
-  let hostClientFailedAt = 0;
-  async function dshHost(): Promise<DshHostClient> {
-    if (hostClient) return hostClient;
-    // A failed connect is remembered only briefly: the host is a separate
-    // process, so it may start later or be restarted, and the sidecar must
-    // not be stuck with the first failure for the life of the process.
-    if (hostClientFailedAt && Date.now() - hostClientFailedAt < HOST_RETRY_COOLDOWN_MS) {
-      throw new Error("the dsh host is not reachable");
-    }
-    try {
-      hostClient = await DshHostClient.connect();
-      hostClientFailedAt = 0;
-      return hostClient;
-    } catch (err) {
-      hostClientFailedAt = Date.now();
-      throw err;
-    }
-  }
+  const hostClient = new DshHostClientCache(() => DshHostClient.connect());
 
   /**
    * The threads one engine owns, newest first.
@@ -983,11 +958,11 @@ async function main(): Promise<void> {
     limit: number,
   ): Promise<SessionSummary[]> {
     if (isDshHostedEngine(engine)) {
-      const listed = await listDshHostSessions(await dshHost(), {
+      const listed = await hostClient.run((client) => listDshHostSessions(client, {
         engine,
         limit,
         ...(cwd ? { cwd } : {}),
-      });
+      }));
       return sortSessionsByUpdated(listed);
     }
     const bridge = bridgeFor(engine);
@@ -1238,10 +1213,10 @@ async function main(): Promise<void> {
           // The next turn still goes through the ACP bridge, which resumes
           // the host's own session id, so the thread continues where it left
           // off rather than starting a new one.
-          const updates = await loadDshHostHistory(await dshHost(), {
+          const updates = await hostClient.run((client) => loadDshHostHistory(client, {
             sessionId: body.sessionId,
             limit: historyLimit,
-          });
+          }));
           history.push(...updates);
         } else if (session.model || session.effort) {
           // A resumed thread keeps the model it was created with unless the
