@@ -500,9 +500,15 @@ export async function materializeAttachment(options: {
     const file = join(imageDir, safeAttachmentName(options.image.name, options.index));
     await writeFile(file, Buffer.from(options.image.data, "base64"), { flag: "wx", mode: 0o600 });
     // Writing a file does not move the directory's own timestamp, so an
-    // active session's directory would look old to the prune.  Touch it.
-    const now = new Date();
-    await utimes(sessionDir, now, now);
+    // active session's directory would look old to the prune.  Touch it —
+    // best-effort only: the image is already written, and a failed touch
+    // must not discard it.
+    try {
+      const now = new Date();
+      await utimes(sessionDir, now, now);
+    } catch {
+      /* the prune also reads the files inside, so this is a courtesy */
+    }
     return file;
   } catch {
     if (imageDir) await rm(imageDir, { recursive: true, force: true }).catch(() => undefined);
@@ -516,7 +522,7 @@ export async function prepareAttachedPrompt(root: string, sessionId: string, tex
   // Old attachment directories are pruned while a new batch is written: the
   // sidecar has no background loop to hang this on, and a write is the moment
   // a stale directory can be noticed.
-  await pruneAttachments(root);
+  await pruneAttachments(root, 24 * 60 * 60 * 1000, sessionId);
   const written: string[] = [];
   try {
     for (const [index, image] of images.entries()) {
@@ -541,7 +547,11 @@ export async function prepareAttachedPrompt(root: string, sessionId: string, tex
  * background loop to hang this on, and a write is the moment a stale
  * directory can be noticed.
  */
-export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
+export async function pruneAttachments(
+  root: string,
+  maxAgeMs = 24 * 60 * 60 * 1000,
+  keepSessionId?: string,
+): Promise<void> {
   let entries: string[];
   try {
     entries = await readdir(root);
@@ -550,6 +560,9 @@ export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1
   }
   const now = Date.now();
   for (const entry of entries) {
+    // Never prune the session being written right now: its directory can
+    // look old between the mkdir and the write.
+    if (keepSessionId && entry === keepSessionId) continue;
     const dir = join(root, entry);
     try {
       const info = await stat(dir);

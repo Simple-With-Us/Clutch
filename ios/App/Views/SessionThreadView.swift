@@ -81,12 +81,13 @@ final class SessionThreadModel {
         catalog?.descriptor(engine)?.effortLevels ?? []
     }
 
-    /// What the model picker shows: the picked model, or the catalog's first
-    /// row.  The first row is only shown — it is not sent with a turn, so an
-    /// untouched thread keeps the model it was created with.
+    /// What the model picker shows: the picked model, or the engine itself.
+    /// Naming a model here would claim the thread runs it, and an untouched
+    /// thread keeps whatever model it was created with — which the client
+    /// does not know.
     var pickerLabel: String {
         if let modelId { return modelId }
-        return models.first?.displayLabel ?? engineLabel
+        return engineLabel
     }
 
     /// Load the catalog so the pickers can show what this host really

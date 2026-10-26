@@ -301,10 +301,12 @@ public struct ChatView: View {
     }
 
     /// What the model picker shows when the owner has not picked one: the
-    /// engine's own default, named but not sent.
+    /// engine itself.  Naming a model would claim the thread runs it, and
+    /// an untouched thread keeps whatever model it was created with —
+    /// which the client does not know.
     private var displayModel: String {
         if let selectedModel { return selectedModel }
-        return engineModels.first?.displayLabel ?? engine.label
+        return engine.label
     }
 
     private var rows: [Row] {
@@ -1098,10 +1100,10 @@ public struct ChatView: View {
             sidebarError = nil
         }
         let target = engine
-        // A resumed thread keeps the model and effort it was created with, so
-        // the previous thread's choices are not sent with the load.
-        selectedModel = nil
-        selectedEffort = nil
+        // A resumed thread keeps the model and effort it was created with,
+        // so the load carries none.  The local picks are cleared only once
+        // the load succeeds (in `adopt`), so a failed load leaves the
+        // visible thread's choices untouched.
         Task {
             defer { if fromSidebar { sidebarLoadingId = nil } }
             do {
