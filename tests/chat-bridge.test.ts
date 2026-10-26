@@ -40,9 +40,15 @@ describe("routeForModel", () => {
 describe("museInstalled", () => {
   it("needs both the Muse host and the ACP adapter", () => {
     const none = { hosts: [] as string[], adapters: [] as string[] };
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(true);
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(false);
+    // `process.execPath` stands in for "a path that really exists".  It is
+    // always present, on every platform; `/bin/true` is not, because macOS
+    // keeps `true` in `/usr/bin` and has no `/bin/true` at all.  On a Mac the
+    // old fixture read as a missing file, so the override looked stale and
+    // this test failed on every run while CI, on Linux, passed.
+    const present = process.execPath;
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: present }, none)).toBe(true);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: present }, none)).toBe(false);
     // A stale override path must not count as installed.
     expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).toBe(false);
   });
