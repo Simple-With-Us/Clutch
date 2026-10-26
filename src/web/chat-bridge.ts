@@ -65,7 +65,7 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
-import { createDshHostSession, runDshHostTurn } from "./dshHostTurn.ts";
+import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "./dshHostTurn.ts";
 import {
   DshHostApprovalRelay,
   type HostApproval,
@@ -2234,6 +2234,31 @@ async function main(): Promise<void> {
             // as a waterfall, and the answer goes back over the host's wire.
             active.answerPermission = async (requestId, optionId) =>
               answerHostApproval(active, requestId, hostOutcomeFor(optionId));
+            // The host's own model selection decides which provider the turn
+            // runs on, so the engine the client picked is applied before the
+            // prompt.  A refusal is not fatal: the turn still runs on the
+            // host's default.
+            try {
+              const provider = await hostProviderFor(host, engine);
+              if (provider) {
+                const catalogValue = await catalog();
+                const wanted = session.model
+                  ? resolveModelValue(catalogValue, engine, session.model)
+                  : null;
+                const chosen = await selectHostModel(
+                  host,
+                  sessionId,
+                  provider,
+                  wanted ?? null,
+                  session.effort ?? null,
+                );
+                log(`chat host-model session=${chatId} provider=${provider.provider} model=${chosen}`);
+              } else {
+                log(`chat host has no provider for engine=${engine}`);
+              }
+            } catch (err) {
+              log(`chat host-model refused session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+            }
             log(`chat host-turn session=${chatId} hostSession=${sessionId}`);
             const result = await runDshHostTurn(host, {
               sessionId,

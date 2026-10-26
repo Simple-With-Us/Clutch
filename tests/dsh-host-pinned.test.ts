@@ -199,4 +199,15 @@ describe("dsh host contract — pinned to the installed dsh build", () => {
     expect(source).toMatch(/event:\s*['"]approval\/request['"]/);
     expect(source).toMatch(/event:\s*['"]approval\/request['"],\s*mode:\s*['"]waterfall['"]/);
   });
+
+  it("declares the endpoints the host turn drives", () => {
+    const source = readInstalled("dsh-api-session-controller/lib/typert.host.js");
+    for (const endpoint of ["selectModel", "modelCatalog", "prompt", "follow"]) {
+      expect(source).toContain(`'${endpoint}'`);
+    }
+    // The model selection is a provider and a model, and the host resolves
+    // the pair, so the sidecar sends both.
+    expect(source).toMatch(/'provider':\s*z\.string\(\)/);
+    expect(source).toMatch(/'model':\s*z\.string\(\)/);
+  });
 });

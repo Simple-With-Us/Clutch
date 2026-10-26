@@ -28,6 +28,94 @@ export interface DshHostTurnResult {
   readonly stopReason: string;
 }
 
+/** The provider that runs one of Clutch's engines, and the models under it. */
+export interface DshHostProvider {
+  readonly provider: string;
+  readonly models: readonly string[];
+}
+
+/** The host's own model catalog, as the host publishes it. */
+interface DshHostModelCatalog {
+  readonly groups?: readonly {
+    readonly id?: string;
+    readonly name?: string;
+    readonly models?: readonly { readonly id?: string; readonly name?: string }[];
+  }[];
+}
+
+/**
+ * The provider that runs one of Clutch's engines in the host.
+ *
+ * The host names its own providers, and the names differ between an upstream
+ * build and a machine that was configured by hand, so the sidecar asks the
+ * host which providers it has and picks the one that carries the engine's
+ * name.  Null means the host has no provider for that engine, and the turn
+ * runs on whatever the host would use on its own.
+ */
+export async function hostProviderFor(
+  client: DshHostClient,
+  engine: string,
+): Promise<DshHostProvider | null> {
+  const wanted = engine.trim().toLowerCase();
+  if (!wanted) return null;
+  const catalog = (await client.call("session/modelCatalog", {})) as DshHostModelCatalog;
+  const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+  const group =
+    groups.find(
+      (entry) => entry.id?.toLowerCase() === wanted || entry.name?.toLowerCase() === wanted,
+    ) ??
+    groups.find(
+      (entry) =>
+        entry.id?.toLowerCase().startsWith(`${wanted}-`) ||
+        entry.name?.toLowerCase().includes(wanted),
+    );
+  if (!group?.id) return null;
+  const models = Array.isArray(group.models) ? group.models : [];
+  return {
+    provider: group.id,
+    models: models
+      .map((model: { readonly id?: string }) => model.id)
+      .filter((id: string | undefined): id is string => typeof id === "string" && id.length > 0),
+  };
+}
+
+/**
+ * Point one host thread at the model the client asked for.
+ *
+ * The host resolves the pair it is given, so a model it does not know is
+ * refused.  The host's own model for the provider is used instead, so the
+ * turn still runs on the engine the client picked even when the two sides
+ * do not spell the model the same way.
+ *
+ * The host also remembers the selection as its own default, which is what
+ * the web canvas does with the model it picks.
+ */
+export async function selectHostModel(
+  client: DshHostClient,
+  sessionId: string,
+  provider: DshHostProvider,
+  model: string | null,
+  effort: string | null,
+): Promise<string | null> {
+  const wanted = model ?? provider.models[0] ?? null;
+  if (!wanted) return null;
+  const payload = {
+    sessionId,
+    provider: provider.provider,
+    model: wanted,
+    ...(effort ? { reasoningEffort: effort } : {}),
+  };
+  try {
+    await client.call("session/selectModel", payload);
+    return wanted;
+  } catch (err) {
+    const fallback = provider.models[0];
+    if (!fallback || fallback === wanted) throw err;
+    await client.call("session/selectModel", { ...payload, model: fallback });
+    return fallback;
+  }
+}
+
 /** Read one record out of an unknown value, or null. */
 function readRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)

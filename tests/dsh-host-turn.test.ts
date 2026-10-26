@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { createDshHostSession, runDshHostTurn } from "../src/web/dshHostTurn.ts";
+import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "../src/web/dshHostTurn.ts";
 import type { DshHostClient } from "../src/web/dshHostClient.ts";
 import type { SessionUpdate } from "../src/web/sessionUpdates.ts";
 
@@ -21,6 +21,27 @@ import type { SessionUpdate } from "../src/web/sessionUpdates.ts";
 class FakeHost {
   readonly calls: Array<{ endpoint: string; args: Record<string, unknown> }> = [];
   readonly streams: Array<{ endpoint: string; args: Record<string, unknown> }> = [];
+
+  /** The model catalog the host publishes. */
+  catalog: unknown = {
+    default: { provider: "deepseek-official", model: "DeepSeek-V4.1-Pro" },
+    routableProviders: ["deepseek-official"],
+    groups: [
+      {
+        id: "deepseek-official",
+        name: "DeepSeek",
+        models: [{ id: "DeepSeek-V4.1-Pro", name: "DeepSeek-V4.1-Pro" }],
+      },
+      {
+        id: "minimax",
+        name: "MiniMax",
+        models: [{ id: "MiniMax-M3.1-Flash", name: "MiniMax-M3.1-Flash" }],
+      },
+    ],
+  };
+
+  /** The models the host refuses to run. */
+  refusedModels: string[] = [];
 
   private readonly queue: unknown[] = [];
   private readonly waiters: Array<() => void> = [];
@@ -57,6 +78,14 @@ class FakeHost {
   async call(endpoint: string, args: Record<string, unknown>): Promise<unknown> {
     this.calls.push({ endpoint, args });
     if (endpoint === "session/create") return { sessionId: "host-session-1" };
+    if (endpoint === "session/modelCatalog") return this.catalog;
+    if (endpoint === "session/selectModel") {
+      const model = String(args["model"] ?? "");
+      if (this.refusedModels.includes(model)) {
+        throw new Error(`model-unavailable: ${model}`);
+      }
+      return { selected: { provider: args["provider"], model } };
+    }
     if (endpoint === "session/prompt") {
       for (const frame of this.onPrompt) this.push(frame);
     }
@@ -205,5 +234,73 @@ describe("running a turn in the host", () => {
       signal: AbortSignal.timeout(50),
     });
     expect(result.stopReason).toBe("cancelled");
+  });
+});
+
+describe("choosing the model in the host", () => {
+  it("finds the provider that runs the engine", async () => {
+    const host = new FakeHost();
+    const provider = await hostProviderFor(host.asClient(), "deepseek");
+    expect(provider).toEqual({
+      provider: "deepseek-official",
+      models: ["DeepSeek-V4.1-Pro"],
+    });
+  });
+
+  it("finds the provider by its name too", async () => {
+    const host = new FakeHost();
+    const provider = await hostProviderFor(host.asClient(), "minimax");
+    expect(provider?.provider).toBe("minimax");
+    expect(provider?.models).toEqual(["MiniMax-M3.1-Flash"]);
+  });
+
+  it("has no provider for an engine the host does not carry", async () => {
+    const host = new FakeHost();
+    expect(await hostProviderFor(host.asClient(), "muse")).toBe(null);
+  });
+
+  it("selects the model the client asked for", async () => {
+    const host = new FakeHost();
+    const provider = await hostProviderFor(host.asClient(), "deepseek");
+    if (!provider) throw new Error("the host has no DeepSeek provider");
+    const chosen = await selectHostModel(
+      host.asClient(),
+      "host-session-1",
+      provider,
+      "DeepSeek-V4.1-Pro",
+      "high",
+    );
+    expect(chosen).toBe("DeepSeek-V4.1-Pro");
+    const selection = host.calls.find((call) => call.endpoint === "session/selectModel");
+    expect(selection?.args).toEqual({
+      sessionId: "host-session-1",
+      provider: "deepseek-official",
+      model: "DeepSeek-V4.1-Pro",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("uses the host's own model when the client named one it does not know", async () => {
+    const host = new FakeHost();
+    host.refusedModels = ["DeepSeek-V9"];
+    const provider = await hostProviderFor(host.asClient(), "deepseek");
+    if (!provider) throw new Error("the host has no DeepSeek provider");
+    const chosen = await selectHostModel(
+      host.asClient(),
+      "host-session-1",
+      provider,
+      "DeepSeek-V9",
+      null,
+    );
+    // The turn still runs on the engine the client picked.
+    expect(chosen).toBe("DeepSeek-V4.1-Pro");
+  });
+
+  it("selects the provider's own model when the client named none", async () => {
+    const host = new FakeHost();
+    const provider = await hostProviderFor(host.asClient(), "minimax");
+    if (!provider) throw new Error("the host has no MiniMax provider");
+    const chosen = await selectHostModel(host.asClient(), "host-session-1", provider, null, null);
+    expect(chosen).toBe("MiniMax-M3.1-Flash");
   });
 });
