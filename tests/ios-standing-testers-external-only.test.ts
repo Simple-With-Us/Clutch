@@ -45,6 +45,10 @@ describe("standing testers sync is external-only", () => {
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);
     expect(branch).toMatch(/await deleteInternalGroups\(/);
+    // After assigning the build to the external group, the sync independently
+    // verifies membership through the group-side builds read (Apple forbids
+    // reading a build's betaGroups).
+    expect(branch).toMatch(/\/v1\/betaGroups\/\$\{group\.id\}\/builds/);
     // Standing testers join the external group with createFirst: an email
     // whose only tester record belongs to another app of the team cannot be
     // related to this app's group (409 STATE_ERROR, seen live 2026-10-09),
@@ -73,7 +77,10 @@ describe("ensure-tf-ready readiness is external-only", () => {
   it("ship-testflight.sh no longer claims internal testers can install", () => {
     const sh = read("scripts/ios-fleet/ship-testflight.sh");
     expect(sh).not.toMatch(/TestFlight internal testers can install this build/);
-    expect(sh).toMatch(/TestFlight external testers can install this build after Beta App Review/);
+    // The readiness step runs before the sync assigns the build, so the rc=0
+    // line states exactly what was verified: the app's external install path.
+    expect(sh).toMatch(/TestFlight external install path is live for /);
+    expect(sh).not.toMatch(/TestFlight external testers can install this build/);
     expect(sh).not.toMatch(/has no internal TestFlight tester/);
   });
 });
