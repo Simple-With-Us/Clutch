@@ -241,7 +241,7 @@ final class SessionThreadModel {
 
     /// The engine's owner-facing name, when the catalog has not loaded yet.
     var engineLabel: String {
-        catalog?.descriptor(engine)?.label ?? (engine == "muse" ? "Muse Code" : "MiniMax Code")
+        catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
     }
 }
 

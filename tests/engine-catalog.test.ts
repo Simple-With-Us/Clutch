@@ -102,6 +102,23 @@ describe("buildEngineCatalog", () => {
     expect(muse.effortLevels).toContain("ultra");
   });
 
+  it("publishes that every engine's threads can be listed and resumed", async () => {
+    const catalog = await buildEngineCatalog({
+      launchers: {
+        deepseek: { command: "dsh", args: [] },
+        minimax: { command: "minimax", args: [] },
+        mcode: { command: "mcode", args: ["acp"] },
+        muse: { command: "muse", args: [] },
+      },
+      // An engine that is not installed here still lists its threads: the
+      // capability belongs to the engine, not to this machine's copy of it.
+      available: { deepseek: true, minimax: true, mcode: false, muse: false },
+      probeCwd: "/tmp",
+      readMuseCatalog: () => [],
+    });
+    expect(catalog.engines.map((engine) => engine.supportsThreads)).toEqual([true, true, true, true]);
+  });
+
   it("notes when an engine advertised nothing", async () => {
     const catalog = await buildEngineCatalog({
       launchers: {
@@ -127,6 +144,7 @@ describe("resolveModelValue", () => {
         id: "muse",
         label: "Muse Code",
         available: true,
+        supportsThreads: true,
         models: [
           { id: "muse-wonder-1.0", label: "muse-wonder-1.0", value: "muse-wonder-1.0" },
           { id: "muse-spark-1.2", label: "muse-spark-1.2", value: "muse-model:[\"meta\",null,\"muse-spark-1.2\"]" },
