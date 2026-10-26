@@ -527,6 +527,34 @@ export async function countInternalTesters({ api, appId }) {
   return { ok: true, groups: groups.length, testers: seen.size };
 }
 
+// Whether a processed build can reach anyone through external testing: it is
+// assigned to at least one external group that has testers or an enabled
+// public link.  Under the owner's external-only policy (2026-10-18/19) this
+// replaces the internal-tester count as the installability check; approval is
+// still Apple's gate after that.  Never throws; { ok:false } means the read
+// failed, which is not the same as uninstallable.
+export async function externalInstallability({ api, buildId }) {
+  const groupsRes = await api("GET", `/v1/builds/${buildId}/betaGroups?limit=200&fields[betaGroups]=name,isInternalGroup,publicLinkEnabled`);
+  if (!groupsRes.ok) return { ok: false, error: ascErrorText(groupsRes), installable: false };
+  const external = ascRows(groupsRes).filter((g) => g.attributes?.isInternalGroup === false);
+  for (const g of external) {
+    if (g.attributes?.publicLinkEnabled === true) {
+      return { ok: true, installable: true, detail: `public link on "${g.attributes?.name}"` };
+    }
+    const members = await api("GET", `/v1/betaGroups/${g.id}/betaTesters?limit=200&fields[betaTesters]=email`);
+    if (!members.ok) return { ok: false, error: ascErrorText(members), installable: false };
+    const count = ascRows(members).length;
+    if (count > 0) return { ok: true, installable: true, detail: `${count} tester(s) in "${g.attributes?.name}"` };
+  }
+  return {
+    ok: true,
+    installable: false,
+    detail: external.length
+      ? "external groups have neither testers nor a public link"
+      : "build is assigned to no external group"
+  };
+}
+
 // Make sure the app has an internal group with access to all builds, and that
 // every standing email that is an App Store Connect user is in it.  Idempotent,
 // ADD-ONLY (never removes a tester or a group), prints emails masked.  An
@@ -1459,6 +1487,22 @@ async function main() {
     //     internal "Internal Testers" group.  ensureInternalTesterGroup
     //     stays available for flows that need an internal group on purpose.
 
+    // 2c) Internal groups that DO exist: delete them.  Owner directive
+    //     2026-10-18 ("delete internal group if that isn't problem to do")
+    //     made automatic 2026-10-19 ("do the same for all other apps too and
+    //     make that automatic").  A group deleted here only ends its access to
+    //     the builds; it never deletes the testers from TestFlight.  Failure
+    //     to delete warns instead of failing the sync.
+    const internalLeft = rows(groupsRes).filter((g) => g.attributes?.isInternalGroup === true);
+    for (const g of internalLeft) {
+      const del = await api("DELETE", `/v1/betaGroups/${g.id}`);
+      if (del.ok || del.status === 204 || del.status === 404) {
+        console.error(`${prefix}: deleted internal group "${g.attributes?.name}" id=${g.id} (owner directive 2026-10-18/19: external testing only)`);
+      } else {
+        warn(`could not delete internal group "${g.attributes?.name}" id=${g.id} (${errText(del)})`);
+      }
+    }
+
     // 3) Build: the given CFBundleVersion, else the newest upload.
     const buildQuery = wantBuild
       ? `/v1/builds?filter[app]=${appId}&filter[version]=${encodeURIComponent(wantBuild)}&limit=5`
@@ -1638,25 +1682,27 @@ async function main() {
       console.error(`ensure-tf-ready: poll ${pollNo} enc=${attrs.usesNonExemptEncryption} internal=${state}`);
       if (state === "IN_BETA_TESTING" || state === "READY_FOR_BETA_TESTING") {
         // READY_FOR_BETA_TESTING only says Apple finished processing.  It does
-        // not say anyone can install the build: a new app record has no internal
-        // group, and that is how 14 green ships reached nobody (GH #1018).
-        const internalTesters = await countInternalTesters({ api, appId });
-        if (internalTesters.ok) {
-          console.error(`ensure-tf-ready: internal testers with access to all builds=${internalTesters.testers} (groups=${internalTesters.groups})`);
+        // not say anyone can install the build.  Under the owner's external-only
+        // policy (2026-10-18/19) there is no internal group, so installability
+        // means the build sits in an external group that has testers or an
+        // enabled public link.  This is how 14 green ships reached nobody (GH #1018).
+        const reach = await externalInstallability({ api, buildId });
+        if (reach.ok) {
+          console.error(`ensure-tf-ready: external installability=${reach.installable} (${reach.detail})`);
         } else {
-          console.error(`ensure-tf-ready: could not count internal testers (${internalTesters.error})`);
+          console.error(`ensure-tf-ready: could not read external installability (${reach.error})`);
         }
-        const nobody = internalTesters.ok && internalTesters.testers === 0;
+        const nobody = reach.ok && !reach.installable;
         console.log(JSON.stringify({
           ok: true,
           buildId,
           version,
           internalBuildState: state,
           usesNonExemptEncryption: attrs.usesNonExemptEncryption,
-          internalTesterCount: internalTesters.ok ? internalTesters.testers : null
+          externalInstallable: reach.ok ? reach.installable : null
         }));
-        // 5 = read and zero; 6 = could not be read, so installability is unverified.
-        process.exit(nobody ? 5 : internalTesters.ok ? 0 : 6);
+        // 5 = read and nobody can install; 6 = could not be read, so installability is unverified.
+        process.exit(nobody ? 5 : reach.ok ? 0 : 6);
       }
       await sleep(POLL_MS);
     }
