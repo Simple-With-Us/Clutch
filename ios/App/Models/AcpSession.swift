@@ -1,5 +1,61 @@
 import Foundation
 
+/// One option the engine offers for a permission request.
+public struct AcpPermissionOption: Decodable, Equatable, Sendable, Identifiable {
+    /// The id the sidecar answers with.
+    public var optionId: String
+    /// The engine's kind for the option: `allow_once`, `allow_always`,
+    /// `reject_once`, `reject_always`.
+    public var kind: String
+    /// The engine's own name for the option.
+    public var name: String
+
+    public var id: String { optionId }
+
+    public init(optionId: String, kind: String, name: String) {
+        self.optionId = optionId
+        self.kind = kind
+        self.name = name
+    }
+
+    /// True when the option lets the tool run.
+    public var allows: Bool {
+        kind == "allow_once" || kind == "allow_always"
+    }
+}
+
+/// A permission request the engine is waiting on.
+///
+/// The engine blocks until the request is answered, so the request travels
+/// with the turn and the answer goes back the same way.
+public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable {
+    /// The id the sidecar answers with.
+    public var requestId: String
+    /// What the tool wants to do, as the engine described it.
+    public var title: String
+    /// The tool that wants the permission.
+    public var toolName: String
+    /// The options the engine offers.
+    public var options: [AcpPermissionOption]
+
+    public var id: String { requestId }
+
+    public init(requestId: String, title: String, toolName: String, options: [AcpPermissionOption]) {
+        self.requestId = requestId
+        self.title = title
+        self.toolName = toolName
+        self.options = options
+    }
+
+    /// The heading the card shows: what the tool wants, and which tool it is.
+    public var headline: String {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+        let tool = toolName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tool.isEmpty ? "The engine is asking for permission" : tool
+    }
+}
+
 /// Real token accounting for one session, as reported by the engine.
 ///
 /// Every field is optional because the sidecar omits what it could not read.

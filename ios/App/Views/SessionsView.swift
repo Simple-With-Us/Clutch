@@ -402,6 +402,14 @@ struct NewThreadSheet: View {
                         .foregroundStyle(.red)
                 }
 
+                // The engine is blocked on this request until the answer
+                // goes back, so it is held on screen.
+                if let request = model.pendingPermission {
+                    PermissionCard(request: request) { optionId in
+                        model.answerPermission(optionId)
+                    }
+                }
+
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("Message", text: $model.draft, axis: .vertical)
                         .textFieldStyle(.plain)
@@ -462,10 +470,41 @@ final class NewThreadModel {
     var reply: String?
     var errorText: String?
     var isSending = false
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered, so the queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card.
+    var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
 
     init(host: ClutchHost, engine: String = "mcode") {
         self.host = host
         self.engine = engine
+    }
+
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.
+    func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermissions.first, let chatId else { return }
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again.
+                pendingPermissions.removeFirst()
+            } else {
+                errorText = "The permission answer did not reach the engine."
+            }
+        }
     }
 
     func send() {
@@ -495,12 +534,18 @@ final class NewThreadModel {
                         reply = text
                     case .thought, .tool:
                         break
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermissions.append(request)
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
+                        pendingPermissions.removeAll()
                     case .usage:
                         break // live usage strip is Mac-only
                     case .failed(let message):
                         errorText = message
+                        pendingPermissions.removeAll()
                     }
                 }
             } catch {

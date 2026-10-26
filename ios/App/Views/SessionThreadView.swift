@@ -45,6 +45,16 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered.  The queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card, where it would
+    /// only be answered by the fallback timer.
+    var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     /// Images attached to the next turn, the way the web canvas attaches
     /// files to a message.
     var attachments: [ChatAttachment] = []
@@ -187,13 +197,19 @@ final class SessionThreadModel {
                         thoughtLine = text
                     case .tool(let id, let name, let status):
                         upsertTool(id: id, name: name, status: status)
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermissions.append(request)
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                     case .usage:
                         break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
@@ -203,6 +219,31 @@ final class SessionThreadModel {
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
             isSending = false
+        }
+    }
+
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.  The
+    /// card is cleared either way: a request the sidecar could not answer
+    /// is not one the engine will take an answer for later.
+    func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermissions.first, let chatId else { return }
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again instead of stranding the
+                // engine on a question nobody can see any more.
+                pendingPermissions.removeFirst()
+            } else {
+                sendError = "The permission answer did not reach the engine."
+            }
         }
     }
 
@@ -218,6 +259,10 @@ final class SessionThreadModel {
         sendTask?.cancel()
         sendTask = nil
         thoughtLine = nil
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
         isSending = false
     }
 
@@ -278,6 +323,16 @@ public struct SessionThreadView: View {
             }
             transcript
             Divider()
+            // The permission card sits above the composer, so the question
+            // the engine is asking is answered in the same place the turn
+            // is written.
+            if let request = model.pendingPermission {
+                PermissionCard(request: request) { optionId in
+                    model.answerPermission(optionId)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
             composer
         }
         .navigationTitle(session.displayTitle)

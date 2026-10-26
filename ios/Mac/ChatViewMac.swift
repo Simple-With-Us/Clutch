@@ -189,6 +189,17 @@ public struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
+    /// The permission request the engine is waiting on, when it asked for
+    /// one.  The engine is blocked until this is answered.
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered.  The queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card.
+    @State private var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    private var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     /// nil until the first health check lands; drives the header status dot.
     @State private var sidecarReachable: Bool?
     @State private var mcodeAvailable: Bool = true
@@ -469,6 +480,15 @@ public struct ChatView: View {
                     .foregroundColor(.red)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
+            }
+            // The permission card sits above the input bar, so the question
+            // the engine is asking is answered where the turn is written.
+            if let request = pendingPermission {
+                PermissionCard(request: request) { optionId in
+                    answerPermission(optionId)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
             MacChatInputBar(
                 draft: $draft,
@@ -1376,6 +1396,10 @@ public struct ChatView: View {
                         } else {
                             liveTools.append(LiveTool(id: key, name: name.isEmpty ? "Tool call" : name, status: status))
                         }
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermissions.append(request)
                     case .done(let stop, let id, let remoteId):
                         if isWorkspace {
                             codeChatId = id
@@ -1393,6 +1417,7 @@ public struct ChatView: View {
                             sessionId = id
                         }
                         liveTools = []
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : (selectedModel ?? engine.label))
                         sending = false
                         streamingText = ""
@@ -1410,6 +1435,7 @@ public struct ChatView: View {
                         thoughtLine = nil
                         sendError = message
                         liveTools = []
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? engine.label : (selectedModel ?? engine.label), failed: true)
                     }
                 }
@@ -1455,6 +1481,34 @@ public struct ChatView: View {
     /// then drop the local stream (whose close cancels a second time on the
     /// server, harmlessly).  The partial reply stays out of the transcript —
     /// a stopped turn is not a finished answer.
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.  The
+    /// card is cleared either way: a request the sidecar could not answer
+    /// is not one the engine will take an answer for later.
+    private func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermissions.first, let host = activeHost else { return }
+        // Without a chat id the sidecar has nothing to answer against, so the
+        // card stays and the turn keeps waiting rather than losing the answer.
+        guard let chatId = isWorkspace ? codeChatId : sessionId, !chatId.isEmpty else { return }
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again instead of stranding the
+                // engine on a question nobody can see any more.
+                pendingPermissions.removeFirst()
+            } else {
+                sendError = "The permission answer did not reach the engine."
+            }
+        }
+    }
+
     private func stop() {
         guard sending else { return }
         if let host = activeHost, let chatId = isWorkspace ? codeChatId : sessionId {
@@ -1465,6 +1519,10 @@ public struct ChatView: View {
         sending = false
         streamingText = ""
         thoughtLine = nil
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
     }
 }
 

@@ -7,13 +7,16 @@
  *
  *   POST /clutch/v1/chat    {prompt, model?, sessionId?, cwd?} → SSE stream
  *   POST /clutch/v1/chat/cancel {sessionId} → stop one in-flight turn
+ *   POST /clutch/v1/permissions {sessionId, requestId, optionId} → answer a
+ *        permission request the engine is waiting on
  *   GET  /clutch/v1/thread?uid=<deviceUid>&limit=<n> → agent thread bubbles
  *   GET  /clutch/v1/health  liveness, engines, and MiniMax Code availability
  *   GET  /clutch/v1/sessions?engine=<engine> → that engine's threads
  *   POST /clutch/v1/sessions/load          → replay one thread of any engine
  *
  * SSE events: `message` {text}, `thought` {text}, `tool`
- * {id, name, status}, `done` {stopReason, sessionId}.  Each turn runs a real coding session through
+ * {id, name, status}, `permission` {requestId, title, toolName, options},
+ * `done` {stopReason, sessionId}.  Each turn runs a real coding session through
  * the existing Python ACP bridges (DeepSeek via `scripts/dsh-acp.sh`,
  * MiniMax via `scripts/minimax-acp.sh`).  The MiniMax Code Remote is a
  * separate direct `mcode acp` client so its existing native threads remain
@@ -99,6 +102,15 @@ const CODE_ENGINES: Engine[] = ["mcode", "muse"];
  * avoid hammering a host that is not there.
  */
 const HOST_RETRY_COOLDOWN_MS = 30_000;
+
+/**
+ * How long a permission request waits for the client's answer.
+ *
+ * The engine is blocked until the request is answered, so a client that
+ * never answers must not block the turn forever: the sidecar falls back to
+ * the allow-once it has always sent.
+ */
+const PERMISSION_TIMEOUT_MS = 120_000;
 
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
@@ -631,6 +643,105 @@ async function newestFileTime(dir: string, fallback: number): Promise<number> {
   return newest;
 }
 
+/**
+ * The counter behind the permission request ids.
+ *
+ * It is file-wide rather than per bridge, so an id names one request in the
+ * whole process and a client cannot answer the wrong turn's request.
+ */
+let permissionCounter = 0;
+
+/** One option the engine offers for a permission request. */
+export interface PermissionOption {
+  /** The id the client sends back. */
+  optionId: string;
+  /** The engine's kind for the option: allow_once, allow_always, reject_once, reject_always. */
+  kind: string;
+  /** The engine's own name for the option. */
+  name: string;
+}
+
+/** A permission request the engine is waiting on. */
+export interface PermissionRequest {
+  /** The id the client answers with. */
+  requestId: string;
+  /** The ACP session that asked. */
+  sessionId: string;
+  /** What the tool wants to do, as the engine described it. */
+  title: string;
+  /** The tool that wants the permission. */
+  toolName: string;
+  /** The options the engine offers. */
+  options: PermissionOption[];
+}
+
+/** Read one string field out of an unknown value, or null. */
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The shape of a permission request as an engine sends it.
+ *
+ * The params arrive from the engine, so they are untrusted: the schema drops
+ * what it does not recognise instead of letting a stray field reach the
+ * client or the engine's answer.
+ */
+const PermissionParamsSchema = z
+  .object({
+    sessionId: z.string().optional(),
+    toolCall: z
+      .object({
+        toolCallId: z.string().optional(),
+        title: z.string().optional(),
+        kind: z.string().optional(),
+      })
+      .optional(),
+    options: z
+      .array(
+        z.object({
+          optionId: z.string().min(1),
+          kind: z.string().default(""),
+          name: z.string().default(""),
+        }),
+      )
+      .optional(),
+  })
+  .loose();
+
+/** Read the options out of a permission request, keeping only the usable ones. */
+function parsePermissionOptions(value: unknown): PermissionOption[] {
+  if (!Array.isArray(value)) return [];
+  const options: PermissionOption[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const optionId = readString(record.optionId);
+    if (!optionId) continue;
+    options.push({
+      optionId,
+      kind: readString(record.kind) ?? "",
+      name: readString(record.name) ?? optionId,
+    });
+  }
+  return options;
+}
+
+/**
+ * The option the sidecar falls back to when nobody answers.
+ *
+ * It is the same allow-once the sidecar has always sent on its own, so a
+ * client that never answers leaves the turn exactly as it was before.
+ */
+export function fallbackPermissionOption(options: PermissionOption[]): string | null {
+  const allow = options.find((option) => option.kind === "allow_once");
+  if (allow) return allow.optionId;
+  const reject = options.find(
+    (option) => option.kind === "reject_once" || option.kind === "reject_always",
+  );
+  return reject?.optionId ?? null;
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 export class Bridge {
   private child: ChildProcess | null = null;
@@ -639,6 +750,11 @@ export class Bridge {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private onUpdate: ((u: AcpUpdate) => void) | null = null;
   private onProcessFailure: (() => void) | null = null;
+  private onPermission: ((request: PermissionRequest) => void) | null = null;
+  private pendingPermissions = new Map<
+    string,
+    { bridgeRequestId: number | string; options: PermissionOption[] }
+  >();
   private buffer = "";
 
   constructor(
@@ -652,6 +768,42 @@ export class Bridge {
 
   setProcessFailureHandler(fn: () => void): void {
     this.onProcessFailure = fn;
+  }
+
+  /**
+   * Take over permission requests.
+   *
+   * Without a handler the sidecar answers them itself, the way it always
+   * has.  With one, the request waits for the client's answer.
+   */
+  setPermissionHandler(fn: (request: PermissionRequest) => void): void {
+    this.onPermission = fn;
+  }
+
+  /**
+   * Answer a permission request the engine is waiting on.
+   *
+   * `optionId` picks one of the options the engine offered; null cancels the
+   * request.  An option the engine never offered is refused rather than
+   * forwarded: a stale card or a mismatched client must not be able to stall
+   * the blocked turn with an id the engine will reject.  A request that is
+   * already gone is reported as unanswered, so a late answer is harmless
+   * rather than an error.
+   */
+  answerPermission(requestId: string, optionId: string | null): boolean {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return false;
+    if (optionId !== null && !pending.options.some((option) => option.optionId === optionId)) {
+      return false;
+    }
+    this.pendingPermissions.delete(requestId);
+    const outcome = optionId
+      ? { outcome: "selected", optionId }
+      : { outcome: "cancelled" };
+    this.child?.stdin?.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: pending.bridgeRequestId, result: { outcome } })}\n`,
+    );
+    return true;
   }
 
   private spawn(): void {
@@ -707,15 +859,7 @@ export class Bridge {
         continue;
       }
       if (msg.method === "session/request_permission" && msg.id !== undefined) {
-        const options = Array.isArray(msg.params?.options)
-          ? msg.params.options as Array<{ optionId?: unknown; kind?: unknown }>
-          : [];
-        const choice = options.find((option) => option?.kind === "allow_once")
-          ?? options.find((option) => option?.kind === "reject_once" || option?.kind === "reject_always");
-        const outcome = typeof choice?.optionId === "string"
-          ? { outcome: "selected", optionId: choice.optionId }
-          : { outcome: "cancelled" };
-        this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { outcome } })}\n`);
+        this.holdPermissionRequest(msg.id, msg.params ?? {});
         continue;
       }
       if (msg.method && msg.id !== undefined) {
@@ -735,6 +879,37 @@ export class Bridge {
         else p.resolve(msg.result);
       }
     }
+  }
+
+  /**
+   * Hold a permission request until the client answers it.
+   *
+   * The engine waits for an answer, so the request is handed up and the
+   * answer goes back the same way.  The request is registered before it is
+   * handed up, so the no-handler fallback below can answer it: without that,
+   * the engine would sit blocked on a request nobody ever replies to.  With
+   * no handler attached the sidecar answers it itself, exactly as it did
+   * before, so a caller that never asked for this feature sees no change.
+   */
+  private holdPermissionRequest(id: number | string, params: Record<string, unknown>): void {
+    const parsed = PermissionParamsSchema.safeParse(params);
+    if (!parsed.success) return;
+    const options = parsePermissionOptions(parsed.data.options);
+    const toolCall = parsed.data.toolCall ?? {};
+    const title = readString(toolCall.title) ?? "";
+    const request: PermissionRequest = {
+      requestId: `perm-${(permissionCounter += 1)}`,
+      sessionId: readString(parsed.data.sessionId) ?? "",
+      title,
+      toolName: readString(toolCall.kind) ?? (title || "Tool call"),
+      options,
+    };
+    this.pendingPermissions.set(request.requestId, { bridgeRequestId: id, options });
+    if (!this.onPermission) {
+      this.answerPermission(request.requestId, fallbackPermissionOption(options));
+      return;
+    }
+    this.onPermission(request);
   }
 
   private send(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -876,6 +1051,18 @@ interface ChatSession {
   model?: string;
   /** The reasoning effort this session runs, as the client asked for it. */
   effort?: string;
+  /** The permission requests this turn is waiting on. */
+  permission?: ((request: PermissionRequest) => void) | null;
+  /** The fallback timers for those requests, so a late answer is not a second one. */
+  permissionTimers: Map<string, ReturnType<typeof setTimeout>>;
+  /**
+   * The permission requests this turn owns, by request id.
+   *
+   * The ids are process-wide and predictable, so an answer is only accepted
+   * when the request it names is one this turn raised: otherwise a stale card
+   * could answer another turn's question.
+   */
+  pendingPermissions: Map<string, PermissionRequest>;
 }
 
 /** Untrusted request bodies for the project/archive routes.  Strict so an
@@ -1002,7 +1189,15 @@ async function main(): Promise<void> {
 
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
-  const bridgeEnv = { ...process.env, CLUTCH_RUNTIME_ROOT: ROOT, DSH_PERMISSION_MODE: "danger-full-access" };
+  // The operator's permission posture wins, so the sidecar does not force
+  // one over the top of it: `danger-full-access` (the default) means the
+  // engine never asks, and anything else means it asks and the native app
+  // answers.
+  const bridgeEnv = {
+    ...process.env,
+    CLUTCH_RUNTIME_ROOT: ROOT,
+    DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? "danger-full-access",
+  };
   // CometChat relay is additive: SSE stays the primary transport, and the
   // relay only runs when the backend is configured AND the caller names a
   // target. Backend-only key; never leaves this process.
@@ -1013,7 +1208,8 @@ async function main(): Promise<void> {
   function bridgeFor(engine: Engine): Bridge {
     let b = bridges.get(engine);
     if (!b) {
-      b = new Bridge(engine, bridgeEnv);
+      const created = new Bridge(engine, bridgeEnv);
+      b = created;
       b.setUpdateHandler((u) => {
         const target = [...sessions.values()].find((s) => s.bridgeSessionId === u.sessionId && s.busy);
         target?.stream?.(u);
@@ -1022,6 +1218,23 @@ async function main(): Promise<void> {
         for (const session of sessions.values()) {
           if (session.engine === engine) session.bridgeSessionId = "";
         }
+      });
+      // A permission request belongs to the turn that asked for it, so it is
+      // routed the same way an update is: by the ACP session that raised it.
+      // A turn whose client cannot answer is answered here, the way the
+      // sidecar has always answered them.
+      b.setPermissionHandler((request) => {
+        const target = [...sessions.values()].find(
+          (s) => s.bridgeSessionId === request.sessionId && s.busy,
+        );
+        if (target?.permission) {
+          // The turn owns the request from here on, so an answer is only
+          // accepted when it names a request this turn raised.
+          target.pendingPermissions.set(request.requestId, request);
+          target.permission(request);
+          return;
+        }
+        created.answerPermission(request.requestId, fallbackPermissionOption(request.options));
       });
       bridges.set(engine, b);
     }
@@ -1052,6 +1265,25 @@ async function main(): Promise<void> {
       hostClientFailedAt = Date.now();
       throw err;
     }
+  }
+
+  /**
+   * Let go of the permission requests one turn is waiting on.
+   *
+   * A turn that is cancelled, or that ends, cannot answer a question any
+   * more.  The engine is blocked on that answer, so it is released here:
+   * otherwise it would wait for a reply that can never come.
+   */
+  function releasePermissions(session: ChatSession, engine: Engine): void {
+    for (const timer of session.permissionTimers.values()) clearTimeout(timer);
+    session.permissionTimers.clear();
+    for (const request of session.pendingPermissions.values()) {
+      bridgeFor(engine).answerPermission(
+        request.requestId,
+        fallbackPermissionOption(request.options),
+      );
+    }
+    session.pendingPermissions.clear();
   }
 
   /**
@@ -1200,6 +1432,69 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/clutch/v1/permissions") {
+      // The answer to a permission request the engine is waiting on.  The
+      // request was pushed to the client as it happened, and the client
+      // sends back the option it picked.
+      let body: { sessionId?: unknown; requestId?: unknown; optionId?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "invalid JSON body" }),
+        );
+        return;
+      }
+      const chatId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const requestId = typeof body.requestId === "string" ? body.requestId : "";
+      const optionId = typeof body.optionId === "string" ? body.optionId : null;
+      if (!chatId || !requestId) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "sessionId and requestId are required" }),
+        );
+        return;
+      }
+      const session = sessions.get(chatId);
+      if (!session) {
+        res.writeHead(404, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "no such session" }),
+        );
+        return;
+      }
+      // The request must be one this turn raised.  The ids are process-wide
+      // and predictable, so without this check a stale card could answer a
+      // different turn's question.
+      const pending = session.pendingPermissions.get(requestId);
+      if (!pending) {
+        res.writeHead(404, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "no such permission request" }),
+        );
+        return;
+      }
+      // The option must be one the engine offered.  An unknown id is refused
+      // rather than forwarded, so a typo cannot stall the blocked turn.
+      if (optionId !== null && !pending.options.some((option) => option.optionId === optionId)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "unknown permission option" }),
+        );
+        return;
+      }
+      // The fallback timer is cleared first, so a request that was already
+      // let go is not answered twice.
+      const timer = session.permissionTimers.get(requestId);
+      if (timer) {
+        clearTimeout(timer);
+        session.permissionTimers.delete(requestId);
+      }
+      session.pendingPermissions.delete(requestId);
+      const answered = bridgeFor(session.engine).answerPermission(requestId, optionId);
+      log(`permission answer session=${chatId} request=${requestId} answered=${answered}`);
+      res.writeHead(answered ? 200 : 404, { "content-type": "application/json" }).end(
+        JSON.stringify(answered ? { ok: true } : { error: "no such permission request" }),
+      );
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/clutch/v1/chat/cancel") {
       // Explicit stop from a native client (the Mac/iPhone Stop button).
       // Dropping the SSE connection already cancels through the `close`
@@ -1230,6 +1525,9 @@ async function main(): Promise<void> {
           /* bridge already gone */
         }
       }
+      // A cancelled turn cannot answer a question any more, so the engine is
+      // released instead of waiting on an answer that will never come.
+      if (session) releasePermissions(session, session.engine);
       log(`chat cancel-request session=${chatId || "none"} cancelled=${cancelled}`);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, cancelled }));
       return;
@@ -1306,6 +1604,8 @@ async function main(): Promise<void> {
         stream: (update) => {
           if (history.length < 20_000) history.push(update);
         },
+        permissionTimers: new Map(),
+        pendingPermissions: new Map(),
         ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
         ...(typeof body.effort === "string" && body.effort.length > 0 ? { effort: body.effort } : {}),
       };
@@ -1520,6 +1820,7 @@ async function main(): Promise<void> {
         cwd?: unknown;
         relay?: unknown;
         images?: unknown;
+        permissions?: unknown;
       };
       try {
         body = (await readJsonBody(req)) as typeof body;
@@ -1543,6 +1844,11 @@ async function main(): Promise<void> {
         typeof body.engine === "string" ? body.engine : undefined,
       );
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
+      // A client that can answer a permission request says so, and the
+      // sidecar holds the request until the answer comes back.  A client
+      // that does not say keeps the behaviour the sidecar has always had,
+      // where it answers the request itself.
+      const asksForPermissions = body.permissions === "ask";
       // The model the client picked and the effort it wants.  Both are
       // optional: without them the engine keeps its own defaults.
       const requestedModel = typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : undefined;
@@ -1554,7 +1860,16 @@ async function main(): Promise<void> {
       let session = chatId ? sessions.get(chatId) : undefined;
       if (!session || session.engine !== engine) {
         chatId = randomBytes(16).toString("hex");
-        session = { engine, bridgeSessionId: "", resumeSessionId: null, cwd, busy: false, stream: null };
+        session = {
+          engine,
+          bridgeSessionId: "",
+          resumeSessionId: null,
+          cwd,
+          busy: false,
+          stream: null,
+          permissionTimers: new Map(),
+          pendingPermissions: new Map(),
+        };
         sessions.set(chatId, session);
       }
       if (requestedModel) session.model = requestedModel;
@@ -1603,6 +1918,32 @@ async function main(): Promise<void> {
         sseSend(res, r.event, { text: r.text });
         if (u.kind !== "user_message_chunk") sink?.onUpdate(u.kind, r.text);
       };
+      // A permission request the engine is waiting on.  It goes to the client
+      // as it is, and the answer comes back through the permissions route.
+      // A turn whose client did not ask for this keeps the sidecar's own
+      // answer, which is what the bridge does when no turn is watching.
+      if (asksForPermissions) {
+        active.permission = (request) => {
+          sseSend(res, "permission", {
+            requestId: request.requestId,
+            title: request.title,
+            toolName: request.toolName,
+            options: request.options,
+          });
+          // The engine waits, so a client that never answers must not hang
+          // the turn: the sidecar falls back to the allow-once it has always
+          // sent.
+          const timer = setTimeout(() => {
+            active.permissionTimers.delete(request.requestId);
+            active.pendingPermissions.delete(request.requestId);
+            bridgeFor(engine).answerPermission(
+              request.requestId,
+              fallbackPermissionOption(request.options),
+            );
+          }, PERMISSION_TIMEOUT_MS);
+          active.permissionTimers.set(request.requestId, timer);
+        };
+      }
       let settled = false;
       // The resumable remote id rides every terminal event so a fresh turn
       // can be reloaded later (mcode threads live in the sidecar map only
@@ -1623,6 +1964,11 @@ async function main(): Promise<void> {
         stopUsage();
         active.busy = false;
         active.stream = null;
+        active.permission = null;
+        // A turn that ended cannot answer a permission request any more, so
+        // the pending ones are let go rather than left waiting: the engine is
+        // blocked on the answer, and a cancelled turn would never send it.
+        releasePermissions(active, engine);
         sseSend(res, event, data);
         res.end();
       };
