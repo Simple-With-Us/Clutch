@@ -91,7 +91,7 @@ Search the `fleet-agents` corpus before re-deriving a lesson (`recall "query"` o
 
 **Do not wait for the owner to ask you to commit or open a PR.**  After each coherent finished unit: commit → push → open or update the PR → arm auto-merge → merge when CI is green.  Never merge with red CI.  Never resolve a merge conflict by "keeping both sides"; resolve it to one coherent version and re-run typecheck and tests.  Never idle-watch a PR: a PR that is not merging is waiting on an action (review threads, a conflict, a failing check, auto-merge not armed, a branch behind main) — diagnose and drive it.  Canonical: `AGENT-SYNC.md` § Always commit + land finished work and § Never idle-watch a PR.
 
-Verification gate before every PR: `pnpm typecheck && pnpm test`.  Pure-docs PRs may use `pnpm test:ci-scope && git diff --check` locally.
+Verification gate before every PR: `npm run typecheck && npm test`.  Pure-docs PRs may use `npm run test:ci-scope && git diff --check` locally.
 
 UI changes must be covered by automated visual verification where feasible: Playwright screenshot assertions for web surfaces, `xcrun simctl io booted screenshot` for iOS simulator.  The owner never takes manual screenshots and does not run local UI preview sessions.  Native Mac app UI is verified through code review and CI.
 
