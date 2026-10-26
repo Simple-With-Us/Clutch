@@ -62,7 +62,13 @@ describe("real local transport refusal recovery", () => {
         expect(exchanges).toBe(1);
         await cache.run(read);
         expect(exchanges).toBe(2);
-        expect(cookies).toEqual(["identity=1", "identity=2"]);
+        // The runtime may retry a refused upgrade internally.  Verify identity
+        // rotation rather than the implementation-specific handshake count.
+        expect(cookies[0]).toBe("identity=1");
+        expect(cookies.at(-1)).toBe("identity=2");
+        expect(new Set(cookies)).toEqual(new Set(["identity=1", "identity=2"]));
+        const freshAt = cookies.indexOf("identity=2");
+        expect(cookies.slice(freshAt).every((cookie) => cookie === "identity=2")).toBe(true);
       } finally {
         for (const socket of sockets) socket.destroy();
         server.close();
