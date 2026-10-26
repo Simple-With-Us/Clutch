@@ -45,9 +45,16 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
-    /// The permission request the engine is waiting on, when it asked for
-    /// one.  The engine is blocked until this is answered.
-    var pendingPermission: AcpPermissionRequest?
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered.  The queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card, where it would
+    /// only be answered by the fallback timer.
+    var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     /// Images attached to the next turn, the way the web canvas attaches
     /// files to a message.
     var attachments: [ChatAttachment] = []
@@ -193,16 +200,16 @@ final class SessionThreadModel {
                     case .permission(let request):
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
-                        pendingPermission = request
+                        pendingPermissions.append(request)
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
-                        pendingPermission = nil
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                     case .usage:
                         break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
-                        pendingPermission = nil
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
@@ -221,8 +228,7 @@ final class SessionThreadModel {
     /// card is cleared either way: a request the sidecar could not answer
     /// is not one the engine will take an answer for later.
     func answerPermission(_ optionId: String?) {
-        guard let request = pendingPermission, let chatId else { return }
-        pendingPermission = nil
+        guard let request = pendingPermissions.first, let chatId else { return }
         Task {
             let answered = await ChatSessionClient.answerPermission(
                 host: host,
@@ -230,7 +236,12 @@ final class SessionThreadModel {
                 requestId: request.requestId,
                 optionId: optionId
             )
-            if !answered {
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again instead of stranding the
+                // engine on a question nobody can see any more.
+                pendingPermissions.removeFirst()
+            } else {
                 sendError = "The permission answer did not reach the engine."
             }
         }
@@ -248,6 +259,10 @@ final class SessionThreadModel {
         sendTask?.cancel()
         sendTask = nil
         thoughtLine = nil
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
         isSending = false
     }
 

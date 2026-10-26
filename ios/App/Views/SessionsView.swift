@@ -470,9 +470,15 @@ final class NewThreadModel {
     var reply: String?
     var errorText: String?
     var isSending = false
-    /// The permission request the engine is waiting on, when it asked for
-    /// one.  The engine is blocked until this is answered.
-    var pendingPermission: AcpPermissionRequest?
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered, so the queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card.
+    var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
 
     init(host: ClutchHost, engine: String = "mcode") {
         self.host = host
@@ -483,8 +489,7 @@ final class NewThreadModel {
     ///
     /// The answer goes to the sidecar, which hands it to the engine.
     func answerPermission(_ optionId: String?) {
-        guard let request = pendingPermission, let chatId else { return }
-        pendingPermission = nil
+        guard let request = pendingPermissions.first, let chatId else { return }
         Task {
             let answered = await ChatSessionClient.answerPermission(
                 host: host,
@@ -492,7 +497,11 @@ final class NewThreadModel {
                 requestId: request.requestId,
                 optionId: optionId
             )
-            if !answered {
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again.
+                pendingPermissions.removeFirst()
+            } else {
                 errorText = "The permission answer did not reach the engine."
             }
         }
@@ -528,15 +537,15 @@ final class NewThreadModel {
                     case .permission(let request):
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
-                        pendingPermission = request
+                        pendingPermissions.append(request)
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
-                        pendingPermission = nil
+                        pendingPermissions.removeAll()
                     case .usage:
                         break // live usage strip is Mac-only
                     case .failed(let message):
                         errorText = message
-                        pendingPermission = nil
+                        pendingPermissions.removeAll()
                     }
                 }
             } catch {

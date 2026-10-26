@@ -680,6 +680,35 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * The shape of a permission request as an engine sends it.
+ *
+ * The params arrive from the engine, so they are untrusted: the schema drops
+ * what it does not recognise instead of letting a stray field reach the
+ * client or the engine's answer.
+ */
+const PermissionParamsSchema = z
+  .object({
+    sessionId: z.string().optional(),
+    toolCall: z
+      .object({
+        toolCallId: z.string().optional(),
+        title: z.string().optional(),
+        kind: z.string().optional(),
+      })
+      .optional(),
+    options: z
+      .array(
+        z.object({
+          optionId: z.string().min(1),
+          kind: z.string().default(""),
+          name: z.string().default(""),
+        }),
+      )
+      .optional(),
+  })
+  .loose();
+
 /** Read the options out of a permission request, keeping only the usable ones. */
 function parsePermissionOptions(value: unknown): PermissionOption[] {
   if (!Array.isArray(value)) return [];
@@ -755,12 +784,18 @@ export class Bridge {
    * Answer a permission request the engine is waiting on.
    *
    * `optionId` picks one of the options the engine offered; null cancels the
-   * request.  A request that is already gone is reported as unanswered, so a
-   * late answer is harmless rather than an error.
+   * request.  An option the engine never offered is refused rather than
+   * forwarded: a stale card or a mismatched client must not be able to stall
+   * the blocked turn with an id the engine will reject.  A request that is
+   * already gone is reported as unanswered, so a late answer is harmless
+   * rather than an error.
    */
   answerPermission(requestId: string, optionId: string | null): boolean {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) return false;
+    if (optionId !== null && !pending.options.some((option) => option.optionId === optionId)) {
+      return false;
+    }
     this.pendingPermissions.delete(requestId);
     const outcome = optionId
       ? { outcome: "selected", optionId }
@@ -850,29 +885,30 @@ export class Bridge {
    * Hold a permission request until the client answers it.
    *
    * The engine waits for an answer, so the request is handed up and the
-   * answer goes back the same way.  With no handler attached the sidecar
-   * answers it itself, exactly as it did before, so a caller that never
-   * asked for this feature sees no change.
+   * answer goes back the same way.  The request is registered before it is
+   * handed up, so the no-handler fallback below can answer it: without that,
+   * the engine would sit blocked on a request nobody ever replies to.  With
+   * no handler attached the sidecar answers it itself, exactly as it did
+   * before, so a caller that never asked for this feature sees no change.
    */
   private holdPermissionRequest(id: number | string, params: Record<string, unknown>): void {
-    const options = parsePermissionOptions(params.options);
-    const toolCall =
-      typeof params.toolCall === "object" && params.toolCall !== null
-        ? (params.toolCall as Record<string, unknown>)
-        : {};
+    const parsed = PermissionParamsSchema.safeParse(params);
+    if (!parsed.success) return;
+    const options = parsePermissionOptions(parsed.data.options);
+    const toolCall = parsed.data.toolCall ?? {};
     const title = readString(toolCall.title) ?? "";
     const request: PermissionRequest = {
       requestId: `perm-${(permissionCounter += 1)}`,
-      sessionId: readString(params.sessionId) ?? "",
+      sessionId: readString(parsed.data.sessionId) ?? "",
       title,
       toolName: readString(toolCall.kind) ?? (title || "Tool call"),
       options,
     };
+    this.pendingPermissions.set(request.requestId, { bridgeRequestId: id, options });
     if (!this.onPermission) {
       this.answerPermission(request.requestId, fallbackPermissionOption(options));
       return;
     }
-    this.pendingPermissions.set(request.requestId, { bridgeRequestId: id, options });
     this.onPermission(request);
   }
 
@@ -1019,6 +1055,14 @@ interface ChatSession {
   permission?: ((request: PermissionRequest) => void) | null;
   /** The fallback timers for those requests, so a late answer is not a second one. */
   permissionTimers: Map<string, ReturnType<typeof setTimeout>>;
+  /**
+   * The permission requests this turn owns, by request id.
+   *
+   * The ids are process-wide and predictable, so an answer is only accepted
+   * when the request it names is one this turn raised: otherwise a stale card
+   * could answer another turn's question.
+   */
+  pendingPermissions: Map<string, PermissionRequest>;
 }
 
 /** Untrusted request bodies for the project/archive routes.  Strict so an
@@ -1184,6 +1228,9 @@ async function main(): Promise<void> {
           (s) => s.bridgeSessionId === request.sessionId && s.busy,
         );
         if (target?.permission) {
+          // The turn owns the request from here on, so an answer is only
+          // accepted when it names a request this turn raised.
+          target.pendingPermissions.set(request.requestId, request);
           target.permission(request);
           return;
         }
@@ -1218,6 +1265,25 @@ async function main(): Promise<void> {
       hostClientFailedAt = Date.now();
       throw err;
     }
+  }
+
+  /**
+   * Let go of the permission requests one turn is waiting on.
+   *
+   * A turn that is cancelled, or that ends, cannot answer a question any
+   * more.  The engine is blocked on that answer, so it is released here:
+   * otherwise it would wait for a reply that can never come.
+   */
+  function releasePermissions(session: ChatSession, engine: Engine): void {
+    for (const timer of session.permissionTimers.values()) clearTimeout(timer);
+    session.permissionTimers.clear();
+    for (const request of session.pendingPermissions.values()) {
+      bridgeFor(engine).answerPermission(
+        request.requestId,
+        fallbackPermissionOption(request.options),
+      );
+    }
+    session.pendingPermissions.clear();
   }
 
   /**
@@ -1395,6 +1461,24 @@ async function main(): Promise<void> {
         );
         return;
       }
+      // The request must be one this turn raised.  The ids are process-wide
+      // and predictable, so without this check a stale card could answer a
+      // different turn's question.
+      const pending = session.pendingPermissions.get(requestId);
+      if (!pending) {
+        res.writeHead(404, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "no such permission request" }),
+        );
+        return;
+      }
+      // The option must be one the engine offered.  An unknown id is refused
+      // rather than forwarded, so a typo cannot stall the blocked turn.
+      if (optionId !== null && !pending.options.some((option) => option.optionId === optionId)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "unknown permission option" }),
+        );
+        return;
+      }
       // The fallback timer is cleared first, so a request that was already
       // let go is not answered twice.
       const timer = session.permissionTimers.get(requestId);
@@ -1402,6 +1486,7 @@ async function main(): Promise<void> {
         clearTimeout(timer);
         session.permissionTimers.delete(requestId);
       }
+      session.pendingPermissions.delete(requestId);
       const answered = bridgeFor(session.engine).answerPermission(requestId, optionId);
       log(`permission answer session=${chatId} request=${requestId} answered=${answered}`);
       res.writeHead(answered ? 200 : 404, { "content-type": "application/json" }).end(
@@ -1440,6 +1525,9 @@ async function main(): Promise<void> {
           /* bridge already gone */
         }
       }
+      // A cancelled turn cannot answer a question any more, so the engine is
+      // released instead of waiting on an answer that will never come.
+      if (session) releasePermissions(session, session.engine);
       log(`chat cancel-request session=${chatId || "none"} cancelled=${cancelled}`);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, cancelled }));
       return;
@@ -1517,6 +1605,7 @@ async function main(): Promise<void> {
           if (history.length < 20_000) history.push(update);
         },
         permissionTimers: new Map(),
+        pendingPermissions: new Map(),
         ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
         ...(typeof body.effort === "string" && body.effort.length > 0 ? { effort: body.effort } : {}),
       };
@@ -1771,7 +1860,16 @@ async function main(): Promise<void> {
       let session = chatId ? sessions.get(chatId) : undefined;
       if (!session || session.engine !== engine) {
         chatId = randomBytes(16).toString("hex");
-        session = { engine, bridgeSessionId: "", resumeSessionId: null, cwd, busy: false, stream: null, permissionTimers: new Map() };
+        session = {
+          engine,
+          bridgeSessionId: "",
+          resumeSessionId: null,
+          cwd,
+          busy: false,
+          stream: null,
+          permissionTimers: new Map(),
+          pendingPermissions: new Map(),
+        };
         sessions.set(chatId, session);
       }
       if (requestedModel) session.model = requestedModel;
@@ -1837,6 +1935,7 @@ async function main(): Promise<void> {
           // sent.
           const timer = setTimeout(() => {
             active.permissionTimers.delete(request.requestId);
+            active.pendingPermissions.delete(request.requestId);
             bridgeFor(engine).answerPermission(
               request.requestId,
               fallbackPermissionOption(request.options),
@@ -1867,9 +1966,9 @@ async function main(): Promise<void> {
         active.stream = null;
         active.permission = null;
         // A turn that ended cannot answer a permission request any more, so
-        // the pending ones are let go rather than left waiting.
-        for (const timer of active.permissionTimers.values()) clearTimeout(timer);
-        active.permissionTimers.clear();
+        // the pending ones are let go rather than left waiting: the engine is
+        // blocked on the answer, and a cancelled turn would never send it.
+        releasePermissions(active, engine);
         sseSend(res, event, data);
         res.end();
       };

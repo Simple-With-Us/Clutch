@@ -3,10 +3,24 @@
 // Speaks just enough JSON-RPC over stdio: initialize, session/list,
 // session/new/load, session/prompt, and session/cancel.
 import readline from "node:readline";
+import { appendFileSync } from "node:fs";
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 let pendingPermission = null;
+let sessionCounter = 0;
+
+// The stub records what the sidecar did to it, so a test can see the engine's
+// side of a permission request rather than only the sidecar's own answer.
+const logPath = process.env.CHAT_BRIDGE_STUB_LOG;
+const record = (entry) => {
+  if (!logPath) return;
+  try {
+    appendFileSync(logPath, `${JSON.stringify(entry)}\n`);
+  } catch {
+    /* the log is a convenience, never a reason to fail the stub */
+  }
+};
 
 const finishPrompt = ({ id, sessionId }) => {
   send({
@@ -31,7 +45,10 @@ rl.on("line", (line) => {
   }
   const { id, method, params } = msg;
   if (!method && id === 900 && pendingPermission) {
-    if (msg.result?.outcome?.outcome !== "selected" || msg.result?.outcome?.optionId !== "allow-once") {
+    const optionId = msg.result?.outcome?.optionId ?? null;
+    const outcome = msg.result?.outcome?.outcome ?? null;
+    record({ event: "permission-answered", optionId, outcome });
+    if (outcome !== "selected" || optionId !== "allow-once") {
       send({ jsonrpc: "2.0", id: pendingPermission.id, error: { message: "permission was not allowed once" } });
     } else {
       finishPrompt(pendingPermission);
@@ -54,7 +71,9 @@ rl.on("line", (line) => {
       },
     });
   } else if (method === "session/new") {
-    send({ jsonrpc: "2.0", id, result: { sessionId: "stub-session-1" } });
+    // A second turn needs its own session id, or the sidecar cannot tell the
+    // two turns apart when it routes a permission request to its owner.
+    send({ jsonrpc: "2.0", id, result: { sessionId: `stub-session-${sessionCounter += 1}` } });
   } else if (method === "session/load") {
     const sessionId = params?.sessionId ?? "mcode-existing-1";
     for (const [sessionUpdate, text] of [
@@ -79,6 +98,7 @@ rl.on("line", (line) => {
     }
     if (Array.isArray(params?.prompt)) {
       pendingPermission = { id, sessionId };
+      record({ event: "permission-requested", sessionId });
       send({
         jsonrpc: "2.0",
         id: 900,
