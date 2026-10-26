@@ -85,6 +85,7 @@ public struct SessionsView: View {
     @State private var model: SessionsModel
     @State private var selectedId: String?
     @State private var isStartingThread = false
+    @State private var isShowingFiles = false
     @State private var searchText = ""
     @State private var pinnedIds: Set<String> = []
     @State private var catalog: EngineCatalog?
@@ -185,6 +186,16 @@ public struct SessionsView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                // The files of the folder the open thread works in, the way
+                // the web canvas shows them beside the thread list.
+                Button {
+                    isShowingFiles = true
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .accessibilityLabel("Files")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     selectedId = nil
                     isStartingThread = true
@@ -211,6 +222,22 @@ public struct SessionsView: View {
                 }
             }
         }
+        .sheet(isPresented: $isShowingFiles) {
+            FilesView(host: host, root: filesRoot)
+        }
+    }
+
+    /// The folder the file tree is rooted at.
+    ///
+    /// The open thread's own folder, so the files on screen are the ones the
+    /// engine is working in.  A thread that names no folder falls back to
+    /// the folder a new thread would work in.
+    private var filesRoot: String {
+        guard let selectedId,
+              let session = model.sessions.first(where: { $0.sessionId == selectedId }),
+              let cwd = session.cwd,
+              !cwd.isEmpty else { return "" }
+        return cwd
     }
 
     /// Which engine's threads are listed.
