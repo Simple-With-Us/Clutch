@@ -175,6 +175,13 @@ describe("externalInstallability behavior", () => {
     expect(out).toMatchObject({ ok: true, installable: true });
   });
 
+  it("reports ok:false instead of throwing when the transport itself throws", async () => {
+    const api = vi.fn(async () => { throw new Error("socket hangup"); });
+    const out = await externalInstallability({ api, buildId: "b1" });
+    expect(out).toMatchObject({ ok: false, installable: false });
+    expect(out.error).toContain("socket hangup");
+  });
+
   it("reports ok:false when every tester read fails and no public link exists", async () => {
     const api = vi.fn(async (method, path) =>
       path.includes("/betaTesters")
