@@ -6,6 +6,7 @@ struct ClutchApp: App {
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
 
     init() {
+        SentryTelemetry.start()
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
             HostStore.resetPersistedHosts()

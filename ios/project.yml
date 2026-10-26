@@ -17,7 +17,13 @@ settings:
     DEVELOPMENT_TEAM: CC8UTF7ATG
     ASSETCATALOG_FILTER_FOR_THINNING: false
     ENABLE_ASSET_THINNING: false
+    # Native Sentry. Empty unless xcodebuild/CI passes SENTRY_DSN=...
+    # SentryTelemetry.swift skips init when this expands to empty or $(SENTRY_DSN).
+    SENTRY_DSN: ""
 packages:
+  Sentry:
+    url: https://github.com/getsentry/sentry-cocoa.git
+    from: "8.44.0"
   CometChatUIKitSwift:
     url: https://github.com/cometchat/cometchat-uikit-ios.git
     from: 5.2.3
@@ -32,6 +38,8 @@ targets:
     dependencies:
       - package: CometChatUIKitSwift
         product: CometChatUIKitSwift
+      - package: Sentry
+        product: Sentry
     settings:
       base:
         PRODUCT_NAME: Clutch
@@ -64,6 +72,7 @@ targets:
         CFBundleName: Clutch
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SENTRY_DSN: $(SENTRY_DSN)
         LSApplicationCategoryType: public.app-category.developer-tools
         ITSAppUsesNonExemptEncryption: false
         CFBundleURLTypes:
@@ -128,6 +137,7 @@ targets:
           # carries a foreign Contents/Resources/Info.plist with iOS-only keys.
           # This target's own plist is Mac/Info.plist (info.path below).
           - Info.plist
+          - SentryTelemetry.swift
           - Services/CometChatManager.swift
           - Views/ChatView.swift
           - Views/AgentMessagesVC.swift

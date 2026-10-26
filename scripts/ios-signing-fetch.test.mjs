@@ -27,6 +27,24 @@ test('maps exact two sources, base64 encodes PEM, masks before exporting', async
   assert.equal(Buffer.from(writes.find(e => e[1] === 'APPLE_API_KEY_P8_BASE64')[2], 'base64').toString(), `${pem}\n`);
   assert.ok(events.findIndex(e => e[0] === 'write') > events.findIndex(e => e[1] === '::add-mask::password'));
 });
+test('SENTRY_DSN and SENTRY_AUTH_TOKEN in Clutch prod are exported masked when present', async () => {
+  const base = mock();
+  const fetchImpl = async (url, options) => {
+    const res = await base.fetchImpl(url, options);
+    const qs = new URL(url).searchParams;
+    if (qs.get('workspaceId') === 'clutch' && res.ok) {
+      const body = await res.json();
+      body.secrets.push({ secretKey: 'SENTRY_DSN', secretValue: 'https://fixture@o0.ingest.sentry.io/1' }, { secretKey: 'SENTRY_AUTH_TOKEN', secretValue: 'fixture-token' });
+      return { ok: true, status: 200, json: async () => body };
+    }
+    return res;
+  };
+  const events = [];
+  await loadSigning({ env, fetchImpl, log: value => events.push(['log', value]), write: (path, name, value) => events.push(['write', name, value]) });
+  const writes = events.filter(e => e[0] === 'write');
+  assert.equal(writes.find(e => e[1] === 'SENTRY_DSN')[2], 'https://fixture@o0.ingest.sentry.io/1');
+  assert.ok(events.findIndex(e => e[0] === 'write' && e[1] === 'SENTRY_DSN') > events.findIndex(e => e[1] === '::add-mask::https://fixture@o0.ingest.sentry.io/1'));
+});
 test('empty CI input fails before login', async () => {
   let called = false;
   await assert.rejects(loadSigning({ env: { ...env, INFISICAL_CLIENT_ID: '' }, fetchImpl: () => { called = true; } }), /INFISICAL_CLIENT_ID is empty/);

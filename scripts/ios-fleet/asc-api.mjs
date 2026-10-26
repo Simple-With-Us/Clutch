@@ -496,7 +496,20 @@ export async function addTesterToGroup({ api, appId, groupId, email, createFirst
       // The record we found is for another app; Apple refused to assign it.
       // Try the app-scoped lookup before giving up.
       const recovered = await recoverFromCrossApp();
-      if (recovered) res = recovered;
+      if (recovered) {
+        res = recovered;
+      } else {
+        // C-102: no record for THIS app exists yet, so create one.  A
+        // standing address that is a tester on another fleet app (but not
+        // an App Store Connect user) hit exactly this: the cross-app
+        // record could not be assigned, no app-scoped record existed,
+        // and the old code gave up with the 409 forever.
+        res = await create();
+        if (res.status === 409) {
+          const recoveredAfterCreate = await recoverFromCrossApp();
+          if (recoveredAfterCreate) res = recoveredAfterCreate;
+        }
+      }
     }
   } else {
     res = await create();
