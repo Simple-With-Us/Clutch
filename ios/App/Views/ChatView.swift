@@ -248,6 +248,8 @@ public struct ChatView: View {
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
                         pendingPermissions.append(request)
+                    case .plan:
+                        break // the plan panel belongs to the workspace
                     case .done(let stop, let id, _):
                         sessionId = id
                         sending = false

@@ -16,7 +16,23 @@ export type SessionUpdateKind =
   | "agent_thought_chunk"
   | "user_message_chunk"
   | "tool_call"
-  | "tool_call_update";
+  | "tool_call_update"
+  | "plan";
+
+/**
+ * One entry in the engine's execution plan.
+ *
+ * The engine reports the whole plan every time it changes, so a client shows
+ * the list it was given rather than patching the one it had.
+ */
+export interface PlanEntry {
+  /** What the entry says, as the engine wrote it. */
+  content: string;
+  /** The engine's priority for the entry. */
+  priority: "high" | "medium" | "low";
+  /** Where the entry stands. */
+  status: "pending" | "in_progress" | "completed";
+}
 
 /** One replayed transcript entry. */
 export interface SessionUpdate {
@@ -25,6 +41,8 @@ export interface SessionUpdate {
   text: string;
   toolCallId?: string;
   toolStatus?: "running" | "completed" | "failed";
+  /** The plan entries, for a `plan` update.  An empty list means the plan is gone. */
+  plan?: PlanEntry[];
 }
 
 /** ACP tool-call status as the clients render it. */

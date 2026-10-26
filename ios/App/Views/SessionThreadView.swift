@@ -45,6 +45,8 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
+    /// The engine's execution plan, as it last reported it.
+    var plan: [AcpPlanEntry] = []
     /// The permission requests the engine is waiting on, oldest first.
     ///
     /// The engine asks one question at a time, but a second request can land
@@ -151,6 +153,9 @@ final class SessionThreadModel {
                     text: entry.text
                 )
             }
+            // The plan is a state, not a line of the transcript: the last
+            // plan the thread carried is the one the engine last reported.
+            plan = loaded.history.last(where: { $0.isPlan })?.plan ?? []
             phase = .ready
         } catch {
             phase = .failed(error.localizedDescription)
@@ -201,6 +206,8 @@ final class SessionThreadModel {
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
                         pendingPermissions.append(request)
+                    case .plan(let entries):
+                        plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.removeAll()
@@ -323,9 +330,14 @@ public struct SessionThreadView: View {
             }
             transcript
             Divider()
-            // The permission card sits above the composer, so the question
-            // the engine is asking is answered in the same place the turn
-            // is written.
+            // The plan and the permission card sit above the composer, so
+            // what the engine is doing and what it is asking are answered
+            // in the same place the turn is written.
+            if !model.plan.isEmpty {
+                PlanPanel(entries: model.plan)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
             if let request = model.pendingPermission {
                 PermissionCard(request: request) { optionId in
                     model.answerPermission(optionId)

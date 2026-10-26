@@ -257,6 +257,10 @@ describe("chat sidecar full loop", () => {
     expect(text).toContain("event: message");
     expect(text).toContain("stub-answer");
     expect(text).toMatch(/event: done[\s\S]*endTurn/);
+    // The plan travels with the turn, so the client can show what the engine
+    // is working on.
+    expect(text).toContain("event: plan");
+    expect(text).toContain("Read the failing test");
 
     const posts = ccCalls.filter((c) => c.method === "POST" && c.path === "/v3/messages");
     expect(posts.length).toBe(1);

@@ -409,6 +409,9 @@ struct NewThreadSheet: View {
                         model.answerPermission(optionId)
                     }
                 }
+                if !model.plan.isEmpty {
+                    PlanPanel(entries: model.plan)
+                }
 
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("Message", text: $model.draft, axis: .vertical)
@@ -479,6 +482,8 @@ final class NewThreadModel {
 
     /// The request on screen.
     var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
+    /// The engine's execution plan, as it last reported it.
+    var plan: [AcpPlanEntry] = []
 
     init(host: ClutchHost, engine: String = "mcode") {
         self.host = host
@@ -538,6 +543,8 @@ final class NewThreadModel {
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
                         pendingPermissions.append(request)
+                    case .plan(let entries):
+                        plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.removeAll()
