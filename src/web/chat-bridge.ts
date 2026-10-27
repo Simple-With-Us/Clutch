@@ -1371,7 +1371,7 @@ async function main(): Promise<void> {
    * The cached host client, for callers that hold it across a turn or a relay.
    * Opening goes through the cache, so the retry cooldown still applies.
    */
-  async function dshHost(): Promise<DshHostClient> {
+  async function openDshHost(): Promise<DshHostClient> {
     return hostClient.run(async (client) => client);
   }
 
@@ -1386,7 +1386,7 @@ async function main(): Promise<void> {
   async function hostApprovals(): Promise<DshHostApprovalRelay> {
     if (approvalRelay) return approvalRelay;
     const relay = DshHostApprovalRelay.start({
-      client: () => dshHost(),
+      client: () => openDshHost(),
       onApproval: (approval) => routeHostApproval(approval),
       onSettled: (eventId) => settleHostApproval(eventId),
       onLog: (message) => log(message),
@@ -2215,7 +2215,7 @@ async function main(): Promise<void> {
         if (isDshHostedEngine(engine)) {
           let host: DshHostClient | null = null;
           try {
-            host = await dshHost();
+            host = await openDshHost();
           } catch (err) {
             log(`chat host unavailable session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
           }
