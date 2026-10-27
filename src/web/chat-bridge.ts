@@ -1320,7 +1320,7 @@ async function main(): Promise<void> {
    * The host is only needed for the engines it owns, so a machine that runs
    * only the code engines never opens a connection to it.
    */
-  const hostClient = new DshHostClientCache(() => DshHostClient.connect());
+  const hostClient = new DshHostClientCache(() => DshHostClient.connect(), Date.now, HOST_RETRY_COOLDOWN_MS);
 
   /**
    * Let go of the permission requests one turn is waiting on.
