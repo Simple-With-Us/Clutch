@@ -11,7 +11,7 @@
  * engine, so the folder is read once, the same way, for all of them.
  */
 
-import { open, readdir, stat } from "node:fs/promises";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 
 /** One entry in a folder listing. */
@@ -79,6 +79,33 @@ export function resolveInside(root: string, relative: string): string | null {
   return target;
 }
 
+/**
+ * Resolve one path, then confirm the real location still sits under the root.
+ *
+ * The lexical check alone follows no symlinks.  `stat`/`readFile` do, so a
+ * symlink under the thread folder could otherwise escape to the rest of the
+ * disk.  Re-checking `realpath` closes that door.
+ */
+export async function resolveInsideReal(root: string, relative: string): Promise<string | null> {
+  const target = resolveInside(root, relative);
+  if (target === null) return null;
+  let baseReal: string;
+  let targetReal: string;
+  try {
+    baseReal = await realpath(root);
+    // lstat first so a dangling symlink is refused instead of throwing ENOENT
+    // from realpath in a way that looks like "outside".
+    await lstat(target);
+    targetReal = await realpath(target);
+  } catch {
+    return null;
+  }
+  if (targetReal === baseReal) return targetReal;
+  const prefix = baseReal.endsWith(sep) ? baseReal : baseReal + sep;
+  if (!targetReal.startsWith(prefix)) return null;
+  return targetReal;
+}
+
 /** The path of a folder relative to the root, with no leading separator. */
 function relativePath(root: string, absolute: string): string {
   const base = resolve(root);
@@ -94,34 +121,54 @@ function relativePath(root: string, absolute: string): string {
  * order a person reads a folder in.
  */
 export async function listDirectory(root: string, relative: string): Promise<DirectoryListing> {
-  const target = resolveInside(root, relative);
+  const target = await resolveInsideReal(root, relative);
   if (!target) throw new FileAccessError("that path is outside the folder the thread works in");
   const names = await readdir(target);
   // Sort before truncating so the entries that fall off the cap are the last
   // by name rather than wherever the filesystem happened to list them.
   names.sort((left, right) => left.localeCompare(right));
-  const entries: FileEntry[] = [];
-  for (const name of names) {
-    if (entries.length >= LISTING_MAX_ENTRIES) break;
-    if (name.startsWith(".") && name !== ".env.example") continue;
-    const absolute = join(target, name);
-    let isDirectory = false;
-    let size: number | undefined;
-    try {
-      const info = await stat(absolute);
-      isDirectory = info.isDirectory();
-      if (!isDirectory) size = info.size;
-    } catch {
-      // A file that vanished between the listing and the stat is simply not
-      // in the listing.
-      continue;
+  const candidates = names
+    .filter((name) => !(name.startsWith(".") && name !== ".env.example"))
+    .slice(0, LISTING_MAX_ENTRIES);
+  // Stat with bounded concurrency so a large folder does not wait on one
+  // entry at a time across thousands of round-trips.
+  const CONCURRENCY = 32;
+  type Raw = { name: string; absolute: string; isDirectory: boolean; size?: number } | null;
+  const raw: Raw[] = new Array(candidates.length).fill(null);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < candidates.length) {
+      const index = next;
+      next += 1;
+      const name = candidates[index]!;
+      const absolute = join(target, name);
+      try {
+        const info = await stat(absolute);
+        const isDirectory = info.isDirectory();
+        if (isDirectory && SKIPPED_FOLDERS.has(name)) {
+          raw[index] = null;
+          continue;
+        }
+        raw[index] = {
+          name,
+          absolute,
+          isDirectory,
+          ...(isDirectory ? {} : { size: info.size }),
+        };
+      } catch {
+        raw[index] = null;
+      }
     }
-    if (isDirectory && SKIPPED_FOLDERS.has(name)) continue;
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () => worker()));
+  const entries: FileEntry[] = [];
+  for (const item of raw) {
+    if (!item) continue;
     entries.push({
-      name,
-      path: relativePath(root, absolute),
-      kind: isDirectory ? "directory" : "file",
-      ...(size === undefined ? {} : { size }),
+      name: item.name,
+      path: relativePath(root, item.absolute),
+      kind: item.isDirectory ? "directory" : "file",
+      ...(item.size === undefined ? {} : { size: item.size }),
     });
   }
   entries.sort((left, right) => {
@@ -141,7 +188,7 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
  * note that it was cut short.
  */
 export async function readPreview(root: string, relative: string): Promise<FilePreview> {
-  const target = resolveInside(root, relative);
+  const target = await resolveInsideReal(root, relative);
   if (!target) throw new FileAccessError("that path is outside the folder the thread works in");
   const info = await stat(target);
   if (info.isDirectory()) throw new FileAccessError("that is a folder, not a file");

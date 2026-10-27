@@ -88,7 +88,8 @@ const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPat
  * the files a turn would work in.
  */
 function defaultCwd(): string {
-  return process.env.HOME ?? "/tmp";
+  // An empty HOME must not fall through to process.cwd().
+  return process.env.HOME || "/tmp";
 }
 
 interface Launcher {
@@ -1736,8 +1737,9 @@ async function main(): Promise<void> {
     // The files of the folder a thread works in, and one of them to look at.
     // The web canvas shows both, and the native apps ask for them here.
     if (req.method === "GET" && url.pathname === "/clutch/v1/files") {
-      const root = url.searchParams.get("root")?.trim() || defaultCwd();
-      const path = url.searchParams.get("path")?.trim() ?? "";
+      // Do not trim root/path: a name with edge spaces is a real name.
+      const root = url.searchParams.get("root") || defaultCwd();
+      const path = url.searchParams.get("path") ?? "";
       try {
         const listing = await listDirectory(root, path);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(listing));
@@ -1748,8 +1750,8 @@ async function main(): Promise<void> {
     }
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/file") {
-      const root = url.searchParams.get("root")?.trim() || defaultCwd();
-      const path = url.searchParams.get("path")?.trim() ?? "";
+      const root = url.searchParams.get("root") || defaultCwd();
+      const path = url.searchParams.get("path") ?? "";
       if (!path) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "the file is missing" }));
         return;
