@@ -13,7 +13,7 @@
  * tells the client to keep the name it already shows for that call.
  */
 
-import type { SessionUpdate } from "./sessionUpdates.ts";
+import type { PlanEntry, SessionUpdate } from "./sessionUpdates.ts";
 import { z } from "zod";
 
 import { DshHostTransportError, HOST_SNAPSHOT_TIMEOUT_MS, type DshHostClient } from "./dshHostClient.ts";
@@ -193,6 +193,27 @@ export function dshHostEventToUpdate(
       toolCallId: callId,
       toolStatus: result.failed ? "failed" : "completed",
     };
+  }
+
+  if (type === "todo/write") {
+    // The host's plan is the agent's todo list, written whole every time it
+    // changes.  It carries no priority, so every entry is a middle one: the
+    // clients show the list the engine gave, and the order is the engine's.
+    const todos = data["todos"];
+    if (!Array.isArray(todos)) return null;
+    const plan: PlanEntry[] = [];
+    for (const entry of todos) {
+      const row = readRecord(entry);
+      const content = row?.["content"];
+      if (typeof content !== "string" || content.length === 0) continue;
+      const status = row?.["status"];
+      plan.push({
+        content,
+        priority: "medium",
+        status: status === "completed" ? "completed" : status === "in_progress" ? "in_progress" : "pending",
+      });
+    }
+    return { sessionId, kind: "plan", text: "", plan };
   }
 
   return null;

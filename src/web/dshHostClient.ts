@@ -372,10 +372,16 @@ export class DshHostClient {
    * only listens on the socket receives frames for a stream it never asked for.
    * The `cancel` frame is sent when the caller stops reading, which is what
    * tells the host the stream is no longer wanted.
+   *
+   * `signal` ends the stream: the host is told the stream is no longer
+   * wanted, and the socket is closed.  Without it a caller that stops
+   * reading leaves the socket open until the host says something, so a
+   * cancelled turn would keep a connection for as long as the host is quiet.
    */
   async *stream(
     endpoint: string,
     args: Record<string, unknown> = {},
+    options: { readonly signal?: AbortSignal } = {},
   ): AsyncGenerator<unknown, void, undefined> {
     if (!isValidDshHostEndpoint(endpoint)) {
       throw new DshHostTransportError(`invalid dsh host endpoint ${JSON.stringify(endpoint)}`);
@@ -407,6 +413,10 @@ export class DshHostClient {
       pending.push(value);
       wake?.();
     };
+    // A cancelled stream ends like a finished one: the reader stops, and the
+    // generator's own cleanup tells the host the stream is not wanted.
+    const onAbort = (): void => settle();
+    options.signal?.addEventListener("abort", onAbort, { once: true });
 
     socket.onmessage = (event) => {
       const frame = parseMuxFrame(event.data);
@@ -457,6 +467,7 @@ export class DshHostClient {
         });
       }
     } finally {
+      options.signal?.removeEventListener("abort", onAbort);
       try {
         socket.send(JSON.stringify({ type: "cancel", streamId }));
       } catch {

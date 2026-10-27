@@ -67,6 +67,12 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
+import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "./dshHostTurn.ts";
+import {
+  DshHostApprovalRelay,
+  type HostApproval,
+  type HostApprovalOutcome,
+} from "./dshHostApprovals.ts";
 import { compactToolHistory, toolStatusOf, type PlanEntry, type SessionUpdate } from "./sessionUpdates.ts";
 
 // Re-exported for the clients and the tests that already import them from
@@ -815,6 +821,29 @@ export function fallbackPermissionOption(options: PermissionOption[]): string | 
   return reject?.optionId ?? null;
 }
 
+/**
+ * The options a host approval offers.
+ *
+ * The host asks one question with two answers, and the grant lasts for that
+ * one call: it is the host's own vocabulary, so a card in the app offers the
+ * same choice the web canvas does.
+ */
+const HOST_APPROVAL_OPTIONS: PermissionOption[] = [
+  { optionId: "allow-once", kind: "allow_once", name: "Allow once" },
+  { optionId: "reject", kind: "reject_once", name: "Reject" },
+];
+
+/**
+ * The host's answer to the option a client picked.
+ *
+ * Anything that is not the grant is a refusal: the host has no other grant,
+ * and a card that sends something the host does not understand would be
+ * refused by the host anyway.
+ */
+function hostOutcomeFor(optionId: string | null): HostApprovalOutcome {
+  return optionId === "allow-once" ? "allowed-once" : "rejected";
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 export class Bridge {
   private child: ChildProcess | null = null;
@@ -1136,6 +1165,22 @@ interface ChatSession {
    * could answer another turn's question.
    */
   pendingPermissions: Map<string, PermissionRequest>;
+  /**
+   * How this turn answers a permission request.
+   *
+   * A turn runs either on an ACP bridge or inside the dsh host, and each has
+   * its own way of receiving the answer, so the turn holds the one that
+   * applies to it.  A turn with none cannot answer, and its requests are
+   * let go instead.
+   */
+  answerPermission?: ((requestId: string, optionId: string | null) => boolean | Promise<boolean>) | null;
+  /**
+   * The host approvals this turn is waiting on, by the id the client sees.
+   *
+   * The host's own id is kept beside the client's, because the answer has to
+   * name the question the host asked and not the card on the screen.
+   */
+  hostApprovals: Map<string, HostApproval>;
 }
 
 /** Untrusted request bodies for the project/archive routes.  Strict so an
@@ -1323,22 +1368,124 @@ async function main(): Promise<void> {
   const hostClient = new DshHostClientCache(() => DshHostClient.connect(), Date.now, HOST_RETRY_COOLDOWN_MS);
 
   /**
+   * The sidecar's end of the host's approval channel.
+   *
+   * The relay is opened once and kept open, because the host asks every
+   * connected client at once: the sidecar has to be listening before the turn
+   * that will be asked has started.
+   */
+  let approvalRelay: DshHostApprovalRelay | null = null;
+  async function hostApprovals(): Promise<DshHostApprovalRelay> {
+    if (approvalRelay) return approvalRelay;
+    const relay = DshHostApprovalRelay.start({
+      client: () => dshHost(),
+      onApproval: (approval) => routeHostApproval(approval),
+      onSettled: (eventId) => settleHostApproval(eventId),
+      onLog: (message) => log(message),
+    });
+    approvalRelay = relay;
+    return relay;
+  }
+
+  /**
+   * Hand one host approval to the turn that owns it.
+   *
+   * The host asks every connected client, so a question about a thread
+   * nobody here is driving belongs to another client — the web canvas, most
+   * likely — and is left for it to answer.  Answering it here would take the
+   * question away from the person looking at it.
+   */
+  function routeHostApproval(approval: HostApproval): void {
+    const target = [...sessions.values()].find(
+      (s) => s.busy && isDshHostedEngine(s.engine) && s.resumeSessionId === approval.agentId,
+    );
+    if (!target) {
+      log(`host approval left to its own client agent=${approval.agentId} tool=${approval.toolName}`);
+      return;
+    }
+    const request: PermissionRequest = {
+      requestId: `perm-${(permissionCounter += 1)}`,
+      sessionId: approval.agentId,
+      title: approval.reason ?? `Tool ${approval.toolName} requests privileged execution`,
+      toolName: approval.toolName,
+      options: HOST_APPROVAL_OPTIONS,
+    };
+    target.hostApprovals.set(request.requestId, approval);
+    if (!target.permission) {
+      // Nobody is watching this turn: do not auto-grant privileged tools.
+      // Reject so the host unblocks without running the tool.
+      void answerHostApproval(target, request.requestId, "rejected");
+      return;
+    }
+    // The turn owns the request from here on, so an answer is only accepted
+    // when it names a request this turn raised.
+    target.pendingPermissions.set(request.requestId, request);
+    target.permission(request);
+  }
+
+  /** Put one answer on the host's wire. */
+  async function answerHostApproval(
+    session: ChatSession,
+    requestId: string,
+    outcome: HostApprovalOutcome,
+  ): Promise<boolean> {
+    const approval = session.hostApprovals.get(requestId);
+    if (!approval) return false;
+    try {
+      const relay = await hostApprovals();
+      const ok = await relay.answer(approval.eventId, outcome);
+      // Keep the request retryable until the host accepts the answer.
+      if (ok) session.hostApprovals.delete(requestId);
+      return ok;
+    } catch (err) {
+      log(`host approval answer failed request=${requestId} message=${(err as Error).message.slice(0, 120)}`);
+      return false;
+    }
+  }
+
+  /**
+   * The host settled a question somewhere else, so the card the client is
+   * holding is stale.
+   */
+  function settleHostApproval(eventId: string): void {
+    for (const session of sessions.values()) {
+      for (const [requestId, approval] of session.hostApprovals) {
+        if (approval.eventId !== eventId) continue;
+        session.hostApprovals.delete(requestId);
+        session.pendingPermissions.delete(requestId);
+        const timer = session.permissionTimers.get(requestId);
+        if (timer) {
+          clearTimeout(timer);
+          session.permissionTimers.delete(requestId);
+        }
+      }
+    }
+  }
+
+  /**
    * Let go of the permission requests one turn is waiting on.
    *
    * A turn that is cancelled, or that ends, cannot answer a question any
    * more.  The engine is blocked on that answer, so it is released here:
    * otherwise it would wait for a reply that can never come.
    */
-  function releasePermissions(session: ChatSession, engine: Engine): void {
+  function releasePermissions(session: ChatSession): void {
     for (const timer of session.permissionTimers.values()) clearTimeout(timer);
     session.permissionTimers.clear();
+    // Host approvals must be rejected, never auto-allowed, when a turn ends
+    // or disconnects: otherwise an unwatched cancel still grants the tool.
+    for (const requestId of [...session.hostApprovals.keys()]) {
+      void answerHostApproval(session, requestId, "rejected");
+    }
     for (const request of session.pendingPermissions.values()) {
-      bridgeFor(engine).answerPermission(
+      if (session.hostApprovals.has(request.requestId)) continue;
+      void session.answerPermission?.(
         request.requestId,
         fallbackPermissionOption(request.options),
       );
     }
     session.pendingPermissions.clear();
+    session.hostApprovals.clear();
   }
 
   /**
@@ -1542,7 +1689,9 @@ async function main(): Promise<void> {
         session.permissionTimers.delete(requestId);
       }
       session.pendingPermissions.delete(requestId);
-      const answered = bridgeFor(session.engine).answerPermission(requestId, optionId);
+      // The turn knows how to answer: a bridge turn answers the bridge, and a
+      // turn that runs in the host answers the host.
+      const answered = (await session.answerPermission?.(requestId, optionId)) ?? false;
       log(`permission answer session=${chatId} request=${requestId} answered=${answered}`);
       res.writeHead(answered ? 200 : 404, { "content-type": "application/json" }).end(
         JSON.stringify(answered ? { ok: true } : { error: "no such permission request" }),
@@ -1582,7 +1731,7 @@ async function main(): Promise<void> {
       }
       // A cancelled turn cannot answer a question any more, so the engine is
       // released instead of waiting on an answer that will never come.
-      if (session) releasePermissions(session, session.engine);
+      if (session) releasePermissions(session);
       log(`chat cancel-request session=${chatId || "none"} cancelled=${cancelled}`);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, cancelled }));
       return;
@@ -1661,6 +1810,7 @@ async function main(): Promise<void> {
         },
         permissionTimers: new Map(),
         pendingPermissions: new Map(),
+        hostApprovals: new Map(),
         ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
         ...(typeof body.effort === "string" && body.effort.length > 0 ? { effort: body.effort } : {}),
       };
@@ -1924,6 +2074,7 @@ async function main(): Promise<void> {
           stream: null,
           permissionTimers: new Map(),
           pendingPermissions: new Map(),
+          hostApprovals: new Map(),
         };
         sessions.set(chatId, session);
       }
@@ -1997,10 +2148,12 @@ async function main(): Promise<void> {
           const timer = setTimeout(() => {
             active.permissionTimers.delete(request.requestId);
             active.pendingPermissions.delete(request.requestId);
-            bridgeFor(engine).answerPermission(
-              request.requestId,
-              fallbackPermissionOption(request.options),
-            );
+            // Host approvals time out as rejected; bridge turns keep the
+            // historical allow-once fallback for unattended ACP prompts.
+            const optionId = active.hostApprovals.has(request.requestId)
+              ? null
+              : fallbackPermissionOption(request.options);
+            void active.answerPermission?.(request.requestId, optionId);
           }, PERMISSION_TIMEOUT_MS);
           active.permissionTimers.set(request.requestId, timer);
         };
@@ -2029,7 +2182,8 @@ async function main(): Promise<void> {
         // A turn that ended cannot answer a permission request any more, so
         // the pending ones are let go rather than left waiting: the engine is
         // blocked on the answer, and a cancelled turn would never send it.
-        releasePermissions(active, engine);
+        releasePermissions(active);
+        active.answerPermission = null;
         sseSend(res, event, data);
         res.end();
       };
@@ -2046,8 +2200,102 @@ async function main(): Promise<void> {
       });
 
       try {
+        // The dsh-hosted engines live in the host: it owns their threads, so
+        // the turn runs there and the client sees the same events the web
+        // canvas does.  A host that cannot be reached falls back to the
+        // bridge, which is the older path and still works on its own.
+        if (isDshHostedEngine(engine)) {
+          let host: DshHostClient | null = null;
+          try {
+            host = await dshHost();
+          } catch (err) {
+            log(`chat host unavailable session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+          }
+          if (host) {
+            // The relay has to be listening before the turn starts: the host
+            // asks every connected client, and a question asked before the
+            // sidecar is listening is a question nobody hears.
+            const relay = await hostApprovals();
+            const ready = await relay.ready();
+            if (!ready) {
+              finish("error", {
+                message: "the host approval relay did not become ready in time",
+                sessionId: chatId,
+                remoteSessionId: remoteId(),
+              });
+              return;
+            }
+            // Only a host session id resumes a host thread.  The bridge
+            // session id is a different namespace and must not be reused.
+            const sessionId =
+              active.resumeSessionId ||
+              (await createDshHostSession(host, { cwd }));
+            // A host thread is resumable by its own id, so the next turn picks
+            // the same thread up after a restart of the sidecar.
+            active.resumeSessionId = sessionId;
+            const turnAbort = new AbortController();
+            const abortTurn = (): void => {
+              if (!turnAbort.signal.aborted) turnAbort.abort();
+            };
+            req.on("close", abortTurn);
+            // This turn answers its own questions: the host's approval arrives
+            // as a waterfall, and the answer goes back over the host's wire.
+            active.answerPermission = async (requestId, optionId) =>
+              answerHostApproval(active, requestId, hostOutcomeFor(optionId));
+            // The host's own model selection decides which provider the turn
+            // runs on, so the engine the client picked is applied before the
+            // prompt.  A refusal is not fatal: the turn still runs on the
+            // host's default.
+            try {
+              const provider = await hostProviderFor(host, engine);
+              if (provider) {
+                const catalogValue = await catalog();
+                const wanted = session.model
+                  ? resolveModelValue(catalogValue, engine, session.model)
+                  : null;
+                const chosen = await selectHostModel(
+                  host,
+                  sessionId,
+                  provider,
+                  wanted ?? null,
+                  session.effort ?? null,
+                );
+                log(`chat host-model session=${chatId} provider=${provider.provider} model=${chosen}`);
+              } else {
+                log(`chat host has no provider for engine=${engine}`);
+              }
+            } catch (err) {
+              log(`chat host-model refused session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+            }
+            log(`chat host-turn session=${chatId} hostSession=${sessionId}`);
+            const result = await runDshHostTurn(host, {
+              sessionId,
+              prompt,
+              images: images.map((image) => ({
+                mediaType: image.mimeType,
+                data: image.data,
+                ...(image.name ? { name: image.name } : {}),
+              })),
+              onUpdate: (update) => active.stream?.(update),
+              signal: turnAbort.signal,
+            });
+            log(`chat end session=${chatId} stopReason=${result.stopReason}`);
+            if (sink) {
+              try {
+                await sink.onDone();
+              } catch (err) {
+                /* relay failures must not break the SSE transport */
+              }
+            }
+            finish("done", { stopReason: result.stopReason, sessionId: chatId, remoteSessionId: remoteId() });
+            return;
+          }
+        }
         const bridge = bridgeFor(engine);
         await bridge.initialize();
+        // This turn answers its own questions, the way a bridge always has.
+        active.answerPermission = (requestId, optionId) =>
+          bridge.answerPermission(requestId, optionId);
         if (!active.bridgeSessionId) {
           // A thread the client resumed keeps its own session id, whichever
           // engine owns it: the dsh-hosted engines resume by that id too, and

@@ -256,7 +256,9 @@ public struct ChatView: View {
                         thoughtLine = nil
                         pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
-                        if stop != "endTurn" && stop != "cancelled" {
+                        // The host ends a turn with its own name for it, and
+                        // the bridge with ACP's, so both are a normal end.
+                        if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         }
                     case .usage:
