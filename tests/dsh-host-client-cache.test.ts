@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DshHostClientCache } from "../src/web/dshHostClientCache.ts";
+import { DshHostClientCache, isRefusedIdentity } from "../src/web/dshHostClientCache.ts";
 import { DshHostHandshakeError, DshHostTransportError } from "../src/web/dshHostClient.ts";
 
 describe("host client identity cache", () => {
@@ -152,6 +152,32 @@ describe("held-client routes report to the cache", () => {
     const source = await readFile(new URL("../src/web/chat-bridge.ts", import.meta.url), "utf8");
     expect(source).toContain("onClientError: (client, error) => hostClient.noteFailure(client, error)");
     expect(source).toContain("hostClient.noteFailure(heldHost, err)");
-    expect(source).toContain("viaHost(() => runDshHostTurn(host");
+    expect(source).toContain("viaHost((client) => runDshHostTurn(client, {");
+  });
+});
+
+describe("refused identity on a held client", () => {
+  it("classifies only 401, 404 and handshake failures as a refused identity", () => {
+    expect(isRefusedIdentity(new DshHostTransportError("x", 401))).toBe(true);
+    expect(isRefusedIdentity(new DshHostTransportError("x", 404))).toBe(true);
+    expect(isRefusedIdentity(new DshHostHandshakeError("x", 0))).toBe(true);
+    expect(isRefusedIdentity(new DshHostTransportError("x", 500))).toBe(false);
+    expect(isRefusedIdentity(new Error("x"))).toBe(false);
+  });
+
+  it("re-acquires after a refusal and never reuses the refused client in the same turn", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../src/web/chat-bridge.ts", import.meta.url), "utf8");
+    const start = source.indexOf("let heldHost: DshHostClient = host;");
+    const body = source.slice(start, start + 1400);
+    expect(body).toContain("hostClient.noteFailure(heldHost, err);");
+    expect(body).toContain("if (!isRefusedIdentity(err)) throw err;");
+    expect(body).toContain("heldHost = await openDshHost();");
+    // Only calls made before the turn starts are retried; the turn is not replayed.
+    expect(source).toContain("createDshHostSession(client, { cwd }), true)");
+    expect(source).toContain("hostProviderFor(client, engine), true)");
+    expect(source).toContain("runDshHostTurn(client, {");
+    expect(source).not.toContain("runDshHostTurn(host,");
+    expect(source).not.toContain("createDshHostSession(host,");
   });
 });

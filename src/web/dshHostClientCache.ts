@@ -1,5 +1,13 @@
 import { DshHostHandshakeError, DshHostTransportError } from "./dshHostClient.ts";
 
+/** A refused identity: 401, 404 or a failed handshake from the host. */
+export function isRefusedIdentity(error: unknown): boolean {
+  return (
+    error instanceof DshHostTransportError &&
+    (error.status === 401 || error.status === 404 || error instanceof DshHostHandshakeError)
+  );
+}
+
 /** Cache a host identity until the host refuses it.  Do not replay a failed request. */
 export class DshHostClientCache<T> {
   private client: T | null = null;
@@ -35,11 +43,7 @@ export class DshHostClientCache<T> {
    * or an error from a client the cache already replaced, changes nothing.
    */
   noteFailure(client: T, error: unknown): void {
-    if (
-      error instanceof DshHostTransportError &&
-      (error.status === 401 || error.status === 404 || error instanceof DshHostHandshakeError) &&
-      this.client === client
-    ) {
+    if (isRefusedIdentity(error) && this.client === client) {
       this.client = null;
       this.refusals += 1;
       this.failedAt = this.refusals >= 2 ? this.now() : null;

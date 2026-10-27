@@ -42,7 +42,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { z } from "zod";
 
-import { DshHostClientCache } from "./dshHostClientCache.ts";
+import { DshHostClientCache, isRefusedIdentity } from "./dshHostClientCache.ts";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
@@ -2223,13 +2223,34 @@ async function main(): Promise<void> {
           if (host) {
             // A refused identity on the held client drops it from the cache, as
             // it does for the one-shot reads.
-            const heldHost = host;
-            const viaHost = async <R>(call: () => Promise<R>): Promise<R> => {
+            let heldHost: DshHostClient = host;
+            // A refused identity must not be reused for the rest of the turn.
+            // The cache is told, a fresh client is acquired for the next call,
+            // and a call made before the turn started (session creation, model
+            // selection) is retried once on it.  The turn itself is never
+            // replayed: it may already have begun on the host.
+            const viaHost = async <R>(
+              call: (client: DshHostClient) => Promise<R>,
+              retryFresh = false,
+            ): Promise<R> => {
               try {
-                return await call();
+                return await call(heldHost);
               } catch (err) {
                 hostClient.noteFailure(heldHost, err);
-                throw err;
+                if (!isRefusedIdentity(err)) throw err;
+                try {
+                  heldHost = await openDshHost();
+                } catch {
+                  throw err;
+                }
+                if (!retryFresh) throw err;
+                const fresh = heldHost;
+                try {
+                  return await call(fresh);
+                } catch (retryErr) {
+                  hostClient.noteFailure(fresh, retryErr);
+                  throw retryErr;
+                }
               }
             };
             // The relay has to be listening before the turn starts: the host
@@ -2249,7 +2270,7 @@ async function main(): Promise<void> {
             // session id is a different namespace and must not be reused.
             const sessionId =
               active.resumeSessionId ||
-              (await viaHost(() => createDshHostSession(host, { cwd })));
+              (await viaHost((client) => createDshHostSession(client, { cwd }), true));
             // A host thread is resumable by its own id, so the next turn picks
             // the same thread up after a restart of the sidecar.
             active.resumeSessionId = sessionId;
@@ -2267,14 +2288,15 @@ async function main(): Promise<void> {
             // prompt.  A refusal is not fatal: the turn still runs on the
             // host's default.
             try {
-              const provider = await viaHost(() => hostProviderFor(host, engine));
+              const provider = await viaHost((client) => hostProviderFor(client, engine), true);
               if (provider) {
                 const catalogValue = await catalog();
                 const wanted = session.model
                   ? resolveModelValue(catalogValue, engine, session.model)
                   : null;
-                const chosen = await viaHost(() =>
-                  selectHostModel(host, sessionId, provider, wanted ?? null, session.effort ?? null),
+                const chosen = await viaHost((client) =>
+                  selectHostModel(client, sessionId, provider, wanted ?? null, session.effort ?? null),
+                  true,
                 );
                 log(`chat host-model session=${chatId} provider=${provider.provider} model=${chosen}`);
               } else {
@@ -2284,7 +2306,7 @@ async function main(): Promise<void> {
               log(`chat host-model refused session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
             }
             log(`chat host-turn session=${chatId} hostSession=${sessionId}`);
-            const result = await viaHost(() => runDshHostTurn(host, {
+            const result = await viaHost((client) => runDshHostTurn(client, {
               sessionId,
               prompt,
               images: images.map((image) => ({
