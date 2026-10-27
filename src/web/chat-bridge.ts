@@ -65,6 +65,7 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
+import { listDirectory, readPreview } from "./files.ts";
 import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "./dshHostTurn.ts";
 import {
   DshHostApprovalRelay,
@@ -85,6 +86,17 @@ const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat
 /** Where the engine keeps its session logs — the only place real usage lives. */
 const DSH_HOME = process.env.CLUTCH_DSH_HOME ?? join(CLUTCH_HOME, "dsh");
 const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPath(CLUTCH_HOME);
+
+/**
+ * The folder a thread works in when the client did not name one.
+ *
+ * The same default the chat route uses, so the files a client looks at are
+ * the files a turn would work in.
+ */
+function defaultCwd(): string {
+  // An empty HOME must not fall through to process.cwd().
+  return process.env.HOME || "/tmp";
+}
 
 interface Launcher {
   command: string;
@@ -1869,6 +1881,37 @@ async function main(): Promise<void> {
     if (req.method === "GET" && url.pathname === "/clutch/v1/session-meta") {
       const meta = loadSessionMeta(SESSION_META_FILE);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ projects: meta.projects, sessions: meta.sessions }));
+      return;
+    }
+
+    // The files of the folder a thread works in, and one of them to look at.
+    // The web canvas shows both, and the native apps ask for them here.
+    if (req.method === "GET" && url.pathname === "/clutch/v1/files") {
+      // Do not trim root/path: a name with edge spaces is a real name.
+      const root = url.searchParams.get("root") || defaultCwd();
+      const path = url.searchParams.get("path") ?? "";
+      try {
+        const listing = await listDirectory(root, path);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(listing));
+      } catch (err) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/file") {
+      const root = url.searchParams.get("root") || defaultCwd();
+      const path = url.searchParams.get("path") ?? "";
+      if (!path) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "the file is missing" }));
+        return;
+      }
+      try {
+        const preview = await readPreview(root, path);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(preview));
+      } catch (err) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+      }
       return;
     }
 
