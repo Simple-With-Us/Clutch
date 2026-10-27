@@ -46,7 +46,18 @@ usage() {
   exit 2
 }
 
+# A value option with no value is a usage error, not an unbound-variable abort.
+need_value() {
+  if [[ $# -lt 2 ]]; then
+    echo "error: $1 needs a value" >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bundle-id|--version|--build|--apple-id|--display-name|--base-json|--out-json) need_value "$@" ;;
+  esac
   case "$1" in
     --bundle-id) BUNDLE_ID="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
@@ -87,8 +98,13 @@ if [[ -z "$BASE_JSON" ]]; then
   TMP_REMOTE="$(mktemp)"
   if fetch_remote_json "$TMP_REMOTE"; then
     BASE_JSON="$TMP_REMOTE"
-  elif [[ -f "$LOCAL_JSON" ]]; then
+  elif [[ "$SKIP_PUSH" -eq 1 && -f "$LOCAL_JSON" ]]; then
+    # The local file is a stale cache: fine for a dry run that pushes nothing,
+    # never a base for a push (it would roll remote app versions back).
     BASE_JSON="$LOCAL_JSON"
+  elif [[ "$SKIP_PUSH" -eq 0 ]]; then
+    echo "error: remote ${REPO}/${REMOTE_PATH} unreachable; refusing to push from the stale local cache" >&2
+    exit 1
   else
     echo "error: no remote ${REPO}/${REMOTE_PATH} and no local ${LOCAL_JSON}" >&2
     echo "error: refusing to publish an empty apps map (would wipe the fleet manifest)" >&2

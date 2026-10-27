@@ -188,3 +188,21 @@ test("publish script fetches remote and refuses an empty apps map", () => {
   assert.match(src, /--skip-push/);
   assert.doesNotMatch(src, /data = \{"schemaVersion": 1, "apps": \{\}\}/);
 });
+
+test("a value option with no value is a usage error, not an unbound variable", () => {
+  const r = run(["--bundle-id"]);
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--bundle-id needs a value/);
+  assert.doesNotMatch(r.stderr, /unbound variable/);
+});
+
+test("a push never falls back to the stale local cache", () => {
+  const src = readFileSync(SCRIPT, "utf8");
+  assert.match(src, /elif \[\[ "\$SKIP_PUSH" -eq 1 && -f "\$LOCAL_JSON" \]\]/);
+  assert.match(src, /refusing to push from the stale local cache/);
+});
+
+test("ship-testflight never lets the publisher dirty the worktree", () => {
+  const ship = readFileSync(join(ROOT, "scripts/ios-fleet/ship-testflight.sh"), "utf8");
+  assert.match(ship, /--version "\$MARKETING" --skip-local-write\)/);
+});

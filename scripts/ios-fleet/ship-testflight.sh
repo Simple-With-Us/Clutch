@@ -902,7 +902,9 @@ record_successful_ship() {
     local -a pub_args
     apple_id="$(json_get "$APP_KEY" appleId || true)"
     display="$(json_get "$APP_KEY" displayName || true)"
-    pub_args=(--bundle-id "$BUNDLE_ID" --version "$MARKETING")
+    # --skip-local-write: the tracked cache file must not dirty the worktree the
+    # dirty-worktree guard checks before the next ship.
+    pub_args=(--bundle-id "$BUNDLE_ID" --version "$MARKETING" --skip-local-write)
     [[ -n "${BUILD_NUM:-}" ]] && pub_args+=(--build "$BUILD_NUM")
     [[ -n "${apple_id:-}" ]] && pub_args+=(--apple-id "$apple_id")
     [[ -n "${display:-}" ]] && pub_args+=(--display-name "$display")

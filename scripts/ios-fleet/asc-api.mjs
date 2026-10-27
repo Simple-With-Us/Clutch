@@ -503,6 +503,9 @@ export async function addTesterToGroup({ api, appId, groupId, email, createFirst
         // an App Store Connect user) hit exactly this: the cross-app
         // record could not be assigned, no app-scoped record existed,
         // and the old code gave up with the 409 forever.
+        // Nothing was found for this app, so the tester is new: do not report
+        // the record from the other-app lookup as pre-existing.
+        existing = null;
         res = await create();
         if (res.status === 409) {
           const recoveredAfterCreate = await recoverFromCrossApp();

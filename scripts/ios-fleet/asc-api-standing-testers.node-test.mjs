@@ -56,3 +56,24 @@ test("already-assigned record stays a no-create success path", async () => {
   assert.equal(out.ok, true);
   assert.equal(out.existing, true);
 });
+
+test("a tester only known from another app is created fresh and not reported as existing", async () => {
+  let created = false;
+  const api = async (method, path) => {
+    if (method === "GET" && path.includes("filter[apps]=6817951255&limit=5")) return { ok: true, status: 200, parsed: { data: [] } };
+    if (method === "GET" && path.includes("filter[email]")) {
+      return { ok: true, status: 200, parsed: { data: [{ id: "other-app", attributes: { email: "person@example.com" } }] } };
+    }
+    if (method === "GET" && path.includes("filter[apps]")) return { ok: true, status: 200, parsed: { data: [], links: {} } };
+    if (method === "POST" && path.includes("/relationships/betaTesters")) return { ok: false, status: 409, parsed: {} };
+    if (method === "POST" && path === "/v1/betaTesters") {
+      created = true;
+      return { ok: true, status: 201, parsed: { data: { id: "new", attributes: { email: "person@example.com" } } } };
+    }
+    throw new Error(`unexpected call ${method} ${path}`);
+  };
+  const out = await addTesterToGroup({ api, appId: "6817951255", groupId: "g1", email: "person@example.com" });
+  assert.equal(out.ok, true);
+  assert.equal(created, true);
+  assert.equal(out.existing, false);
+});
