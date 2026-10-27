@@ -139,7 +139,9 @@ struct FilePreviewView: View {
         }
         .background(Color.clutchBackground)
         .navigationTitle(name)
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task { await model.load() }
         .overlay {
             switch model.phase {
