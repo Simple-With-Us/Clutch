@@ -20,16 +20,29 @@ export class DshHostClientCache<T> {
       this.refusals = 0;
       return result;
     } catch (error) {
-      if (
-        error instanceof DshHostTransportError &&
-        (error.status === 401 || error.status === 404 || error instanceof DshHostHandshakeError) &&
-        this.client === client
-      ) {
-        this.client = null;
-        this.refusals += 1;
-        this.failedAt = this.refusals >= 2 ? this.now() : null;
-      }
+      this.noteFailure(client, error);
       throw error;
+    }
+  }
+
+  /**
+   * Record a failure from a read made through a client this cache handed out.
+   *
+   * A client held across a stream or a turn cannot go through run(), so its
+   * owner reports the error here.  A refused identity (401, 404 or a failed
+   * handshake) on the client still in use drops it, so the next read exchanges
+   * a fresh one; two refusals in a row start the cooldown.  Any other error,
+   * or an error from a client the cache already replaced, changes nothing.
+   */
+  noteFailure(client: T, error: unknown): void {
+    if (
+      error instanceof DshHostTransportError &&
+      (error.status === 401 || error.status === 404 || error instanceof DshHostHandshakeError) &&
+      this.client === client
+    ) {
+      this.client = null;
+      this.refusals += 1;
+      this.failedAt = this.refusals >= 2 ? this.now() : null;
     }
   }
 

@@ -56,6 +56,8 @@ export type DshHostClientProvider = () => Promise<DshHostClient>;
 export interface DshHostApprovalRelayOptions {
   /** The host client, fetched again when the host restarts. */
   readonly client: DshHostClientProvider;
+  /** Told of an error from a client this relay was given, so its owner can drop a refused identity. */
+  readonly onClientError?: (client: DshHostClient, error: unknown) => void;
   /** Called for every approval the host asks. */
   readonly onApproval: (approval: HostApproval) => void;
   /** Called when the host settled a request elsewhere, so a stale card can go. */
@@ -197,11 +199,16 @@ export class DshHostApprovalRelay {
     const generation = this.generations.get(eventId);
     if (!generation) return false;
     const client = await this.options.client();
-    await client.call(DSH_HOST_EVENT_RESULT_ENDPOINT, {
-      clientId: generation,
-      eventId,
-      outcome: { kind: "result", value: outcome },
-    });
+    try {
+      await client.call(DSH_HOST_EVENT_RESULT_ENDPOINT, {
+        clientId: generation,
+        eventId,
+        outcome: { kind: "result", value: outcome },
+      });
+    } catch (err) {
+      this.options.onClientError?.(client, err);
+      throw err;
+    }
     this.generations.delete(eventId);
     return true;
   }
@@ -215,10 +222,12 @@ export class DshHostApprovalRelay {
    */
   private async loop(): Promise<void> {
     while (true) {
+      let client: DshHostClient | null = null;
       try {
-        const client = await this.options.client();
+        client = await this.options.client();
         await this.read(client);
       } catch (err) {
+        if (client) this.options.onClientError?.(client, err);
         this.log(`approval relay stopped reading: ${messageOf(err)}`);
       }
       if (await this.settled()) return;

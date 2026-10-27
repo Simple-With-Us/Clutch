@@ -1387,6 +1387,7 @@ async function main(): Promise<void> {
     if (approvalRelay) return approvalRelay;
     const relay = DshHostApprovalRelay.start({
       client: () => openDshHost(),
+      onClientError: (client, error) => hostClient.noteFailure(client, error),
       onApproval: (approval) => routeHostApproval(approval),
       onSettled: (eventId) => settleHostApproval(eventId),
       onLog: (message) => log(message),
@@ -2220,6 +2221,17 @@ async function main(): Promise<void> {
             log(`chat host unavailable session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
           }
           if (host) {
+            // A refused identity on the held client drops it from the cache, as
+            // it does for the one-shot reads.
+            const heldHost = host;
+            const viaHost = async <R>(call: () => Promise<R>): Promise<R> => {
+              try {
+                return await call();
+              } catch (err) {
+                hostClient.noteFailure(heldHost, err);
+                throw err;
+              }
+            };
             // The relay has to be listening before the turn starts: the host
             // asks every connected client, and a question asked before the
             // sidecar is listening is a question nobody hears.
@@ -2237,7 +2249,7 @@ async function main(): Promise<void> {
             // session id is a different namespace and must not be reused.
             const sessionId =
               active.resumeSessionId ||
-              (await createDshHostSession(host, { cwd }));
+              (await viaHost(() => createDshHostSession(host, { cwd })));
             // A host thread is resumable by its own id, so the next turn picks
             // the same thread up after a restart of the sidecar.
             active.resumeSessionId = sessionId;
@@ -2255,18 +2267,14 @@ async function main(): Promise<void> {
             // prompt.  A refusal is not fatal: the turn still runs on the
             // host's default.
             try {
-              const provider = await hostProviderFor(host, engine);
+              const provider = await viaHost(() => hostProviderFor(host, engine));
               if (provider) {
                 const catalogValue = await catalog();
                 const wanted = session.model
                   ? resolveModelValue(catalogValue, engine, session.model)
                   : null;
-                const chosen = await selectHostModel(
-                  host,
-                  sessionId,
-                  provider,
-                  wanted ?? null,
-                  session.effort ?? null,
+                const chosen = await viaHost(() =>
+                  selectHostModel(host, sessionId, provider, wanted ?? null, session.effort ?? null),
                 );
                 log(`chat host-model session=${chatId} provider=${provider.provider} model=${chosen}`);
               } else {
@@ -2276,7 +2284,7 @@ async function main(): Promise<void> {
               log(`chat host-model refused session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
             }
             log(`chat host-turn session=${chatId} hostSession=${sessionId}`);
-            const result = await runDshHostTurn(host, {
+            const result = await viaHost(() => runDshHostTurn(host, {
               sessionId,
               prompt,
               images: images.map((image) => ({
@@ -2286,7 +2294,7 @@ async function main(): Promise<void> {
               })),
               onUpdate: (update) => active.stream?.(update),
               signal: turnAbort.signal,
-            });
+            }));
             log(`chat end session=${chatId} stopReason=${result.stopReason}`);
             if (sink) {
               try {
