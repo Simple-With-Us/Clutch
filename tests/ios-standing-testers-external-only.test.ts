@@ -45,6 +45,10 @@ describe("standing testers sync is external-only", () => {
     expect(end).toBeGreaterThan(start);
     const branch = mjs.slice(start, end);
     expect(branch).toMatch(/await deleteInternalGroups\(/);
+    // After assigning the build to the external group, the sync independently
+    // verifies membership through the group-side builds read (Apple forbids
+    // reading a build's betaGroups).
+    expect(branch).toMatch(/\/v1\/betaGroups\/\$\{group\.id\}\/builds/);
     // Standing testers join the external group with createFirst: an email
     // whose only tester record belongs to another app of the team cannot be
     // related to this app's group (409 STATE_ERROR, seen live 2026-10-09),
@@ -73,7 +77,10 @@ describe("ensure-tf-ready readiness is external-only", () => {
   it("ship-testflight.sh no longer claims internal testers can install", () => {
     const sh = read("scripts/ios-fleet/ship-testflight.sh");
     expect(sh).not.toMatch(/TestFlight internal testers can install this build/);
-    expect(sh).toMatch(/TestFlight external testers can install this build after Beta App Review/);
+    // The readiness step runs before the sync assigns the build, so the rc=0
+    // line states exactly what was verified: the app's external install path.
+    expect(sh).toMatch(/TestFlight external install path is live for /);
+    expect(sh).not.toMatch(/TestFlight external testers can install this build/);
     expect(sh).not.toMatch(/has no internal TestFlight tester/);
   });
 });
@@ -132,9 +139,12 @@ describe("deleteInternalGroups behavior", () => {
 describe("externalInstallability behavior", () => {
   it("is installable when an external group has a public link, even with zero testers", async () => {
     const api = vi.fn(async () => listRes([group("g1", "Public Beta", false, true)]));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: true, installable: true });
     expect(api).toHaveBeenCalledTimes(1); // public link short-circuits the tester read
+    // App-level URL: Apple forbids GET /v1/builds/{id}/betaGroups (403).
+    expect(api.mock.calls[0][1]).toContain("/v1/apps/app-1/betaGroups");
+    expect(api.mock.calls[0][1]).not.toMatch(/\/v1\/builds\//);
   });
 
   it("is installable when an external group has testers but no public link", async () => {
@@ -142,20 +152,20 @@ describe("externalInstallability behavior", () => {
       path.includes("/betaTesters")
         ? listRes([{ id: "t1", attributes: { email: "a@b.c" } }])
         : listRes([group("g1", "Public Beta", false, false)]));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: true, installable: true });
   });
 
   it("is not installable when external groups have neither testers nor a public link", async () => {
     const api = vi.fn(async (method, path) =>
       path.includes("/betaTesters") ? listRes([]) : listRes([group("g1", "Public Beta", false, false)]));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: true, installable: false });
   });
 
   it("is not installable when the build is in no external group (internal groups do not count)", async () => {
     const api = vi.fn(async () => listRes([group("g-int", "Internal Testers", true)]));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: true, installable: false });
   });
 
@@ -164,20 +174,20 @@ describe("externalInstallability behavior", () => {
       if (path.includes("/betaTesters")) return { ok: false, status: 500, parsed: { errors: [{ detail: "boom" }] } };
       return listRes([group("g-bad", "Public Beta", false, false), group("g-link", "Beta Link", false, true)]);
     });
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: true, installable: true });
     expect(out.detail).toContain("Beta Link");
   });
 
   it("counts a group with a missing isInternalGroup flag as external", async () => {
     const api = vi.fn(async () => listRes([{ id: "g1", attributes: { name: "Public Beta", publicLinkEnabled: true } }]));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: true, installable: true });
   });
 
   it("reports ok:false instead of throwing when the transport itself throws", async () => {
     const api = vi.fn(async () => { throw new Error("socket hangup"); });
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: false, installable: false });
     expect(out.error).toContain("socket hangup");
   });
@@ -187,13 +197,13 @@ describe("externalInstallability behavior", () => {
       path.includes("/betaTesters")
         ? { ok: false, status: 500, parsed: { errors: [{ detail: "boom" }] } }
         : listRes([group("g1", "Public Beta", false, false)]));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out).toMatchObject({ ok: false, installable: false });
   });
 
   it("reports ok:false when the read fails, which is not the same as uninstallable", async () => {
     const api = vi.fn(async () => ({ ok: false, status: 401, parsed: { errors: [{ detail: "denied" }] } }));
-    const out = await externalInstallability({ api, buildId: "b1" });
+    const out = await externalInstallability({ api, appId: "app-1" });
     expect(out.ok).toBe(false);
     expect(out.installable).toBe(false);
   });
