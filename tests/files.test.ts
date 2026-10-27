@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,9 +113,9 @@ describe("the path a client asked for", () => {
     expect(resolveInside("/work/app", "../application")).toBe(null);
   });
   it("refuses a symlink that escapes the thread folder", async () => {
-    const outside = await mkdtemp(join(tmpdir(), "clutch-files-out-"));
-    await writeFile(join(outside, "secret.txt"), "nope", "utf8");
-    await symlink(outside, join(root, "escape"));
+    const outside = mkdtempSync(join(tmpdir(), "clutch-files-out-"));
+    writeFileSync(join(outside, "secret.txt"), "nope", "utf8");
+    symlinkSync(outside, join(root, "escape"));
     await expect(listDirectory(root, "escape")).rejects.toThrow(/outside the folder/);
     await expect(readPreview(root, "escape/secret.txt")).rejects.toThrow(/outside the folder/);
   });
