@@ -1427,9 +1427,9 @@ async function main(): Promise<void> {
     };
     target.hostApprovals.set(request.requestId, approval);
     if (!target.permission) {
-      // Nobody is watching this turn, so the sidecar answers the way it has
-      // always answered an unattended request: the tool runs once.
-      void answerHostApproval(target, request.requestId, "allowed-once");
+      // Nobody is watching this turn: do not auto-grant privileged tools.
+      // Reject so the host unblocks without running the tool.
+      void answerHostApproval(target, request.requestId, "rejected");
       return;
     }
     // The turn owns the request from here on, so an answer is only accepted
@@ -1446,10 +1446,12 @@ async function main(): Promise<void> {
   ): Promise<boolean> {
     const approval = session.hostApprovals.get(requestId);
     if (!approval) return false;
-    session.hostApprovals.delete(requestId);
     try {
       const relay = await hostApprovals();
-      return await relay.answer(approval.eventId, outcome);
+      const ok = await relay.answer(approval.eventId, outcome);
+      // Keep the request retryable until the host accepts the answer.
+      if (ok) session.hostApprovals.delete(requestId);
+      return ok;
     } catch (err) {
       log(`host approval answer failed request=${requestId} message=${(err as Error).message.slice(0, 120)}`);
       return false;
@@ -1485,7 +1487,13 @@ async function main(): Promise<void> {
   function releasePermissions(session: ChatSession): void {
     for (const timer of session.permissionTimers.values()) clearTimeout(timer);
     session.permissionTimers.clear();
+    // Host approvals must be rejected, never auto-allowed, when a turn ends
+    // or disconnects: otherwise an unwatched cancel still grants the tool.
+    for (const requestId of [...session.hostApprovals.keys()]) {
+      void answerHostApproval(session, requestId, "rejected");
+    }
     for (const request of session.pendingPermissions.values()) {
+      if (session.hostApprovals.has(request.requestId)) continue;
       void session.answerPermission?.(
         request.requestId,
         fallbackPermissionOption(request.options),
@@ -2155,10 +2163,12 @@ async function main(): Promise<void> {
           const timer = setTimeout(() => {
             active.permissionTimers.delete(request.requestId);
             active.pendingPermissions.delete(request.requestId);
-            void active.answerPermission?.(
-              request.requestId,
-              fallbackPermissionOption(request.options),
-            );
+            // Host approvals time out as rejected; bridge turns keep the
+            // historical allow-once fallback for unattended ACP prompts.
+            const optionId = active.hostApprovals.has(request.requestId)
+              ? null
+              : fallbackPermissionOption(request.options);
+            void active.answerPermission?.(request.requestId, optionId);
           }, PERMISSION_TIMEOUT_MS);
           active.permissionTimers.set(request.requestId, timer);
         };
@@ -2221,15 +2231,28 @@ async function main(): Promise<void> {
             // asks every connected client, and a question asked before the
             // sidecar is listening is a question nobody hears.
             const relay = await hostApprovals();
-            await relay.ready();
+            const ready = await relay.ready();
+            if (!ready) {
+              finish("error", {
+                message: "the host approval relay did not become ready in time",
+                sessionId: chatId,
+                remoteSessionId: remoteId(),
+              });
+              return;
+            }
+            // Only a host session id resumes a host thread.  The bridge
+            // session id is a different namespace and must not be reused.
             const sessionId =
               active.resumeSessionId ||
-              active.bridgeSessionId ||
               (await createDshHostSession(host, { cwd }));
-            active.bridgeSessionId = sessionId;
             // A host thread is resumable by its own id, so the next turn picks
             // the same thread up after a restart of the sidecar.
             active.resumeSessionId = sessionId;
+            const turnAbort = new AbortController();
+            const abortTurn = (): void => {
+              if (!turnAbort.signal.aborted) turnAbort.abort();
+            };
+            req.on("close", abortTurn);
             // This turn answers its own questions: the host's approval arrives
             // as a waterfall, and the answer goes back over the host's wire.
             active.answerPermission = async (requestId, optionId) =>
@@ -2269,6 +2292,7 @@ async function main(): Promise<void> {
                 ...(image.name ? { name: image.name } : {}),
               })),
               onUpdate: (update) => active.stream?.(update),
+              signal: turnAbort.signal,
             });
             log(`chat end session=${chatId} stopReason=${result.stopReason}`);
             if (sink) {

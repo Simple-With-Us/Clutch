@@ -239,6 +239,9 @@ export class DshHostApprovalRelay {
         this.handle(step.value);
       }
     } finally {
+      // Questions from a closed stream can never be answered; drop them so
+      // a long-lived sidecar does not accumulate orphan generations.
+      this.generations.clear();
       // Tells the host the stream is no longer wanted.
       await iterator.return?.();
     }
@@ -267,7 +270,14 @@ export class DshHostApprovalRelay {
       if (frame.event !== HOST_APPROVAL_EVENT) return;
       const request = ApprovalRequestSchema.safeParse(frame.request);
       if (!request.success) return;
-      this.generations.set(frame.eventId, this.currentGeneration());
+      // A waterfall before ready has no generation, and answer() rejects a
+      // falsy one: storing "" would make the client's card unanswerable.
+      const generation = this.currentGeneration();
+      if (!generation) {
+        this.log(`approval waterfall before ready event=${frame.eventId}; skipped`);
+        return;
+      }
+      this.generations.set(frame.eventId, generation);
       this.options.onApproval({
         eventId: frame.eventId,
         agentId: frame.agentId,
