@@ -163,4 +163,51 @@ describe("dsh host contract — pinned to the installed dsh build", () => {
       expect(source).toContain(frame);
     }
   });
+
+  it("declares the remote-event frames the approval relay reads", () => {
+    const source = readInstalled("dsh-api-gateway/lib/types/stream-protocol.d.ts");
+    // The relay reads the opening frame, the questions and the
+    // cancellations; a dsh bump that renames one of them has to be reviewed
+    // by hand before the sidecar is rebuilt.
+    for (const frame of ["'ready'", "'emit'", "'waterfall'", "'cancel'"]) {
+      expect(source).toContain(frame);
+    }
+    expect(source).toMatch(/type:\s*'waterfall'/);
+    expect(source).toMatch(/eventId:\s*RemoteEventId/);
+    expect(source).toMatch(/agentId:\s*RemoteEventAgentId/);
+  });
+
+  it("declares the remote-event answer the relay sends", () => {
+    const source = readInstalled("dsh-api-gateway/lib/types/stream-protocol.d.ts");
+    expect(source).toMatch(/clientId:\s*RemoteEventClientId/);
+    expect(source).toMatch(/kind:\s*'result'/);
+    expect(source).toMatch(/kind:\s*'next'/);
+    expect(source).toMatch(/kind:\s*'rejected'/);
+  });
+
+  it("declares the approval outcomes the host accepts", () => {
+    const source = readInstalled("dsh-user-approval/lib/types/index.js");
+    for (const outcome of ["allowed-once", "rejected", "cancelled", "unavailable"]) {
+      expect(source).toContain(`'${outcome}'`);
+    }
+  });
+
+  it("declares the approval event the relay answers", () => {
+    const source = readInstalled("dsh-api-remotes/lib/types/remote-events.js");
+    // The approval is forwarded as a waterfall, which is the shape the relay
+    // answers: the host waits for a decision instead of only telling.
+    expect(source).toMatch(/event:\s*['"]approval\/request['"]/);
+    expect(source).toMatch(/event:\s*['"]approval\/request['"],\s*mode:\s*['"]waterfall['"]/);
+  });
+
+  it("declares the endpoints the host turn drives", () => {
+    const source = readInstalled("dsh-api-session-controller/lib/typert.host.js");
+    for (const endpoint of ["selectModel", "modelCatalog", "prompt", "follow"]) {
+      expect(source).toContain(`'${endpoint}'`);
+    }
+    // The model selection is a provider and a model, and the host resolves
+    // the pair, so the sidecar sends both.
+    expect(source).toMatch(/'provider':\s*z\.string\(\)/);
+    expect(source).toMatch(/'model':\s*z\.string\(\)/);
+  });
 });
