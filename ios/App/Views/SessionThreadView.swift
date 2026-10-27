@@ -45,6 +45,18 @@ final class SessionThreadModel {
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
+    /// The engine's execution plan, as it last reported it.
+    var plan: [AcpPlanEntry] = []
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered.  The queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card, where it would
+    /// only be answered by the fallback timer.
+    var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     /// Images attached to the next turn, the way the web canvas attaches
     /// files to a message.
     var attachments: [ChatAttachment] = []
@@ -79,6 +91,15 @@ final class SessionThreadModel {
     /// The engine's effort levels, as the catalog published them.
     var effortLevels: [String] {
         catalog?.descriptor(engine)?.effortLevels ?? []
+    }
+
+    /// What the model picker shows: the picked model, or the engine itself.
+    /// Naming a model here would claim the thread runs it, and an untouched
+    /// thread keeps whatever model it was created with — which the client
+    /// does not know.
+    var pickerLabel: String {
+        if let modelId { return modelId }
+        return engineLabel
     }
 
     /// Load the catalog so the pickers can show what this host really
@@ -132,6 +153,14 @@ final class SessionThreadModel {
                     text: entry.text
                 )
             }
+            // The plan is a state, not a line of the transcript: the last
+            // plan the thread carried is the one the engine last reported.
+            // A reload that carries no plan keeps the one on screen: the
+            // transcript is a tail slice, and a plan written before it
+            // would otherwise vanish from under the owner.
+            if let carried = loaded.history.last(where: { $0.isPlan })?.plan {
+                plan = carried
+            }
             phase = .ready
         } catch {
             phase = .failed(error.localizedDescription)
@@ -178,13 +207,21 @@ final class SessionThreadModel {
                         thoughtLine = text
                     case .tool(let id, let name, let status):
                         upsertTool(id: id, name: name, status: status)
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermissions.append(request)
+                    case .plan(let entries):
+                        plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                     case .usage:
                         break // live usage strip is Mac-only
                     case .failed(let message):
                         sendError = message
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
@@ -194,6 +231,31 @@ final class SessionThreadModel {
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
             isSending = false
+        }
+    }
+
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.  The
+    /// card is cleared either way: a request the sidecar could not answer
+    /// is not one the engine will take an answer for later.
+    func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermissions.first, let chatId else { return }
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again instead of stranding the
+                // engine on a question nobody can see any more.
+                pendingPermissions.removeFirst()
+            } else {
+                sendError = "The permission answer did not reach the engine."
+            }
         }
     }
 
@@ -209,6 +271,10 @@ final class SessionThreadModel {
         sendTask?.cancel()
         sendTask = nil
         thoughtLine = nil
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
         isSending = false
     }
 
@@ -269,6 +335,21 @@ public struct SessionThreadView: View {
             }
             transcript
             Divider()
+            // The plan and the permission card sit above the composer, so
+            // what the engine is doing and what it is asking are answered
+            // in the same place the turn is written.
+            if !model.plan.isEmpty {
+                PlanPanel(entries: model.plan)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+            if let request = model.pendingPermission {
+                PermissionCard(request: request) { optionId in
+                    model.answerPermission(optionId)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
             composer
         }
         .navigationTitle(session.displayTitle)
@@ -326,7 +407,10 @@ public struct SessionThreadView: View {
                 HStack(spacing: 4) {
                     Image(systemName: "cpu")
                         .font(.system(size: 10))
-                    Text(model.modelId ?? model.engineLabel)
+                    // What the engine will run: the picked model, or the
+                    // catalog's first row, which is only shown — an
+                    // untouched thread keeps the model it was created with.
+                    Text(model.pickerLabel)
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Image(systemName: "chevron.down")

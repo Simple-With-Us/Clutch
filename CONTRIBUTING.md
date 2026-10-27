@@ -16,7 +16,7 @@ repo.  Read both before opening a PR.
 ## Code style
 
 - TypeScript for `src/`.  `noUncheckedIndexedAccess`,
-  `exactOptionalPropertyTypes`, `verbatimModuleSyntax` are on.  `pnpm
+  `exactOptionalPropertyTypes`, `verbatimModuleSyntax` are on.  `npm run
   typecheck` must pass.
 - Python for `bridges/`.  stdlib only.  No `pip install`.  Code must run
   under `/opt/homebrew/bin/python3` on the owner's Mac.
@@ -25,11 +25,13 @@ repo.  Read both before opening a PR.
 
 ## Verification gate
 
-- `pnpm typecheck` clean
-- `pnpm test` green (or `pnpm test:ci-scope && git diff --check` for
+- `npm run typecheck` clean
+- `npm test` green (or `npm run test:ci-scope && git diff --check` for
   pure-docs PRs)
-- iOS files: `cd ios && swift test` (no iOS files yet, but the gate
-  applies once the Swift dock app moves into the repo's CI)
+- iOS files: `cd ios && xcodegen generate`, then `bash scripts/ios-ui-tests.sh`
+  for the UI tests; the Swift unit tests are the `ClutchTests` bundle and run
+  with `xcodebuild -project Clutch.xcodeproj -scheme Clutch test` on a
+  simulator
 - UI changes: screenshot in the PR body
 
 ## Standing rules
