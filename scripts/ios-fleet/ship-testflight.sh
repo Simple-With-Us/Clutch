@@ -663,7 +663,10 @@ asc_released_store_version() {
     logerr "asc-released: TMPDIR resolves to the filesystem root; refusing to write there"
     return 1
   }
-  errf="$(mktemp "${errf_root}/asc-released-err.XXXXXX")"
+  errf="$(mktemp "${errf_root}/asc-released-err.XXXXXX")" || {
+    logerr "asc-released: cannot create temp file in ${errf_root}"
+    return 1
+  }
   set +e
   out=$(asc_client released-store-version "$BUNDLE_ID" "$plat" "${APPLE_ID:-}" 2>"$errf")
   rc=$?
@@ -1204,7 +1207,7 @@ sys.exit(0 if a>b else 1)' "$FIXED_MARKETING" "$_rel"; then
 
   # ---- the build number ---------------------------------------------------
   if [[ -n "$FORCE_BUILD" ]]; then
-    if [[ "$FIXED_MODE" -eq 1 && ! "$FORCE_BUILD" =~ ^${MARKETING%.*}\.[0-9]+$ ]]; then
+    prefix="${MARKETING%.*}"; prefix_re="${prefix//./\.}"; if [[ "$FIXED_MODE" -eq 1 && ! "$FORCE_BUILD" =~ ^${prefix_re}\.[0-9]+$ ]]; then
       die "--build ${FORCE_BUILD} is not ${MARKETING%.*}.<n>:  in fixed-version mode the train holds only dotted builds of that shape, and a different one would block every later ship.  Pass --build ${MARKETING%.*}.<n> or leave --build off.  Nothing was shipped."
     fi
     # An explicit --build is honoured exactly, and it does NOT move the
