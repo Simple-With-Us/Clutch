@@ -120,7 +120,8 @@ async function resolveInsideRealOrThrow(root: string, relative: string): Promise
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       throw new FileAccessError("that path does not exist in the folder the thread works in");
     }
-    throw err;
+    // Never leak absolute server paths from raw filesystem errors to clients.
+    throw new FileAccessError("that path cannot be read in the folder the thread works in");
   }
 }
 
@@ -143,7 +144,12 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
   // withFileTypes avoids a second stat for kind on the common path; we still
   // stat when the dirent is a symlink so kind matches the followed target.
   const dirents = await readdir(target, { withFileTypes: true });
-  const visible = dirents.filter((entry) => !(entry.name.startsWith(".") && entry.name !== ".env.example"));
+  // Bound how many dirents we stat/sort so a huge folder cannot stall the request
+  // before LISTING_MAX_ENTRIES trims the response.
+  const SCAN_BUDGET = 20_000;
+  const visible = dirents
+    .filter((entry) => !(entry.name.startsWith(".") && entry.name !== ".env.example"))
+    .slice(0, SCAN_BUDGET);
   const CONCURRENCY = 32;
   type Raw = { name: string; absolute: string; isDirectory: boolean; size?: number } | null;
   const raw: Raw[] = new Array(visible.length).fill(null);
@@ -157,7 +163,9 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
       try {
         let isDirectory = entry.isDirectory();
         let size: number | undefined;
-        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+        // Revalidate directory dirents so entries deleted/replaced between
+        // readdir and listing do not linger as ghosts (ENOENT drops them).
+        if (entry.isSymbolicLink() || entry.isDirectory() || (!entry.isDirectory() && !entry.isFile())) {
           const info = await stat(absolute);
           isDirectory = info.isDirectory();
           if (!isDirectory) size = info.size;
