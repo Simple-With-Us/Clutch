@@ -97,13 +97,31 @@ export async function resolveInsideReal(root: string, relative: string): Promise
     // from realpath in a way that looks like "outside".
     await lstat(target);
     targetReal = await realpath(target);
-  } catch {
+  } catch (err) {
+    // Missing paths are not escapes; surface ENOENT so callers can say "not found".
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") throw err;
     return null;
   }
-  if (targetReal === baseReal) return targetReal;
+  // Return the lexical target (not targetReal) so relativePath, which also uses
+  // lexical resolve(root), stays consistent when root itself contains a symlink.
+  if (targetReal === baseReal) return target;
   const prefix = baseReal.endsWith(sep) ? baseReal : baseReal + sep;
   if (!targetReal.startsWith(prefix)) return null;
-  return targetReal;
+  return target;
+}
+
+async function resolveInsideRealOrThrow(root: string, relative: string): Promise<string> {
+  try {
+    const target = await resolveInsideReal(root, relative);
+    if (!target) throw new FileAccessError("that path is outside the folder the thread works in");
+    return target;
+  } catch (err) {
+    if (err instanceof FileAccessError) throw err;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new FileAccessError("that path does not exist in the folder the thread works in");
+    }
+    throw err;
+  }
 }
 
 /** The path of a folder relative to the root, with no leading separator. */
@@ -121,46 +139,43 @@ function relativePath(root: string, absolute: string): string {
  * order a person reads a folder in.
  */
 export async function listDirectory(root: string, relative: string): Promise<DirectoryListing> {
-  const target = await resolveInsideReal(root, relative);
-  if (!target) throw new FileAccessError("that path is outside the folder the thread works in");
-  const names = await readdir(target);
-  // Sort before truncating so the entries that fall off the cap are the last
-  // by name rather than wherever the filesystem happened to list them.
-  names.sort((left, right) => left.localeCompare(right));
-  const candidates = names
-    .filter((name) => !(name.startsWith(".") && name !== ".env.example"))
-    .slice(0, LISTING_MAX_ENTRIES);
-  // Stat with bounded concurrency so a large folder does not wait on one
-  // entry at a time across thousands of round-trips.
+  const target = await resolveInsideRealOrThrow(root, relative);
+  // withFileTypes avoids a second stat for kind on the common path; we still
+  // stat when the dirent is a symlink so kind matches the followed target.
+  const dirents = await readdir(target, { withFileTypes: true });
+  const visible = dirents.filter((entry) => !(entry.name.startsWith(".") && entry.name !== ".env.example"));
   const CONCURRENCY = 32;
   type Raw = { name: string; absolute: string; isDirectory: boolean; size?: number } | null;
-  const raw: Raw[] = new Array(candidates.length).fill(null);
+  const raw: Raw[] = new Array(visible.length).fill(null);
   let next = 0;
   async function worker(): Promise<void> {
-    while (next < candidates.length) {
+    while (next < visible.length) {
       const index = next;
       next += 1;
-      const name = candidates[index]!;
-      const absolute = join(target, name);
+      const entry = visible[index]!;
+      const absolute = join(target, entry.name);
       try {
-        const info = await stat(absolute);
-        const isDirectory = info.isDirectory();
-        if (isDirectory && SKIPPED_FOLDERS.has(name)) {
+        let isDirectory = entry.isDirectory();
+        let size: number | undefined;
+        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) {
+          const info = await stat(absolute);
+          isDirectory = info.isDirectory();
+          if (!isDirectory) size = info.size;
+        } else if (!isDirectory) {
+          const info = await stat(absolute);
+          size = info.size;
+        }
+        if (isDirectory && SKIPPED_FOLDERS.has(entry.name)) {
           raw[index] = null;
           continue;
         }
-        raw[index] = {
-          name,
-          absolute,
-          isDirectory,
-          ...(isDirectory ? {} : { size: info.size }),
-        };
+        raw[index] = { name: entry.name, absolute, isDirectory, ...(size === undefined ? {} : { size }) };
       } catch {
         raw[index] = null;
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, candidates.length) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, visible.length) }, () => worker()));
   const entries: FileEntry[] = [];
   for (const item of raw) {
     if (!item) continue;
@@ -171,10 +186,13 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
       ...(item.size === undefined ? {} : { size: item.size }),
     });
   }
+  // Folders-first, then name — and only then the cap, so a crowded folder of
+  // files cannot push alphabetically-late directories out of the listing.
   entries.sort((left, right) => {
     if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
     return left.name.localeCompare(right.name);
   });
+  if (entries.length > LISTING_MAX_ENTRIES) entries.length = LISTING_MAX_ENTRIES;
   const path = relativePath(root, target);
   const parent = path === "" ? null : path.split(sep).slice(0, -1).join(sep);
   return { path, parent, entries };
@@ -188,8 +206,7 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
  * note that it was cut short.
  */
 export async function readPreview(root: string, relative: string): Promise<FilePreview> {
-  const target = await resolveInsideReal(root, relative);
-  if (!target) throw new FileAccessError("that path is outside the folder the thread works in");
+  const target = await resolveInsideRealOrThrow(root, relative);
   const info = await stat(target);
   if (info.isDirectory()) throw new FileAccessError("that is a folder, not a file");
   const bytes = info.size;
