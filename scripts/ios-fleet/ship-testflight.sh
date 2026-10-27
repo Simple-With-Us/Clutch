@@ -393,6 +393,7 @@ sentry_project_for_app() {
     contactlogo|contactlogo-mac) echo "contactlogo" ;;
     botfleet|botfleet-mac) echo "botfleet" ;;
     codecaps|codecaps-mac) echo "codecaps" ;;
+    clutch) echo "clutch" ;;
     hoghunter) echo "hoghunter" ;;
     fleetlink) echo "fleetlink" ;;
     *) echo "" ;;
@@ -901,15 +902,27 @@ record_successful_ship() {
     local -a pub_args
     apple_id="$(json_get "$APP_KEY" appleId || true)"
     display="$(json_get "$APP_KEY" displayName || true)"
-    pub_args=(--bundle-id "$BUNDLE_ID" --version "$MARKETING")
+    # --skip-local-write: the tracked cache file must not dirty the worktree the
+    # dirty-worktree guard checks before the next ship.
+    pub_args=(--bundle-id "$BUNDLE_ID" --version "$MARKETING" --skip-local-write)
     [[ -n "${BUILD_NUM:-}" ]] && pub_args+=(--build "$BUILD_NUM")
     [[ -n "${apple_id:-}" ]] && pub_args+=(--apple-id "$apple_id")
     [[ -n "${display:-}" ]] && pub_args+=(--display-name "$display")
-    if bash "${FLEET_DIR}/publish-ios-versions.sh" "${pub_args[@]}" >/dev/null 2>&1; then
+    # C-102: never swallow the publisher's output.  On failure print its
+    # tail so the ship log names the underlying error.
+    local pub_log pub_rc
+    pub_log="$(mktemp)"
+    set +e
+    bash "${FLEET_DIR}/publish-ios-versions.sh" "${pub_args[@]}" >"$pub_log" 2>&1
+    pub_rc=$?
+    set -e
+    if [[ "$pub_rc" -eq 0 ]]; then
       log "version-manifest: published ${BUNDLE_ID} ${MARKETING}"
     else
-      log "warning: version-manifest publish failed (non-fatal)"
+      log "warning: version-manifest publish failed rc=${pub_rc} (non-fatal); publisher output follows"
+      tail -n 25 "$pub_log" | sed 's/^/[ios-ship]   version-manifest: /'
     fi
+    rm -f "$pub_log"
   fi
 }
 

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-10-18T02:20:00Z",
+  "apps": {
+    "app.botfleet": {
+      "marketingVersion": "1.0.29",
+      "build": "202609032050",
+      "appleId": 6806379515,
+      "displayName": "BotFleet"
+    },
+    "codes.autorotate": {
+      "displayName": "Autorotate.Codes",
+      "marketingVersion": "1.0.5",
+      "build": "202608311112",
+      "appleId": 6804248985
+    },
+    "codes.autorotate.macos": {
+      "marketingVersion": "1.0.1",
+      "build": "202608311115",
+      "appleId": 6804928534,
+      "displayName": "Autorotate for Mac"
+    },
+    "com.contactlogo": {
+      "marketingVersion": "1.0.4",
+      "build": "202610180127",
+      "appleId": 6804247582,
+      "displayName": "ContactLogo"
+    },
+    "com.contactlogo.macos": {
+      "marketingVersion": "1.0.2",
+      "build": "202608311131",
+      "appleId": 6804248235,
+      "displayName": "ContactLogo for Mac"
+    },
+    "com.simplewithus.usage.client.ios": {
+      "marketingVersion": "1.0.2",
+      "build": "202610180034",
+      "appleId": 6820881005,
+      "displayName": "Usage Monitor Client"
+    },
+    "com.simplewithus.usage.local.ios": {
+      "marketingVersion": "1.0.3",
+      "build": "202610180042",
+      "appleId": 6820885210,
+      "displayName": "Usage Monitor Local"
+    },
+    "net.dealdex": {
+      "marketingVersion": "1.0.317",
+      "build": "202610180141",
+      "appleId": 6804249232,
+      "displayName": "DealDex"
+    },
+    "online.dealdex": {
+      "displayName": "DealDex",
+      "marketingVersion": "1.0.1",
+      "appleId": 6802474288
+    },
+    "services.jays.usage.client.monitor": {
+      "displayName": "Usage Client Monitor",
+      "marketingVersion": "1.0.14",
+      "appleId": 6799230435,
+      "build": "202608250546"
+    },
+    "services.jays.usage.local.monitor": {
+      "displayName": "Usage Local Monitor",
+      "marketingVersion": "1.0.9",
+      "appleId": 6799230729,
+      "build": "202608231806"
+    },
+    "trade.congress.ios": {
+      "displayName": "Congress.Trade",
+      "marketingVersion": "1.0.236",
+      "appleId": 6798076688,
+      "build": "202610180036"
+    },
+    "trade.socratic.app": {
+      "displayName": "Socratic.Trade",
+      "marketingVersion": "1.0.72",
+      "appleId": 6799238379,
+      "build": "202608250600"
+    }
+  }
+}

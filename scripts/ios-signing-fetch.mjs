@@ -35,9 +35,19 @@ export async function loadSigning({ env = process.env, fetchImpl = fetch, log = 
     IOS_CERT_P12_BASE64: cert.get('IOS_CERT_P12_BASE64'),
     IOS_CERT_PASSWORD: cert.get('IOS_CERT_PASSWORD'),
   };
+  // C-102: Sentry is optional until its project/DSN exist.  Export it when
+  // Clutch prod / carries it so the archive gets a live DSN and the ship
+  // can upload dSYMs; when absent, say so by name and ship without it.
+  for (const name of ['SENTRY_DSN', 'SENTRY_AUTH_TOKEN']) {
+    const value = cert.get(name)?.trim();
+    if (value && !UNRESOLVED_REFERENCE.test(value)) values[name] = value;
+  }
   for (const value of [...asc.values(), ...Object.values(values)]) maskValue(value, log);
   for (const [name, value] of Object.entries(values)) write(env.GITHUB_ENV, name, value);
   log('Loaded shared ASC credentials from Fleet-OPS prod /asc and certificate from Clutch prod /.');
+  for (const name of ['SENTRY_DSN', 'SENTRY_AUTH_TOKEN']) {
+    if (!values[name]) log(`::warning::${name} not set in Clutch prod /; Sentry stays inert for this ship until it is provisioned.`);
+  }
 }
 
 try {
