@@ -205,6 +205,8 @@ public struct ChatView: View {
     @State private var mcodeAvailable: Bool = true
     @State private var sendTask: Task<Void, Never>?
     @State private var showingCwdEditor = false
+    /// Whether the file browser is open.
+    @State private var showingFiles = false
     @State private var cwdDraft: String = ""
     @State private var pinnedIds: Set<String> = []
     /// Tool calls from the in-flight turn; folded into the transcript on done.
@@ -442,6 +444,12 @@ public struct ChatView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingFiles) {
+            if let host = activeHost {
+                FilesView(host: host, root: codeCwd ?? "")
+                    .frame(minWidth: 480, minHeight: 420)
+            }
+        }
         .onChange(of: activeHost?.id) { _, _ in
             // A different host means a different engine catalog and a
             // different thread list; both are re-read by prepare(), and the
@@ -601,6 +609,13 @@ public struct ChatView: View {
                 .truncationMode(.head)
                 .help(displayCwd)
             Spacer(minLength: 0)
+            // The files of the working folder, the way the web canvas shows
+            // them beside the thread rail.
+            Button("Files") { showingFiles = true }
+                .font(.system(size: 11))
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .help("Browse the files in the working folder")
             Button("Choose…") { chooseCwd() }
                 .font(.system(size: 11))
                 .buttonStyle(.plain)

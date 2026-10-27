@@ -42,6 +42,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { z } from "zod";
 
+import { DshHostClientCache, isRefusedIdentity } from "./dshHostClientCache.ts";
+
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
 import { ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
@@ -65,6 +67,7 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
+import { listDirectory, readPreview } from "./files.ts";
 import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "./dshHostTurn.ts";
 import {
   DshHostApprovalRelay,
@@ -85,6 +88,17 @@ const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat
 /** Where the engine keeps its session logs — the only place real usage lives. */
 const DSH_HOME = process.env.CLUTCH_DSH_HOME ?? join(CLUTCH_HOME, "dsh");
 const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPath(CLUTCH_HOME);
+
+/**
+ * The folder a thread works in when the client did not name one.
+ *
+ * The same default the chat route uses, so the files a client looks at are
+ * the files a turn would work in.
+ */
+function defaultCwd(): string {
+  // An empty HOME must not fall through to process.cwd().
+  return process.env.HOME || "/tmp";
+}
 
 interface Launcher {
   command: string;
@@ -117,6 +131,7 @@ const HOST_RETRY_COOLDOWN_MS = 30_000;
  * the allow-once it has always sent.
  */
 const PERMISSION_TIMEOUT_MS = 120_000;
+
 
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
@@ -1362,24 +1377,14 @@ async function main(): Promise<void> {
    * The host is only needed for the engines it owns, so a machine that runs
    * only the code engines never opens a connection to it.
    */
-  let hostClient: DshHostClient | null = null;
-  let hostClientFailedAt = 0;
-  async function dshHost(): Promise<DshHostClient> {
-    if (hostClient) return hostClient;
-    // A failed connect is remembered only briefly: the host is a separate
-    // process, so it may start later or be restarted, and the sidecar must
-    // not be stuck with the first failure for the life of the process.
-    if (hostClientFailedAt && Date.now() - hostClientFailedAt < HOST_RETRY_COOLDOWN_MS) {
-      throw new Error("the dsh host is not reachable");
-    }
-    try {
-      hostClient = await DshHostClient.connect();
-      hostClientFailedAt = 0;
-      return hostClient;
-    } catch (err) {
-      hostClientFailedAt = Date.now();
-      throw err;
-    }
+  const hostClient = new DshHostClientCache(() => DshHostClient.connect(), Date.now, HOST_RETRY_COOLDOWN_MS);
+
+  /**
+   * The cached host client, for callers that hold it across a turn or a relay.
+   * Opening goes through the cache, so the retry cooldown still applies.
+   */
+  async function openDshHost(): Promise<DshHostClient> {
+    return hostClient.run(async (client) => client);
   }
 
   /**
@@ -1393,7 +1398,8 @@ async function main(): Promise<void> {
   async function hostApprovals(): Promise<DshHostApprovalRelay> {
     if (approvalRelay) return approvalRelay;
     const relay = DshHostApprovalRelay.start({
-      client: () => dshHost(),
+      client: () => openDshHost(),
+      onClientError: (client, error) => hostClient.noteFailure(client, error),
       onApproval: (approval) => routeHostApproval(approval),
       onSettled: (eventId) => settleHostApproval(eventId),
       onLog: (message) => log(message),
@@ -1515,11 +1521,11 @@ async function main(): Promise<void> {
     limit: number,
   ): Promise<SessionSummary[]> {
     if (isDshHostedEngine(engine)) {
-      const listed = await listDshHostSessions(await dshHost(), {
+      const listed = await hostClient.run((client) => listDshHostSessions(client, {
         engine,
         limit,
         ...(cwd ? { cwd } : {}),
-      });
+      }));
       return sortSessionsByUpdated(listed);
     }
     const bridge = bridgeFor(engine);
@@ -1841,10 +1847,10 @@ async function main(): Promise<void> {
           // The next turn still goes through the ACP bridge, which resumes
           // the host's own session id, so the thread continues where it left
           // off rather than starting a new one.
-          const updates = await loadDshHostHistory(await dshHost(), {
+          const updates = await hostClient.run((client) => loadDshHostHistory(client, {
             sessionId: body.sessionId,
             limit: historyLimit,
-          });
+          }));
           history.push(...updates);
         } else if (session.model || session.effort) {
           // A resumed thread keeps the model it was created with unless the
@@ -1869,6 +1875,37 @@ async function main(): Promise<void> {
     if (req.method === "GET" && url.pathname === "/clutch/v1/session-meta") {
       const meta = loadSessionMeta(SESSION_META_FILE);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ projects: meta.projects, sessions: meta.sessions }));
+      return;
+    }
+
+    // The files of the folder a thread works in, and one of them to look at.
+    // The web canvas shows both, and the native apps ask for them here.
+    if (req.method === "GET" && url.pathname === "/clutch/v1/files") {
+      // Do not trim root/path: a name with edge spaces is a real name.
+      const root = url.searchParams.get("root") || defaultCwd();
+      const path = url.searchParams.get("path") ?? "";
+      try {
+        const listing = await listDirectory(root, path);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(listing));
+      } catch (err) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/file") {
+      const root = url.searchParams.get("root") || defaultCwd();
+      const path = url.searchParams.get("path") ?? "";
+      if (!path) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "the file is missing" }));
+        return;
+      }
+      try {
+        const preview = await readPreview(root, path);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(preview));
+      } catch (err) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
+      }
       return;
     }
 
@@ -2222,11 +2259,43 @@ async function main(): Promise<void> {
         if (isDshHostedEngine(engine)) {
           let host: DshHostClient | null = null;
           try {
-            host = await dshHost();
+            host = await openDshHost();
           } catch (err) {
             log(`chat host unavailable session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
           }
           if (host) {
+            // A refused identity on the held client drops it from the cache, as
+            // it does for the one-shot reads.
+            let heldHost: DshHostClient = host;
+            // A refused identity must not be reused for the rest of the turn.
+            // The cache is told, a fresh client is acquired for the next call,
+            // and a call made before the turn started (session creation, model
+            // selection) is retried once on it.  The turn itself is never
+            // replayed: it may already have begun on the host.
+            const viaHost = async <R>(
+              call: (client: DshHostClient) => Promise<R>,
+              retryFresh = false,
+            ): Promise<R> => {
+              try {
+                return await call(heldHost);
+              } catch (err) {
+                hostClient.noteFailure(heldHost, err);
+                if (!isRefusedIdentity(err)) throw err;
+                try {
+                  heldHost = await openDshHost();
+                } catch {
+                  throw err;
+                }
+                if (!retryFresh) throw err;
+                const fresh = heldHost;
+                try {
+                  return await call(fresh);
+                } catch (retryErr) {
+                  hostClient.noteFailure(fresh, retryErr);
+                  throw retryErr;
+                }
+              }
+            };
             // The relay has to be listening before the turn starts: the host
             // asks every connected client, and a question asked before the
             // sidecar is listening is a question nobody hears.
@@ -2244,7 +2313,7 @@ async function main(): Promise<void> {
             // session id is a different namespace and must not be reused.
             const sessionId =
               active.resumeSessionId ||
-              (await createDshHostSession(host, { cwd }));
+              (await viaHost((client) => createDshHostSession(client, { cwd }), true));
             // A host thread is resumable by its own id, so the next turn picks
             // the same thread up after a restart of the sidecar.
             active.resumeSessionId = sessionId;
@@ -2262,18 +2331,15 @@ async function main(): Promise<void> {
             // prompt.  A refusal is not fatal: the turn still runs on the
             // host's default.
             try {
-              const provider = await hostProviderFor(host, engine);
+              const provider = await viaHost((client) => hostProviderFor(client, engine), true);
               if (provider) {
                 const catalogValue = await catalog();
                 const wanted = session.model
                   ? resolveModelValue(catalogValue, engine, session.model)
                   : null;
-                const chosen = await selectHostModel(
-                  host,
-                  sessionId,
-                  provider,
-                  wanted ?? null,
-                  session.effort ?? null,
+                const chosen = await viaHost((client) =>
+                  selectHostModel(client, sessionId, provider, wanted ?? null, session.effort ?? null),
+                  true,
                 );
                 log(`chat host-model session=${chatId} provider=${provider.provider} model=${chosen}`);
               } else {
@@ -2283,7 +2349,7 @@ async function main(): Promise<void> {
               log(`chat host-model refused session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
             }
             log(`chat host-turn session=${chatId} hostSession=${sessionId}`);
-            const result = await runDshHostTurn(host, {
+            const result = await viaHost((client) => runDshHostTurn(client, {
               sessionId,
               prompt,
               images: images.map((image) => ({
@@ -2293,7 +2359,7 @@ async function main(): Promise<void> {
               })),
               onUpdate: (update) => active.stream?.(update),
               signal: turnAbort.signal,
-            });
+            }));
             log(`chat end session=${chatId} stopReason=${result.stopReason}`);
             if (sink) {
               try {
