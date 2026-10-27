@@ -600,6 +600,19 @@ project_marketing_seq() {
 
 # The App Store Connect client.  The node binary is a seam, so an offline
 # test can answer the version queries from a stub instead of the network.
+# A directory mktemp may use.  macOS TMPDIR ends in a slash, and joining
+# another slash onto it produces a doubled slash.  A TMPDIR of "/" strips
+# down to nothing, and nothing is not a directory:  the root of the
+# filesystem is refused rather than turned into a path that can be written.
+asc_temp_root() {
+  local root="${TMPDIR:-/tmp}"
+  while [[ "$root" == */ ]]; do
+    root="${root%/}"
+  done
+  [[ -n "$root" ]] || return 1
+  printf '%s' "$root"
+}
+
 asc_client() {
   "$ASC_NODE" "${FLEET_DIR}/asc-api.mjs" "$@"
 }
