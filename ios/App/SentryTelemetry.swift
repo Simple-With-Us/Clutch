@@ -23,7 +23,12 @@ enum SentryTelemetry {
                 options.dist = dist
             }
             options.tracesSampleRate = 0.2
-            options.profilesSampleRate = 0.1
+            // Sentry 9 samples profiling sessions, not individual transactions.
+            // Trace lifecycle keeps profiling tied to sampled root spans.
+            options.configureProfiling = { profiling in
+                profiling.lifecycle = .trace
+                profiling.sessionSampleRate = 0.1
+            }
             options.enableAppHangTracking = true
             options.appHangTimeoutInterval = 2.0
             options.enableCaptureFailedRequests = true
