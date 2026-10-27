@@ -34,6 +34,14 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
     public var label: String
     /// False when the engine's launcher or host binary is missing there.
     public var available: Bool
+    /// True when this engine's threads can be listed and resumed.
+    ///
+    /// The sidecar publishes the capability, so the app never hardcodes which
+    /// engines those are: the code engines keep their own session log and the
+    /// dsh-hosted engines keep theirs in the dsh host, and the sidecar reads
+    /// and resumes both through the same endpoint.  A sidecar that does not
+    /// say is taken at its word, because every Clutch engine can do this.
+    public var supportsThreads: Bool
     public var models: [EngineModel]
     /// Reasoning-effort levels, ascending.
     public var effortLevels: [String]
@@ -48,6 +56,7 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         id: String,
         label: String,
         available: Bool,
+        supportsThreads: Bool = true,
         models: [EngineModel],
         effortLevels: [String],
         effortConfigId: String,
@@ -57,6 +66,7 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         self.id = id
         self.label = label
         self.available = available
+        self.supportsThreads = supportsThreads
         self.models = models
         self.effortLevels = effortLevels
         self.effortConfigId = effortConfigId
@@ -64,9 +74,49 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         self.note = note
     }
 
-    /// The engines whose threads can be listed and resumed.
-    public var supportsThreads: Bool {
-        id == "mcode" || id == "muse"
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case available
+        case supportsThreads
+        case models
+        case effortLevels
+        case effortConfigId
+        case modelConfigId
+        case note
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        available = try container.decode(Bool.self, forKey: .available)
+        // An older sidecar does not publish the capability.  Every engine
+        // Clutch can run lists its threads, so absent means yes.
+        supportsThreads = try container.decodeIfPresent(Bool.self, forKey: .supportsThreads) ?? true
+        models = try container.decode([EngineModel].self, forKey: .models)
+        effortLevels = try container.decode([String].self, forKey: .effortLevels)
+        effortConfigId = try container.decode(String.self, forKey: .effortConfigId)
+        modelConfigId = try container.decode(String.self, forKey: .modelConfigId)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+    }
+}
+
+/// Owner-facing names for the engines.
+///
+/// The catalog is the source of truth for these names, so this is only the
+/// fallback the views show before it lands.  It lives here so no view has to
+/// spell out which engine is which.
+public enum EngineLabels {
+    /// The name for an engine id, or the id itself when it is not one Clutch knows.
+    public static func label(for id: String) -> String {
+        switch id {
+        case "deepseek": return "DeepSeek"
+        case "minimax": return "MiniMax"
+        case "mcode": return "MiniMax Code"
+        case "muse": return "Muse Code"
+        default: return id
+        }
     }
 }
 

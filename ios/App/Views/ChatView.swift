@@ -7,16 +7,11 @@ import CometChatSDK
 /// send path so prompts travel to the Mac sidecar (`POST /clutch/v1/chat`)
 /// instead of CometChat's cloud send, and the sidecar relays the turn back
 /// into the thread. Model strip and hold-to-record voice stay native.
+///
+/// The coding threads live in the Workspace tab, which covers every engine
+/// the host runs.  This tab is the agent conversation, which is a different
+/// kind of conversation rather than another engine.
 public struct ChatView: View {
-    /// Which surface the Chat tab shows: the CometChat agent thread, or the
-    /// host's MiniMax Code threads (the same split view as the Code tab, so
-    /// the two entry points can never drift apart).
-    enum Surface: Hashable {
-        case agent
-        case code
-    }
-
-    @State private var surface: Surface = .agent
     /// The paired-host store, so the chat surface can switch hosts the way
     /// the web canvas does.  The Mac app uses it to reach a code server.
     let store: HostStore?
@@ -29,6 +24,17 @@ public struct ChatView: View {
     @State private var sending: Bool = false
     @State private var thoughtLine: String?
     @State private var sendError: String?
+    /// The permission request the engine is waiting on, when it asked for
+    /// one.  The engine is blocked until this is answered.
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered, so the queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card.
+    @State private var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    private var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     @State private var cardAlert: String?
     @State private var isTranscribingVoice: Bool = false
     @State private var voiceStatusMessage: String?
@@ -42,35 +48,12 @@ public struct ChatView: View {
     }
 
     public var body: some View {
-        Group {
-            if surface == .code, let host = activeHost {
-                VStack(spacing: 0) {
-                    surfacePicker
-                    SessionsView(host: host)
-                }
-            } else {
-                agentBody
-            }
-        }
-        .onAppear {
-            if activeHost?.isMiniMaxCodeOnly == true { surface = .code }
-        }
-    }
-
-    private var surfacePicker: some View {
-        Picker("Chat Surface", selection: $surface) {
-            Text("Agent").tag(Surface.agent)
-            Text("MiniMax Code").tag(Surface.code)
-        }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        agentBody
     }
 
     private var agentBody: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                surfacePicker
                 // Model header strip
                 HStack(spacing: 8) {
                     Menu {
@@ -169,6 +152,16 @@ public struct ChatView: View {
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 4)
                             }
+                            // The permission card sits above the composer, so
+                            // the question the engine is asking is answered
+                            // where the turn is written.
+                            if let request = pendingPermission {
+                                PermissionCard(request: request) { optionId in
+                                    answerPermission(optionId)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
+                            }
                             ChatInputBar(
                                 draft: $draft,
                                 sending: sending,
@@ -209,6 +202,28 @@ public struct ChatView: View {
         }
     }
 
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.
+    private func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermissions.first, let host = activeHost, let sessionId else { return }
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: sessionId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again.
+                pendingPermissions.removeFirst()
+            } else {
+                sendError = "The permission answer did not reach the engine."
+            }
+        }
+    }
+
     private func send(_ text: String) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !sending else { return }
@@ -229,10 +244,17 @@ public struct ChatView: View {
                         thoughtLine = String(text.prefix(220))
                     case .tool:
                         break
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermissions.append(request)
+                    case .plan:
+                        break // the plan panel belongs to the workspace
                     case .done(let stop, let id, _):
                         sessionId = id
                         sending = false
                         thoughtLine = nil
+                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         if stop != "endTurn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
@@ -242,6 +264,7 @@ public struct ChatView: View {
                     case .failed(let message):
                         sending = false
                         thoughtLine = nil
+                        pendingPermissions.removeAll()
                         sendError = message
                     }
                 }

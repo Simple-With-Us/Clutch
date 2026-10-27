@@ -40,9 +40,15 @@ describe("routeForModel", () => {
 describe("museInstalled", () => {
   it("needs both the Muse host and the ACP adapter", () => {
     const none = { hosts: [] as string[], adapters: [] as string[] };
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(true);
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/bin/true", MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: "/bin/true" }, none)).toBe(false);
+    // `process.execPath` stands in for "a path that really exists".  It is
+    // always present, on every platform; `/bin/true` is not, because macOS
+    // keeps `true` in `/usr/bin` and has no `/bin/true` at all.  On a Mac the
+    // old fixture read as a missing file, so the override looked stale and
+    // this test failed on every run while CI, on Linux, passed.
+    const present = process.execPath;
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: present }, none)).toBe(true);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
+    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: present }, none)).toBe(false);
     // A stale override path must not count as installed.
     expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).toBe(false);
   });
@@ -254,8 +260,60 @@ describe("normalizeSessionUpdate", () => {
       .toEqual({ sessionId: "s1", kind: "tool_call_update", text: "done", toolCallId: "t1", toolStatus: "completed" });
   });
 
+  it("keeps the engine's plan, with its entries and their states", () => {
+    expect(normalizeSessionUpdate({
+      sessionId: "s1",
+      update: {
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Read the failing test", priority: "high", status: "in_progress" },
+          { content: "Fix it", priority: "medium", status: "pending" },
+        ],
+      },
+    })).toEqual({
+      sessionId: "s1",
+      kind: "plan",
+      text: "",
+      plan: [
+        { content: "Read the failing test", priority: "high", status: "in_progress" },
+        { content: "Fix it", priority: "medium", status: "pending" },
+      ],
+    });
+  });
+
+  it("reads a plan update that nests its entries under the content", () => {
+    expect(normalizeSessionUpdate({
+      sessionId: "s1",
+      update: {
+        sessionUpdate: "plan_update",
+        content: { type: "items", planId: "p1", entries: [{ content: "Ship it", status: "completed" }] },
+      },
+    })).toEqual({
+      sessionId: "s1",
+      kind: "plan",
+      text: "",
+      plan: [{ content: "Ship it", priority: "medium", status: "completed" }],
+    });
+  });
+
+  it("drops a plan whose shape it cannot read, rather than emptying it", () => {
+    // An empty list tells the client to remove the plan, so a shape the
+    // sidecar does not understand must not become one.
+    expect(normalizeSessionUpdate({
+      sessionId: "s1",
+      update: { sessionUpdate: "plan_update", content: { type: "text", text: "working on it" } },
+    })).toBe(null);
+  });
+
+  it("reads a removed plan as an empty list", () => {
+    expect(normalizeSessionUpdate({
+      sessionId: "s1",
+      update: { sessionUpdate: "plan_removed" },
+    })).toEqual({ sessionId: "s1", kind: "plan", text: "", plan: [] });
+  });
+
   it("drops updates the clients do not render", () => {
-    expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "plan", entries: [] } })).toBe(null);
+    expect(normalizeSessionUpdate({ sessionId: "s1", update: { sessionUpdate: "current_mode_update", currentModeId: "code" } })).toBe(null);
     expect(normalizeSessionUpdate({ update: { sessionUpdate: "agent_message_chunk", content: { text: "x" } } })).toBe(null);
     expect(normalizeSessionUpdate(null)).toBe(null);
   });
@@ -385,6 +443,10 @@ describe("parsePromptImages", () => {
     expect(parsePromptImages(undefined)).toEqual([]);
     expect(parsePromptImages("nope")).toEqual([]);
     expect(parsePromptImages([null, 42])).toEqual([]);
+    // An array element is boundary data too: an array or a nested object
+    // is not an image.
+    expect(parsePromptImages([["image/png", png]])).toEqual([]);
+    expect(parsePromptImages([{ mimeType: "image/png", data: { bytes: png } }])).toEqual([]);
   });
 });
 

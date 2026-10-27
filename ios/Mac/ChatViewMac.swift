@@ -102,17 +102,33 @@ enum ChatEngine: String, CaseIterable, Identifiable {
     /// The engine id the sidecar knows this one by.
     var sidecarId: String { rawValue }
 
-    /// True for the engines whose threads can be listed and resumed.
-    var supportsThreads: Bool {
-        self == .mcode || self == .muse
-    }
-
     var label: String {
         switch self {
         case .deepseek: return "DeepSeek"
         case .minimax: return "MiniMax"
         case .mcode: return "MiniMax Code"
         case .muse: return "Muse Code"
+        }
+    }
+}
+
+/// Which conversation the Mac surface shows.
+///
+/// The workspace is the coding surface: an engine, the threads it owns, and
+/// the transcript.  The agent chat is the relay conversation, where a paired
+/// agent answers through the sidecar.  They are two kinds of conversation
+/// rather than two engines, so the owner picks one and the engine picker
+/// then says which engine runs it.
+enum MacSurface: String, CaseIterable, Identifiable {
+    case workspace
+    case agent
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .workspace: return "Workspace"
+        case .agent: return "Agent Chat"
         }
     }
 }
@@ -140,6 +156,9 @@ public struct ChatView: View {
     }
 
     @State private var phase: Phase = .loading
+    /// Which conversation the surface shows: the coding workspace or the
+    /// agent chat.
+    @State private var surface: MacSurface = .workspace
     @State private var engine: ChatEngine = .deepseek
     @State private var agentBubbles: [ThreadBubble] = []
     @State private var localPrompts: [LocalPrompt] = MacChatStore.loadPrompts()
@@ -170,6 +189,17 @@ public struct ChatView: View {
     @State private var streamingText: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
+    /// The engine's execution plan, as it last reported it.
+    @State private var plan: [AcpPlanEntry] = []
+    /// The permission requests the engine is waiting on, oldest first.
+    ///
+    /// The engine asks one question at a time, but a second request can land
+    /// before the first is answered.  The queue keeps the earlier one on
+    /// screen instead of dropping it behind the newer card.
+    @State private var pendingPermissions: [AcpPermissionRequest] = []
+
+    /// The request on screen.
+    private var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     /// nil until the first health check lands; drives the header status dot.
     @State private var sidecarReachable: Bool?
     @State private var mcodeAvailable: Bool = true
@@ -218,6 +248,14 @@ public struct ChatView: View {
 
     private var deviceUid: String { MacChatIdentity.deviceUid }
 
+    /// True when the coding workspace is showing.
+    ///
+    /// The workspace keeps an engine's threads and its transcript; the agent
+    /// chat keeps the relay conversation instead.  Everything that used to
+    /// ask whether an engine had threads now asks this, because every engine
+    /// Clutch can run has them.
+    private var isWorkspace: Bool { surface == .workspace }
+
     /// The engines this host can run, from its catalog.  A host that answers
     /// with no catalog falls back to the built-in list, so the picker is
     /// never empty.
@@ -228,6 +266,18 @@ public struct ChatView: View {
             return descriptor.available
         }
         return listed.isEmpty ? ChatEngine.allCases : listed
+    }
+
+    /// The engines the engine picker offers right now.
+    ///
+    /// The workspace offers every engine the host runs, because every one of
+    /// them keeps a thread log.  The agent chat offers the hosted engines,
+    /// because that is what the relay answers with.
+    private var offeredEngines: [ChatEngine] {
+        guard !isWorkspace else { return availableEngines }
+        let relay = availableEngines.filter { $0 == .deepseek || $0 == .minimax }
+        // A host that runs neither hosted engine still gets a picker.
+        return relay.isEmpty ? availableEngines : relay
     }
 
     /// The models the picked engine offers, from the catalog.
@@ -262,14 +312,16 @@ public struct ChatView: View {
     }
 
     /// What the model picker shows when the owner has not picked one: the
-    /// engine's own default, named but not sent.
+    /// engine itself.  Naming a model would claim the thread runs it, and
+    /// an untouched thread keeps whatever model it was created with —
+    /// which the client does not know.
     private var displayModel: String {
         if let selectedModel { return selectedModel }
-        return engineModels.first?.displayLabel ?? engine.label
+        return engine.label
     }
 
     private var rows: [Row] {
-        if engine.supportsThreads { return codeRows }
+        if isWorkspace { return codeRows }
         let promptRows = localPrompts.map {
             Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
         }
@@ -308,7 +360,7 @@ public struct ChatView: View {
     public var body: some View {
         NavigationStack {
             HStack(spacing: 0) {
-                if engine.supportsThreads && showingSidebar {
+                if isWorkspace && showingSidebar {
                     ThreadSidebar(
                         sessions: sidebarSessions,
                         selectedId: codeRemoteId,
@@ -365,7 +417,7 @@ public struct ChatView: View {
                     }
                     .accessibilityLabel("Export Transcript")
                     .help("Export Transcript")
-                    if engine.supportsThreads {
+                    if isWorkspace {
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) { showingSidebar.toggle() }
                         } label: {
@@ -381,7 +433,7 @@ public struct ChatView: View {
             await prepare()
         }
         .task(id: engine) {
-            if engine.supportsThreads { await loadSidebarSessions() }
+            if isWorkspace { await loadSidebarSessions() }
         }
         .sheet(isPresented: $showingSessions) {
             if let host = activeHost {
@@ -408,7 +460,7 @@ public struct ChatView: View {
     private var chatPane: some View {
         VStack(spacing: 0) {
             modelStrip
-            if engine.supportsThreads {
+            if isWorkspace {
                 cwdBar
             }
             if showFind {
@@ -428,6 +480,21 @@ public struct ChatView: View {
                     .foregroundColor(.red)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
+            }
+            // The plan and the permission card sit above the input bar, so what the
+            // engine is doing and what it is asking are answered where the
+            // turn is written.
+            if !plan.isEmpty {
+                PlanPanel(entries: plan)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+            if let request = pendingPermission {
+                PermissionCard(request: request) { optionId in
+                    answerPermission(optionId)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
             MacChatInputBar(
                 draft: $draft,
@@ -621,8 +688,30 @@ public struct ChatView: View {
 
     private var modelStrip: some View {
         HStack(spacing: 8) {
+            // Which conversation this is: the coding workspace or the agent
+            // chat.  It comes first because it decides what the engine
+            // picker below means.
+            Menu {
+                ForEach(MacSurface.allCases) { candidate in
+                    Button {
+                        selectSurface(candidate)
+                    } label: {
+                        if candidate == surface {
+                            Label(candidate.label, systemImage: "checkmark")
+                        } else {
+                            Text(candidate.label)
+                        }
+                    }
+                }
+            } label: {
+                pickerLabel(entryLabel: surface.label, symbol: "rectangle.on.rectangle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Switch between the coding workspace and the agent chat")
+
             Picker("Engine", selection: engineBinding) {
-                ForEach(availableEngines) { candidate in
+                ForEach(offeredEngines) { candidate in
                     Text(candidate.label).tag(candidate)
                 }
             }
@@ -679,7 +768,7 @@ public struct ChatView: View {
 
             usageStrip
 
-            if engine.supportsThreads {
+            if isWorkspace {
                 Button {
                     Task { await loadSidebarSessions() }
                 } label: {
@@ -774,14 +863,35 @@ public struct ChatView: View {
     private func selectEngine(_ next: ChatEngine) {
         guard next != engine else { return }
         engine = next
-        MacEngineStore.save(next)
+        // Each surface keeps its own engine: the workspace's choice is what
+        // a relaunch returns to, and the agent chat's choice never
+        // overwrites it.
+        if isWorkspace {
+            MacEngineStore.save(next)
+        } else {
+            MacAgentEngineStore.save(next)
+        }
         resetTurnState()
         sessionId = nil
-        if next.supportsThreads {
-            // Resume, not reset: prepare() reopens the last thread for this
-            // host.  Clearing it is what the sidebar's New Thread button is
-            // for (startMcodeThread).
-            Task { await prepare() }
+        if isWorkspace {
+            // The saved thread belongs to the previous engine: restoring it
+            // would adopt its engine back over the choice just made, so it
+            // is dropped and prepare() starts the new engine empty.  Moving
+            // between surfaces keeps the thread (selectSurface), but moving
+            // between engines cannot — one slot holds one thread.  Clearing
+            // it is what the sidebar's New Thread button is for
+            // (startMcodeThread).
+            if let host = activeHost,
+               let saved = MacMcodeStore.load(for: host),
+               saved.engineId != next.sidecarId {
+                MacMcodeStore.clear(for: host)
+            }
+            codeChatId = nil
+            codeRemoteId = nil
+            codeCwd = nil
+            codeLoaded = []
+            codePending = []
+            Task { await prepare(preferredEngine: next) }
             return
         }
         // The agent engines keep their own model names; a model chosen for
@@ -789,7 +899,38 @@ public struct ChatView: View {
         selectedModel = nil
         Task {
             await loadCatalog()
-            await prepare()
+            await prepare(preferredEngine: next)
+        }
+    }
+
+    /// Show the other conversation.
+    ///
+    /// The two surfaces keep their own state, so moving between them does
+    /// not lose the open thread or the agent bubbles.  A switch is also not
+    /// a reload: the host and the engine did not change, so the open thread
+    /// is not replayed and only the part being shown is read.
+    private func selectSurface(_ next: MacSurface) {
+        guard next != surface else { return }
+        surface = next
+        resetTurnState()
+        // The agent chat runs on the hosted engines, so the engine picker
+        // has to offer one of those.
+        if !isWorkspace, !offeredEngines.contains(engine), let first = offeredEngines.first {
+            engine = first
+            // The agent chat's engine is its own choice: writing it into the
+            // workspace's store would overwrite the workspace's engine.
+            MacAgentEngineStore.save(first)
+            selectedModel = nil
+        }
+        Task {
+            if isWorkspace {
+                // The workspace shows the thread rail, and the list belongs
+                // to the engine rather than to the surface, so it is read
+                // again.  The open thread is left alone.
+                await loadSidebarSessions()
+            } else {
+                await refreshThread()
+            }
         }
     }
 
@@ -843,7 +984,7 @@ public struct ChatView: View {
             case .ready:
                 if rows.isEmpty {
                     Spacer()
-                    if engine.supportsThreads {
+                    if isWorkspace {
                         MacChatSetupCard(
                             symbol: "terminal",
                             title: engine.label,
@@ -929,18 +1070,27 @@ public struct ChatView: View {
     /// The engine is not changed: the sidebar's New Thread button must not
     /// move a Muse Code thread over to MiniMax Code.
     private func startMcodeThread() {
-        guard engine.supportsThreads else {
-            selectEngine(.mcode)
+        guard isWorkspace else {
+            // The agent chat has no threads, so a new thread means the
+            // workspace.
+            selectSurface(.workspace)
             return
         }
         MacEngineStore.save(engine)
         resetTurnState()
+        // The picked model and effort belong to the thread that was open, so
+        // a new thread starts on the engine's own defaults.
+        selectedModel = nil
+        selectedEffort = nil
         sessionId = nil
         codeChatId = nil
         codeRemoteId = nil
         codeCwd = nil
         codeLoaded = []
         codePending = []
+        // The plan belongs to the thread that was open, so a new thread
+        // starts without one.
+        plan = []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.clear(for: host)
@@ -953,11 +1103,20 @@ public struct ChatView: View {
         self.engine = engine
         MacEngineStore.save(engine)
         resetTurnState()
+        // The picked model and effort belong to the thread that was open,
+        // so they are cleared here: a new thread must not inherit the
+        // previous thread's choice.
+        selectedModel = nil
+        selectedEffort = nil
         codeChatId = chatId
         codeRemoteId = remoteId
         codeCwd = cwd
         codeLoaded = history
         codePending = []
+        // The plan belongs to the thread that was open, so the thread being
+        // adopted brings its own: the last one the engine reported in that
+        // thread's history, and none when that thread never had one.
+        plan = history.last(where: { $0.isPlan })?.plan ?? []
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.save(remoteId: remoteId, cwd: cwd, engine: engine.sidecarId, for: host)
@@ -974,15 +1133,17 @@ public struct ChatView: View {
             sidebarError = nil
         }
         let target = engine
+        // A resumed thread keeps the model and effort it was created with,
+        // so the load carries none.  The local picks are cleared only once
+        // the load succeeds (in `adopt`), so a failed load leaves the
+        // visible thread's choices untouched.
         Task {
             defer { if fromSidebar { sidebarLoadingId = nil } }
             do {
                 let loaded = try await SessionsClient(host: host).load(
                     sessionId: session.sessionId,
                     cwd: session.cwd,
-                    engine: target.sidecarId,
-                    model: selectedModel,
-                    effort: selectedEffort
+                    engine: target.sidecarId
                 )
                 adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target)
             } catch {
@@ -996,7 +1157,7 @@ public struct ChatView: View {
     }
 
     private func loadSidebarSessions() async {
-        guard let host = activeHost, engine.supportsThreads else { return }
+        guard let host = activeHost, isWorkspace else { return }
         sidebarLoading = true
         defer { sidebarLoading = false }
         do {
@@ -1091,26 +1252,29 @@ public struct ChatView: View {
         sendError = nil
     }
 
-    private func prepare() async {
+    private func prepare(preferredEngine: ChatEngine? = nil) async {
         guard let host = activeHost else { return }
         pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
         // The catalog can take a while on a cold server, so the thread list
         // and the health check do not wait for it.
         async let catalogTask = loadCatalog()
         await checkSidecar()
-        // The saved engine wins, so a relaunch returns to the thread the
-        // owner was working in instead of an empty tab.  Whether the host
-        // actually runs it is settled once the catalog lands.
-        if let saved = MacEngineStore.load() {
+        // The engine the owner picked wins, so a relaunch returns to the
+        // thread the owner was working in instead of an empty tab.  Each
+        // surface keeps its own engine: the agent chat's choice never
+        // overwrites the workspace's.
+        if let preferred = preferredEngine {
+            engine = preferred
+        } else if let saved = isWorkspace ? MacEngineStore.load() : MacAgentEngineStore.load() {
             engine = saved
         }
         _ = await catalogTask
         // The host's catalog decides which engines this Mac can offer: a
         // server with Muse Code but no MiniMax Code shows Muse Code only.
-        if !availableEngines.contains(where: { $0 == engine }), let first = availableEngines.first {
+        if !offeredEngines.contains(where: { $0 == engine }), let first = offeredEngines.first {
             engine = first
         }
-        if engine.supportsThreads {
+        if isWorkspace {
             // Reopen the last thread for this host when there is one, so a
             // finished turn survives relaunch instead of going nowhere.
             if let saved = MacMcodeStore.load(for: host) {
@@ -1145,7 +1309,7 @@ public struct ChatView: View {
 
     private func refreshThread() async {
         guard let host = activeHost, phase == .ready else { return }
-        if engine.supportsThreads {
+        if isWorkspace {
             guard let remoteId = codeRemoteId else { return }
             do {
                 let loaded = try await SessionsClient(host: host).load(
@@ -1202,7 +1366,7 @@ public struct ChatView: View {
         sending = true
         streamingText = ""
         liveTools = []
-        if engine.supportsThreads {
+        if isWorkspace {
             codePending.append(LocalPrompt(text: prompt, at: Date()))
         } else {
             localPrompts.append(LocalPrompt(text: prompt, at: Date()))
@@ -1211,13 +1375,13 @@ public struct ChatView: View {
         let client = ChatSessionClient(
             host: host,
             model: selectedModel ?? "",
-            sessionId: engine.supportsThreads ? codeChatId : sessionId,
+            sessionId: isWorkspace ? codeChatId : sessionId,
             relayReceiverUid: deviceUid,
             // The engine always rides along: without it the sidecar routes
             // by model name, and a MiniMax turn with no model named would
             // land on DeepSeek.
             engine: engine.sidecarId,
-            cwd: engine.supportsThreads ? codeCwd : nil,
+            cwd: isWorkspace ? codeCwd : nil,
             effort: selectedEffort,
             images: attachments
         )
@@ -1227,7 +1391,7 @@ public struct ChatView: View {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
                     case .started(let id, _):
-                        if engine.supportsThreads {
+                        if isWorkspace {
                             codeChatId = id
                         } else {
                             sessionId = id
@@ -1245,8 +1409,14 @@ public struct ChatView: View {
                         } else {
                             liveTools.append(LiveTool(id: key, name: name.isEmpty ? "Tool call" : name, status: status))
                         }
+                    case .permission(let request):
+                        // The engine is blocked on this request until the
+                        // answer goes back, so it is held on screen.
+                        pendingPermissions.append(request)
+                    case .plan(let entries):
+                        plan = entries
                     case .done(let stop, let id, let remoteId):
-                        if engine.supportsThreads {
+                        if isWorkspace {
                             codeChatId = id
                             if let remoteId, !remoteId.isEmpty {
                                 codeRemoteId = remoteId
@@ -1262,13 +1432,14 @@ public struct ChatView: View {
                             sessionId = id
                         }
                         liveTools = []
-                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : (selectedModel ?? engine.label))
+                        pendingPermissions.removeAll()
+                        TurnNotifier.turnFinished(threadTitle: isWorkspace ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : (selectedModel ?? engine.label))
                         sending = false
                         streamingText = ""
                         thoughtLine = nil
                         if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
-                        } else if !engine.supportsThreads {
+                        } else if !isWorkspace {
                             await refreshThread()
                         }
                     case .usage(let usage):
@@ -1279,7 +1450,8 @@ public struct ChatView: View {
                         thoughtLine = nil
                         sendError = message
                         liveTools = []
-                        TurnNotifier.turnFinished(threadTitle: engine.supportsThreads ? engine.label : (selectedModel ?? engine.label), failed: true)
+                        pendingPermissions.removeAll()
+                        TurnNotifier.turnFinished(threadTitle: isWorkspace ? engine.label : (selectedModel ?? engine.label), failed: true)
                     }
                 }
                 sending = false
@@ -1299,10 +1471,10 @@ public struct ChatView: View {
                 text: row.text
             )
         }
-        let title = engine.supportsThreads
+        let title = isWorkspace
             ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? "\(engine.label) Thread")
             : "\(selectedModel ?? engine.label) Thread"
-        return TranscriptExport.markdown(title: title, cwd: engine.supportsThreads ? displayCwd : nil, entries: entries)
+        return TranscriptExport.markdown(title: title, cwd: isWorkspace ? displayCwd : nil, entries: entries)
     }
 
     private func copyTranscript() {
@@ -1324,9 +1496,37 @@ public struct ChatView: View {
     /// then drop the local stream (whose close cancels a second time on the
     /// server, harmlessly).  The partial reply stays out of the transcript —
     /// a stopped turn is not a finished answer.
+    /// Answer the permission request the engine is waiting on.
+    ///
+    /// The answer goes to the sidecar, which hands it to the engine.  The
+    /// card is cleared either way: a request the sidecar could not answer
+    /// is not one the engine will take an answer for later.
+    private func answerPermission(_ optionId: String?) {
+        guard let request = pendingPermissions.first, let host = activeHost else { return }
+        // Without a chat id the sidecar has nothing to answer against, so the
+        // card stays and the turn keeps waiting rather than losing the answer.
+        guard let chatId = isWorkspace ? codeChatId : sessionId, !chatId.isEmpty else { return }
+        Task {
+            let answered = await ChatSessionClient.answerPermission(
+                host: host,
+                sessionId: chatId,
+                requestId: request.requestId,
+                optionId: optionId
+            )
+            if answered {
+                // The card only goes away once the answer is on its way, so a
+                // failed answer can be tried again instead of stranding the
+                // engine on a question nobody can see any more.
+                pendingPermissions.removeFirst()
+            } else {
+                sendError = "The permission answer did not reach the engine."
+            }
+        }
+    }
+
     private func stop() {
         guard sending else { return }
-        if let host = activeHost, let chatId = engine.supportsThreads ? codeChatId : sessionId {
+        if let host = activeHost, let chatId = isWorkspace ? codeChatId : sessionId {
             Task { await ChatSessionClient.cancel(host: host, sessionId: chatId) }
         }
         sendTask?.cancel()
@@ -1334,6 +1534,10 @@ public struct ChatView: View {
         sending = false
         streamingText = ""
         thoughtLine = nil
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
     }
 }
 
@@ -1430,7 +1634,7 @@ struct MacSessionsSheet: View {
                     }
                 }
             }
-            .navigationTitle(engine == "muse" ? "Muse Code Threads" : "MiniMax Code Threads")
+            .navigationTitle("\(EngineLabels.label(for: engine)) Threads")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1702,8 +1906,8 @@ enum MacMcodeStore {
     struct Saved: Codable {
         var remoteId: String
         var cwd: String?
-        /// The engine the thread belongs to (`mcode` or `muse`).  Absent in
-        /// records written before Muse Code existed: those are MiniMax Code.
+        /// The engine the thread belongs to.  Absent in records written before Muse
+        /// Code existed: those are MiniMax Code.
         var engine: String?
 
         /// The engine id to resume with.
@@ -1741,6 +1945,25 @@ enum MacMcodeStore {
 /// thread instead of dropping back to an empty DeepSeek tab.
 enum MacEngineStore {
     private static let key = "codes.clutch.mac-engine.v1"
+
+    static func save(_ engine: ChatEngine) {
+        UserDefaults.standard.set(engine.rawValue, forKey: key)
+    }
+
+    static func load() -> ChatEngine? {
+        guard let raw = UserDefaults.standard.string(forKey: key) else { return nil }
+        return ChatEngine(rawValue: raw)
+    }
+}
+
+/// The agent chat's engine, kept apart from the workspace's.
+///
+/// The two surfaces are separate conversations, so the engine the owner
+/// picks for one is not the engine of the other: the agent chat runs on the
+/// hosted engines, and writing its choice into the workspace's record would
+/// silently move the workspace to another engine.
+enum MacAgentEngineStore {
+    private static let key = "codes.clutch.mac-agent-engine.v1"
 
     static func save(_ engine: ChatEngine) {
         UserDefaults.standard.set(engine.rawValue, forKey: key)

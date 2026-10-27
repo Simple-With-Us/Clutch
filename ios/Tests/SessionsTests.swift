@@ -2,6 +2,49 @@ import XCTest
 @testable import Clutch
 
 final class AcpSessionTests: XCTestCase {
+    func testDecodesAPermissionRequestFromTheStream() throws {
+        let payload = """
+        {"requestId":"perm-7","title":"Run rm -rf build","toolName":"bash",
+         "options":[{"optionId":"allow-once","kind":"allow_once","name":"Allow once"},
+                    {"optionId":"reject-once","kind":"reject_once","name":"Reject"}]}
+        """
+        let event = ChatSessionClient.decode(event: "permission", payload: payload)
+        guard case .permission(let request) = event else {
+            return XCTFail("expected a permission event, got \(String(describing: event))")
+        }
+        XCTAssertEqual(request.requestId, "perm-7")
+        XCTAssertEqual(request.headline, "Run rm -rf build")
+        XCTAssertEqual(request.options.count, 2)
+        XCTAssertTrue(request.options[0].allows)
+        XCTAssertFalse(request.options[1].allows)
+    }
+
+    func testDecodesThePlanFromTheStream() throws {
+        let payload = """
+        {"entries":[{"content":"Read the failing test","priority":"high","status":"in_progress"},
+                    {"content":"Fix it","priority":"medium","status":"pending"}]}
+        """
+        let event = ChatSessionClient.decode(event: "plan", payload: payload)
+        guard case .plan(let entries) = event else {
+            return XCTFail("expected a plan event, got \(String(describing: event))")
+        }
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries[0].content, "Read the failing test")
+        XCTAssertTrue(entries[0].isActive)
+        XCTAssertFalse(entries[0].isDone)
+        XCTAssertFalse(entries[1].isActive)
+    }
+
+    func testPermissionHeadlineFallsBackToTheToolName() {
+        let request = AcpPermissionRequest(
+            requestId: "perm-1",
+            title: "  ",
+            toolName: "write_file",
+            options: []
+        )
+        XCTAssertEqual(request.headline, "write_file")
+    }
+
     func testDecodesSidecarSessionPayload() throws {
         let json = """
         {"sessions":[{"sessionId":"s-1","cwd":"/Users/jay/lanes/foo","title":"Fix the flaky test","updatedAt":"2026-10-16T09:41:07.412Z"}]}
@@ -167,6 +210,32 @@ final class AcpSessionTests: XCTestCase {
         let mcode = try XCTUnwrap(catalog.descriptor("mcode"))
         XCTAssertFalse(mcode.available)
         XCTAssertTrue(mcode.supportsThreads)
+    }
+
+    func testEngineCatalogReadsThePublishedThreadCapability() throws {
+        // The sidecar publishes which engines list their threads, so the app
+        // never hardcodes it.
+        let json = """
+        {"engines":[
+          {"id":"deepseek","label":"DeepSeek","available":true,"supportsThreads":true,
+           "models":[],"effortLevels":["high"],"effortConfigId":"reasoning_effort","modelConfigId":"model"},
+          {"id":"minimax","label":"MiniMax","available":true,"supportsThreads":false,
+           "models":[],"effortLevels":[],"effortConfigId":"reasoning_effort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        let deepseek = try XCTUnwrap(catalog.descriptor("deepseek"))
+        XCTAssertTrue(deepseek.supportsThreads)
+        let minimax = try XCTUnwrap(catalog.descriptor("minimax"))
+        XCTAssertFalse(minimax.supportsThreads)
+    }
+
+    func testEngineLabelsCoverEveryEngine() {
+        XCTAssertEqual(EngineLabels.label(for: "deepseek"), "DeepSeek")
+        XCTAssertEqual(EngineLabels.label(for: "minimax"), "MiniMax")
+        XCTAssertEqual(EngineLabels.label(for: "mcode"), "MiniMax Code")
+        XCTAssertEqual(EngineLabels.label(for: "muse"), "Muse Code")
+        XCTAssertEqual(EngineLabels.label(for: "something-new"), "something-new")
     }
 
     func testPinStoreTogglesPerHost() {

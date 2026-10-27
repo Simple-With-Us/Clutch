@@ -7,13 +7,16 @@
  *
  *   POST /clutch/v1/chat    {prompt, model?, sessionId?, cwd?} → SSE stream
  *   POST /clutch/v1/chat/cancel {sessionId} → stop one in-flight turn
+ *   POST /clutch/v1/permissions {sessionId, requestId, optionId} → answer a
+ *        permission request the engine is waiting on
  *   GET  /clutch/v1/thread?uid=<deviceUid>&limit=<n> → agent thread bubbles
  *   GET  /clutch/v1/health  liveness, engines, and MiniMax Code availability
  *   GET  /clutch/v1/sessions?engine=<engine> → that engine's threads
  *   POST /clutch/v1/sessions/load          → replay one thread of any engine
  *
  * SSE events: `message` {text}, `thought` {text}, `tool`
- * {id, name, status}, `done` {stopReason, sessionId}.  Each turn runs a real coding session through
+ * {id, name, status}, `permission` {requestId, title, toolName, options},
+ * `done` {stopReason, sessionId}.  Each turn runs a real coding session through
  * the existing Python ACP bridges (DeepSeek via `scripts/dsh-acp.sh`,
  * MiniMax via `scripts/minimax-acp.sh`).  The MiniMax Code Remote is a
  * separate direct `mcode acp` client so its existing native threads remain
@@ -32,7 +35,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -64,7 +67,7 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
-import { compactToolHistory, toolStatusOf, type SessionUpdate } from "./sessionUpdates.ts";
+import { compactToolHistory, toolStatusOf, type PlanEntry, type SessionUpdate } from "./sessionUpdates.ts";
 
 // Re-exported for the clients and the tests that already import them from
 // here; the implementations now live in the shared module.
@@ -92,6 +95,25 @@ interface Launcher {
  * bridge only carries the turns.
  */
 const CODE_ENGINES: Engine[] = ["mcode", "muse"];
+
+/**
+ * How long a failed connection to the dsh host is remembered.
+ *
+ * The host is a separate process from the sidecar, so it may start after the
+ * sidecar or restart under it; the failure is remembered only long enough to
+ * avoid hammering a host that is not there.
+ */
+const HOST_RETRY_COOLDOWN_MS = 30_000;
+
+/**
+ * How long a permission request waits for the client's answer.
+ *
+ * The engine is blocked until the request is answered, so a client that
+ * never answers must not block the turn forever: the sidecar falls back to
+ * the allow-once it has always sent.
+ */
+const PERMISSION_TIMEOUT_MS = 120_000;
+
 
 const defaultMcode = [
   join(homedir(), ".local", "bin", "mcode"),
@@ -374,7 +396,77 @@ export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
       toolStatus: toolStatusOf(update.status),
     };
   }
+  if (kind === "plan" || kind === "plan_update" || kind === "plan_removed") {
+    // The engine sends the whole plan every time it changes, so the client
+    // replaces the list it has rather than patching it.
+    const entries = readPlanEntries(update, kind);
+    // A plan the sidecar cannot read is dropped rather than emptied.  A shape
+    // it does not know is not a plan the engine removed, and emptying the
+    // list would wipe the plan the owner is looking at.
+    if (entries === null) return null;
+    return { sessionId: row.sessionId, kind: "plan", text: "", plan: entries };
+  }
   return null;
+}
+
+/**
+ * The plan entries an update carries.
+ *
+ * `plan_update` nests the entries under a content object whose type says
+ * what shape they are in.  Only the item shape is a list the clients can
+ * show, so the others are dropped rather than guessed at, and a plan that
+ * was removed arrives as an empty list.
+ *
+ * Null means the shape was not one this sidecar reads: the caller keeps
+ * what it has rather than treating the plan as gone.
+ */
+function readPlanEntries(update: Record<string, unknown>, kind: string): PlanEntry[] | null {
+  // A removed plan is an empty list, not a missing one.
+  if (kind === "plan_removed") return [];
+  const content = update.content;
+  const nested =
+    typeof content === "object" && content !== null
+      ? (content as Record<string, unknown>).entries
+      : undefined;
+  const raw = Array.isArray(update.entries) ? update.entries : nested;
+  if (!Array.isArray(raw)) return null;
+  const entries: PlanEntry[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const record = item as Record<string, unknown>;
+    const content = typeof record.content === "string" ? record.content.trim() : "";
+    if (!content) continue;
+    entries.push({
+      content,
+      priority: planPriority(record.priority),
+      status: planStatus(record.status),
+    });
+  }
+  return entries;
+}
+
+/** The engine's priority for a plan entry, or the middle one it did not say. */
+function planPriority(raw: unknown): "high" | "medium" | "low" {
+  switch (raw) {
+    case "high":
+      return "high";
+    case "low":
+      return "low";
+    default:
+      return "medium";
+  }
+}
+
+/** Where a plan entry stands. */
+function planStatus(raw: unknown): "pending" | "in_progress" | "completed" {
+  switch (raw) {
+    case "completed":
+      return "completed";
+    case "in_progress":
+      return "in_progress";
+    default:
+      return "pending";
+  }
 }
 
 interface AcpSessionInfo {
@@ -469,7 +561,31 @@ export function safeAttachmentName(raw: string | undefined, index: number): stri
  * The resolved path is checked against the root before the write, so a
  * crafted name cannot escape.
  */
+let attachmentWork: Promise<void> = Promise.resolve();
+
+/** Serialize scan/delete and image writes so pruning cannot invalidate a returned path. */
+async function withAttachmentWork<T>(work: () => Promise<T>): Promise<T> {
+  const previous = attachmentWork;
+  let release!: () => void;
+  attachmentWork = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+  }
+}
+
 export async function materializeAttachment(options: {
+  root: string;
+  sessionId: string;
+  image: PromptImage;
+  index: number;
+}): Promise<string | null> {
+  return withAttachmentWork(() => materializeAttachmentUnlocked(options));
+}
+
+async function materializeAttachmentUnlocked(options: {
   root: string;
   sessionId: string;
   image: PromptImage;
@@ -492,6 +608,16 @@ export async function materializeAttachment(options: {
     imageDir = await mkdtemp(join(sessionDir, "image-"));
     const file = join(imageDir, safeAttachmentName(options.image.name, options.index));
     await writeFile(file, Buffer.from(options.image.data, "base64"), { flag: "wx", mode: 0o600 });
+    // Writing a file does not move the directory's own timestamp, so an
+    // active session's directory would look old to the prune.  Touch it —
+    // best-effort only: the image is already written, and a failed touch
+    // must not discard it.
+    try {
+      const now = new Date();
+      await utimes(sessionDir, now, now);
+    } catch {
+      /* the prune also reads the files inside, so this is a courtesy */
+    }
     return file;
   } catch {
     if (imageDir) await rm(imageDir, { recursive: true, force: true }).catch(() => undefined);
@@ -502,10 +628,18 @@ export async function materializeAttachment(options: {
 
 /** Prepare every image before a turn can be sent. Never silently drop one. */
 export async function prepareAttachedPrompt(root: string, sessionId: string, text: string, images: PromptImage[]): Promise<string> {
+  return withAttachmentWork(() => prepareAttachedPromptUnlocked(root, sessionId, text, images));
+}
+
+async function prepareAttachedPromptUnlocked(root: string, sessionId: string, text: string, images: PromptImage[]): Promise<string> {
+  // Old attachment directories are pruned while a new batch is written: the
+  // sidecar has no background loop to hang this on, and a write is the moment
+  // a stale directory can be noticed.
+  await pruneAttachmentsUnlocked(root, 24 * 60 * 60 * 1000, sessionId);
   const written: string[] = [];
   try {
     for (const [index, image] of images.entries()) {
-      const file = await materializeAttachment({ root, sessionId, image, index });
+      const file = await materializeAttachmentUnlocked({ root, sessionId, image, index });
       if (!file) throw new Error("An attachment could not be saved. The turn was not sent. Please try again.");
       written.push(file);
     }
@@ -521,8 +655,20 @@ export async function prepareAttachedPrompt(root: string, sessionId: string, tex
 /**
  * Remove attachment directories older than a day, so a long-lived sidecar
  * does not keep every image it ever received.
+ *
+ * Called when an attachment is written, not on a timer: the sidecar has no
+ * background loop to hang this on, and a write is the moment a stale
+ * directory can be noticed.
  */
-export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1000): Promise<void> {
+export async function pruneAttachments(
+  root: string,
+  maxAgeMs = 24 * 60 * 60 * 1000,
+  keepSessionId?: string,
+): Promise<void> {
+  return withAttachmentWork(() => pruneAttachmentsUnlocked(root, maxAgeMs, keepSessionId));
+}
+
+async function pruneAttachmentsUnlocked(root: string, maxAgeMs: number, keepSessionId?: string): Promise<void> {
   let entries: string[];
   try {
     entries = await readdir(root);
@@ -531,16 +677,142 @@ export async function pruneAttachments(root: string, maxAgeMs = 24 * 60 * 60 * 1
   }
   const now = Date.now();
   for (const entry of entries) {
+    // Never prune the session being written right now: its directory can
+    // look old between the mkdir and the write.
+    if (keepSessionId && entry === keepSessionId) continue;
     const dir = join(root, entry);
     try {
       const info = await stat(dir);
       if (!info.isDirectory()) continue;
-      if (now - info.mtimeMs < maxAgeMs) continue;
+      // The newest file inside counts too: a session that keeps receiving
+      // attachments must not be pruned because its directory timestamp
+      // did not move.
+      const newest = await newestFileTime(dir, info.mtimeMs);
+      if (now - newest < maxAgeMs) continue;
       await rm(dir, { recursive: true, force: true });
     } catch {
       /* a directory we cannot prune is not worth failing a turn over */
     }
   }
+}
+
+/** The newest modification time inside a directory, or the directory's own. */
+async function newestFileTime(dir: string, fallback: number): Promise<number> {
+  let newest = fallback;
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return fallback;
+  }
+  for (const entry of entries) {
+    try {
+      const info = await stat(join(dir, entry));
+      if (info.mtimeMs > newest) newest = info.mtimeMs;
+    } catch {
+      /* a file that vanished mid-scan is not worth failing over */
+    }
+  }
+  return newest;
+}
+
+/**
+ * The counter behind the permission request ids.
+ *
+ * It is file-wide rather than per bridge, so an id names one request in the
+ * whole process and a client cannot answer the wrong turn's request.
+ */
+let permissionCounter = 0;
+
+/** One option the engine offers for a permission request. */
+export interface PermissionOption {
+  /** The id the client sends back. */
+  optionId: string;
+  /** The engine's kind for the option: allow_once, allow_always, reject_once, reject_always. */
+  kind: string;
+  /** The engine's own name for the option. */
+  name: string;
+}
+
+/** A permission request the engine is waiting on. */
+export interface PermissionRequest {
+  /** The id the client answers with. */
+  requestId: string;
+  /** The ACP session that asked. */
+  sessionId: string;
+  /** What the tool wants to do, as the engine described it. */
+  title: string;
+  /** The tool that wants the permission. */
+  toolName: string;
+  /** The options the engine offers. */
+  options: PermissionOption[];
+}
+
+/** Read one string field out of an unknown value, or null. */
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The shape of a permission request as an engine sends it.
+ *
+ * The params arrive from the engine, so they are untrusted: the schema drops
+ * what it does not recognise instead of letting a stray field reach the
+ * client or the engine's answer.
+ */
+const PermissionParamsSchema = z
+  .object({
+    sessionId: z.string().optional(),
+    toolCall: z
+      .object({
+        toolCallId: z.string().optional(),
+        title: z.string().optional(),
+        kind: z.string().optional(),
+      })
+      .optional(),
+    options: z
+      .array(
+        z.object({
+          optionId: z.string().min(1),
+          kind: z.string().default(""),
+          name: z.string().default(""),
+        }),
+      )
+      .optional(),
+  })
+  .loose();
+
+/** Read the options out of a permission request, keeping only the usable ones. */
+function parsePermissionOptions(value: unknown): PermissionOption[] {
+  if (!Array.isArray(value)) return [];
+  const options: PermissionOption[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const optionId = readString(record.optionId);
+    if (!optionId) continue;
+    options.push({
+      optionId,
+      kind: readString(record.kind) ?? "",
+      name: readString(record.name) ?? optionId,
+    });
+  }
+  return options;
+}
+
+/**
+ * The option the sidecar falls back to when nobody answers.
+ *
+ * It is the same allow-once the sidecar has always sent on its own, so a
+ * client that never answers leaves the turn exactly as it was before.
+ */
+export function fallbackPermissionOption(options: PermissionOption[]): string | null {
+  const allow = options.find((option) => option.kind === "allow_once");
+  if (allow) return allow.optionId;
+  const reject = options.find(
+    (option) => option.kind === "reject_once" || option.kind === "reject_always",
+  );
+  return reject?.optionId ?? null;
 }
 
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
@@ -551,6 +823,11 @@ export class Bridge {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private onUpdate: ((u: AcpUpdate) => void) | null = null;
   private onProcessFailure: (() => void) | null = null;
+  private onPermission: ((request: PermissionRequest) => void) | null = null;
+  private pendingPermissions = new Map<
+    string,
+    { bridgeRequestId: number | string; options: PermissionOption[] }
+  >();
   private buffer = "";
 
   constructor(
@@ -564,6 +841,42 @@ export class Bridge {
 
   setProcessFailureHandler(fn: () => void): void {
     this.onProcessFailure = fn;
+  }
+
+  /**
+   * Take over permission requests.
+   *
+   * Without a handler the sidecar answers them itself, the way it always
+   * has.  With one, the request waits for the client's answer.
+   */
+  setPermissionHandler(fn: (request: PermissionRequest) => void): void {
+    this.onPermission = fn;
+  }
+
+  /**
+   * Answer a permission request the engine is waiting on.
+   *
+   * `optionId` picks one of the options the engine offered; null cancels the
+   * request.  An option the engine never offered is refused rather than
+   * forwarded: a stale card or a mismatched client must not be able to stall
+   * the blocked turn with an id the engine will reject.  A request that is
+   * already gone is reported as unanswered, so a late answer is harmless
+   * rather than an error.
+   */
+  answerPermission(requestId: string, optionId: string | null): boolean {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return false;
+    if (optionId !== null && !pending.options.some((option) => option.optionId === optionId)) {
+      return false;
+    }
+    this.pendingPermissions.delete(requestId);
+    const outcome = optionId
+      ? { outcome: "selected", optionId }
+      : { outcome: "cancelled" };
+    this.child?.stdin?.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: pending.bridgeRequestId, result: { outcome } })}\n`,
+    );
+    return true;
   }
 
   private spawn(): void {
@@ -619,15 +932,7 @@ export class Bridge {
         continue;
       }
       if (msg.method === "session/request_permission" && msg.id !== undefined) {
-        const options = Array.isArray(msg.params?.options)
-          ? msg.params.options as Array<{ optionId?: unknown; kind?: unknown }>
-          : [];
-        const choice = options.find((option) => option?.kind === "allow_once")
-          ?? options.find((option) => option?.kind === "reject_once" || option?.kind === "reject_always");
-        const outcome = typeof choice?.optionId === "string"
-          ? { outcome: "selected", optionId: choice.optionId }
-          : { outcome: "cancelled" };
-        this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { outcome } })}\n`);
+        this.holdPermissionRequest(msg.id, msg.params ?? {});
         continue;
       }
       if (msg.method && msg.id !== undefined) {
@@ -647,6 +952,37 @@ export class Bridge {
         else p.resolve(msg.result);
       }
     }
+  }
+
+  /**
+   * Hold a permission request until the client answers it.
+   *
+   * The engine waits for an answer, so the request is handed up and the
+   * answer goes back the same way.  The request is registered before it is
+   * handed up, so the no-handler fallback below can answer it: without that,
+   * the engine would sit blocked on a request nobody ever replies to.  With
+   * no handler attached the sidecar answers it itself, exactly as it did
+   * before, so a caller that never asked for this feature sees no change.
+   */
+  private holdPermissionRequest(id: number | string, params: Record<string, unknown>): void {
+    const parsed = PermissionParamsSchema.safeParse(params);
+    if (!parsed.success) return;
+    const options = parsePermissionOptions(parsed.data.options);
+    const toolCall = parsed.data.toolCall ?? {};
+    const title = readString(toolCall.title) ?? "";
+    const request: PermissionRequest = {
+      requestId: `perm-${(permissionCounter += 1)}`,
+      sessionId: readString(parsed.data.sessionId) ?? "",
+      title,
+      toolName: readString(toolCall.kind) ?? (title || "Tool call"),
+      options,
+    };
+    this.pendingPermissions.set(request.requestId, { bridgeRequestId: id, options });
+    if (!this.onPermission) {
+      this.answerPermission(request.requestId, fallbackPermissionOption(options));
+      return;
+    }
+    this.onPermission(request);
   }
 
   private send(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -788,6 +1124,18 @@ interface ChatSession {
   model?: string;
   /** The reasoning effort this session runs, as the client asked for it. */
   effort?: string;
+  /** The permission requests this turn is waiting on. */
+  permission?: ((request: PermissionRequest) => void) | null;
+  /** The fallback timers for those requests, so a late answer is not a second one. */
+  permissionTimers: Map<string, ReturnType<typeof setTimeout>>;
+  /**
+   * The permission requests this turn owns, by request id.
+   *
+   * The ids are process-wide and predictable, so an answer is only accepted
+   * when the request it names is one this turn raised: otherwise a stale card
+   * could answer another turn's question.
+   */
+  pendingPermissions: Map<string, PermissionRequest>;
 }
 
 /** Untrusted request bodies for the project/archive routes.  Strict so an
@@ -879,8 +1227,10 @@ export function parsePromptImages(raw: unknown): Array<{ mimeType: string; data:
   if (!Array.isArray(raw)) return [];
   const images: Array<{ mimeType: string; data: string; name?: string }> = [];
   for (const item of raw) {
-    if (!item || typeof item !== "object") continue;
-    const row = item as { mimeType?: unknown; data?: unknown; name?: unknown };
+    // The array and its elements are boundary data: each one is checked
+    // before any field is read.
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
     const mimeType = typeof row.mimeType === "string" ? row.mimeType.trim().toLowerCase() : "";
     if (!IMAGE_MIME_TYPES.has(mimeType)) continue;
     const data = typeof row.data === "string" ? row.data.trim() : "";
@@ -912,7 +1262,15 @@ async function main(): Promise<void> {
 
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
-  const bridgeEnv = { ...process.env, CLUTCH_RUNTIME_ROOT: ROOT, DSH_PERMISSION_MODE: "danger-full-access" };
+  // The operator's permission posture wins, so the sidecar does not force
+  // one over the top of it: `danger-full-access` (the default) means the
+  // engine never asks, and anything else means it asks and the native app
+  // answers.
+  const bridgeEnv = {
+    ...process.env,
+    CLUTCH_RUNTIME_ROOT: ROOT,
+    DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? "danger-full-access",
+  };
   // CometChat relay is additive: SSE stays the primary transport, and the
   // relay only runs when the backend is configured AND the caller names a
   // target. Backend-only key; never leaves this process.
@@ -923,7 +1281,8 @@ async function main(): Promise<void> {
   function bridgeFor(engine: Engine): Bridge {
     let b = bridges.get(engine);
     if (!b) {
-      b = new Bridge(engine, bridgeEnv);
+      const created = new Bridge(engine, bridgeEnv);
+      b = created;
       b.setUpdateHandler((u) => {
         const target = [...sessions.values()].find((s) => s.bridgeSessionId === u.sessionId && s.busy);
         target?.stream?.(u);
@@ -932,6 +1291,23 @@ async function main(): Promise<void> {
         for (const session of sessions.values()) {
           if (session.engine === engine) session.bridgeSessionId = "";
         }
+      });
+      // A permission request belongs to the turn that asked for it, so it is
+      // routed the same way an update is: by the ACP session that raised it.
+      // A turn whose client cannot answer is answered here, the way the
+      // sidecar has always answered them.
+      b.setPermissionHandler((request) => {
+        const target = [...sessions.values()].find(
+          (s) => s.bridgeSessionId === request.sessionId && s.busy,
+        );
+        if (target?.permission) {
+          // The turn owns the request from here on, so an answer is only
+          // accepted when it names a request this turn raised.
+          target.pendingPermissions.set(request.requestId, request);
+          target.permission(request);
+          return;
+        }
+        created.answerPermission(request.requestId, fallbackPermissionOption(request.options));
       });
       bridges.set(engine, b);
     }
@@ -945,6 +1321,25 @@ async function main(): Promise<void> {
    * only the code engines never opens a connection to it.
    */
   const hostClient = new DshHostClientCache(() => DshHostClient.connect());
+
+  /**
+   * Let go of the permission requests one turn is waiting on.
+   *
+   * A turn that is cancelled, or that ends, cannot answer a question any
+   * more.  The engine is blocked on that answer, so it is released here:
+   * otherwise it would wait for a reply that can never come.
+   */
+  function releasePermissions(session: ChatSession, engine: Engine): void {
+    for (const timer of session.permissionTimers.values()) clearTimeout(timer);
+    session.permissionTimers.clear();
+    for (const request of session.pendingPermissions.values()) {
+      bridgeFor(engine).answerPermission(
+        request.requestId,
+        fallbackPermissionOption(request.options),
+      );
+    }
+    session.pendingPermissions.clear();
+  }
 
   /**
    * The threads one engine owns, newest first.
@@ -1092,6 +1487,69 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/clutch/v1/permissions") {
+      // The answer to a permission request the engine is waiting on.  The
+      // request was pushed to the client as it happened, and the client
+      // sends back the option it picked.
+      let body: { sessionId?: unknown; requestId?: unknown; optionId?: unknown };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "invalid JSON body" }),
+        );
+        return;
+      }
+      const chatId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const requestId = typeof body.requestId === "string" ? body.requestId : "";
+      const optionId = typeof body.optionId === "string" ? body.optionId : null;
+      if (!chatId || !requestId) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "sessionId and requestId are required" }),
+        );
+        return;
+      }
+      const session = sessions.get(chatId);
+      if (!session) {
+        res.writeHead(404, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "no such session" }),
+        );
+        return;
+      }
+      // The request must be one this turn raised.  The ids are process-wide
+      // and predictable, so without this check a stale card could answer a
+      // different turn's question.
+      const pending = session.pendingPermissions.get(requestId);
+      if (!pending) {
+        res.writeHead(404, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "no such permission request" }),
+        );
+        return;
+      }
+      // The option must be one the engine offered.  An unknown id is refused
+      // rather than forwarded, so a typo cannot stall the blocked turn.
+      if (optionId !== null && !pending.options.some((option) => option.optionId === optionId)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "unknown permission option" }),
+        );
+        return;
+      }
+      // The fallback timer is cleared first, so a request that was already
+      // let go is not answered twice.
+      const timer = session.permissionTimers.get(requestId);
+      if (timer) {
+        clearTimeout(timer);
+        session.permissionTimers.delete(requestId);
+      }
+      session.pendingPermissions.delete(requestId);
+      const answered = bridgeFor(session.engine).answerPermission(requestId, optionId);
+      log(`permission answer session=${chatId} request=${requestId} answered=${answered}`);
+      res.writeHead(answered ? 200 : 404, { "content-type": "application/json" }).end(
+        JSON.stringify(answered ? { ok: true } : { error: "no such permission request" }),
+      );
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/clutch/v1/chat/cancel") {
       // Explicit stop from a native client (the Mac/iPhone Stop button).
       // Dropping the SSE connection already cancels through the `close`
@@ -1122,6 +1580,9 @@ async function main(): Promise<void> {
           /* bridge already gone */
         }
       }
+      // A cancelled turn cannot answer a question any more, so the engine is
+      // released instead of waiting on an answer that will never come.
+      if (session) releasePermissions(session, session.engine);
       log(`chat cancel-request session=${chatId || "none"} cancelled=${cancelled}`);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, cancelled }));
       return;
@@ -1198,6 +1659,8 @@ async function main(): Promise<void> {
         stream: (update) => {
           if (history.length < 20_000) history.push(update);
         },
+        permissionTimers: new Map(),
+        pendingPermissions: new Map(),
         ...(typeof body.model === "string" && body.model.length > 0 ? { model: body.model } : {}),
         ...(typeof body.effort === "string" && body.effort.length > 0 ? { effort: body.effort } : {}),
       };
@@ -1412,6 +1875,7 @@ async function main(): Promise<void> {
         cwd?: unknown;
         relay?: unknown;
         images?: unknown;
+        permissions?: unknown;
       };
       try {
         body = (await readJsonBody(req)) as typeof body;
@@ -1435,6 +1899,11 @@ async function main(): Promise<void> {
         typeof body.engine === "string" ? body.engine : undefined,
       );
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
+      // A client that can answer a permission request says so, and the
+      // sidecar holds the request until the answer comes back.  A client
+      // that does not say keeps the behaviour the sidecar has always had,
+      // where it answers the request itself.
+      const asksForPermissions = body.permissions === "ask";
       // The model the client picked and the effort it wants.  Both are
       // optional: without them the engine keeps its own defaults.
       const requestedModel = typeof body.model === "string" && body.model.trim().length > 0 ? body.model.trim() : undefined;
@@ -1446,7 +1915,16 @@ async function main(): Promise<void> {
       let session = chatId ? sessions.get(chatId) : undefined;
       if (!session || session.engine !== engine) {
         chatId = randomBytes(16).toString("hex");
-        session = { engine, bridgeSessionId: "", resumeSessionId: null, cwd, busy: false, stream: null };
+        session = {
+          engine,
+          bridgeSessionId: "",
+          resumeSessionId: null,
+          cwd,
+          busy: false,
+          stream: null,
+          permissionTimers: new Map(),
+          pendingPermissions: new Map(),
+        };
         sessions.set(chatId, session);
       }
       if (requestedModel) session.model = requestedModel;
@@ -1491,10 +1969,42 @@ async function main(): Promise<void> {
           sseSend(res, "tool", { id: u.toolCallId ?? "", name: u.text, status: u.toolStatus ?? "running" });
           return;
         }
+        if (u.kind === "plan") {
+          // The plan is a state, not a line of the transcript: the client
+          // shows the list the engine last reported.
+          sseSend(res, "plan", { entries: u.plan ?? [] });
+          return;
+        }
         const r = route(u);
         sseSend(res, r.event, { text: r.text });
         if (u.kind !== "user_message_chunk") sink?.onUpdate(u.kind, r.text);
       };
+      // A permission request the engine is waiting on.  It goes to the client
+      // as it is, and the answer comes back through the permissions route.
+      // A turn whose client did not ask for this keeps the sidecar's own
+      // answer, which is what the bridge does when no turn is watching.
+      if (asksForPermissions) {
+        active.permission = (request) => {
+          sseSend(res, "permission", {
+            requestId: request.requestId,
+            title: request.title,
+            toolName: request.toolName,
+            options: request.options,
+          });
+          // The engine waits, so a client that never answers must not hang
+          // the turn: the sidecar falls back to the allow-once it has always
+          // sent.
+          const timer = setTimeout(() => {
+            active.permissionTimers.delete(request.requestId);
+            active.pendingPermissions.delete(request.requestId);
+            bridgeFor(engine).answerPermission(
+              request.requestId,
+              fallbackPermissionOption(request.options),
+            );
+          }, PERMISSION_TIMEOUT_MS);
+          active.permissionTimers.set(request.requestId, timer);
+        };
+      }
       let settled = false;
       // The resumable remote id rides every terminal event so a fresh turn
       // can be reloaded later (mcode threads live in the sidecar map only
@@ -1515,6 +2025,11 @@ async function main(): Promise<void> {
         stopUsage();
         active.busy = false;
         active.stream = null;
+        active.permission = null;
+        // A turn that ended cannot answer a permission request any more, so
+        // the pending ones are let go rather than left waiting: the engine is
+        // blocked on the answer, and a cancelled turn would never send it.
+        releasePermissions(active, engine);
         sseSend(res, event, data);
         res.end();
       };
