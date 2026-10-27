@@ -1368,6 +1368,14 @@ async function main(): Promise<void> {
   const hostClient = new DshHostClientCache(() => DshHostClient.connect(), Date.now, HOST_RETRY_COOLDOWN_MS);
 
   /**
+   * The cached host client, for callers that hold it across a turn or a relay.
+   * Opening goes through the cache, so the retry cooldown still applies.
+   */
+  async function dshHost(): Promise<DshHostClient> {
+    return hostClient.run(async (client) => client);
+  }
+
+  /**
    * The sidecar's end of the host's approval channel.
    *
    * The relay is opened once and kept open, because the host asks every
