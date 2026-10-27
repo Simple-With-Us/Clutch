@@ -1,5 +1,87 @@
 import Foundation
 
+/// One entry in the engine's execution plan.
+///
+/// The engine reports the whole plan every time it changes, so a client
+/// shows the list it was given rather than patching the one it had.
+public struct AcpPlanEntry: Decodable, Equatable, Sendable, Identifiable {
+    /// What the entry says, as the engine wrote it.
+    public var content: String
+    /// The engine's priority for the entry.
+    public var priority: String
+    /// Where the entry stands.
+    public var status: String
+
+    public var id: String { "\(status)-\(content)" }
+
+    public init(content: String, priority: String = "medium", status: String = "pending") {
+        self.content = content
+        self.priority = priority
+        self.status = status
+    }
+
+    /// True when the entry is the one the engine is working on.
+    public var isActive: Bool { status == "in_progress" }
+    /// True when the entry is finished.
+    public var isDone: Bool { status == "completed" }
+}
+
+/// One option the engine offers for a permission request.
+public struct AcpPermissionOption: Decodable, Equatable, Sendable, Identifiable {
+    /// The id the sidecar answers with.
+    public var optionId: String
+    /// The engine's kind for the option: `allow_once`, `allow_always`,
+    /// `reject_once`, `reject_always`.
+    public var kind: String
+    /// The engine's own name for the option.
+    public var name: String
+
+    public var id: String { optionId }
+
+    public init(optionId: String, kind: String, name: String) {
+        self.optionId = optionId
+        self.kind = kind
+        self.name = name
+    }
+
+    /// True when the option lets the tool run.
+    public var allows: Bool {
+        kind == "allow_once" || kind == "allow_always"
+    }
+}
+
+/// A permission request the engine is waiting on.
+///
+/// The engine blocks until the request is answered, so the request travels
+/// with the turn and the answer goes back the same way.
+public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable {
+    /// The id the sidecar answers with.
+    public var requestId: String
+    /// What the tool wants to do, as the engine described it.
+    public var title: String
+    /// The tool that wants the permission.
+    public var toolName: String
+    /// The options the engine offers.
+    public var options: [AcpPermissionOption]
+
+    public var id: String { requestId }
+
+    public init(requestId: String, title: String, toolName: String, options: [AcpPermissionOption]) {
+        self.requestId = requestId
+        self.title = title
+        self.toolName = toolName
+        self.options = options
+    }
+
+    /// The heading the card shows: what the tool wants, and which tool it is.
+    public var headline: String {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+        let tool = toolName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tool.isEmpty ? "The engine is asking for permission" : tool
+    }
+}
+
 /// Real token accounting for one session, as reported by the engine.
 ///
 /// Every field is optional because the sidecar omits what it could not read.
@@ -208,16 +290,30 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     /// Present on tool-call entries (`tool_call`, `tool_call_update`).
     public var toolCallId: String?
     public var toolStatus: String?
+    /// Present on a `plan` entry: the plan the engine last reported.
+    public var plan: [AcpPlanEntry]?
 
-    public init(sessionId: String, kind: String, text: String, toolCallId: String? = nil, toolStatus: String? = nil) {
+    public init(
+        sessionId: String,
+        kind: String,
+        text: String,
+        toolCallId: String? = nil,
+        toolStatus: String? = nil,
+        plan: [AcpPlanEntry]? = nil
+    ) {
         self.sessionId = sessionId
         self.kind = kind
         self.text = text
         self.toolCallId = toolCallId
         self.toolStatus = toolStatus
+        self.plan = plan
     }
 
     public var isTool: Bool { kind == "tool_call" || kind == "tool_call_update" }
+
+    /// True on a `plan` entry, which carries the engine's execution plan
+    /// rather than a line of the transcript.
+    public var isPlan: Bool { kind == "plan" }
 
     /// Sidecar kinds that are user- or assistant-visible; tool chatter and
     /// progress notices are dropped so the transcript stays readable.  The
