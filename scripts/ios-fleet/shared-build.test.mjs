@@ -80,13 +80,16 @@ test('paired apps join as concatenated per-platform lists', () => {
     {build: '202611010801'}
   );
 });
-test('extra floors accept plain integers and long digit strings', () => {
+test('extra floors accept plain integers and 12-digit strings', () => {
   assert.deepEqual(next({...input, extraFloors: [986]}), {build: STAMP});
   assert.deepEqual(next({...input, extraFloors: ['1500']}), {build: STAMP});
-  assert.deepEqual(
-    next({...input, extraFloors: ['202611010800000001']}),
-    {build: '202611010800000002'}
-  );
+  assert.deepEqual(next({...input, extraFloors: ['202611010800']}), {build: '202611010801'});
+});
+test('a plan above 12 digits throws instead of shipping past the gate', () => {
+  assert.throws(() => next({...input, extraFloors: ['2026102909300']}), /planned build exceeds 12 digits/);
+  assert.throws(() => next({...input, extraFloors: ['202611010800000001']}), /planned build exceeds 12 digits/);
+  assert.throws(() => next({...input, iosBuilds: ['202611010800000001']}), /planned build exceeds 12 digits/);
+  assert.throws(() => next({...input, macBuilds: ['999999999999']}), /planned build exceeds 12 digits/);
 });
 test('the build is a plain integer with no leading zeros', () => {
   const {build} = next({...input, iosBuilds: ['0236']});

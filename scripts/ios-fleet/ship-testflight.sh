@@ -662,7 +662,7 @@ asc_credential_available() {
 # Prints the build on stdout.  Returns 1 (and prints nothing on stdout) when
 # it cannot be worked out.  Feed failures are logged with the feed URL so they
 # are not mistaken for App Store Connect failures.  A non-https feed, a feed
-# with no numeric version, and a floor below 1 or above 18 digits all fail
+# with no numeric version, and a floor below 1 or above 12 digits all fail
 # closed; a configured feed is never silently treated as "no floor".
 asc_next_shared_build() {
   local out rc mac_id feed feed_xml feed_err_file feed_err max max_digits floor merge_stamp
@@ -740,12 +740,12 @@ asc_next_shared_build() {
       return 1
     fi
     # The feed floor is https-only (checked above), numeric (checked above),
-    # >= 1 and <= 18 digits.  Anything else fails closed; it is never clamped
-    # into range.
+    # >= 1 and <= 12 digits, so the planner result still fits the 12-digit
+    # gate.  Anything else fails closed; it is never clamped into range.
     max_digits="$(printf '%s' "$max" | sed 's/^0*//')"
     [[ -z "$max_digits" ]] && max_digits="0"
-    if [[ "$max_digits" == "0" || "${#max_digits}" -gt 18 ]]; then
-      logerr "asc-next-shared-build: pairedBuildFeed $feed floor $max outside 1..18 digits; failing closed"
+    if [[ "$max_digits" == "0" || "${#max_digits}" -gt 12 ]]; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed floor $max outside 1..12 digits; failing closed"
       return 1
     fi
     floor="$max"

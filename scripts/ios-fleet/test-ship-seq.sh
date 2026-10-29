@@ -751,6 +751,20 @@ OUT_PLAN="$(env -i \
 PLAN_RC=$?
 check "plan-build-only prints the bare planned build on stdout (got '${OUT_PLAN}')" \
   "$([[ "$PLAN_RC" -eq 0 && "$OUT_PLAN" == "$S_STAMP" ]] && echo 0 || echo 1)"
+# The CI plan step captures the WRAPPER's stdout, so the wrapper keeps its own
+# status lines on stderr: only the fleet script's bare build may reach stdout.
+WRAPPER="${HERE}/../ios-ship-testflight.sh"
+OUT_WRAP="$(env -i \
+  HOME="$FAKE_HOME" \
+  PATH="${FAKE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin" \
+  TMPDIR="${WORK}/tmp" \
+  LANG=C \
+  DEVELOPER_DIR="${WORK}/tmp/Xcode.app/Contents/Developer" \
+  bash "$WRAPPER" --bogus-flag-for-stdout-test 2>"${WORK}/wrap-err.log")"
+check "the wrapper prints no stdout chatter ahead of the fleet script (got '${OUT_WRAP}')" \
+  "$([[ -z "$OUT_WRAP" ]] && echo 0 || echo 1)"
+check "the wrapper still reports its status lines on stderr" \
+  "$([[ -s "${WORK}/wrap-err.log" ]] && echo 0 || echo 1)"
 FAKE_SHARED="fail"
 run_ship --plan-build-only
 check "plan-build-only fails closed on an unreadable inventory (rc=${RC})" \
@@ -1051,21 +1065,21 @@ rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
 run_ship --dry-run
 check "feed floor 0 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
-check "feed floor 0 says outside 1..18 digits" "$(contains 'outside 1..18 digits' && echo 0 || echo 1)"
+check "feed floor 0 says outside 1..12 digits" "$(contains 'outside 1..12 digits' && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
-printf '%s' '<rss><channel><item><sparkle:version>202610290930000001</sparkle:version></item></channel></rss>'
+printf '%s' '<rss><channel><item><sparkle:version>2026102909300</sparkle:version></item></channel></rss>'
 exit 0
 FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
-planned_pair
-check "an 18-digit feed floor is accepted as the floor" "$(grep -q '202610290930000001' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "an 18-digit feed floor plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
+check "a 13-digit feed floor fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "a 13-digit feed floor says outside 1..12 digits" "$(contains 'outside 1..12 digits' && echo 0 || echo 1)"
+check "a 13-digit feed floor names the URL and the value" "$(contains "$FEED_URL" && contains '2026102909300' && echo 0 || echo 1)"
+check "a 13-digit feed floor never reaches plan-release-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
@@ -1077,7 +1091,7 @@ rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
 run_ship --dry-run
 check "a 19-digit feed floor fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
-check "a 19-digit feed floor says outside 1..18 digits" "$(contains 'outside 1..18 digits' && echo 0 || echo 1)"
+check "a 19-digit feed floor says outside 1..12 digits" "$(contains 'outside 1..12 digits' && echo 0 || echo 1)"
 check "a 19-digit feed floor never reaches plan-release-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
 python3 - "$ROUND2DIR/apps.json" <<'PY'
 import json, sys

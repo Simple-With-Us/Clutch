@@ -6,8 +6,9 @@
 // known build: every iOS build and every macOS build on ALL trains (expired
 // included, old timestamp-style builds included) plus every extra floor.
 // A rebuild of the same commit still goes up, because M already holds the
-// previous build.  No floor and no cap.  Incomplete or malformed inventory
-// throws; nothing is guessed.
+// previous build.  The planned build never exceeds 12 digits: a result above
+// 12 digits throws instead of shipping a value the 12-digit gate would
+// reject.  Incomplete or malformed inventory throws; nothing is guessed.
 export function nextSharedBuild({iosBuilds, macBuilds, extraFloors = [], complete, mergeStamp}) {
   if (complete !== true || !Array.isArray(iosBuilds) || !Array.isArray(macBuilds)) {
     throw new Error('complete build inventory required');
@@ -41,5 +42,7 @@ export function nextSharedBuild({iosBuilds, macBuilds, extraFloors = [], complet
   for (const floor of extraFloors) {
     consider(BigInt(floor));
   }
-  return {build: String(next)};
+  const build = String(next);
+  if (build.length > 12) throw new Error('planned build exceeds 12 digits');
+  return {build};
 }

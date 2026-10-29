@@ -1218,7 +1218,9 @@ async function main() {
   // YYYYMMDDHHMM, passed as --merge-stamp) and M is the highest first numeric
   // component among every iOS build and every macOS build on ALL trains
   // (expired included, old timestamp-style builds included) plus every extra
-  // floor.  No floor and no cap; a rebuild of the same commit still goes up.
+  // floor.  The planned build never exceeds 12 digits (the planner throws
+  // above that, so the 12-digit gate never sees a longer value); a rebuild
+  // of the same commit still goes up.
   // When the paired bundle id resolves to a different app, both platforms of
   // both apps are collected: IOS(app) + IOS(paired) and MAC_OS(app) + MAC_OS(paired).
   // The independent inventories are fetched concurrently (collectSharedBuilds);
@@ -1226,7 +1228,7 @@ async function main() {
   //
   // A pure-integer middle arg is a floor, not a bundle id (bundle ids are
   // never bare integers), so a caller with no paired app passes only floors.
-  // Floors stay strings so an 18-digit Sparkle floor never crosses Number
+  // Floors stay strings so a long Sparkle floor never crosses Number
   // precision on its way to the planner.
   //
   // next-shared-build is the same planner under its earlier name; both
