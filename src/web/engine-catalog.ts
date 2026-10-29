@@ -354,6 +354,11 @@ export function probeEngineOptions(
           continue;
         }
         if (message.id === 2) {
+          if (!message.result) {
+            clearTimeout(timer);
+            finish({ models: [], efforts: [], supportsThreads: false, initialized: false });
+            continue;
+          }
           const result = message.result ?? {};
           sessionId = typeof result.sessionId === "string" ? result.sessionId : null;
           if (Array.isArray(result.configOptions)) options.push(...result.configOptions);
@@ -363,10 +368,10 @@ export function probeEngineOptions(
           } else {
             clearTimeout(timer);
             finish({
-              models: modelsFromConfigOptions(options),
-              efforts: effortsFromConfigOptions(options, effortConfigId),
-              supportsThreads,
-              initialized: true,
+              models: [],
+              efforts: [],
+              supportsThreads: false,
+              initialized: false,
             });
           }
           continue;

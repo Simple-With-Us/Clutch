@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   buildEngineCatalog,
   effortsFromConfigOptions,
   mergeMuseModels,
   modelsFromConfigOptions,
+  probeEngineOptions,
   readMuseProviderCatalog,
   resolveModelValue,
   threadSupportFromInitialize,
@@ -70,6 +74,29 @@ describe("threadSupportFromInitialize", () => {
     expect(threadSupportFromInitialize({
       agentCapabilities: { loadSession: true, sessionCapabilities: { additionalDirectories: {} } },
     })).toBe(false);
+  });
+});
+
+describe("probeEngineOptions", () => {
+  it("does not treat a failed session/new as an initialized capability probe", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-acp-probe-"));
+    const stub = join(dir, "probe-error.mjs");
+    writeFileSync(stub, `#!/usr/bin/env node
+import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } } } }) + "\\n");
+  } else if (message.id === 2) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 2, error: { code: -32000, message: "session unavailable" } }) + "\\n");
+  }
+});
+`);
+    chmodSync(stub, 0o755);
+
+    const result = await probeEngineOptions(stub, [], dir, "reasoningEffort", 2_000);
+    expect(result).toEqual({ models: [], efforts: [], supportsThreads: false, initialized: false });
   });
 });
 
