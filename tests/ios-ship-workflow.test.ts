@@ -126,7 +126,7 @@ describe("ios-ship.yml auto-ship contract", () => {
   it("retries a failed push ship on a schedule, behind the scheduled path gate", () => {
     expect(on).toMatch(/^\s+schedule:\s*\n\s+- cron: '[^']+'/m);
     expect(code).toMatch(/scheduled-ship-gate\.sh/);
-    expect(code).toMatch(/--path-prefix 'ios\/'/);
+    expect(code).toMatch(/--path-prefix 'ios\/\*\*'/);
     expect(code).toMatch(/--event "\$\{\{ github\.event_name \}\}"/);
     expect(existsSync(join(ROOT, "scripts/ios-fleet/scheduled-ship-gate.sh"))).toBe(true);
   });
