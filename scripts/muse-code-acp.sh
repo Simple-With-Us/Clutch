@@ -83,6 +83,8 @@ native_supported() {
   while kill -0 "$probe_pid" >/dev/null 2>&1; do
     if (( ticks >= 50 )); then
       kill "$probe_pid" >/dev/null 2>&1 || true
+      sleep 0.2
+      kill -KILL "$probe_pid" >/dev/null 2>&1 || true
       wait "$probe_pid" 2>/dev/null || true
       return 1
     fi
