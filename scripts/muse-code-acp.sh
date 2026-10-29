@@ -2,16 +2,23 @@
 # Shellular ACP spawn for Muse Code.  Stdout is JSON-RPC only — every
 # diagnostic below goes to stderr.
 #
-# Muse Code is not itself an ACP agent: `muse serve` speaks MSP, and the
-# community adapter `@bex-co/muse-code-acp` translates MSP to ACP on stdio.
-# So this wrapper execs the adapter directly and there is no Python bridge —
-# the first engine in the repo whose launcher is pure pass-through.
+# Current Muse Code builds expose experimental ACP v1 directly as `muse acp`.
+# Older builds still work through the community `@bex-co/muse-code-acp`
+# MSP-to-ACP adapter.  Auto mode probes the installed Muse binary and prefers
+# the native route when it proves support; the adapter remains a compatibility
+# backend and the fallback for older hosts.
 #
 # Deliberately does not source lib/clutch-env.sh: Muse Code is not the DSH
 # engine, so it has no use for Clutch's engine home.  Same rule as grok.
 set -euo pipefail
 
 die() { printf 'muse-code-acp: %s\n' "$1" >&2; exit 1; }
+
+BACKEND="${MUSE_CODE_ACP_BACKEND:-auto}"
+case "$BACKEND" in
+  auto|native|adapter) ;;
+  *) die "MUSE_CODE_ACP_BACKEND must be auto, native, or adapter" ;;
+esac
 
 # 1. The adapter.  An explicit MUSE_CODE_ACP_BIN wins, then PATH, then the
 #    usual global-install prefixes (a GUI app's PATH is often thinner than an
@@ -62,12 +69,26 @@ find_muse() {
   return 1
 }
 
-ADAPTER="$(find_adapter)" || die "muse-code-acp not found — install it with: npm install -g @bex-co/muse-code-acp"
-
 if ! MUSE_HOST="$(find_muse)"; then
   printf 'muse-code-acp: muse not found on PATH — install Muse Code, or set MUSE_CODE_EXECUTABLE\n' >&2
   exit 1
 fi
 export MUSE_CODE_EXECUTABLE="$MUSE_HOST"
 
+native_supported() {
+  local gate="${MUSE_EXPERIMENTAL_ACP:-on}"
+  MUSE_EXPERIMENTAL_ACP="$gate" "$MUSE_HOST" acp --help >/dev/null 2>&1
+}
+
+if [ "$BACKEND" != "adapter" ]; then
+  if native_supported; then
+    export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
+    exec "$MUSE_HOST" acp "$@"
+  fi
+  if [ "$BACKEND" = "native" ]; then
+    die "native ACP is unavailable — update Muse Code, set MUSE_EXPERIMENTAL_ACP=on, or use MUSE_CODE_ACP_BACKEND=adapter"
+  fi
+fi
+
+ADAPTER="$(find_adapter)" || die "native ACP is unavailable and muse-code-acp was not found — update Muse Code or install the fallback with: npm install -g @bex-co/muse-code-acp"
 exec "$ADAPTER" "$@"

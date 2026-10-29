@@ -38,7 +38,7 @@ describe("routeForModel", () => {
 });
 
 describe("museInstalled", () => {
-  it("needs both the Muse host and the ACP adapter", () => {
+  it("accepts native ACP or the compatibility adapter", async () => {
     const none = { hosts: [] as string[], adapters: [] as string[] };
     // `process.execPath` stands in for "a path that really exists".  It is
     // always present, on every platform; `/bin/true` is not, because macOS
@@ -46,11 +46,25 @@ describe("museInstalled", () => {
     // old fixture read as a missing file, so the override looked stale and
     // this test failed on every run while CI, on Linux, passed.
     const present = process.execPath;
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: present }, none)).toBe(true);
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" }, none)).toBe(false);
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: present }, none)).toBe(false);
+    await expect(museInstalled(
+      { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" },
+      { ...none, nativeProbe: async () => true },
+    )).resolves.toBe(true);
+    await expect(museInstalled(
+      { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: present },
+      { ...none, nativeProbe: () => false },
+    )).resolves.toBe(true);
+    await expect(museInstalled(
+      { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" },
+      { ...none, nativeProbe: () => false },
+    )).resolves.toBe(false);
+    await expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: present }, none)).resolves.toBe(false);
+    await expect(museInstalled(
+      { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "", MUSE_CODE_ACP_BACKEND: "adapter" },
+      { ...none, nativeProbe: () => true },
+    )).resolves.toBe(false);
     // A stale override path must not count as installed.
-    expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).toBe(false);
+    await expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).resolves.toBe(false);
   });
 });
 
