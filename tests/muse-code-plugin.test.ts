@@ -157,6 +157,7 @@ describe("the Muse Code launcher", () => {
     );
     chmodSync(muse, 0o755);
 
+    const started = Date.now();
     const out = execFileSync(LAUNCHER, ["--trust-workspace"], {
       env: {
         PATH: `${stub}:${process.env.PATH ?? ""}`,
@@ -166,6 +167,7 @@ describe("the Muse Code launcher", () => {
     });
     expect(out).toContain("NATIVE gate=on");
     expect(out).toContain("args=acp --trust-workspace");
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it("falls back to the adapter when the installed Muse binary lacks native ACP", () => {
@@ -230,6 +232,26 @@ describe("the Muse Code launcher", () => {
       stdio: ["ignore", "pipe", "pipe"],
     })).toThrow(/native ACP is unavailable/);
   });
+
+  it("bounds a native capability probe that never answers", () => {
+    const stub = scratch();
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\nif [ "$1" = acp ] && [ "${2:-}" = --help ]; then trap "" TERM; while :; do sleep 1; done; fi\n');
+    chmodSync(muse, 0o755);
+    const started = Date.now();
+
+    expect(() => execFileSync(LAUNCHER, [], {
+      env: {
+        PATH: `${stub}:${process.env.PATH ?? ""}`,
+        HOME: stub,
+        MUSE_CODE_ACP_BACKEND: "native",
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    })).toThrow(/native ACP is unavailable/);
+    expect(Date.now() - started).toBeLessThan(8_000);
+  }, 12_000);
 
   it("explains the missing adapter instead of failing silently", () => {
     const stub = scratch();
