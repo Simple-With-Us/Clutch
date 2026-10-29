@@ -28,7 +28,7 @@ if [[ -n "$resolved" ]] && is_beta "$resolved"; then
     echo "       Refusing to build for App Store Connect with a beta Xcode toolchain." >&2
     exit 1
   fi
-  echo "[ios-ship] refusing beta toolchain at ${resolved}"
+  echo "[ios-ship] refusing beta toolchain at ${resolved}" >&2
   export DEVELOPER_DIR="$STABLE_DEV_DIR"
 elif [[ -n "$resolved" ]]; then
   export DEVELOPER_DIR="$resolved"
@@ -39,15 +39,18 @@ if [[ -n "${DEVELOPER_DIR:-}" ]] && is_beta "$DEVELOPER_DIR"; then
   exit 1
 fi
 
+# Every status line here goes to stderr: the CI plan step captures this
+# script's stdout into $build, so anything but the bare build number on
+# stdout breaks the 12-digit match and aborts the release.
 if [[ -n "${DEVELOPER_DIR:-}" ]]; then
-  echo "[ios-ship] DEVELOPER_DIR=${DEVELOPER_DIR}"
-  xcodebuild -version 2>/dev/null | sed 's/^/[ios-ship] /' || true
+  echo "[ios-ship] DEVELOPER_DIR=${DEVELOPER_DIR}" >&2
+  xcodebuild -version 2>/dev/null | sed 's/^/[ios-ship] /' >&2 || true
 fi
 
 IN_REPO="${ROOT}/scripts/ios-fleet/ship-testflight.sh"
 MAC="/Users/jay/apps/ios-fleet/ship-testflight.sh"
 if [[ -f "$IN_REPO" ]]; then
-  echo "[ios-ship] using in-repo fleet script: ${IN_REPO}"
+  echo "[ios-ship] using in-repo fleet script: ${IN_REPO}" >&2
   exec bash "$IN_REPO" clutch --repo-root "$ROOT" "$@"
 fi
 if [[ -f "$MAC" ]]; then

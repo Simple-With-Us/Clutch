@@ -146,7 +146,18 @@ describe("ios-ship.yml auto-ship contract", () => {
   it("publishes What to Test and ships through the fleet wrapper", () => {
     expect(code).toMatch(/IOS_TF_RELEASE_NOTES:\s*"1"/);
     expect(code).not.toMatch(/IOS_TF_RELEASE_NOTES:\s*"0"/);
-    expect(code).toMatch(/run: bash scripts\/ios-ship-testflight\.sh\s*$/m);
+    expect(code).toMatch(/run: bash scripts\/ios-ship-testflight\.sh --build "\$\{\{ steps\.plan\.outputs\.build \}\}"/);
+  });
+
+  it("plans the release build once and hands that one value to the ship", () => {
+    // One plan per release: the plan step runs --plan-build-only behind the
+    // scheduled gate, exposes the value as a step and job output, and the
+    // ship step is the only consumer of it.
+    expect(code).toMatch(/id: plan\n(\s+)if: steps\.gate\.outputs\.should_ship == '1'/);
+    expect(code).toMatch(/bash scripts\/ios-ship-testflight\.sh --plan-build-only/);
+    expect(code).toMatch(/echo "build=\$\{build\}" >>"\$GITHUB_OUTPUT"/);
+    expect(code).toMatch(/build: \$\{\{ steps\.plan\.outputs\.build \}\}/);
+    expect(code).not.toMatch(/next-shared-build/);
   });
 
   it("takes ASC credentials from Fleet-OPS /asc and guards the Xcode toolchain", () => {
