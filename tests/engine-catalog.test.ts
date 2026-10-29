@@ -7,6 +7,7 @@ import {
   modelsFromConfigOptions,
   readMuseProviderCatalog,
   resolveModelValue,
+  threadSupportFromInitialize,
   type EngineCatalog,
 } from "../src/web/engine-catalog.ts";
 
@@ -55,6 +56,20 @@ describe("effortsFromConfigOptions", () => {
   it("reads the effort levels the engine accepts", () => {
     expect(effortsFromConfigOptions(MCPRODE_OPTIONS, "thinkingEffort")).toEqual(["default", "high"]);
     expect(effortsFromConfigOptions(MCPRODE_OPTIONS, "reasoning_effort")).toEqual([]);
+  });
+});
+
+describe("threadSupportFromInitialize", () => {
+  it("requires both ACP session listing and loading", () => {
+    expect(threadSupportFromInitialize({
+      agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+    })).toBe(true);
+    expect(threadSupportFromInitialize({
+      agentCapabilities: { loadSession: false, sessionCapabilities: { list: {} } },
+    })).toBe(false);
+    expect(threadSupportFromInitialize({
+      agentCapabilities: { loadSession: true, sessionCapabilities: { additionalDirectories: {} } },
+    })).toBe(false);
   });
 });
 

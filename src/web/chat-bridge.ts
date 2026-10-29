@@ -149,9 +149,10 @@ const LAUNCHERS: Record<Engine, Launcher> = {
   mcode: mcodeLauncherOverride
     ? { command: mcodeLauncherOverride, args: [] }
     : { command: process.env.CLUTCH_MCODE_CLI?.trim() || defaultMcode, args: ["acp"] },
-  // Muse Code is not an ACP agent: `muse serve` speaks MSP and the community
-  // adapter translates it to ACP on stdio.  The shipped launcher execs the
-  // adapter directly, so there is no Python bridge for this engine.
+  // The shipped launcher prefers current Muse Code's native experimental ACP
+  // command and falls back to the community MSP adapter for older hosts.  In
+  // either case the sidecar receives the same ACP v1 stream and needs no
+  // Python bridge for this engine.
   muse: museLauncherOverride
     ? { command: museLauncherOverride, args: [] }
     : { command: join(ROOT, "scripts", "muse-code-acp.sh"), args: [] },
@@ -279,19 +280,58 @@ export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
   return launcher.command.includes("/") ? existsSync(launcher.command) : true;
 }
 
+const pendingMuseNativeProbes = new Map<string, Promise<boolean>>();
+
+function probeNativeMuseAcp(host: string, env: Record<string, string | undefined>): Promise<boolean> {
+  const gate = env.MUSE_EXPERIMENTAL_ACP || "on";
+  const key = `${host}\0${gate}\0${env.MUSE_EXPERIMENTAL_SDK_ENABLED ?? ""}`;
+  const pending = pendingMuseNativeProbes.get(key);
+  if (pending) return pending;
+  const probe = new Promise<boolean>((resolve) => {
+    const child = spawn(host, ["acp", "--help"], {
+      env: {
+        ...process.env,
+        ...env,
+        MUSE_EXPERIMENTAL_ACP: gate,
+      },
+      stdio: "ignore",
+    });
+    const timeout = setTimeout(() => {
+      child.kill();
+      resolve(false);
+    }, 5_000);
+    child.once("error", () => {
+      clearTimeout(timeout);
+      resolve(false);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      resolve(code === 0);
+    });
+  });
+  pendingMuseNativeProbes.set(key, probe);
+  void probe.finally(() => {
+    if (pendingMuseNativeProbes.get(key) === probe) pendingMuseNativeProbes.delete(key);
+  });
+  return probe;
+}
+
 /**
  * Whether Muse Code can run here.
  *
- * Two pieces are needed: the `muse` host binary, and the community ACP
- * adapter that translates Muse's MSP to ACP.  The adapter is usually a
- * global npm install, so its bin lands in the npm global prefix — on a
- * server that is `/usr/local/bin`, on a Mac it is under the Homebrew
- * prefix — and the launcher script searches the same places.
+ * The official native ACP server is preferred when the installed `muse`
+ * supports it.  Older hosts can still use the community adapter, whose bin
+ * usually lands in the npm global prefix; the launcher script searches the
+ * same paths as this availability check.
  */
-export function museInstalled(
+export async function museInstalled(
   env: Record<string, string | undefined> = process.env,
-  candidates: { hosts?: string[]; adapters?: string[] } = {},
-): boolean {
+  candidates: {
+    hosts?: string[];
+    adapters?: string[];
+    nativeProbe?: (host: string, env: Record<string, string | undefined>) => boolean | Promise<boolean>;
+  } = {},
+): Promise<boolean> {
   // An explicit override only counts when the path is really there: a stale
   // variable must not make the catalog claim Muse Code is installed.
   const hostPaths = candidates.hosts ?? [
@@ -315,6 +355,13 @@ export function museInstalled(
   const host = (override && existsSync(override) ? override : undefined)
     || hostPaths.find(existsSync);
   if (!host) return false;
+  const backend = env.MUSE_CODE_ACP_BACKEND?.trim() || "auto";
+  if (backend !== "auto" && backend !== "native" && backend !== "adapter") return false;
+  if (backend !== "adapter") {
+    const probe = candidates.nativeProbe ?? probeNativeMuseAcp;
+    if (await probe(host, env)) return true;
+    if (backend === "native") return false;
+  }
   const adapterOverride = env.MUSE_CODE_ACP_BIN?.trim();
   const adapter = (adapterOverride && existsSync(adapterOverride) ? adapterOverride : undefined)
     || adapterPaths.find(existsSync);
@@ -1537,7 +1584,7 @@ async function main(): Promise<void> {
    * Whether an engine's launcher and host binary are present here, so the
    * catalog can say "not installed" instead of failing on the first turn.
    */
-  function engineAvailable(engine: Engine): boolean {
+  async function engineAvailable(engine: Engine): Promise<boolean> {
     const launcher = LAUNCHERS[engine];
     // A launcher with a path is checked against the filesystem; a bare
     // command name is checked against PATH, so a server without MiniMax
@@ -1553,9 +1600,10 @@ async function main(): Promise<void> {
 
   /** The catalog for this host, with the real launchers wired in. */
   async function catalog(): Promise<EngineCatalog> {
+    const availability = await Promise.all(ENGINE_ORDER.map(async (engine) => [engine, await engineAvailable(engine)] as const));
     return engineCatalog({
       launchers: LAUNCHERS,
-      available: Object.fromEntries(ENGINE_ORDER.map((engine) => [engine, engineAvailable(engine)])) as Record<Engine, boolean>,
+      available: Object.fromEntries(availability) as Record<Engine, boolean>,
       probeCwd: process.env.HOME ?? "/tmp",
     });
   }

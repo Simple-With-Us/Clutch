@@ -54,20 +54,20 @@ The health answer reports `mcode.available`, which is false when MiniMax Code is
 
 - Unit: `clutch-chat-bridge.service`, running as root from the fleet checkout, always-on with `Restart=on-failure`.  It is the only Clutch process on that box; there is no clutch web there.
 - Reachable at `https://jay-server.boa-roygbiv.ts.net:3181` on the tailnet only (`tailscale serve`, set up by `scripts/chat-bridge.sh` on every start).
-- Engines on that box: MiniMax Code (`mcode acp`) and Muse Code (`muse serve` behind the community `@bex-co/muse-code-acp` adapter, installed globally at `/usr/local/bin/muse-code-acp`).  The catalog route reports both, with Muse's models read from the Muse provider catalog — Muse Wonder (`muse-wonder-1.0`) among them.
+- Engines on that box: MiniMax Code (`mcode acp`) and Muse Code (native `muse acp` when supported, with the community `@bex-co/muse-code-acp` adapter installed at `/usr/local/bin/muse-code-acp` as the compatibility fallback).  The catalog route reports both, with Muse's models read from the Muse provider catalog — Muse Wonder (`muse-wonder-1.0`) among them.
 - Pairing link: `/root/.clutch/server-pairing-link.txt` on the server (owner-only).  Re-mint it any time with the pairing command above; the token survives sidecar restarts, so existing pairings keep working.
 - Updating: pull the checkout, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  Re-run the installer if the checkout moved, because the unit points at it.
 
 ### Muse Code On A Server
 
-Muse Code is not an ACP agent: `muse serve` speaks MSP, and the community adapter `@bex-co/muse-code-acp` translates MSP to ACP on stdio.  The sidecar launches that adapter through `scripts/muse-code-acp.sh`, exactly as the Shellular runtime does.
+Current Muse Code builds expose experimental ACP v1 directly through `muse acp`.  The sidecar's `scripts/muse-code-acp.sh` launcher probes that command and prefers it, while keeping the community `@bex-co/muse-code-acp` MSP adapter as the fallback for older builds.
 
 ```bash
-npm install -g @bex-co/muse-code-acp      # the adapter
+npm install -g @bex-co/muse-code-acp      # compatibility fallback for older Muse builds
 muse login                                # as the service user
 ```
 
-The launcher's `MUSE_CODE_ACP_BIN` pins the adapter path, and `MUSE_CODE_ACP_SEARCH_PATHS` replaces the whole search list (the fleet runtime keeps the adapter outside the global npm prefix).  `MUSE_CODE_EXECUTABLE` pins the `muse` host binary.
+The launcher defaults to `MUSE_CODE_ACP_BACKEND=auto`, which prefers native ACP only after `MUSE_EXPERIMENTAL_ACP=on muse acp --help` succeeds.  `native` requires that route and `adapter` forces the compatibility adapter.  `MUSE_CODE_EXECUTABLE` pins the Muse binary, while `MUSE_CODE_ACP_BIN` and `MUSE_CODE_ACP_SEARCH_PATHS` control the fallback adapter.
 
 The Muse models come from two places, and the catalog merges them: what the ACP session advertises on `session/new`, and the provider catalog the Muse CLI writes to `~/.local/share/muse/model-catalog/`.  The provider catalog is what makes a model the session does not advertise — Muse Wonder — selectable from the phone and the Mac.
 

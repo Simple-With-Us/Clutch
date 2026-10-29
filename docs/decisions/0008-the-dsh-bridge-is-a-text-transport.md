@@ -19,9 +19,10 @@ and it already had a handler for an incoming `session/request_permission`.
 The engines do not all answer in the same protocol, and the difference
 matters here.
 
-**The code engines answer in ACP.**  `mcode acp` and the `muse-code-acp`
-adapter are ACP servers, so they send `session/request_permission` to the
-sidecar when the model wants a tool approved.
+**The code engines answer in ACP.**  `mcode acp`, native `muse acp`, and the
+Muse compatibility adapter are ACP servers, so they send
+`session/request_permission` to the sidecar when the model wants a tool
+approved.
 
 **The dsh engines answer in text.**  `bridges/dsh/dsh-acp.py` does not speak
 ACP to dsh at all.  It implements the ACP session methods on the sidecar's

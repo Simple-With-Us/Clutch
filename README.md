@@ -31,11 +31,11 @@ attribution record is in [`NOTICE`](./NOTICE); the summary is below.
 - **Muse Code and Muse Spark** — Meta products, documented at
   <https://dev.meta.ai/docs/muse-code/>.  Clutch is not affiliated with,
   endorsed by, or supported by Meta.
-- **`@bex-co/muse-code-acp`** — the unofficial community adapter the Muse Code
-  engine plugin depends on, Apache 2.0 and maintained outside Meta.  Muse Code
-  is not itself an ACP agent: `muse serve` speaks MSP (Muse Session Protocol)
-  and this adapter translates MSP to ACP on stdio.  Clutch installs it at
-  runtime and vendors none of its code.
+- **`@bex-co/muse-code-acp`** — the unofficial Apache 2.0 community adapter
+  retained for compatibility with older Muse Code builds.  Current builds
+  expose experimental ACP v1 directly through `muse acp`, so Clutch prefers the
+  native route and falls back to this MSP-to-ACP adapter only when the installed
+  Muse binary does not support it.  Clutch vendors none of the adapter's code.
 
 ## What You Get
 
@@ -106,12 +106,14 @@ Driver and bridge changes belong in this repository.  BotFleet and other consume
 
 The MiniMax headless bridge launches `dsh --profile minimax-headless`, using MiniMax as the model provider within the upstream coding stack.  DeepSeek and MiniMax profiles share parts of that stack, but model responses, provider features, and tool support can differ.
 
-Muse Code is a different shape of engine.  It is a Meta coding agent that is not part of the DeepSeek stack, and it has no Python bridge: `scripts/muse-code-acp.sh` execs the community `@bex-co/muse-code-acp` adapter directly, making it the first engine in this repo with zero bridge code.  It needs a Meta account — `muse login`, or `META_API_KEY` for headless use.
+Muse Code is a different shape of engine.  It is a Meta coding agent that is not part of the DeepSeek stack, and it has no Python bridge: `scripts/muse-code-acp.sh` probes for native `muse acp`, enables its experimental gate when supported, and falls back to the community `@bex-co/muse-code-acp` adapter on older hosts.  It needs a Muse login for the native route; the compatibility adapter also accepts `META_API_KEY` for headless use.
 
-Two honest limits on the Muse Code plugin, both visible in `engines/muse-code.engine.json`:
+The sidecar reads the live native catalog and capabilities.  The compatibility manifest keeps two conservative fallbacks for older adapter consumers:
 
 - **The model catalog is a floor, not the truth.**  Muse Code serves its real catalog over ACP, so the static catalog in the manifest is a fallback.  The machine it was captured on had no Meta account, so only one model was reachable; that option carries an "Unverified" badge and should not be read as the complete list.
 - **Effort tiers are the intersection, not the full Muse range.**  Muse offers `minimal` and `ultra` tiers that have no equivalent in Clutch's shared effort levels, so the plugin advertises only the tiers both sides have: `none`, `low`, `medium`, `high`, `xhigh`.
+
+Native capability reporting remains authoritative.  Muse Code 1.4.14 advertises model selection but not reasoning-effort selection or session loading, so Clutch hides those two controls when that native host is active; an adapter that advertises them keeps them available.
 
 ## Why Python for the Bridges
 
