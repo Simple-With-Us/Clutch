@@ -202,6 +202,26 @@ else:
 PY
 }
 
+json_reverse_paired_id() {
+  # json_reverse_paired_id <bundle_id> <exclude_app_key>
+  # The bundle id of the first apps.json entry (other than <exclude_app_key>)
+  # whose pairedBundleId or macBundleId names <bundle_id>.  Prints nothing
+  # when no entry names it.  Lets a macOS entry with no paired id of its own
+  # join the counter through the iOS entry that names it.
+  /usr/bin/python3 - "$APPS_JSON" "$1" "$2" <<'PY'
+import json, sys
+path, bundle, exclude = sys.argv[1], sys.argv[2], sys.argv[3]
+data = json.load(open(path))
+for key in data.get("apps", {}):
+    if key == exclude:
+        continue
+    entry = data["apps"][key]
+    if entry.get("pairedBundleId") == bundle or entry.get("macBundleId") == bundle:
+        print(entry.get("bundleId") or "", end="")
+        break
+PY
+}
+
 resolve_project() {
   local root="$1" rel="$2" alt="$3"
   if [[ -n "$rel" && -e "${root}/${rel}" ]]; then
@@ -629,23 +649,93 @@ asc_credential_available() {
   return 1
 }
 
-# The highest patch already used on the <prefix> train in App Store Connect
-# (App Store versions AND TestFlight trains, drift trains ignored).
-# Prints the integer on stdout.  Returns 1 (and prints nothing) when ASC
-# cannot be consulted -- the caller must distinguish "no patch yet" (0) from
-# "unknown" (failure).
-asc_next_dotted_build() {
-  local version="$1" plat="${2:-}" out rc
+# The next shared four-digit build for a fixed marketing version (owner, Oct 28 2026):
+# ONE counter per app across iOS and macOS: max(every iOS build on ALL trains,
+# every macOS build, every extra floor, 999) + 1, floored at 1000.  Prints the
+# build on stdout.  Returns 1 (and prints nothing on stdout) when it cannot be
+# worked out.  Feed failures are logged with the feed URL so they are not
+# mistaken for App Store Connect failures.  A non-https feed, a feed whose max
+# sits outside 1..9998, and a feed with no numeric version all fail closed;
+# a configured feed is never silently treated as "no floor".
+asc_next_shared_build() {
+  local out rc mac_id feed feed_xml feed_err_file feed_err max max_digits floor
   command -v "$ASC_NODE" >/dev/null 2>&1 || return 1
-  # Not load_secrets: both helpers run inside command substitutions, where a
+  # Not load_secrets: this helper runs inside command substitutions, where a
   # secrets temp dir and its EXIT trap die with the subshell and leave the
   # key behind.  asc-api.mjs resolves its own credential.
   asc_credential_available || return 1
+  mac_id="$(json_get "$APP_KEY" pairedBundleId 2>/dev/null || true)"
+  [[ "$mac_id" == "null" ]] && mac_id=""
+  if [[ -z "$mac_id" ]]; then
+    mac_id="$(json_get "$APP_KEY" macBundleId 2>/dev/null || true)"
+    [[ "$mac_id" == "null" ]] && mac_id=""
+  fi
+  if [[ -z "$mac_id" && -n "${BUNDLE_ID:-}" ]]; then
+    # A macOS entry rarely names the pairing itself; the iOS entry does (its
+    # pairedBundleId/macBundleId is this entry's bundle id).  The reverse
+    # lookup finds that iOS entry so iOS builds still join this ship's
+    # counter.  No referrer means no pairing, not an error.
+    case "${PLATFORM:-}" in
+      macOS|macos|MAC_OS)
+        mac_id="$(json_reverse_paired_id "$BUNDLE_ID" "$APP_KEY" 2>/dev/null || true)"
+        [[ "$mac_id" == "null" ]] && mac_id=""
+        ;;
+    esac
+  fi
+  feed="$(json_get "$APP_KEY" pairedBuildFeed 2>/dev/null || true)"
+  [[ "$feed" == "null" ]] && feed=""
+  floor=""
+  if [[ -n "$feed" ]]; then
+    case "$feed" in
+      https://*) ;;
+      *)
+        logerr "asc-next-shared-build: pairedBuildFeed $feed rejected: feed URL must start with https://"
+        return 1
+        ;;
+    esac
+    if ! command -v curl >/dev/null 2>&1; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed unreadable: curl not on PATH"
+      return 1
+    fi
+    feed_err_file="$(mktemp "${TMPDIR:-/tmp}/paired-feed-err.XXXXXX")" || {
+      logerr "asc-next-shared-build: pairedBuildFeed $feed unreadable: cannot create temp file"
+      return 1
+    }
+    set +e
+    feed_xml="$(curl -fsSL --proto =https --proto-redir =https --connect-timeout 10 --max-time 30 --max-filesize 5000000 "$feed" 2>"$feed_err_file")"
+    rc=$?
+    set -e
+    feed_err="$(cat "$feed_err_file" 2>/dev/null || true)"
+    rm -f "$feed_err_file" >/dev/null 2>&1 || true
+    if [[ $rc -ne 0 || -z "$feed_xml" ]]; then
+      if [[ -n "$feed_err" ]]; then
+        logerr "asc-next-shared-build: pairedBuildFeed fetch failed for $feed: $feed_err"
+      else
+        logerr "asc-next-shared-build: pairedBuildFeed fetch failed for $feed (curl rc=$rc)"
+      fi
+      return 1
+    fi
+    max="$(printf '%s' "$feed_xml" | grep -o -E '<sparkle:version>[[:space:]]*[0-9]+[[:space:]]*</sparkle:version>' 2>/dev/null | grep -o -E '[0-9]+' 2>/dev/null | sort -n 2>/dev/null | tail -n 1 2>/dev/null || true)"
+    if [[ ! "$max" =~ ^[0-9]+$ ]]; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed holds no numeric <sparkle:version>; failing closed"
+      return 1
+    fi
+    # A feed max outside 1..9998 cannot yield a valid four-digit build, so it
+    # fails closed; it is never clamped into range.  The length check runs
+    # first so the arithmetic below only ever sees at most four digits.
+    max_digits="$(printf '%s' "$max" | sed 's/^0*//')"
+    [[ -z "$max_digits" ]] && max_digits="0"
+    if [[ "${#max_digits}" -gt 4 || "$max_digits" -lt 1 || "$max_digits" -gt 9998 ]]; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed floor $max outside 1..9998; failing closed"
+      return 1
+    fi
+    floor="$max"
+  fi
   set +e
-  out=$(asc_client next-dotted-build "$BUNDLE_ID" "$version" "$plat" "${APPLE_ID:-}")
+  out=$(asc_client next-shared-build "$BUNDLE_ID" "$mac_id" "$floor" "${APPLE_ID:-}")
   rc=$?
   set -e
-  [[ $rc -eq 0 && "$out" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  [[ $rc -eq 0 && "$out" =~ ^[1-9][0-9]{3}$ ]] || return 1
   printf '%s' "$out"
 }
 
@@ -1008,11 +1098,18 @@ PROJECT_REL="$(json_get "$APP_KEY" projectRel)"
 PROJECT_REL_ALT="$(json_get "$APP_KEY" projectRelAlt)"
 XCODEGEN_DIR="$(json_get "$APP_KEY" xcodegenDir)"
 DEFAULT_MARKETING="$(json_get "$APP_KEY" marketingVersionDefault)"
-# Optional fixed-version policy (owner, 2026-10-26): the marketing version does
-# not count up per TestFlight ship; the build is a dotted M.m.<n> (see
-# asc-api.mjs next-dotted-build) that goes up inside the fixed train.  apps.json
-# key: fixedMarketingVersion ("1.1.2").  Absent key keeps the next-patch
-# behaviour.  Not used on macOS (builds must grow across all trains).
+# Optional fixed-version policy (owner, Oct 28 2026): the marketing version does
+# not count up per ship; the build is one shared four-digit counter per app
+# across iOS and macOS (see asc-api.mjs next-shared-build and shared-build.mjs).
+# apps.json keys: fixedMarketingVersion ("1.1.2"), optional pairedBundleId (the
+# paired app whose iOS and macOS builds join the counter; macBundleId is an
+# accepted alias), optional pairedBuildFeed (a Sparkle appcast URL whose max
+# <sparkle:version> joins the counter).  For a macOS entry the paired id is the
+# iOS entry's bundle id; a macOS entry with no paired id of its own is paired
+# by reverse lookup (the entry whose pairedBundleId/macBundleId names this
+# entry's bundle id).  Absent fixedMarketingVersion keeps the next-patch
+# behaviour.  Fixed mode works on both platforms: the counter sits above every
+# Mac build, which is what macOS needs.
 FIXED_MARKETING="$(json_get "$APP_KEY" fixedMarketingVersion)"
 
 if [[ -z "$PLATFORM" ]]; then
@@ -1157,9 +1254,6 @@ else
   if [[ -n "$FIXED_MARKETING" && ( -z "$FORCE_VERSION" || "$FORCE_VERSION" == "$FIXED_MARKETING" ) ]]; then
     [[ "$FIXED_MARKETING" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
       || die "fixedMarketingVersion '${FIXED_MARKETING}' for ${APP_KEY} in apps.json is not M.m.p (three dot-separated integers).  Nothing was shipped."
-    if [[ "$(printf '%s' "${ASC_PLATFORM:-}" | tr a-z A-Z)" == "MAC_OS" ]]; then
-      die "fixedMarketingVersion is not supported on macOS:  Mac builds must grow across every train, so a dotted build under a fixed version cannot be ordered safely.  Nothing was shipped."
-    fi
     FORCE_VERSION="$FIXED_MARKETING"
     FIXED_MODE=1
     log "version: fixed marketing version ${FIXED_MARKETING} from apps.json; it does not count up per ship"
@@ -1220,8 +1314,10 @@ sys.exit(0 if a>b else 1)' "$FIXED_MARKETING" "$_rel"; then
 
   # ---- the build number ---------------------------------------------------
   if [[ -n "$FORCE_BUILD" ]]; then
-    prefix="${MARKETING%.*}"; prefix_re="${prefix//./\.}"; if [[ "$FIXED_MODE" -eq 1 && ! "$FORCE_BUILD" =~ ^${prefix_re}\.[0-9]+$ ]]; then
-      die "--build ${FORCE_BUILD} is not ${MARKETING%.*}.<n>:  in fixed-version mode the train holds only dotted builds of that shape, and a different one would block every later ship.  Pass --build ${MARKETING%.*}.<n> or leave --build off.  Nothing was shipped."
+    if [[ "$FIXED_MODE" -eq 1 ]]; then
+      [[ "$FORCE_BUILD" =~ ^[1-9][0-9]{3}$ ]] || die "fixed mode requires a four-digit build 1000..9999; nothing shipped"
+      _minimum="$(asc_next_shared_build)" || die "cannot verify four-digit build floor; nothing shipped"
+      [[ "$FORCE_BUILD" -ge "$_minimum" ]] || die "requested build is below the planned four-digit minimum ${_minimum}; nothing shipped"
     fi
     # An explicit --build is honoured exactly, and it does NOT move the
     # marketing version:  the two numbers are independent.
@@ -1234,15 +1330,8 @@ sys.exit(0 if a>b else 1)' "$FIXED_MARKETING" "$_rel"; then
     fi
     log "version: operator override (--build/--version); the local build-seq counter is not consulted"
   elif [[ "$FIXED_MODE" -eq 1 ]]; then
-    if [[ "$(printf '%s' "${ASC_PLATFORM:-}" | tr a-z A-Z)" == "MAC_OS" ]]; then
-      die "fixedMarketingVersion is not supported on macOS:  Mac builds must grow across every train, so a dotted build under a fixed version cannot be ordered safely.  Nothing was shipped."
-    fi
-    # The build reads like the version it ships under (1.1.2 (1.1.2)) and goes
-    # up inside the fixed train (1.1.3, 1.1.4, ...).  No floor, seed, count or
-    # patch bump applies:  the train itself is the only record.
-    BUILD_NUM="$(asc_next_dotted_build "$MARKETING" "$ASC_PLATFORM")" \
-      || die "cannot work out the next dotted build for ${MARKETING}: App Store Connect could not be read, or the train holds a build that is not ${MARKETING%.*}.<n>.  Nothing was shipped or guessed."
-    log "build: dotted build ${BUILD_NUM} for fixed version ${MARKETING}"
+    BUILD_NUM="$(asc_next_shared_build)" || die "cannot work out the next shared four-digit build: incomplete inventory or floor outside 1000..9999; nothing shipped"
+    log "build: shared four-digit build ${BUILD_NUM} for fixed version ${MARKETING}"
   else
     [[ "$PLAN_COMMIT_COUNT" =~ ^[0-9]+$ ]] || die "could not read the commit count from ${REPO_ROOT}; CFBundleVersion is the repo commit count and UTC timestamps are retired"
 
