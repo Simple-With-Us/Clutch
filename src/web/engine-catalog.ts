@@ -231,6 +231,15 @@ export function readMuseProviderCatalog(home: string = homedir()): EngineModel[]
 interface ProbeResult {
   models: EngineModel[];
   efforts: string[];
+  supportsThreads: boolean;
+}
+
+/** Whether an ACP initialize result promises both thread listing and loading. */
+export function threadSupportFromInitialize(result: unknown): boolean {
+  if (!isRecord(result) || !isRecord(result.agentCapabilities)) return false;
+  const capabilities = result.agentCapabilities;
+  if (capabilities.loadSession !== true || !isRecord(capabilities.sessionCapabilities)) return false;
+  return isRecord(capabilities.sessionCapabilities.list);
 }
 
 /**
@@ -284,6 +293,7 @@ export function probeEngineOptions(
     let buffer = "";
     let settled = false;
     let sessionId: string | null = null;
+    let supportsThreads = false;
     const options: unknown[] = [];
 
     const finish = (result: ProbeResult): void => {
@@ -298,7 +308,7 @@ export function probeEngineOptions(
     };
 
     const timer = setTimeout(() => {
-      finish({ models: [], efforts: [] });
+      finish({ models: [], efforts: [], supportsThreads: false });
     }, timeoutMs);
 
     const send = (payload: Record<string, unknown>): void => {
@@ -328,6 +338,7 @@ export function probeEngineOptions(
           continue;
         }
         if (message.id === 1) {
+          supportsThreads = threadSupportFromInitialize(message.result);
           send({
             jsonrpc: "2.0",
             id: 2,
@@ -348,6 +359,7 @@ export function probeEngineOptions(
             finish({
               models: modelsFromConfigOptions(options),
               efforts: effortsFromConfigOptions(options, effortConfigId),
+              supportsThreads,
             });
           }
           continue;
@@ -357,6 +369,7 @@ export function probeEngineOptions(
           finish({
             models: modelsFromConfigOptions(options),
             efforts: effortsFromConfigOptions(options, effortConfigId),
+            supportsThreads,
           });
           continue;
         }
@@ -365,11 +378,11 @@ export function probeEngineOptions(
 
     child.on("error", () => {
       clearTimeout(timer);
-      finish({ models: [], efforts: [] });
+      finish({ models: [], efforts: [], supportsThreads: false });
     });
     child.on("close", () => {
       clearTimeout(timer);
-      finish({ models: [], efforts: [] });
+      finish({ models: [], efforts: [], supportsThreads: false });
     });
 
     send({
@@ -438,7 +451,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
     if (engine === "muse") {
       const provider = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
       models = mergeMuseModels(probed?.models ?? [], provider);
-      effortLevels = probed?.efforts.length ? probed.efforts : effortLevels;
+      effortLevels = probed ? probed.efforts : effortLevels;
       if (!models.length) {
         note = "Muse Code did not advertise a model catalog on this host.";
       } else if (provider.length > 0 && probed && probed.models.length < provider.length) {
@@ -446,7 +459,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
       }
     } else if (engine === "mcode") {
       models = probed?.models ?? [];
-      effortLevels = probed?.efforts.length ? probed.efforts : effortLevels;
+      effortLevels = probed ? probed.efforts : effortLevels;
       if (!models.length) note = "MiniMax Code did not advertise a model catalog on this host.";
     }
 
@@ -454,7 +467,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
       id: engine,
       label: engine === "mcode" ? "MiniMax Code" : engine === "muse" ? "Muse Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
       available,
-      supportsThreads: supportsThreads(engine),
+      supportsThreads: probed ? probed.supportsThreads : supportsThreads(engine),
       models,
       effortLevels,
       effortConfigId: EFFORT_CONFIG_IDS[engine] ?? "reasoning_effort",

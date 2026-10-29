@@ -113,6 +113,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CLUTCH_CHAT_LAUNCHER_MUSE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CHAT_BRIDGE_STUB_LOG: stubLogFile,
     COMETCHAT_APP_ID: "loop",
     COMETCHAT_REGION: "us",
@@ -231,6 +232,36 @@ describe("chat sidecar full loop", () => {
     });
     expect(recovered.text).toContain("stub-answer");
     expect(recovered.text).not.toContain("loaded thread was detached");
+  }, 60000);
+
+  it("lists, loads, and continues a Muse Code ACP thread through the generic route", async () => {
+    const listed = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`, {
+      headers: chatHeaders(),
+    });
+    expect(listed.status).toBe(200);
+    const listBody = (await listed.json()) as { sessions: Array<{ sessionId: string }> };
+    expect(listBody.sessions).toEqual([
+      expect.objectContaining({ sessionId: "mcode-existing-1" }),
+    ]);
+
+    const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "muse", sessionId: "mcode-existing-1", cwd: "/tmp/project" }),
+    });
+    expect(loaded.status).toBe(200);
+    const loadBody = (await loaded.json()) as { sessionId: string; remoteSessionId: string };
+    expect(loadBody.remoteSessionId).toBe("mcode-existing-1");
+
+    const continued = await postChat({
+      engine: "muse",
+      sessionId: loadBody.sessionId,
+      prompt: "continue the Muse thread",
+      cwd: "/tmp/project",
+    });
+    expect(continued.status).toBe(200);
+    expect(continued.text).toContain("stub-answer");
+    expect(continued.text).toMatch(/event: done[\s\S]*endTurn/);
   }, 60000);
 
   it("serves chat-config with the relay coordinates", async () => {

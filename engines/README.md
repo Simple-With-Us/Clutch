@@ -61,26 +61,36 @@ what a future revision should re-run before claiming more than this.
 
 ## muse-code
 
-Muse Code is Meta's coding agent.  It is **not** an ACP agent: `muse serve`
-speaks MSP (the Muse Session Protocol) over stdio.  The community adapter
-`@bex-co/muse-code-acp` translates MSP to ACP, and `scripts/muse-code-acp.sh`
-execs that adapter — so this engine needs no Python bridge, the first in the
-repo whose launcher is pure pass-through.
+Muse Code is Meta's coding agent.  Current builds expose experimental ACP
+v1 directly through `muse acp`; older builds expose MSP through `muse serve`
+and need the community `@bex-co/muse-code-acp` adapter.  The launcher
+probes the native command, prefers it when available, and falls back to the
+adapter, so neither route needs a Clutch Python bridge.
 
 ```sh
-npm install -g @bex-co/muse-code-acp   # the adapter
-muse login                             # or set META_API_KEY for headless use
+npm install -g @bex-co/muse-code-acp   # fallback for older Muse builds
+muse login                             # as the service user
 ```
 
-Install Muse Code itself separately.  The launcher resolves the `muse` launcher
-rather than a versioned `muse-bin-*`, because the adapter's own documentation
-notes that pinning an old launcher cache does not survive its update-and-prune
-cycle.
+Install Muse Code itself separately.  The launcher resolves the `muse`
+launcher rather than a versioned `muse-bin-*`, probes native support with
+`MUSE_EXPERIMENTAL_ACP=on muse acp --help`, and accepts
+`MUSE_CODE_ACP_BACKEND=auto|native|adapter` for an explicit compatibility
+choice.
 
 ### What is verified, and what is not
 
-A real turn was run through `scripts/muse-code-acp.sh` against Muse Code
-1.4.4-R5419.1 with adapter 0.7.0.  The whole Clutch-side path works: the
+Native ACP was verified against Muse Code 1.4.14.  ACP `initialize` and
+`session/new` complete through the shipped launcher, the host advertises its
+four current models, image prompts, HTTP MCP servers, and device-code login,
+and Clutch consumes those options without an adapter.  That native build
+explicitly reports no session loading and no reasoning-effort option, so the
+host catalog reports both limitations instead of offering controls the agent
+would reject.  No paid model turn was run during this compatibility check.
+
+The compatibility route retains its earlier end-to-end evidence.  A real turn
+was run through the compatibility backend against Muse Code
+1.4.4-R5419.1 with adapter 0.7.0.  The whole Clutch-side path works: the
 launcher resolves the adapter and the host, ACP `initialize` and `session/new`
 succeed, a prompt is accepted and submitted, streamed updates arrive, and the
 provider is reached.

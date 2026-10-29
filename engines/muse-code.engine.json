@@ -4,8 +4,8 @@
   "driverKind": "museCodeAgent",
   "displayName": "Muse Code",
   "defaultCli": "muse-code-acp.sh",
-  "nativeSource": "muse.serve",
-  "loginNote": "Headless spawns need META_API_KEY.  A browser/OAuth credential in the login keychain works in an interactive terminal but is not readable by the `muse serve` child a GUI-spawned client starts, and that fails with 'not logged in'.  Store an API key instead: `muse auth set --provider meta --api-key-stdin`.",
+  "nativeSource": "muse.acp",
+  "loginNote": "Current Muse Code builds speak ACP v1 directly through the experimental `muse acp` command.\u00A0 Clutch enables the gate and falls back to the community MSP adapter on older hosts.\u00A0 Run `muse login` as the service user before starting headless sessions.",
 
   "images": true,
   "mcpServers": true,
@@ -41,11 +41,8 @@
     { "pattern": "unknown model|model not found|no such model|invalid model", "code": "model_catalog_outage" }
   ],
 
-  "credentialEnv": ["META_API_KEY", "MUSE_CODE_EXECUTABLE", "MUSE_CODE_ACP_BACKEND", "MUSE_CODE_ACP_ALLOW_YOLO"],
+  "credentialEnv": ["META_API_KEY", "MUSE_CODE_EXECUTABLE", "MUSE_CODE_ACP_BACKEND", "MUSE_EXPERIMENTAL_ACP", "MUSE_CODE_ACP_ALLOW_YOLO"],
   "authFailure": "continue",
-  "authenticatedWhen": {
-    "anyEnv": ["META_API_KEY"]
-  },
 
   "install": {
     "command": {
