@@ -116,7 +116,7 @@ cmd=""
 for a in "$@"; do
   case "$a" in
     */asc-api.mjs) cmd="asc-api" ;;
-    latest-marketing-patch|build-floor|released-store-version|next-shared-build)
+    latest-marketing-patch|build-floor|released-store-version|next-shared-build|plan-release-build|platform-max-build)
       if [[ "$cmd" == "asc-api" ]]; then cmd="${cmd}:${a}"; fi
       ;;
   esac
@@ -135,13 +135,22 @@ case "$cmd" in
     printf '%s\n' "${FAKE_RELEASED:-}"
     exit 0
     ;;
-  asc-api:next-shared-build)
+  asc-api:next-shared-build|asc-api:plan-release-build)
     if [[ -n "${FAKE_ASC_ARGS_LOG:-}" ]]; then
       printf '%s\n' "$*" >>"$FAKE_ASC_ARGS_LOG"
     fi
     [[ "${FAKE_SHARED:-}" == "fail" ]] && exit 3
     [[ -n "${FAKE_SHARED:-}" ]] || exit 2
     printf '%s\n' "$FAKE_SHARED"
+    exit 0
+    ;;
+  asc-api:platform-max-build)
+    if [[ -n "${FAKE_ASC_ARGS_LOG:-}" ]]; then
+      printf '%s\n' "$*" >>"$FAKE_ASC_ARGS_LOG"
+    fi
+    [[ "${FAKE_PLATFORM_MAX:-}" == "fail" ]] && exit 2
+    [[ -n "${FAKE_PLATFORM_MAX:-}" ]] || exit 2
+    printf '%s\n' "$FAKE_PLATFORM_MAX"
     exit 0
     ;;
   asc-api:build-floor)
@@ -181,6 +190,10 @@ process.stdout.write(privateKey.export({ type: "pkcs8", format: "pem" }));
 # number is the commit count and the floor guard does not fire.  With a
 # one-commit fixture the floor wins and every version assertion ends up
 # testing the guard instead of the scheme.
+# Fixed committer dates, so the merge stamp S (the HEAD committer date in
+# America/Chicago as YYYYMMDDHHMM) is deterministic: 202610290930.
+FIXTURE_DATE="2026-10-29T09:30:00-05:00"
+S_STAMP="202610290930"
 mkdir -p "${REPO}/ios"
 printf 'name: clutch-test\n' >"${REPO}/README"
 printf 'DEVELOPMENT_TEAM: ABCDE12345\n' >"${REPO}/ios/project.yml"
@@ -188,15 +201,21 @@ git -C "$REPO" init -q
 git -C "$REPO" config user.name "seq test"
 git -C "$REPO" config user.email "seq@test.invalid"
 git -C "$REPO" add README ios/project.yml
-git -C "$REPO" -c commit.gpgsign=false commit -qm seed
+GIT_COMMITTER_DATE="$FIXTURE_DATE" git -C "$REPO" -c commit.gpgsign=false commit -qm seed
 _seed=2
 while [ "$_seed" -le 6 ]; do
   echo "seed ${_seed}" >"${REPO}/seed-${_seed}"
   git -C "$REPO" add "seed-${_seed}"
-  git -C "$REPO" -c commit.gpgsign=false commit -qm "seed ${_seed}"
+  GIT_COMMITTER_DATE="$FIXTURE_DATE" git -C "$REPO" -c commit.gpgsign=false commit -qm "seed ${_seed}"
   _seed=$((_seed + 1))
 done
 HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+# The exact command the ship script uses for S, against the fixture.
+FIXTURE_STAMP="$(cd "$REPO" && TZ=America/Chicago git show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD)"
+if [[ "$FIXTURE_STAMP" != "$S_STAMP" ]]; then
+  echo "FATAL: fixture stamp is ${FIXTURE_STAMP}, want ${S_STAMP}" >&2
+  exit 1
+fi
 # Owner directive 2026-10-24 (AFC-517): the build number starts from the commit
 # count.  Read the count from the fixture instead of hard-coding it, so adding
 # a seed commit to the fixture cannot silently stale the assertions.
@@ -243,6 +262,7 @@ run_ship() {
     FAKE_ASC_FLOOR="$FAKE_ASC_FLOOR" \
     FAKE_RELEASED="${FAKE_RELEASED:-}" \
     FAKE_SHARED="${FAKE_SHARED:-}" \
+    FAKE_PLATFORM_MAX="${FAKE_PLATFORM_MAX:-}" \
     FAKE_ASC_TRAIN_FLOOR="${FAKE_ASC_TRAIN_FLOOR:-}" \
     FAKE_ASC_APP_FLOOR="${FAKE_ASC_APP_FLOOR:-}" \
     FAKE_ASC_ARGS_LOG="${FAKE_ASC_ARGS_LOG:-}" \
@@ -544,6 +564,16 @@ check "the marketing patch query is asked for" \
   "$(grep -q 'latest-marketing-patch' "$SHIP" && echo 0 || echo 1)"
 check "the build floor query is asked for" \
   "$(grep -q 'build-floor' "$SHIP" && echo 0 || echo 1)"
+check "the merge-stamp build is planned through plan-release-build" \
+  "$(grep -q 'plan-release-build' "$SHIP" && echo 0 || echo 1)"
+check "an explicit fixed --build is checked against platform-max-build" \
+  "$(grep -q 'platform-max-build' "$SHIP" && echo 0 || echo 1)"
+check "the merge stamp comes from the exact HEAD committer-date command" \
+  "$(grep -q -F 'TZ=America/Chicago git show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD' "$SHIP" && echo 0 || echo 1)"
+check "the fixed build accepts only 12-digit stamps" \
+  "$(grep -q -F '^[1-9][0-9]{11}$' "$SHIP" && echo 0 || echo 1)"
+check "no four-digit counter wording survives in the ship script" \
+  "$(grep -q 'four-digit' "$SHIP" && echo 1 || echo 0)"
 echo
 
 # --- rejected API key -----------------------------------------------------
@@ -559,7 +589,7 @@ check "plans no version around it" "$(contains 'UNVERIFIED patch' && echo 1 || e
 FAKE_ASC_PATCH=236
 echo
 
-echo "12. fixed marketing version + shared four-digit build (apps.json fixedMarketingVersion)"
+echo "12. fixed marketing version + shared merge-stamp build (apps.json fixedMarketingVersion)"
 FIXDIR="${WORK}/fleet-fixed"
 rm -rf "$FIXDIR"; cp -R "$HERE" "$FIXDIR"
 python3 - "$FIXDIR/apps.json" <<'PY'
@@ -579,29 +609,30 @@ FIXAPP="$APP_KEY"
 SHIP_REAL="$SHIP"; SHIP="${FIXDIR}/ship-testflight.sh"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 write_record "$FIXAPP" 5
-FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=2383; FAKE_RELEASED=""; FAKE_SHARED="1000"
+FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=2383; FAKE_RELEASED=""; FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
 planned_pair
 check "fixed: marketing stays 1.1.2 even though ASC holds patch 239 (got '${PLANNED_MARKETING}')" \
   "$([[ "$PLANNED_MARKETING" == "1.1.2" ]] && echo 0 || echo 1)"
-check "fixed: an empty inventory plans the first shared four-digit build (got '${PLANNED_BUILD}')" \
-  "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+check "fixed: a fresh inventory plans the merge stamp itself (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 check "fixed: the integer floor and commit count play no part" \
-  "$(contains 'shared four-digit build 1000 for fixed version 1.1.2' && echo 0 || echo 1)"
-FAKE_SHARED="1001"
+  "$(contains "merge-stamp build ${S_STAMP} for fixed version 1.1.2" && echo 0 || echo 1)"
+ABOVE_STAMP="202610291200"
+FAKE_SHARED="$ABOVE_STAMP"
 run_ship --dry-run
 planned_pair
-check "fixed: a counter holding 1000 goes to 1001 (got '${PLANNED_BUILD}')" \
-  "$([[ "$PLANNED_BUILD" == "1001" ]] && echo 0 || echo 1)"
+check "fixed: an inventory above the stamp plans above it (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "$ABOVE_STAMP" ]] && echo 0 || echo 1)"
 FAKE_SHARED="fail"
 run_ship --dry-run
 check "fixed: an unreadable or exhausted inventory stops the run, nothing guessed" \
-  "$(contains 'cannot work out the next shared four-digit build' && echo 0 || echo 1)"
+  "$(contains 'cannot work out the next merge-stamp build' && echo 0 || echo 1)"
 FAKE_SHARED=""
 run_ship --dry-run
 check "fixed: an unreadable inventory stops the run" \
-  "$(contains 'cannot work out the next shared four-digit build' && echo 0 || echo 1)"
-FAKE_SHARED="1000"; FAKE_RELEASED="1.1.2"
+  "$(contains 'cannot work out the next merge-stamp build' && echo 0 || echo 1)"
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED="1.1.2"
 run_ship --dry-run
 check "fixed: a version at the released App Store version is refused, not bumped" \
   "$(contains 'at or below the released App Store version 1.1.2' && echo 0 || echo 1)"
@@ -609,28 +640,56 @@ FAKE_RELEASED="fail"
 run_ship --dry-run
 check "fixed: an unreadable released App Store version stops the run (fail closed)" \
   "$(contains 'cannot read the released App Store version' && echo 0 || echo 1)"
-FAKE_SHARED="1000"; FAKE_RELEASED=""
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""; FAKE_PLATFORM_MAX="0"
 run_ship --dry-run --build 7
-check "fixed: a non-four-digit --build is refused" \
-  "$(contains 'fixed mode requires a four-digit build' && echo 0 || echo 1)"
+check "fixed: a one-digit --build is refused" \
+  "$(contains 'fixed mode requires a 12-digit' && echo 0 || echo 1)"
 run_ship --dry-run --build 999
 check "fixed: a three-digit --build is refused" \
-  "$(contains 'fixed mode requires a four-digit build' && echo 0 || echo 1)"
+  "$(contains 'fixed mode requires a 12-digit' && echo 0 || echo 1)"
+run_ship --dry-run --build 20261029093
+check "fixed: an 11-digit --build is refused" \
+  "$(contains 'fixed mode requires a 12-digit' && echo 0 || echo 1)"
+run_ship --dry-run --build 2026102909301
+check "fixed: a 13-digit --build is refused" \
+  "$(contains 'fixed mode requires a 12-digit' && echo 0 || echo 1)"
+run_ship --dry-run --build 022610290930
+check "fixed: a leading-zero --build is refused" \
+  "$(contains 'fixed mode requires a 12-digit' && echo 0 || echo 1)"
 run_ship --dry-run --build 1.1.9
 check "fixed: a dotted --build is refused" \
-  "$(contains 'fixed mode requires a four-digit build' && echo 0 || echo 1)"
-run_ship --dry-run --build 1000
+  "$(contains 'fixed mode requires a 12-digit' && echo 0 || echo 1)"
+FAKE_PLATFORM_MAX="202610290929"
+run_ship --dry-run --build "$S_STAMP"
 planned_pair
-check "fixed: a four-digit --build at the planned minimum is honoured (got '${PLANNED_BUILD}')" \
-  "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
-FAKE_SHARED="1001"
-run_ship --dry-run --build 1000
-check "fixed: a --build below the planned minimum is refused" \
-  "$(contains 'below the planned four-digit minimum 1001' && echo 0 || echo 1)"
+check "fixed: a 12-digit --build above this platform's max is honoured (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
+FAKE_PLATFORM_MAX="$S_STAMP"
+run_ship --dry-run --build "$S_STAMP"
+check "fixed: a --build at this platform's max is refused" \
+  "$(contains "at or below this platform's highest build ${S_STAMP}" && echo 0 || echo 1)"
+FAKE_PLATFORM_MAX="202610290931"
+run_ship --dry-run --build "$S_STAMP"
+check "fixed: a --build below this platform's max is refused" \
+  "$(contains "at or below this platform's highest build 202610290931" && echo 0 || echo 1)"
+# The --build path never consults the shared (paired-inclusive) plan: even
+# though FAKE_SHARED sits above this --build, the value is honoured because
+# it clears THIS platform's max.  That is what lets the paired platform of
+# one release carry the same build number.
+FAKE_SHARED="202610290935"; FAKE_PLATFORM_MAX="$S_STAMP"
+run_ship --dry-run --build 202610290931
+planned_pair
+check "fixed: a --build equal to the paired platform's build is honoured (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "202610290931" ]] && echo 0 || echo 1)"
+FAKE_PLATFORM_MAX=""
+run_ship --dry-run --build 202610290931
+check "fixed: a --build with an unreadable this-platform floor stops the run" \
+  "$(contains "cannot verify this platform's build floor" && echo 0 || echo 1)"
+FAKE_SHARED="$S_STAMP"; FAKE_PLATFORM_MAX="0"
 run_ship --dry-run --version 1.1.2
 planned_pair
 check "fixed: --version equal to the fixed version stays in fixed mode (got '${PLANNED_BUILD}')" \
-  "$([[ "$PLANNED_BUILD" == "1001" ]] && echo 0 || echo 1)"
+  "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 python3 - "$FIXDIR/apps.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -646,19 +705,68 @@ d["apps"]["fixmac"] = {
 }
 json.dump(d, open(p, "w"), indent=2)
 PY
-FAKE_SHARED="1000"; FAKE_RELEASED=""
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""
 rm -f "${STATE}/build-seq-fixmac.txt" "${STATE}/last-ship-fixmac.txt"
 APP_KEY_SAVED="$APP_KEY"; APP_KEY="fixmac"
 run_ship --dry-run
 planned_pair
 check "fixed macOS: marketing stays 1.1.2 (got '${PLANNED_MARKETING}')" \
   "$([[ "$PLANNED_MARKETING" == "1.1.2" ]] && echo 0 || echo 1)"
-check "fixed macOS: plans the shared four-digit build instead of refusing (got '${PLANNED_BUILD}')" \
-  "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
-check "fixed macOS: logs the shared counter line" \
-  "$(contains 'shared four-digit build 1000 for fixed version 1.1.2' && echo 0 || echo 1)"
+check "fixed macOS: plans the merge-stamp build instead of refusing (got '${PLANNED_BUILD}')" \
+  "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
+check "fixed macOS: logs the shared build line" \
+  "$(contains "merge-stamp build ${S_STAMP} for fixed version 1.1.2" && echo 0 || echo 1)"
 APP_KEY="$APP_KEY_SAVED"
-SHIP="$SHIP_REAL"; FAKE_ASC_FLOOR=0; FAKE_RELEASED=""; FAKE_SHARED=""; FAKE_ASC_PATCH=236
+# The HEAD stamp reaches plan-release-build exactly as --merge-stamp, and
+# --plan-build-only prints the bare planned build for the CI plan step.
+FAKE_ASC_ARGS_LOG="${WORK}/asc-args12.log"
+: >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""; FAKE_PLATFORM_MAX="0"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+run_ship --dry-run
+check "the HEAD stamp is passed to plan-release-build as --merge-stamp" \
+  "$(grep -q -- '--merge-stamp' "$FAKE_ASC_ARGS_LOG" && grep -q "$S_STAMP" "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "plan-release-build is the fixed-mode planner" \
+  "$(grep -q 'plan-release-build' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+run_ship --plan-build-only
+check "plan-build-only exits 0" "$([[ $RC -eq 0 ]] && echo 0 || echo 1)"
+check "plan-build-only reports the planned build" \
+  "$(contains "plan-build-only: marketing=1.1.2 build=${S_STAMP}" && echo 0 || echo 1)"
+check "plan-build-only never reaches the archive" \
+  "$(contains 'fake xcodebuild' && echo 1 || echo 0)"
+OUT_PLAN="$(env -i \
+  HOME="$FAKE_HOME" \
+  PATH="${FAKE_BIN}:/usr/bin:/bin:/usr/sbin:/sbin" \
+  TMPDIR="${WORK}/tmp" \
+  LANG=C \
+  IOS_FLEET_STATE_DIR="$STATE" \
+  CLUTCH_TEST_REAL_NODE="$REAL_NODE" \
+  ASC_KEY_ID=fakekeyid \
+  ASC_ISSUER_ID=fakeissuerid \
+  ASC_KEY_P8="$FAKE_KEY" \
+  IOS_FLEET_NODE="${FAKE_BIN}/node" \
+  FAKE_SHARED="$S_STAMP" \
+  FAKE_RELEASED="" \
+  bash "$SHIP" "$APP_KEY" --repo-root "$REPO" --plan-build-only 2>"${WORK}/plan-err.log")"
+PLAN_RC=$?
+check "plan-build-only prints the bare planned build on stdout (got '${OUT_PLAN}')" \
+  "$([[ "$PLAN_RC" -eq 0 && "$OUT_PLAN" == "$S_STAMP" ]] && echo 0 || echo 1)"
+FAKE_SHARED="fail"
+run_ship --plan-build-only
+check "plan-build-only fails closed on an unreadable inventory (rc=${RC})" \
+  "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "plan-build-only names the failure" \
+  "$(contains 'cannot work out the next merge-stamp build' && echo 0 || echo 1)"
+FAKE_SHARED="$S_STAMP"
+run_ship --plan-build-only --build "$S_STAMP"
+check "plan-build-only refuses --build" \
+  "$(contains 'cannot be combined with --build' && echo 0 || echo 1)"
+SHIP_SAVED_PLAN="$SHIP"; SHIP="${LEGACY_DIR}/ship-testflight.sh"
+run_ship --plan-build-only
+check "plan-build-only refuses an app with no fixed version" \
+  "$(contains 'needs a fixed marketing version' && echo 0 || echo 1)"
+SHIP="$SHIP_SAVED_PLAN"
+SHIP="$SHIP_REAL"; FAKE_ASC_FLOOR=0; FAKE_RELEASED=""; FAKE_SHARED=""; FAKE_ASC_PATCH=236; FAKE_PLATFORM_MAX=""; FAKE_ASC_ARGS_LOG=""
 echo
 
 echo "13. paired feed timeout/failure fails closed; paired-bundle passthrough"
@@ -707,14 +815,14 @@ FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1000"; FAKE_RELEASED=""; FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=0
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""; FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=0
 run_ship --dry-run
 check "feed timeout fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
-check "feed timeout names the shared-build failure" "$(contains 'cannot work out the next shared four-digit build' && echo 0 || echo 1)"
+check "feed timeout names the shared-build failure" "$(contains 'cannot work out the next merge-stamp build' && echo 0 || echo 1)"
 check "feed timeout logs the feed URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
 check "feed timeout logs curl stderr, not an ASC failure" "$(contains 'timed out' && echo 0 || echo 1)"
 check "feed curl is bounded with connect/max timeouts" "$(grep -q -- '--connect-timeout 10' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--max-time 30' "$FAKE_CURL_ARGS_LOG" && echo 0 || echo 1)"
-check "feed failure never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+check "feed failure never reaches plan-release-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
@@ -735,19 +843,25 @@ printf '%s' '<rss><channel><item><sparkle:version>1400</sparkle:version></item><
 exit 0
 FAKE
 chmod +x "${FAKE_BIN}/curl"
-TRIPLE="$("$REAL_NODE" --input-type=module -e "
+TRIPLE_HIGH="$("$REAL_NODE" --input-type=module -e "
 import {nextSharedBuild} from 'file://${HERE}/shared-build.mjs';
-const r = nextSharedBuild({iosBuilds: ['1100'], macBuilds: ['1200'], extraFloors: [1500], complete: true});
+const r = nextSharedBuild({iosBuilds: ['202610190645'], macBuilds: ['1200'], extraFloors: [1500], complete: true, mergeStamp: '202501010000'});
 process.stdout.write(r.build);
 ")"
-check "stub-ASC contract: planner triple iOS 1100 + mac 1200 + floor 1500 is 1501 (got '${TRIPLE}')" "$([[ "$TRIPLE" == "1501" ]] && echo 0 || echo 1)"
+check "stub-ASC contract: planner triple iOS 202610190645 + mac 1200 + floor 1500 under stamp 202501010000 is 202610190646 (got '${TRIPLE_HIGH}')" "$([[ "$TRIPLE_HIGH" == "202610190646" ]] && echo 0 || echo 1)"
+TRIPLE_STAMP="$("$REAL_NODE" --input-type=module -e "
+import {nextSharedBuild} from 'file://${HERE}/shared-build.mjs';
+const r = nextSharedBuild({iosBuilds: ['1100'], macBuilds: ['1200'], extraFloors: [1500], complete: true, mergeStamp: '202610290930'});
+process.stdout.write(r.build);
+")"
+check "stub-ASC contract: planner triple iOS 1100 + mac 1200 + floor 1500 under stamp 202610290930 is the stamp (got '${TRIPLE_STAMP}')" "$([[ "$TRIPLE_STAMP" == "202610290930" ]] && echo 0 || echo 1)"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="$TRIPLE"
+FAKE_SHARED="$TRIPLE_HIGH"
 run_ship --dry-run
 planned_pair
-check "feed max is passed as the floor to next-shared-build" "$(grep -q '1500' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "feed floor plans the planner result (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$TRIPLE" ]] && echo 0 || echo 1)"
+check "feed max is passed as the floor to plan-release-build" "$(grep -q '1500' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "feed floor plans the planner result (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$TRIPLE_HIGH" ]] && echo 0 || echo 1)"
 python3 - "$PAIRDIR/apps.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -760,9 +874,9 @@ PY
 rm -f "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1000"
+FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
-check "pairedBundleId is passed to next-shared-build" "$(grep -q 'codes.clutch.mac' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "pairedBundleId is passed to plan-release-build" "$(grep -q 'codes.clutch.mac' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
 python3 - "$PAIRDIR/apps.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -774,7 +888,7 @@ PY
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_ASC_ARGS_LOG"
 run_ship --dry-run
-check "macBundleId alias is passed to next-shared-build" "$(grep -q 'codes.clutch.mac-legacy' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "macBundleId alias is passed to plan-release-build" "$(grep -q 'codes.clutch.mac-legacy' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
 python3 - "$PAIRDIR/apps.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -790,11 +904,11 @@ check "pairedBundleId wins over macBundleId" "$(grep -q 'codes.clutch.mac' "$FAK
 APP_KEY_SAVED_13="$APP_KEY"; APP_KEY="pairmac"
 rm -f "${STATE}/build-seq-pairmac.txt" "${STATE}/last-ship-pairmac.txt"
 : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1000"; FAKE_RELEASED=""
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""
 run_ship --dry-run
 planned_pair
 check "macOS paired id is the iOS bundle id" "$(grep -q 'codes.clutch.ios' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "macOS paired entry plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+check "macOS paired entry plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 APP_KEY="$APP_KEY_SAVED_13"
 clear_record "clutch"
 SHIP="$SHIP_SAVED_13"; FAKE_ASC_ARGS_LOG=""; FAKE_CURL_ARGS_LOG=""
@@ -845,11 +959,11 @@ FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1501"; FAKE_RELEASED=""; FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=0
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""; FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=0
 run_ship --dry-run
 planned_pair
 check "whitespace-padded sparkle versions still yield the max floor" "$(grep -q '1500' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "whitespace-padded feed plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1501" ]] && echo 0 || echo 1)"
+check "whitespace-padded feed plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 check "feed curl pins https and its redirects" "$(grep -q -- '--proto =https' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--proto-redir =https' "$FAKE_CURL_ARGS_LOG" && echo 0 || echo 1)"
 check "feed curl bounds size and time" "$(grep -q -- '--max-filesize 5000000' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--connect-timeout 10' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--max-time 30' "$FAKE_CURL_ARGS_LOG" && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
@@ -861,12 +975,12 @@ FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1000"
+FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
 check "empty feed fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
 check "empty feed message names the tag it looked for" "$(contains 'holds no numeric <sparkle:version>' && echo 0 || echo 1)"
 check "empty feed message names the URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
-check "empty feed never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+check "empty feed never reaches plan-release-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
 HTTP_FEED_URL="http://example.invalid/appcast.xml"
 python3 - "$ROUND2DIR/apps.json" "$HTTP_FEED_URL" <<'PY'
 import json, sys
@@ -884,13 +998,13 @@ FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1000"
+FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
 check "non-https feed fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
 check "non-https feed names the URL" "$(contains "$HTTP_FEED_URL" && echo 0 || echo 1)"
 check "non-https feed says https is required" "$(contains 'must start with https://' && echo 0 || echo 1)"
 check "non-https feed never reaches curl" "$([[ ! -s "$FAKE_CURL_ARGS_LOG" ]] && echo 0 || echo 1)"
-check "non-https feed never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+check "non-https feed never reaches plan-release-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
 python3 - "$ROUND2DIR/apps.json" "$FEED_URL" <<'PY'
 import json, sys
 p, url = sys.argv[1], sys.argv[2]
@@ -907,11 +1021,11 @@ FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
-check "feed floor 9999 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
-check "feed floor 9999 names the URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
-check "feed floor 9999 says outside 1..9998" "$(contains 'outside 1..9998' && echo 0 || echo 1)"
-check "feed floor 9999 never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+planned_pair
+check "feed floor 9999 is accepted as the floor" "$(grep -q '9999' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "feed floor 9999 plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
@@ -921,9 +1035,11 @@ FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
-check "feed floor 202610190645 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
-check "feed floor 202610190645 says outside 1..9998" "$(contains 'outside 1..9998' && echo 0 || echo 1)"
+planned_pair
+check "feed floor 202610190645 is accepted as the floor" "$(grep -q '202610190645' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "feed floor 202610190645 plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
@@ -935,21 +1051,34 @@ rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
 run_ship --dry-run
 check "feed floor 0 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
-check "feed floor 0 says outside 1..9998" "$(contains 'outside 1..9998' && echo 0 || echo 1)"
+check "feed floor 0 says outside 1..18 digits" "$(contains 'outside 1..18 digits' && echo 0 || echo 1)"
 cat >"${FAKE_BIN}/curl" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
-printf '%s' '<rss><channel><item><sparkle:version>9998</sparkle:version></item></channel></rss>'
+printf '%s' '<rss><channel><item><sparkle:version>202610290930000001</sparkle:version></item></channel></rss>'
 exit 0
 FAKE
 chmod +x "${FAKE_BIN}/curl"
 rm -f "$SEQ_FILE" "$SHIP_FILE"
 : >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="9999"
+FAKE_SHARED="$S_STAMP"
 run_ship --dry-run
 planned_pair
-check "feed floor 9998 is accepted as the floor" "$(grep -q '9998' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "feed floor 9998 plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "9999" ]] && echo 0 || echo 1)"
+check "an 18-digit feed floor is accepted as the floor" "$(grep -q '202610290930000001' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "an 18-digit feed floor plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>2026102909300000011</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "a 19-digit feed floor fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "a 19-digit feed floor says outside 1..18 digits" "$(contains 'outside 1..18 digits' && echo 0 || echo 1)"
+check "a 19-digit feed floor never reaches plan-release-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
 python3 - "$ROUND2DIR/apps.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -968,11 +1097,11 @@ chmod +x "${FAKE_BIN}/curl"
 APP_KEY_SAVED_14="$APP_KEY"; APP_KEY="lonelymac"
 rm -f "${STATE}/build-seq-lonelymac.txt" "${STATE}/last-ship-lonelymac.txt"
 : >"$FAKE_ASC_ARGS_LOG"
-FAKE_SHARED="1000"; FAKE_RELEASED=""
+FAKE_SHARED="$S_STAMP"; FAKE_RELEASED=""
 run_ship --dry-run
 planned_pair
 check "macOS entry without a paired id reverse-pairs to the iOS bundle id" "$(grep -q 'codes.clutch.ios' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "reverse-paired macOS entry plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+check "reverse-paired macOS entry plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 python3 - "$ROUND2DIR/apps.json" <<'PY'
 import json, sys
 p = sys.argv[1]
@@ -997,7 +1126,7 @@ rm -f "${STATE}/build-seq-lonelymac.txt" "${STATE}/last-ship-lonelymac.txt"
 run_ship --dry-run
 planned_pair
 check "macOS entry with no referrer passes no paired id" "$(! grep -q 'codes.clutch' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
-check "unpaired macOS entry still plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+check "unpaired macOS entry still plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$S_STAMP" ]] && echo 0 || echo 1)"
 APP_KEY="$APP_KEY_SAVED_14"
 clear_record "clutch"
 rm -f "${FAKE_BIN}/curl"

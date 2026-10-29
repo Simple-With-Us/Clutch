@@ -10,6 +10,9 @@
 #                      commit count, raised above the App Store Connect floor)
 #   --version X.Y.Z    Force MARKETING_VERSION (exact; default: the next patch
 #                      on the app's train)
+#   --plan-build-only  Print the planned fixed-mode build and exit (read-only;
+#                      the CI plan-build step; same code path as the automatic
+#                      fixed-mode build)
 #   --export-only      Build IPA only; do not upload
 #   --upload-only IPA  Skip archive; upload an existing IPA via ASC API key
 #   --dry-run          Print plan and exit
@@ -167,6 +170,7 @@ ALLOW_DIRTY=0
 FORCE_SHIP=0
 ALLOW_UNVERIFIED_SEQ=0
 SYNC_PROJECT_VERSION=0
+PLAN_BUILD_ONLY=0
 
 die() { echo "error: $*" >&2; exit 1; }
 log() { echo "[ios-ship] $*"; }
@@ -649,21 +653,36 @@ asc_credential_available() {
   return 1
 }
 
-# The next shared four-digit build for a fixed marketing version (owner, Oct 28 2026):
-# ONE counter per app across iOS and macOS: max(every iOS build on ALL trains,
-# every macOS build, every extra floor, 999) + 1, floored at 1000.  Prints the
-# build on stdout.  Returns 1 (and prints nothing on stdout) when it cannot be
-# worked out.  Feed failures are logged with the feed URL so they are not
-# mistaken for App Store Connect failures.  A non-https feed, a feed whose max
-# sits outside 1..9998, and a feed with no numeric version all fail closed;
-# a configured feed is never silently treated as "no floor".
+# The next shared MERGE-TIMESTAMP build for a fixed marketing version (owner,
+# Oct 29 2026): build = max(S, M + 1), a plain integer.  S is the committer
+# date of HEAD in America/Chicago as YYYYMMDDHHMM; M is the highest first
+# numeric component among every build of the app and its paired app on iOS and
+# macOS (all trains, expired included, old timestamp-style builds included)
+# plus every extra floor.  A rebuild of the same commit still goes up.
+# Prints the build on stdout.  Returns 1 (and prints nothing on stdout) when
+# it cannot be worked out.  Feed failures are logged with the feed URL so they
+# are not mistaken for App Store Connect failures.  A non-https feed, a feed
+# with no numeric version, and a floor below 1 or above 18 digits all fail
+# closed; a configured feed is never silently treated as "no floor".
 asc_next_shared_build() {
-  local out rc mac_id feed feed_xml feed_err_file feed_err max max_digits floor
+  local out rc mac_id feed feed_xml feed_err_file feed_err max max_digits floor merge_stamp
+  local -a plan_args
   command -v "$ASC_NODE" >/dev/null 2>&1 || return 1
   # Not load_secrets: this helper runs inside command substitutions, where a
   # secrets temp dir and its EXIT trap die with the subshell and leave the
   # key behind.  asc-api.mjs resolves its own credential.
   asc_credential_available || return 1
+  # S: the committer date of the commit being built, in the owner's timezone.
+  # The command is exact: TZ=America/Chicago git show -s --format=%cd
+  # --date=format-local:%Y%m%d%H%M HEAD (run with REPO_ROOT as cwd).
+  merge_stamp="$(cd "$REPO_ROOT" 2>/dev/null && TZ=America/Chicago git show -s --format=%cd --date=format-local:%Y%m%d%H%M HEAD 2>/dev/null)" || {
+    logerr "asc-next-shared-build: cannot read the committer date of HEAD"
+    return 1
+  }
+  if [[ ! "$merge_stamp" =~ ^[1-9][0-9]{11}$ ]]; then
+    logerr "asc-next-shared-build: HEAD committer date did not yield a 12-digit stamp"
+    return 1
+  fi
   mac_id="$(json_get "$APP_KEY" pairedBundleId 2>/dev/null || true)"
   [[ "$mac_id" == "null" ]] && mac_id=""
   if [[ -z "$mac_id" ]]; then
@@ -720,22 +739,50 @@ asc_next_shared_build() {
       logerr "asc-next-shared-build: pairedBuildFeed $feed holds no numeric <sparkle:version>; failing closed"
       return 1
     fi
-    # A feed max outside 1..9998 cannot yield a valid four-digit build, so it
-    # fails closed; it is never clamped into range.  The length check runs
-    # first so the arithmetic below only ever sees at most four digits.
+    # The feed floor is https-only (checked above), numeric (checked above),
+    # >= 1 and <= 18 digits.  Anything else fails closed; it is never clamped
+    # into range.
     max_digits="$(printf '%s' "$max" | sed 's/^0*//')"
     [[ -z "$max_digits" ]] && max_digits="0"
-    if [[ "${#max_digits}" -gt 4 || "$max_digits" -lt 1 || "$max_digits" -gt 9998 ]]; then
-      logerr "asc-next-shared-build: pairedBuildFeed $feed floor $max outside 1..9998; failing closed"
+    if [[ "$max_digits" == "0" || "${#max_digits}" -gt 18 ]]; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed floor $max outside 1..18 digits; failing closed"
       return 1
     fi
     floor="$max"
   fi
+  plan_args=("$BUNDLE_ID")
+  [[ -n "$mac_id" ]] && plan_args+=("$mac_id")
+  [[ -n "$floor" ]] && plan_args+=("$floor")
+  plan_args+=(--merge-stamp "$merge_stamp")
+  [[ -n "${APPLE_ID:-}" ]] && plan_args+=(--apple-id "$APPLE_ID")
   set +e
-  out=$(asc_client next-shared-build "$BUNDLE_ID" "$mac_id" "$floor" "${APPLE_ID:-}")
+  out=$(asc_client plan-release-build "${plan_args[@]}")
   rc=$?
   set -e
-  [[ $rc -eq 0 && "$out" =~ ^[1-9][0-9]{3}$ ]] || return 1
+  [[ $rc -eq 0 && "$out" =~ ^[1-9][0-9]{11}$ ]] || return 1
+  printf '%s' "$out"
+}
+
+# The highest first numeric component among the builds of THIS app record on
+# THIS platform (all trains, expired included): the floor an explicit --build
+# in fixed mode must clear.  The paired platform is deliberately NOT
+# consulted, so both platforms of one release can carry the same build number.
+# Prints the max (0 when the platform holds no builds).  Returns 1 (and prints
+# nothing on stdout) when it cannot be worked out.
+asc_this_platform_max() {
+  local out rc
+  command -v "$ASC_NODE" >/dev/null 2>&1 || return 1
+  # Not load_secrets: same command-substitution reason as asc_next_shared_build.
+  asc_credential_available || return 1
+  set +e
+  if [[ -n "${APPLE_ID:-}" ]]; then
+    out=$(asc_client platform-max-build "$BUNDLE_ID" "$ASC_PLATFORM" "$APPLE_ID")
+  else
+    out=$(asc_client platform-max-build "$BUNDLE_ID" "$ASC_PLATFORM")
+  fi
+  rc=$?
+  set -e
+  [[ $rc -eq 0 && "$out" =~ ^[0-9]+$ ]] || return 1
   printf '%s' "$out"
 }
 
@@ -1029,6 +1076,7 @@ while [[ $# -gt 0 ]]; do
     --force-ship) FORCE_SHIP=1; shift ;;
     --allow-unverified-seq) ALLOW_UNVERIFIED_SEQ=1; shift ;;
     --sync-project-version) SYNC_PROJECT_VERSION=1; shift ;;
+    --plan-build-only) PLAN_BUILD_ONLY=1; shift ;;
     -h|--help) usage ;;
     -*) die "unknown option: $1 (try --help)" ;;
     *)
@@ -1051,6 +1099,10 @@ _EARLY_SCHEME="$(json_get "$APP_KEY" scheme)"
 _EARLY_PROJECT="$(json_get "$APP_KEY" projectRel)"
 [[ -n "$_EARLY_BUNDLE" && -n "$_EARLY_SCHEME" && -n "$_EARLY_PROJECT" ]] || die "unknown app key or incomplete registry: $APP_KEY"
 
+# --plan-build-only prints one build number and never archives, so it needs no
+# Xcode toolchain.  The preamble below is skipped for it, which also keeps
+# plan-only stdout to the bare build number.
+if [[ "$PLAN_BUILD_ONLY" -eq 0 ]]; then
 # Prefer stable Xcode.app over Xcode-beta for TestFlight / ASC compatibility.
 # Beta toolchains + beta macOS stamp BuildMachineOSBuild that App Store review
 # rejects as INVALID_BINARY even when TestFlight accepts the same IPA.
@@ -1067,7 +1119,6 @@ if [[ -n "${DEVELOPER_DIR:-}" ]]; then
 fi
 
 need_cmd xcodebuild
-need_cmd /usr/bin/python3
 
 # Owner 2026-08-11: always use stable Xcode.app for archive/export/upload.
 # Xcode-beta breaks TestFlight / App Store Connect tooling compatibility.
@@ -1081,6 +1132,8 @@ if [[ -n "${DEVELOPER_DIR:-}" ]]; then
   log "using DEVELOPER_DIR=${DEVELOPER_DIR}"
   xcodebuild -version || die "xcodebuild broken under DEVELOPER_DIR=${DEVELOPER_DIR}"
 fi
+fi
+need_cmd /usr/bin/python3
 
 
 if [[ -z "$REPO_ROOT" ]]; then
@@ -1098,17 +1151,20 @@ PROJECT_REL="$(json_get "$APP_KEY" projectRel)"
 PROJECT_REL_ALT="$(json_get "$APP_KEY" projectRelAlt)"
 XCODEGEN_DIR="$(json_get "$APP_KEY" xcodegenDir)"
 DEFAULT_MARKETING="$(json_get "$APP_KEY" marketingVersionDefault)"
-# Optional fixed-version policy (owner, Oct 28 2026): the marketing version does
-# not count up per ship; the build is one shared four-digit counter per app
-# across iOS and macOS (see asc-api.mjs next-shared-build and shared-build.mjs).
+# Optional fixed-version policy (owner, Oct 29 2026): the marketing version does
+# not count up per ship; the build is one shared MERGE-TIMESTAMP build per app
+# across iOS and macOS: max(S, M + 1) (see asc-api.mjs plan-release-build and
+# shared-build.mjs).  S is the committer date of HEAD in America/Chicago as
+# YYYYMMDDHHMM; M is the highest first numeric component among every build of
+# the app and its paired app on both platforms plus every extra floor.
 # apps.json keys: fixedMarketingVersion ("1.1.2"), optional pairedBundleId (the
-# paired app whose iOS and macOS builds join the counter; macBundleId is an
+# paired app whose iOS and macOS builds join the inventory; macBundleId is an
 # accepted alias), optional pairedBuildFeed (a Sparkle appcast URL whose max
-# <sparkle:version> joins the counter).  For a macOS entry the paired id is the
+# <sparkle:version> joins as a floor).  For a macOS entry the paired id is the
 # iOS entry's bundle id; a macOS entry with no paired id of its own is paired
 # by reverse lookup (the entry whose pairedBundleId/macBundleId names this
 # entry's bundle id).  Absent fixedMarketingVersion keeps the next-patch
-# behaviour.  Fixed mode works on both platforms: the counter sits above every
+# behaviour.  Fixed mode works on both platforms: the build sits above every
 # Mac build, which is what macOS needs.
 FIXED_MARKETING="$(json_get "$APP_KEY" fixedMarketingVersion)"
 
@@ -1135,6 +1191,25 @@ if [[ "$APP_KEY" == "botfleet" && "$BUNDLE_ID" == "app.botfleet" ]]; then
 fi
 if [[ "$APP_KEY" == "botfleet" && "$BUNDLE_ID" != "app.botfleet.ios" ]]; then
   die "BotFleet ASC app is app.botfleet.ios (appleId 6820175685); refusing bundleId=${BUNDLE_ID}"
+fi
+
+# --plan-build-only is the read-only plan behind the CI plan-build step: it
+# prints the planned fixed-mode build on stdout and exits before the dirty
+# check, the gate, the archive, and any state.  Same code path as the
+# automatic fixed-mode build below.
+if [[ "$PLAN_BUILD_ONLY" -eq 1 ]]; then
+  [[ -n "$FIXED_MARKETING" ]] \
+    || die "--plan-build-only needs a fixed marketing version (fixedMarketingVersion for '${APP_KEY}' in ${APPS_JSON}); nothing planned"
+  [[ -z "$FORCE_BUILD" ]] \
+    || die "--plan-build-only cannot be combined with --build; nothing planned"
+  if [[ -n "$FORCE_VERSION" && "$FORCE_VERSION" != "$FIXED_MARKETING" ]]; then
+    die "--plan-build-only plans the fixed version ${FIXED_MARKETING}, not ${FORCE_VERSION}; nothing planned"
+  fi
+  BUILD_NUM="$(asc_next_shared_build)" \
+    || die "cannot work out the next merge-stamp build: incomplete inventory, unreadable HEAD date, or unusable floor; nothing planned"
+  echo "[ios-ship] plan-build-only: marketing=${FIXED_MARKETING} build=${BUILD_NUM}" >&2
+  printf '%s\n' "$BUILD_NUM"
+  exit 0
 fi
 
 if [[ -z "$UPLOAD_ONLY_IPA" && "$DRY_RUN" -eq 0 ]]; then
@@ -1315,9 +1390,21 @@ sys.exit(0 if a>b else 1)' "$FIXED_MARKETING" "$_rel"; then
   # ---- the build number ---------------------------------------------------
   if [[ -n "$FORCE_BUILD" ]]; then
     if [[ "$FIXED_MODE" -eq 1 ]]; then
-      [[ "$FORCE_BUILD" =~ ^[1-9][0-9]{3}$ ]] || die "fixed mode requires a four-digit build 1000..9999; nothing shipped"
-      _minimum="$(asc_next_shared_build)" || die "cannot verify four-digit build floor; nothing shipped"
-      [[ "$FORCE_BUILD" -ge "$_minimum" ]] || die "requested build is below the planned four-digit minimum ${_minimum}; nothing shipped"
+      [[ "$FORCE_BUILD" =~ ^[1-9][0-9]{11}$ ]] || die "fixed mode requires a 12-digit merge-stamp build (YYYYMMDDHHMM, first digit non-zero); nothing shipped"
+      _this_max="$(asc_this_platform_max)" || die "cannot verify this platform's build floor, so --build ${FORCE_BUILD} cannot be checked against it; nothing shipped"
+      # The paired platform may already carry this same build (one release, one
+      # value), so the check is strictly greater than THIS platform's max.
+      # Length-then-lexicographic: both sides are digit strings and bash
+      # arithmetic cannot hold an unbounded build number.
+      _this_norm="$(printf '%s' "$_this_max" | sed 's/^0*//')"
+      [[ -z "$_this_norm" ]] && _this_norm="0"
+      _above=0
+      if [[ "${#_this_norm}" -lt 12 ]]; then
+        _above=1
+      elif [[ "${#_this_norm}" -eq 12 && "$FORCE_BUILD" > "$_this_norm" ]]; then
+        _above=1
+      fi
+      [[ "$_above" -eq 1 ]] || die "requested build ${FORCE_BUILD} is at or below this platform's highest build ${_this_max} (${BUNDLE_ID} on ${ASC_PLATFORM}); nothing shipped"
     fi
     # An explicit --build is honoured exactly, and it does NOT move the
     # marketing version:  the two numbers are independent.
@@ -1330,8 +1417,8 @@ sys.exit(0 if a>b else 1)' "$FIXED_MARKETING" "$_rel"; then
     fi
     log "version: operator override (--build/--version); the local build-seq counter is not consulted"
   elif [[ "$FIXED_MODE" -eq 1 ]]; then
-    BUILD_NUM="$(asc_next_shared_build)" || die "cannot work out the next shared four-digit build: incomplete inventory or floor outside 1000..9999; nothing shipped"
-    log "build: shared four-digit build ${BUILD_NUM} for fixed version ${MARKETING}"
+    BUILD_NUM="$(asc_next_shared_build)" || die "cannot work out the next merge-stamp build: incomplete inventory, unreadable HEAD date, or unusable floor; nothing shipped"
+    log "build: merge-stamp build ${BUILD_NUM} for fixed version ${MARKETING}"
   else
     [[ "$PLAN_COMMIT_COUNT" =~ ^[0-9]+$ ]] || die "could not read the commit count from ${REPO_ROOT}; CFBundleVersion is the repo commit count and UTC timestamps are retired"
 

@@ -62,7 +62,7 @@ test("the four inventories are fetched concurrently", { timeout: 10000 }, async 
   assert.deepEqual(out, { iosBuilds: [], macBuilds: [] });
 });
 
-test("union feeds the shared counter from the highest build on either app", async () => {
+test("union feeds the shared build from the highest build on either app", async () => {
   const versions = {
     "app1/IOS": ["1100"],
     "app1/MAC_OS": ["1200"],
@@ -71,5 +71,27 @@ test("union feeds the shared counter from the highest build on either app", asyn
   };
   const fetchBuilds = async (appId, platform) => versions[`${appId}/${platform}`] || [];
   const out = await collectSharedBuilds({ fetchBuilds, appId: "app1", pairedAppId: "app2" });
-  assert.deepEqual(nextSharedBuild({ ...out, complete: true }), { build: "1401", ignoredIos: 0 });
+  assert.deepEqual(
+    nextSharedBuild({ ...out, complete: true, mergeStamp: "202610290930" }),
+    { build: "202610290930" }
+  );
+  assert.deepEqual(
+    nextSharedBuild({ ...out, complete: true, mergeStamp: "202501010000" }),
+    { build: "202501010000" }
+  );
+});
+
+test("union counts timestamp-style builds on either app", async () => {
+  const versions = {
+    "app1/IOS": ["202610190645"],
+    "app1/MAC_OS": [],
+    "app2/IOS": [],
+    "app2/MAC_OS": ["202610180127"]
+  };
+  const fetchBuilds = async (appId, platform) => versions[`${appId}/${platform}`] || [];
+  const out = await collectSharedBuilds({ fetchBuilds, appId: "app1", pairedAppId: "app2" });
+  assert.deepEqual(
+    nextSharedBuild({ ...out, complete: true, mergeStamp: "202501010000" }),
+    { build: "202610190646" }
+  );
 });

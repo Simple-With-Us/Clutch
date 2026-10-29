@@ -94,6 +94,10 @@ jobs:
     name: TestFlight archive + upload
     if: github.event.repository.fork == false && github.event_name != 'pull_request'
     runs-on: xcode-27
+    outputs:
+      # The one build number this release carries, planned once by the
+      # plan-build step below and handed to every platform ship of the release.
+      build: ${{ steps.plan.outputs.build }}
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
@@ -165,12 +169,27 @@ jobs:
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
 
+      - name: Plan release build (once per release)
+        id: plan
+        if: steps.gate.outputs.should_ship == '1'
+        run: |
+          build="$(bash scripts/ios-ship-testflight.sh --plan-build-only)"
+          case "$build" in
+            [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+            *)
+              echo "::error::plan-build-only printed no 12-digit build number"
+              exit 1
+              ;;
+          esac
+          echo "planned build for this release: ${build}"
+          echo "build=${build}" >>"$GITHUB_OUTPUT"
+
       - name: Ship Clutch to TestFlight
         if: steps.gate.outputs.should_ship == '1'
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
-        run: bash scripts/ios-ship-testflight.sh
+        run: bash scripts/ios-ship-testflight.sh --build "${{ steps.plan.outputs.build }}"
 
       - name: Sync standing TestFlight testers
         if: success() && steps.gate.outputs.should_ship == '1'
