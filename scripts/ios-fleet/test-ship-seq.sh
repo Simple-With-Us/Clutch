@@ -56,6 +56,7 @@ for a in d["apps"].values():
     a.pop("fixedMarketingVersion", None)
     a.pop("buildCountSeed", None)
     a.pop("macBundleId", None)
+    a.pop("pairedBundleId", None)
     a.pop("pairedBuildFeed", None)
 json.dump(d, open(p, "w"), indent=2)
 PY
@@ -135,6 +136,9 @@ case "$cmd" in
     exit 0
     ;;
   asc-api:next-shared-build)
+    if [[ -n "${FAKE_ASC_ARGS_LOG:-}" ]]; then
+      printf '%s\n' "$*" >>"$FAKE_ASC_ARGS_LOG"
+    fi
     [[ "${FAKE_SHARED:-}" == "fail" ]] && exit 3
     [[ -n "${FAKE_SHARED:-}" ]] || exit 2
     printf '%s\n' "$FAKE_SHARED"
@@ -241,6 +245,8 @@ run_ship() {
     FAKE_SHARED="${FAKE_SHARED:-}" \
     FAKE_ASC_TRAIN_FLOOR="${FAKE_ASC_TRAIN_FLOOR:-}" \
     FAKE_ASC_APP_FLOOR="${FAKE_ASC_APP_FLOOR:-}" \
+    FAKE_ASC_ARGS_LOG="${FAKE_ASC_ARGS_LOG:-}" \
+    FAKE_CURL_ARGS_LOG="${FAKE_CURL_ARGS_LOG:-}" \
     bash "$SHIP" "$APP_KEY" --repo-root "$REPO" "$@" 2>&1)
   RC=$?
   return 0
@@ -565,6 +571,7 @@ for k in list(a)[:1]:
     a[k]["fixedMarketingVersion"] = "1.1.2"
     a[k].pop("buildCountSeed", None)
     a[k].pop("macBundleId", None)
+    a[k].pop("pairedBundleId", None)
     a[k].pop("pairedBuildFeed", None)
 json.dump(d, open(p, "w"), indent=2)
 PY
@@ -652,6 +659,350 @@ check "fixed macOS: logs the shared counter line" \
   "$(contains 'shared four-digit build 1000 for fixed version 1.1.2' && echo 0 || echo 1)"
 APP_KEY="$APP_KEY_SAVED"
 SHIP="$SHIP_REAL"; FAKE_ASC_FLOOR=0; FAKE_RELEASED=""; FAKE_SHARED=""; FAKE_ASC_PATCH=236
+echo
+
+echo "13. paired feed timeout/failure fails closed; paired-bundle passthrough"
+PAIRDIR="${WORK}/fleet-paired"
+rm -rf "$PAIRDIR"; cp -R "$HERE" "$PAIRDIR"
+python3 - "$PAIRDIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+a = d["apps"]["clutch"]
+a["fixedMarketingVersion"] = "1.1.2"
+a.pop("pairedBundleId", None)
+a.pop("macBundleId", None)
+a.pop("pairedBuildFeed", None)
+d["apps"]["pairmac"] = {
+  "displayName": "Paired Mac",
+  "fixedMarketingVersion": "1.1.2",
+  "bundleId": "trade.example.pairmac",
+  "scheme": "PairMac",
+  "projectRel": "mac/PairMac.xcodeproj",
+  "platform": "macOS",
+  "marketingVersionDefault": "1.0.0",
+  "pairedBundleId": "codes.clutch.ios"
+}
+json.dump(d, open(p, "w"), indent=2)
+PY
+SHIP_SAVED_13="$SHIP"; SHIP="${PAIRDIR}/ship-testflight.sh"
+FEED_URL="https://example.invalid/appcast.xml"
+FAKE_ASC_ARGS_LOG="${WORK}/asc-args.log"
+FAKE_CURL_ARGS_LOG="${WORK}/curl-args.log"
+: >"$FAKE_ASC_ARGS_LOG"; : >"$FAKE_CURL_ARGS_LOG"
+write_record "$APP_KEY" 5
+python3 - "$PAIRDIR/apps.json" "$FEED_URL" <<'PY'
+import json, sys
+p, url = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+d["apps"]["clutch"]["pairedBuildFeed"] = url
+json.dump(d, open(p, "w"), indent=2)
+PY
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+echo "curl: (28) Operation timed out after 30001 ms" >&2
+exit 28
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1000"; FAKE_RELEASED=""; FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=0
+run_ship --dry-run
+check "feed timeout fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "feed timeout names the shared-build failure" "$(contains 'cannot work out the next shared four-digit build' && echo 0 || echo 1)"
+check "feed timeout logs the feed URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
+check "feed timeout logs curl stderr, not an ASC failure" "$(contains 'timed out' && echo 0 || echo 1)"
+check "feed curl is bounded with connect/max timeouts" "$(grep -q -- '--connect-timeout 10' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--max-time 30' "$FAKE_CURL_ARGS_LOG" && echo 0 || echo 1)"
+check "feed failure never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><title>no versions here</title></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "feed with no numeric version fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "feed with no numeric version logs the URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
+check "feed with no numeric version says so" "$(contains 'holds no numeric' && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>1400</sparkle:version></item><item><sparkle:version>1500</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+TRIPLE="$("$REAL_NODE" --input-type=module -e "
+import {nextSharedBuild} from 'file://${HERE}/shared-build.mjs';
+const r = nextSharedBuild({iosBuilds: ['1100'], macBuilds: ['1200'], extraFloors: [1500], complete: true});
+process.stdout.write(r.build);
+")"
+check "stub-ASC contract: planner triple iOS 1100 + mac 1200 + floor 1500 is 1501 (got '${TRIPLE}')" "$([[ "$TRIPLE" == "1501" ]] && echo 0 || echo 1)"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="$TRIPLE"
+run_ship --dry-run
+planned_pair
+check "feed max is passed as the floor to next-shared-build" "$(grep -q '1500' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "feed floor plans the planner result (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "$TRIPLE" ]] && echo 0 || echo 1)"
+python3 - "$PAIRDIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["apps"]["clutch"].pop("pairedBuildFeed", None)
+d["apps"]["clutch"]["pairedBundleId"] = "codes.clutch.mac"
+d["apps"]["clutch"].pop("macBundleId", None)
+json.dump(d, open(p, "w"), indent=2)
+PY
+rm -f "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1000"
+run_ship --dry-run
+check "pairedBundleId is passed to next-shared-build" "$(grep -q 'codes.clutch.mac' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+python3 - "$PAIRDIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["apps"]["clutch"].pop("pairedBundleId", None)
+d["apps"]["clutch"]["macBundleId"] = "codes.clutch.mac-legacy"
+json.dump(d, open(p, "w"), indent=2)
+PY
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "macBundleId alias is passed to next-shared-build" "$(grep -q 'codes.clutch.mac-legacy' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+python3 - "$PAIRDIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["apps"]["clutch"]["pairedBundleId"] = "codes.clutch.mac"
+d["apps"]["clutch"]["macBundleId"] = "codes.clutch.mac-legacy"
+json.dump(d, open(p, "w"), indent=2)
+PY
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "pairedBundleId wins over macBundleId" "$(grep -q 'codes.clutch.mac' "$FAKE_ASC_ARGS_LOG" && ! grep -q 'codes.clutch.mac-legacy' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+APP_KEY_SAVED_13="$APP_KEY"; APP_KEY="pairmac"
+rm -f "${STATE}/build-seq-pairmac.txt" "${STATE}/last-ship-pairmac.txt"
+: >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1000"; FAKE_RELEASED=""
+run_ship --dry-run
+planned_pair
+check "macOS paired id is the iOS bundle id" "$(grep -q 'codes.clutch.ios' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "macOS paired entry plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+APP_KEY="$APP_KEY_SAVED_13"
+clear_record "clutch"
+SHIP="$SHIP_SAVED_13"; FAKE_ASC_ARGS_LOG=""; FAKE_CURL_ARGS_LOG=""
+FAKE_ASC_FLOOR=0; FAKE_RELEASED=""; FAKE_SHARED=""; FAKE_ASC_PATCH=236
+echo
+
+echo "14. feed hardening, floor range, macOS reverse lookup"
+ROUND2DIR="${WORK}/fleet-round2"
+rm -rf "$ROUND2DIR"; cp -R "$HERE" "$ROUND2DIR"
+python3 - "$ROUND2DIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+a = d["apps"]["clutch"]
+a["fixedMarketingVersion"] = "1.1.2"
+a.pop("pairedBundleId", None)
+a.pop("macBundleId", None)
+a.pop("pairedBuildFeed", None)
+d["apps"]["lonelymac"] = {
+  "displayName": "Lonely Mac",
+  "fixedMarketingVersion": "1.1.2",
+  "bundleId": "trade.example.lonelymac",
+  "scheme": "LonelyMac",
+  "projectRel": "mac/LonelyMac.xcodeproj",
+  "platform": "macOS",
+  "marketingVersionDefault": "1.0.0"
+}
+json.dump(d, open(p, "w"), indent=2)
+PY
+SHIP_SAVED_14="$SHIP"; SHIP="${ROUND2DIR}/ship-testflight.sh"
+FAKE_ASC_ARGS_LOG="${WORK}/asc-args14.log"
+FAKE_CURL_ARGS_LOG="${WORK}/curl-args14.log"
+: >"$FAKE_ASC_ARGS_LOG"; : >"$FAKE_CURL_ARGS_LOG"
+write_record "$APP_KEY" 5
+python3 - "$ROUND2DIR/apps.json" "$FEED_URL" <<'PY'
+import json, sys
+p, url = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+d["apps"]["clutch"]["pairedBuildFeed"] = url
+json.dump(d, open(p, "w"), indent=2)
+PY
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>  1400 </sparkle:version></item><item><sparkle:version>   1500   </sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1501"; FAKE_RELEASED=""; FAKE_ASC_PATCH=239; FAKE_ASC_FLOOR=0
+run_ship --dry-run
+planned_pair
+check "whitespace-padded sparkle versions still yield the max floor" "$(grep -q '1500' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "whitespace-padded feed plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1501" ]] && echo 0 || echo 1)"
+check "feed curl pins https and its redirects" "$(grep -q -- '--proto =https' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--proto-redir =https' "$FAKE_CURL_ARGS_LOG" && echo 0 || echo 1)"
+check "feed curl bounds size and time" "$(grep -q -- '--max-filesize 5000000' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--connect-timeout 10' "$FAKE_CURL_ARGS_LOG" && grep -q -- '--max-time 30' "$FAKE_CURL_ARGS_LOG" && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><title>no versions here</title></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1000"
+run_ship --dry-run
+check "empty feed fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "empty feed message names the tag it looked for" "$(contains 'holds no numeric <sparkle:version>' && echo 0 || echo 1)"
+check "empty feed message names the URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
+check "empty feed never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+HTTP_FEED_URL="http://example.invalid/appcast.xml"
+python3 - "$ROUND2DIR/apps.json" "$HTTP_FEED_URL" <<'PY'
+import json, sys
+p, url = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+d["apps"]["clutch"]["pairedBuildFeed"] = url
+json.dump(d, open(p, "w"), indent=2)
+PY
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>1500</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1000"
+run_ship --dry-run
+check "non-https feed fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "non-https feed names the URL" "$(contains "$HTTP_FEED_URL" && echo 0 || echo 1)"
+check "non-https feed says https is required" "$(contains 'must start with https://' && echo 0 || echo 1)"
+check "non-https feed never reaches curl" "$([[ ! -s "$FAKE_CURL_ARGS_LOG" ]] && echo 0 || echo 1)"
+check "non-https feed never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+python3 - "$ROUND2DIR/apps.json" "$FEED_URL" <<'PY'
+import json, sys
+p, url = sys.argv[1], sys.argv[2]
+d = json.load(open(p))
+d["apps"]["clutch"]["pairedBuildFeed"] = url
+json.dump(d, open(p, "w"), indent=2)
+PY
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>9999</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "feed floor 9999 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "feed floor 9999 names the URL" "$(contains "$FEED_URL" && echo 0 || echo 1)"
+check "feed floor 9999 says outside 1..9998" "$(contains 'outside 1..9998' && echo 0 || echo 1)"
+check "feed floor 9999 never reaches next-shared-build" "$([[ ! -s "$FAKE_ASC_ARGS_LOG" ]] && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>202610190645</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "feed floor 202610190645 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "feed floor 202610190645 says outside 1..9998" "$(contains 'outside 1..9998' && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>0</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "feed floor 0 fails closed (rc=${RC})" "$([[ $RC -ne 0 ]] && echo 0 || echo 1)"
+check "feed floor 0 says outside 1..9998" "$(contains 'outside 1..9998' && echo 0 || echo 1)"
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_CURL_ARGS_LOG:-/dev/null}"
+printf '%s' '<rss><channel><item><sparkle:version>9998</sparkle:version></item></channel></rss>'
+exit 0
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+rm -f "$SEQ_FILE" "$SHIP_FILE"
+: >"$FAKE_CURL_ARGS_LOG"; : >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="9999"
+run_ship --dry-run
+planned_pair
+check "feed floor 9998 is accepted as the floor" "$(grep -q '9998' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "feed floor 9998 plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "9999" ]] && echo 0 || echo 1)"
+python3 - "$ROUND2DIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["apps"]["clutch"].pop("pairedBuildFeed", None)
+d["apps"]["clutch"]["pairedBundleId"] = "trade.example.lonelymac"
+d["apps"]["clutch"].pop("macBundleId", None)
+json.dump(d, open(p, "w"), indent=2)
+PY
+cat >"${FAKE_BIN}/curl" <<'FAKE'
+#!/usr/bin/env bash
+echo "fake curl: no feed is configured; refusing the call" >&2
+exit 99
+FAKE
+chmod +x "${FAKE_BIN}/curl"
+APP_KEY_SAVED_14="$APP_KEY"; APP_KEY="lonelymac"
+rm -f "${STATE}/build-seq-lonelymac.txt" "${STATE}/last-ship-lonelymac.txt"
+: >"$FAKE_ASC_ARGS_LOG"
+FAKE_SHARED="1000"; FAKE_RELEASED=""
+run_ship --dry-run
+planned_pair
+check "macOS entry without a paired id reverse-pairs to the iOS bundle id" "$(grep -q 'codes.clutch.ios' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "reverse-paired macOS entry plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+python3 - "$ROUND2DIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["apps"]["lonelymac"]["pairedBundleId"] = "codes.clutch.direct"
+json.dump(d, open(p, "w"), indent=2)
+PY
+rm -f "${STATE}/build-seq-lonelymac.txt" "${STATE}/last-ship-lonelymac.txt"
+: >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+check "a macOS entry's own paired id wins over the reverse lookup" "$(grep -q 'codes.clutch.direct' "$FAKE_ASC_ARGS_LOG" && ! grep -q 'codes.clutch.ios' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+python3 - "$ROUND2DIR/apps.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["apps"]["clutch"].pop("pairedBundleId", None)
+d["apps"]["lonelymac"].pop("pairedBundleId", None)
+json.dump(d, open(p, "w"), indent=2)
+PY
+rm -f "${STATE}/build-seq-lonelymac.txt" "${STATE}/last-ship-lonelymac.txt"
+: >"$FAKE_ASC_ARGS_LOG"
+run_ship --dry-run
+planned_pair
+check "macOS entry with no referrer passes no paired id" "$(! grep -q 'codes.clutch' "$FAKE_ASC_ARGS_LOG" && echo 0 || echo 1)"
+check "unpaired macOS entry still plans the shared build (got '${PLANNED_BUILD}')" "$([[ "$PLANNED_BUILD" == "1000" ]] && echo 0 || echo 1)"
+APP_KEY="$APP_KEY_SAVED_14"
+clear_record "clutch"
+rm -f "${FAKE_BIN}/curl"
+SHIP="$SHIP_SAVED_14"; FAKE_ASC_ARGS_LOG=""; FAKE_CURL_ARGS_LOG=""
+FAKE_ASC_FLOOR=0; FAKE_RELEASED=""; FAKE_SHARED=""; FAKE_ASC_PATCH=236
 echo
 
 echo "passed=${PASS} failed=${FAIL}"

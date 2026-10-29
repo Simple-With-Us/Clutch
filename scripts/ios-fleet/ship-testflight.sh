@@ -202,6 +202,26 @@ else:
 PY
 }
 
+json_reverse_paired_id() {
+  # json_reverse_paired_id <bundle_id> <exclude_app_key>
+  # The bundle id of the first apps.json entry (other than <exclude_app_key>)
+  # whose pairedBundleId or macBundleId names <bundle_id>.  Prints nothing
+  # when no entry names it.  Lets a macOS entry with no paired id of its own
+  # join the counter through the iOS entry that names it.
+  /usr/bin/python3 - "$APPS_JSON" "$1" "$2" <<'PY'
+import json, sys
+path, bundle, exclude = sys.argv[1], sys.argv[2], sys.argv[3]
+data = json.load(open(path))
+for key in data.get("apps", {}):
+    if key == exclude:
+        continue
+    entry = data["apps"][key]
+    if entry.get("pairedBundleId") == bundle or entry.get("macBundleId") == bundle:
+        print(entry.get("bundleId") or "", end="")
+        break
+PY
+}
+
 resolve_project() {
   local root="$1" rel="$2" alt="$3"
   if [[ -n "$rel" && -e "${root}/${rel}" ]]; then
@@ -632,28 +652,83 @@ asc_credential_available() {
 # The next shared four-digit build for a fixed marketing version (owner, Oct 28 2026):
 # ONE counter per app across iOS and macOS: max(every iOS build on ALL trains,
 # every macOS build, every extra floor, 999) + 1, floored at 1000.  Prints the
-# build on stdout.  Returns 1 (and prints nothing) when it cannot be worked out.
+# build on stdout.  Returns 1 (and prints nothing on stdout) when it cannot be
+# worked out.  Feed failures are logged with the feed URL so they are not
+# mistaken for App Store Connect failures.  A non-https feed, a feed whose max
+# sits outside 1..9998, and a feed with no numeric version all fail closed;
+# a configured feed is never silently treated as "no floor".
 asc_next_shared_build() {
-  local out rc mac_id feed feed_xml max floor
+  local out rc mac_id feed feed_xml feed_err_file feed_err max max_digits floor
   command -v "$ASC_NODE" >/dev/null 2>&1 || return 1
   # Not load_secrets: this helper runs inside command substitutions, where a
   # secrets temp dir and its EXIT trap die with the subshell and leave the
   # key behind.  asc-api.mjs resolves its own credential.
   asc_credential_available || return 1
-  mac_id="$(json_get "$APP_KEY" macBundleId 2>/dev/null || true)"
+  mac_id="$(json_get "$APP_KEY" pairedBundleId 2>/dev/null || true)"
   [[ "$mac_id" == "null" ]] && mac_id=""
+  if [[ -z "$mac_id" ]]; then
+    mac_id="$(json_get "$APP_KEY" macBundleId 2>/dev/null || true)"
+    [[ "$mac_id" == "null" ]] && mac_id=""
+  fi
+  if [[ -z "$mac_id" && -n "${BUNDLE_ID:-}" ]]; then
+    # A macOS entry rarely names the pairing itself; the iOS entry does (its
+    # pairedBundleId/macBundleId is this entry's bundle id).  The reverse
+    # lookup finds that iOS entry so iOS builds still join this ship's
+    # counter.  No referrer means no pairing, not an error.
+    case "${PLATFORM:-}" in
+      macOS|macos|MAC_OS)
+        mac_id="$(json_reverse_paired_id "$BUNDLE_ID" "$APP_KEY" 2>/dev/null || true)"
+        [[ "$mac_id" == "null" ]] && mac_id=""
+        ;;
+    esac
+  fi
   feed="$(json_get "$APP_KEY" pairedBuildFeed 2>/dev/null || true)"
   [[ "$feed" == "null" ]] && feed=""
   floor=""
   if [[ -n "$feed" ]]; then
-    command -v curl >/dev/null 2>&1 || return 1
+    case "$feed" in
+      https://*) ;;
+      *)
+        logerr "asc-next-shared-build: pairedBuildFeed $feed rejected: feed URL must start with https://"
+        return 1
+        ;;
+    esac
+    if ! command -v curl >/dev/null 2>&1; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed unreadable: curl not on PATH"
+      return 1
+    fi
+    feed_err_file="$(mktemp "${TMPDIR:-/tmp}/paired-feed-err.XXXXXX")" || {
+      logerr "asc-next-shared-build: pairedBuildFeed $feed unreadable: cannot create temp file"
+      return 1
+    }
     set +e
-    feed_xml="$(curl -fsSL "$feed" 2>/dev/null)"
+    feed_xml="$(curl -fsSL --proto =https --proto-redir =https --connect-timeout 10 --max-time 30 --max-filesize 5000000 "$feed" 2>"$feed_err_file")"
     rc=$?
     set -e
-    [[ $rc -eq 0 && -n "$feed_xml" ]] || return 1
-    max="$(printf '%s' "$feed_xml" | grep -o -E '<sparkle:version>[0-9]+</sparkle:version>' 2>/dev/null | grep -o -E '[0-9]+' 2>/dev/null | /usr/bin/python3 -c 'import sys; ns=[int(x.strip()) for x in sys.stdin if x.strip().isdigit()]; print(max(ns) if ns else "")' 2>/dev/null || true)"
-    [[ "$max" =~ ^[0-9]+$ ]] || return 1
+    feed_err="$(cat "$feed_err_file" 2>/dev/null || true)"
+    rm -f "$feed_err_file" >/dev/null 2>&1 || true
+    if [[ $rc -ne 0 || -z "$feed_xml" ]]; then
+      if [[ -n "$feed_err" ]]; then
+        logerr "asc-next-shared-build: pairedBuildFeed fetch failed for $feed: $feed_err"
+      else
+        logerr "asc-next-shared-build: pairedBuildFeed fetch failed for $feed (curl rc=$rc)"
+      fi
+      return 1
+    fi
+    max="$(printf '%s' "$feed_xml" | grep -o -E '<sparkle:version>[[:space:]]*[0-9]+[[:space:]]*</sparkle:version>' 2>/dev/null | grep -o -E '[0-9]+' 2>/dev/null | sort -n 2>/dev/null | tail -n 1 2>/dev/null || true)"
+    if [[ ! "$max" =~ ^[0-9]+$ ]]; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed holds no numeric <sparkle:version>; failing closed"
+      return 1
+    fi
+    # A feed max outside 1..9998 cannot yield a valid four-digit build, so it
+    # fails closed; it is never clamped into range.  The length check runs
+    # first so the arithmetic below only ever sees at most four digits.
+    max_digits="$(printf '%s' "$max" | sed 's/^0*//')"
+    [[ -z "$max_digits" ]] && max_digits="0"
+    if [[ "${#max_digits}" -gt 4 || "$max_digits" -lt 1 || "$max_digits" -gt 9998 ]]; then
+      logerr "asc-next-shared-build: pairedBuildFeed $feed floor $max outside 1..9998; failing closed"
+      return 1
+    fi
     floor="$max"
   fi
   set +e
@@ -1026,12 +1101,15 @@ DEFAULT_MARKETING="$(json_get "$APP_KEY" marketingVersionDefault)"
 # Optional fixed-version policy (owner, Oct 28 2026): the marketing version does
 # not count up per ship; the build is one shared four-digit counter per app
 # across iOS and macOS (see asc-api.mjs next-shared-build and shared-build.mjs).
-# apps.json keys: fixedMarketingVersion ("1.1.2"), optional macBundleId (the Mac
-# app whose builds join the counter), optional pairedBuildFeed (a Sparkle
-# appcast URL whose max <sparkle:version> joins the counter).  Absent
-# fixedMarketingVersion keeps the next-patch behaviour.  Fixed mode works on
-# both platforms: the counter sits above every Mac build, which is what macOS
-# needs.
+# apps.json keys: fixedMarketingVersion ("1.1.2"), optional pairedBundleId (the
+# paired app whose iOS and macOS builds join the counter; macBundleId is an
+# accepted alias), optional pairedBuildFeed (a Sparkle appcast URL whose max
+# <sparkle:version> joins the counter).  For a macOS entry the paired id is the
+# iOS entry's bundle id; a macOS entry with no paired id of its own is paired
+# by reverse lookup (the entry whose pairedBundleId/macBundleId names this
+# entry's bundle id).  Absent fixedMarketingVersion keeps the next-patch
+# behaviour.  Fixed mode works on both platforms: the counter sits above every
+# Mac build, which is what macOS needs.
 FIXED_MARKETING="$(json_get "$APP_KEY" fixedMarketingVersion)"
 
 if [[ -z "$PLATFORM" ]]; then

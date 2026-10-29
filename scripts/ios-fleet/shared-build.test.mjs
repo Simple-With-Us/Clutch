@@ -22,6 +22,30 @@ test('extra floors raise the counter above 999', () => {
   assert.deepEqual(next({...input, extraFloors: [1500]}), {build: '1501', ignoredIos: 0});
   assert.deepEqual(next({...input, iosBuilds: ['1100'], extraFloors: [1500]}), {build: '1501', ignoredIos: 0});
 });
+test('one counter spans an iOS build, a macOS build and a floor', () => {
+  assert.deepEqual(
+    next({...input, iosBuilds: ['1100'], macBuilds: ['1200'], extraFloors: [1500]}),
+    {build: '1501', ignoredIos: 0}
+  );
+  assert.deepEqual(
+    next({...input, iosBuilds: ['1600'], macBuilds: ['1200'], extraFloors: [1500]}),
+    {build: '1601', ignoredIos: 0}
+  );
+  assert.deepEqual(
+    next({...input, iosBuilds: ['1100'], macBuilds: ['1700'], extraFloors: [1500]}),
+    {build: '1701', ignoredIos: 0}
+  );
+});
+test('paired apps join as concatenated per-platform lists', () => {
+  assert.deepEqual(
+    next({...input, iosBuilds: ['1100', '1400'], macBuilds: ['1200', '1300']}),
+    {build: '1401', ignoredIos: 0}
+  );
+  assert.deepEqual(
+    next({...input, iosBuilds: ['1100', '1200'], macBuilds: ['1200', '1450']}),
+    {build: '1451', ignoredIos: 0}
+  );
+});
 test('iOS timestamp builds are ignored and counted', () => {
   assert.deepEqual(
     next({...input, iosBuilds: ['202610190645', '202610180127']}),
