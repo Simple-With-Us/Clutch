@@ -131,6 +131,17 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(existsSync(join(ROOT, "scripts/ios-fleet/scheduled-ship-gate.sh"))).toBe(true);
   });
 
+  it("gives the scheduled gate every push path, so a missed push still ships", () => {
+    // The cron has no paths filter of its own: the gate replays on.push.paths
+    // one --path-prefix each.  A push path missing from the gate never ships
+    // when its push run is missed (disabled workflow, dropped event, bot
+    // merge); an extra gate prefix ships builds no push would have built.
+    const pushPaths = Array.from(pushBlock.matchAll(/-\s+'([^']+)'/g), (m) => m[1] as string);
+    expect(pushPaths).toContain("ios/**");
+    const gatePrefixes = Array.from(code.matchAll(/--path-prefix '([^']+)'/g), (m) => m[1] as string);
+    expect([...gatePrefixes].sort()).toEqual([...pushPaths].sort());
+  });
+
   it("carries the last-ship state between hosted runs", () => {
     expect(code).toMatch(/actions\/cache\/restore@/);
     expect(code).toMatch(/actions\/cache\/save@/);
