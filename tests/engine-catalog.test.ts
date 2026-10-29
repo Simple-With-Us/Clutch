@@ -151,6 +151,8 @@ describe("buildEngineCatalog", () => {
     const mcode = catalog.engines.find((engine) => engine.id === "mcode");
     expect(mcode?.models).toEqual([]);
     expect(mcode?.note).toContain("did not advertise");
+    expect(mcode?.effortLevels).toEqual(["default", "low", "medium", "high", "xhigh", "max"]);
+    expect(mcode?.supportsThreads).toBe(true);
   });
 });
 

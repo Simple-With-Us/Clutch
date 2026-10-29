@@ -232,6 +232,7 @@ interface ProbeResult {
   models: EngineModel[];
   efforts: string[];
   supportsThreads: boolean;
+  initialized: boolean;
 }
 
 /** Whether an ACP initialize result promises both thread listing and loading. */
@@ -308,7 +309,7 @@ export function probeEngineOptions(
     };
 
     const timer = setTimeout(() => {
-      finish({ models: [], efforts: [], supportsThreads: false });
+      finish({ models: [], efforts: [], supportsThreads: false, initialized: false });
     }, timeoutMs);
 
     const send = (payload: Record<string, unknown>): void => {
@@ -338,6 +339,11 @@ export function probeEngineOptions(
           continue;
         }
         if (message.id === 1) {
+          if (!message.result) {
+            clearTimeout(timer);
+            finish({ models: [], efforts: [], supportsThreads: false, initialized: false });
+            continue;
+          }
           supportsThreads = threadSupportFromInitialize(message.result);
           send({
             jsonrpc: "2.0",
@@ -360,6 +366,7 @@ export function probeEngineOptions(
               models: modelsFromConfigOptions(options),
               efforts: effortsFromConfigOptions(options, effortConfigId),
               supportsThreads,
+              initialized: true,
             });
           }
           continue;
@@ -370,6 +377,7 @@ export function probeEngineOptions(
             models: modelsFromConfigOptions(options),
             efforts: effortsFromConfigOptions(options, effortConfigId),
             supportsThreads,
+            initialized: true,
           });
           continue;
         }
@@ -378,11 +386,11 @@ export function probeEngineOptions(
 
     child.on("error", () => {
       clearTimeout(timer);
-      finish({ models: [], efforts: [], supportsThreads: false });
+      finish({ models: [], efforts: [], supportsThreads: false, initialized: false });
     });
     child.on("close", () => {
       clearTimeout(timer);
-      finish({ models: [], efforts: [], supportsThreads: false });
+      finish({ models: [], efforts: [], supportsThreads: false, initialized: false });
     });
 
     send({
@@ -451,7 +459,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
     if (engine === "muse") {
       const provider = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
       models = mergeMuseModels(probed?.models ?? [], provider);
-      effortLevels = probed ? probed.efforts : effortLevels;
+      effortLevels = probed?.initialized ? probed.efforts : effortLevels;
       if (!models.length) {
         note = "Muse Code did not advertise a model catalog on this host.";
       } else if (provider.length > 0 && probed && probed.models.length < provider.length) {
@@ -459,7 +467,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
       }
     } else if (engine === "mcode") {
       models = probed?.models ?? [];
-      effortLevels = probed ? probed.efforts : effortLevels;
+      effortLevels = probed?.initialized ? probed.efforts : effortLevels;
       if (!models.length) note = "MiniMax Code did not advertise a model catalog on this host.";
     }
 
@@ -467,7 +475,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
       id: engine,
       label: engine === "mcode" ? "MiniMax Code" : engine === "muse" ? "Muse Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
       available,
-      supportsThreads: probed ? probed.supportsThreads : supportsThreads(engine),
+      supportsThreads: probed?.initialized ? probed.supportsThreads : supportsThreads(engine),
       models,
       effortLevels,
       effortConfigId: EFFORT_CONFIG_IDS[engine] ?? "reasoning_effort",

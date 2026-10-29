@@ -77,7 +77,22 @@ export MUSE_CODE_EXECUTABLE="$MUSE_HOST"
 
 native_supported() {
   local gate="${MUSE_EXPERIMENTAL_ACP:-on}"
-  MUSE_EXPERIMENTAL_ACP="$gate" "$MUSE_HOST" acp --help >/dev/null 2>&1
+  MUSE_EXPERIMENTAL_ACP="$gate" "$MUSE_HOST" acp --help >/dev/null 2>&1 &
+  local probe_pid=$!
+  local ticks=0
+  while kill -0 "$probe_pid" >/dev/null 2>&1; do
+    if (( ticks >= 50 )); then
+      kill "$probe_pid" >/dev/null 2>&1 || true
+      wait "$probe_pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+    ((ticks += 1))
+  done
+  if wait "$probe_pid"; then
+    return 0
+  fi
+  return 1
 }
 
 if [ "$BACKEND" != "adapter" ]; then
