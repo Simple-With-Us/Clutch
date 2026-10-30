@@ -76,6 +76,8 @@ beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), "clutch-muse-auth-"));
   tokenFile = join(tempDir, "chat-token");
   stubLogFile = join(tempDir, "muse-auth-stub.jsonl");
+  const launcher = join(tempDir, "muse-auth-stub.mjs");
+  writeFileSync(launcher, readFileSync(FIXTURE), { mode: 0o755 });
   writeFileSync(tokenFile, `${TOKEN}\n`, { mode: 0o600 });
   port = await freePort();
   sidecar = spawn(TSX, [BRIDGE], {
@@ -86,7 +88,7 @@ beforeAll(async () => {
       CLUTCH_SESSION_META_FILE: join(tempDir, "session-meta.json"),
       CLUTCH_DSH_HOME: join(tempDir, "absent-dsh-home"),
       CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
-      CLUTCH_CHAT_LAUNCHER_MUSE: FIXTURE,
+      CLUTCH_CHAT_LAUNCHER_MUSE: launcher,
       MUSE_AUTH_STUB_LOG: stubLogFile,
     },
     stdio: ["ignore", "ignore", "pipe"],
