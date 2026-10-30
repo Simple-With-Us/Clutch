@@ -23,9 +23,11 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #
 # NOT EVERY TICK SHIPS.  A cron carries no `paths:` filter, so the scheduled
 # path is guarded twice:
-#   1. scripts/ios-fleet/scheduled-ship-gate.sh refuses to try unless ios/
-#      actually changed between the last successful ship's sha and HEAD.  It
-#      reads that sha from ~/.cache/ios-fleet, which a hosted runner starts
+#   1. scripts/ios-fleet/scheduled-ship-gate.sh replays the on.push.paths set
+#      below (passed as one --path-prefix each, pinned equal by
+#      tests/ios-ship-workflow.test.ts) and refuses to try unless one of those
+#      paths actually changed between the last successful ship's sha and HEAD.
+#      It reads that sha from ~/.cache/ios-fleet, which a hosted runner starts
 #      without, so the cache restore/save steps below carry it between runs.  No
 #      recorded ship means the tick skips; a first ship is a push or a dispatch.
 #   2. ship-testflight.sh rate-limits successful uploads per app and skips when
@@ -120,12 +122,25 @@ jobs:
           restore-keys: |
             ios-fleet-clutch-
 
-      - name: Scheduled ship gate (skip unless iOS code changed)
+      - name: Scheduled ship gate (skip unless a push path changed)
         id: gate
         run: |
+          # Every entry mirrors on.push.paths above: the cron has no paths
+          # filter of its own, so the gate replays the same set and a merge
+          # whose push run never fired still ships.  tests/ios-ship-workflow.test.ts
+          # pins the two lists to each other.
           bash "$GITHUB_WORKSPACE/scripts/ios-fleet/scheduled-ship-gate.sh" \
             --event "${{ github.event_name }}" \
-            --path-prefix 'ios/' \
+            --path-prefix 'ios/**' \
+            --path-prefix 'assets/clutch-icon-1024.png' \
+            --path-prefix 'scripts/ios-fleet/**' \
+            --path-prefix 'scripts/ios-ship-testflight.sh' \
+            --path-prefix 'scripts/ios-appstore-gm-prepare.sh' \
+            --path-prefix 'scripts/ios-install-appstore-profiles.sh' \
+            --path-prefix 'scripts/ios-xcodegen-post.sh' \
+            --path-prefix 'scripts/ios-ui-tests.sh' \
+            --path-prefix 'ios/appstore-profiles.json' \
+            --path-prefix '.github/workflows/ios-ship.yml' \
             --repo-root "$GITHUB_WORKSPACE" \
             clutch
 

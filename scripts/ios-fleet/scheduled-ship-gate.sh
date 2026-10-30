@@ -14,15 +14,22 @@
 # tests "is HEAD the sha I last shipped" plus a time interval. Without this
 # script, a backend-only commit sitting past the rate-limit window would ship a
 # TestFlight build for changes no tester can see. The owner does not want
-# TestFlight spammed, so the scheduled path ships only when the app's own
-# source tree actually changed since its last successful ship.
+# TestFlight spammed, so the scheduled path ships only when a path in the
+# workflow's push filter actually changed since its last successful ship.
 #
 # Usage:
-#   scheduled-ship-gate.sh --path-prefix <dir/> [options] <app_key> [app_key...]
+#   scheduled-ship-gate.sh --path-prefix <pattern> [--path-prefix <pattern>...] [options] <app_key> [app_key...]
 #
 # Options:
-#   --path-prefix P   Repo-relative path prefix that counts as app source
-#                     (required; e.g. clients/ios/ or ios/)
+#   --path-prefix P   Repo-relative path that counts as shippable source.
+#                     Repeatable; at least one is required. Each value uses
+#                     the workflow's own on.push.paths syntax: a directory
+#                     prefix (ios/), a glob (ios/**), an exact file
+#                     (scripts/ios-ship-testflight.sh), or a `!` exclusion
+#                     (!ios/Generated/**). Entries map onto git pathspecs
+#                     1:1, so the replay matches the push filter as closely
+#                     as a diff can. The old single-prefix call keeps
+#                     working unchanged.
 #   --event NAME      GitHub event name (default: $GITHUB_EVENT_NAME).
 #                     Anything other than "schedule" votes ship=1 for every
 #                     app: a push already passed the workflow's paths filter,
@@ -43,7 +50,7 @@
 
 set -uo pipefail
 
-PATH_PREFIX=""
+PATH_PREFIXES=()
 EVENT="${GITHUB_EVENT_NAME:-}"
 REPO_ROOT=""
 STATE_DIR="${IOS_FLEET_STATE_DIR:-${HOME}/.cache/ios-fleet}"
@@ -54,7 +61,10 @@ log() { echo "[ship-gate] $*"; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --path-prefix) PATH_PREFIX="${2:-}"; shift 2 ;;
+    --path-prefix)
+      [[ -n "${2:-}" ]] || die "--path-prefix needs a value"
+      [[ "${2:-}" != "!" ]] || die "--path-prefix '!' excludes everything and matches nothing; drop it"
+      PATH_PREFIXES+=("$2"); shift 2 ;;
     --event) EVENT="${2:-}"; shift 2 ;;
     --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
     --state-dir) STATE_DIR="${2:-}"; shift 2 ;;
@@ -64,8 +74,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$PATH_PREFIX" ]] || die "--path-prefix is required"
+[[ "${#PATH_PREFIXES[@]}" -gt 0 ]] || die "--path-prefix is required (repeatable)"
 [[ -n "${APPS// /}" ]] || die "at least one app key is required"
+
+# Replay the workflow's on.push.paths set through git pathspecs: directory
+# prefixes, globs, and exact files pass through untouched (git matches `**`
+# the way the push filter does), and a leading `!` becomes git's
+# :(exclude) magic. A lone `!` set matches nothing on GitHub and would make
+# this backstop silently never ship, so reject it loudly instead.
+GIT_SPECS=()
+HAVE_POSITIVE=0
+for _pat in "${PATH_PREFIXES[@]}"; do
+  case "$_pat" in
+    "!"*) GIT_SPECS+=(":(exclude)${_pat#!}") ;;
+    *) GIT_SPECS+=("$_pat"); HAVE_POSITIVE=1 ;;
+  esac
+done
+[[ "$HAVE_POSITIVE" -eq 1 ]] || die "at least one positive --path-prefix is required (a lone '!' set matches nothing)"
+PUSH_PATHS_DISPLAY="${PATH_PREFIXES[*]}"
 
 if [[ -z "$REPO_ROOT" ]]; then REPO_ROOT="$(pwd)"; fi
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)" || die "bad --repo-root"
@@ -89,6 +115,8 @@ if [[ "$EVENT" != "schedule" ]]; then
   emit should_ship 1
   exit 0
 fi
+
+log "scheduled backstop over push paths: ${PUSH_PATHS_DISPLAY}"
 
 HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
 if [[ -z "$HEAD_SHA" ]]; then
@@ -134,9 +162,9 @@ for app in $APPS; do
         log "[${app}] last shipped sha ${last_sha} is unreachable from HEAD (shipped from another worktree/branch, or history was rewritten)."
         last_ts="$(awk 'NR==1{print $1}' "$state" 2>/dev/null || true)"
         if [[ "${last_ts:-}" =~ ^[0-9]+$ ]]; then
-          since_changed="$(git -C "$REPO_ROOT" log --since="@${last_ts}" --format= --name-only -- "$PATH_PREFIX" 2>/dev/null | sed '/^$/d' | sort -u | head -20)"
+          since_changed="$(git -C "$REPO_ROOT" log --since="@${last_ts}" --format= --name-only -- "${GIT_SPECS[@]}" 2>/dev/null | sed '/^$/d' | sort -u | head -20)"
           if [[ -n "$since_changed" ]]; then
-            log "[${app}] falling back to time: ${PATH_PREFIX} changed after the last ship:"
+            log "[${app}] falling back to time: a push path changed after the last ship:"
             # Line-by-line, NOT `printf ... $var`: Socratic.Trade's iOS path is
             # "ios/Socratic Trade.xcodeproj/...", and unquoted word-splitting
             # printed that one file as two bogus lines. Decision logic is
@@ -144,7 +172,7 @@ for app in $APPS; do
             printf '%s\n' "$since_changed" | while IFS= read -r f; do echo "  $f"; done
             decision=1
           else
-            log "[${app}] falling back to time: no ${PATH_PREFIX} commits since the last ship; skip."
+            log "[${app}] falling back to time: no push-path commits since the last ship; skip."
           fi
         else
           log "[${app}] state has no usable timestamp either; letting ship-testflight.sh decide."
@@ -160,13 +188,13 @@ for app in $APPS; do
       # Captured into a variable, not piped into `grep -q`: under pipefail an
       # early-exiting grep SIGPIPEs git and the pipeline reports failure even
       # though it matched.
-      changed="$(git -C "$REPO_ROOT" diff --name-only "$last_sha" HEAD -- "$PATH_PREFIX" 2>/dev/null | head -20)"
+      changed="$(git -C "$REPO_ROOT" diff --name-only "$last_sha" HEAD -- "${GIT_SPECS[@]}" 2>/dev/null | head -20)"
       if [[ -n "$changed" ]]; then
-        log "[${app}] ${PATH_PREFIX} changed since ${last_sha}:"
+        log "[${app}] a push path changed since ${last_sha}:"
         printf '%s\n' "$changed" | while IFS= read -r f; do echo "  $f"; done
         decision=1
       else
-        log "[${app}] no ${PATH_PREFIX} changes since ${last_sha}; skip (TestFlight is not a commit log)."
+        log "[${app}] no push-path changes since ${last_sha}; skip (TestFlight is not a commit log)."
         decision=0
       fi
     fi

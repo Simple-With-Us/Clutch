@@ -111,6 +111,16 @@ function onBlock(yml: string): string {
   return m[1];
 }
 
+/** Values from an on.push.paths list: single, double or no quotes. */
+function pushPathsFrom(listBlock: string): string[] {
+  return Array.from(listBlock.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*$/gm), (m) => m[1] as string);
+}
+
+/** --path-prefix values: single, double or no quotes. */
+function gatePrefixesFrom(gateBlock: string): string[] {
+  return Array.from(gateBlock.matchAll(/--path-prefix\s+['"]?([^'"\s]+)['"]?/g), (m) => m[1] as string);
+}
+
 describe("ios-ship.yml auto-ship contract", () => {
   const yml = read(".github/workflows/ios-ship.yml");
   const code = withoutComments(yml);
@@ -126,9 +136,33 @@ describe("ios-ship.yml auto-ship contract", () => {
   it("retries a failed push ship on a schedule, behind the scheduled path gate", () => {
     expect(on).toMatch(/^\s+schedule:\s*\n\s+- cron: '[^']+'/m);
     expect(code).toMatch(/scheduled-ship-gate\.sh/);
-    expect(code).toMatch(/--path-prefix 'ios\/'/);
+    expect(code).toMatch(/--path-prefix 'ios\/\*\*'/);
     expect(code).toMatch(/--event "\$\{\{ github\.event_name \}\}"/);
     expect(existsSync(join(ROOT, "scripts/ios-fleet/scheduled-ship-gate.sh"))).toBe(true);
+  });
+
+  it("gives the scheduled gate every push path, so a missed push still ships", () => {
+    // The cron has no paths filter of its own: the gate replays on.push.paths
+    // one --path-prefix each.  A push path missing from the gate never ships
+    // when its push run is missed (disabled workflow, dropped event, bot
+    // merge); an extra gate prefix ships builds no push would have built.
+    const pushPathsList = pushBlock.match(/^\s+paths:\s*\n((?:\s+-\s+.*(?:\n|$))*)/m)?.[1] ?? "";
+    const pushPaths = pushPathsFrom(pushPathsList);
+    expect(pushPaths).toContain("ios/**");
+    const gateBlock = code.match(/scheduled-ship-gate\.sh[\s\S]*?\n\s*clutch/)?.[0] ?? "";
+    const gatePrefixes = gatePrefixesFrom(gateBlock);
+    expect([...gatePrefixes].sort()).toEqual([...pushPaths].sort());
+  });
+
+  it("extracts single-, double- and unquoted values", () => {
+    expect(pushPathsFrom("      - 'ios/**'\n      - \"scripts/foo/**\"\n      - scripts/bar.sh\n")).toEqual([
+      "ios/**",
+      "scripts/foo/**",
+      "scripts/bar.sh",
+    ]);
+    expect(
+      gatePrefixesFrom("--path-prefix 'ios/**' --path-prefix \"scripts/foo/**\" --path-prefix scripts/bar.sh"),
+    ).toEqual(["ios/**", "scripts/foo/**", "scripts/bar.sh"]);
   });
 
   it("carries the last-ship state between hosted runs", () => {

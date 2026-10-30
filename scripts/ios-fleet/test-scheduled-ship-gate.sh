@@ -54,10 +54,32 @@ check() {
 
 run_gate() {
   # run_gate <event> [extra args...] -> prints "key=value" lines
+  # The old single-prefix call, kept working by the repeatable flag.
   local event="$1"; shift
   bash "$GATE" \
     --event "$event" \
     --path-prefix "ios/" \
+    --repo-root "$REPO" \
+    --state-dir "$STATE" \
+    "$@" 2>&1
+}
+
+run_gate_multi() {
+  # run_gate_multi <event> <app>... -> prints "key=value" lines
+  # The full on.push.paths set, mirroring the gate step in ios-ship.yml.
+  local event="$1"; shift
+  bash "$GATE" \
+    --event "$event" \
+    --path-prefix "ios/**" \
+    --path-prefix "assets/clutch-icon-1024.png" \
+    --path-prefix "scripts/ios-fleet/**" \
+    --path-prefix "scripts/ios-ship-testflight.sh" \
+    --path-prefix "scripts/ios-appstore-gm-prepare.sh" \
+    --path-prefix "scripts/ios-install-appstore-profiles.sh" \
+    --path-prefix "scripts/ios-xcodegen-post.sh" \
+    --path-prefix "scripts/ios-ui-tests.sh" \
+    --path-prefix "ios/appstore-profiles.json" \
+    --path-prefix ".github/workflows/ios-ship.yml" \
     --repo-root "$REPO" \
     --state-dir "$STATE" \
     "$@" 2>&1
@@ -140,6 +162,47 @@ set_state demo "$(git -C "$REPO" rev-parse HEAD)"
 echo "== 8. deciding 'skip' is never an error exit =="
 run_gate schedule demo >/dev/null
 check "exit code on skip" 0 "$?"
+
+echo "== 9. a tooling-only merge since the last ship DOES ship (the missed push) =="
+# The root cause: the gate used to replay only ios/, so a merge touching
+# only ship tooling or project files never shipped when its push run was
+# missed (workflow disabled at merge time, a dropped event, a bot merge).
+commit "scripts/ios-fleet/ship-testflight.sh" "# tooling fix" "fix(ios-fleet): tooling-only" >/dev/null
+out="$(run_gate schedule demo)"
+check "old single-prefix call still skips tooling-only" 0 "$(field "$out" should_ship)"
+out="$(run_gate_multi schedule demo)"
+check "tooling-only change, full push set -> should_ship" 1 "$(field "$out" should_ship)"
+
+echo "== 10. a workflow-file-only merge since the last ship DOES ship =="
+set_state demo "$(git -C "$REPO" rev-parse HEAD)"
+commit ".github/workflows/ios-ship.yml" "# workflow tune" "ci(ios-ship): tune" >/dev/null
+out="$(run_gate_multi schedule demo)"
+check "workflow-file-only change -> should_ship" 1 "$(field "$out" should_ship)"
+
+echo "== 11. unrelated-only commits still skip with the full push set =="
+set_state demo "$(git -C "$REPO" rev-parse HEAD)"
+commit "README.md" "more docs" "docs: readme" >/dev/null
+commit "server/api.ts" "backend change" "feat(server): unrelated to iOS" >/dev/null
+commit "scripts/build-web.sh" "#!/bin/sh" "chore(web): other tooling" >/dev/null
+out="$(run_gate_multi schedule demo)"
+check "unrelated-only -> should_ship" 0 "$(field "$out" should_ship)"
+
+echo "== 12. HEAD already shipped still skips with the full push set =="
+set_state demo "$(git -C "$REPO" rev-parse HEAD)"
+out="$(run_gate_multi schedule demo)"
+check "HEAD already shipped (multi) -> should_ship" 0 "$(field "$out" should_ship)"
+
+echo "== 13. a '!' exclusion removes its subtree from a glob =="
+commit "ios/Generated/mirror.swift" "// generated" "chore(ios): regen" >/dev/null
+out="$(bash "$GATE" --event schedule \
+  --path-prefix "ios/**" \
+  --path-prefix "!ios/Generated/**" \
+  --repo-root "$REPO" \
+  --state-dir "$STATE" \
+  demo 2>&1)"
+check "excluded-only change -> should_ship" 0 "$(field "$out" should_ship)"
+out="$(run_gate schedule demo)"
+check "same change without the exclusion -> should_ship" 1 "$(field "$out" should_ship)"
 
 echo
 echo "passed=${PASS} failed=${FAIL}"
