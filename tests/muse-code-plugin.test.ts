@@ -103,15 +103,12 @@ describe("the shipped Muse Code plugin", () => {
     expect(ids).toContain(support.models.default);
   });
 
-  it("states that the catalog is complete for this adapter, and what is still unproven", async () => {
+  it("describes model availability without claiming that login expands the catalog", async () => {
     const { support } = await loadMuse();
     const [option] = support.models.options;
-    // Observed identical signed-out and authenticated on this Mac, so the
-    // earlier "an account gets a larger catalog" claim was wrong and is gone.
-    expect(option!.badgeTitle).toMatch(/complete catalog this adapter advertises/);
-    expect(option!.badgeTitle).toMatch(/does not grow with a login/);
-    expect(option!.badgeTitle).toMatch(/No model turn has completed/);
-    expect(option!.badgeTitle).not.toMatch(/floor, not the truth/);
+    expect(option!.badgeTitle).toMatch(/configured model catalog/);
+    expect(option!.badgeTitle).toMatch(/Signing in does not expand the model list/);
+    expect(option!.badgeTitle).toMatch(/installed Muse runtime and account/);
   });
 
   it("tells the operator about native ACP and service-user login", async () => {
@@ -168,6 +165,63 @@ describe("the Muse Code launcher", () => {
     expect(out).toContain("NATIVE gate=on");
     expect(out).toContain("args=acp --trust-workspace");
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("routes Darwin native ACP through the installed GUI helper", () => {
+    const stub = scratch();
+    const app = join(stub, "Clutch.app");
+    const helperApp = join(app, "Contents", "Helpers", "ClutchMuseACP.app");
+    const helperExecutable = join(helperApp, "Contents", "MacOS", "ClutchMuseACP");
+    mkdirSync(dirname(helperExecutable), { recursive: true });
+    writeFileSync(helperExecutable, "fixture helper");
+    chmodSync(helperExecutable, 0o755);
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && [ "${2:-}" = --help ] && exit 0\nprintf "NATIVE args=%s\\n" "$*"\n');
+    chmodSync(muse, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+    const python = join(stub, "python3");
+    writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\nprintf "%s\\n" "$@"\n');
+    chmodSync(python, 0o755);
+
+    const out = execFileSync(LAUNCHER, ["--trust-workspace"], {
+      env: { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app },
+      encoding: "utf8",
+    });
+    expect(out).toContain("BROKER");
+    expect(out).toContain(join(ROOT, "bridges", "muse", "gui-acp.py"));
+    expect(out).toContain(helperApp);
+    expect(out).toContain(muse);
+    expect(out).toContain("--trust-workspace");
+    expect(out).not.toContain("NATIVE");
+  });
+
+  it("keeps native ACP direct when META_API_KEY is set or the helper is absent", () => {
+    const stub = scratch();
+    const app = join(stub, "Clutch.app");
+    mkdirSync(app, { recursive: true });
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && [ "${2:-}" = --help ] && exit 0\nprintf "NATIVE args=%s\\n" "$*"\n');
+    chmodSync(muse, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+    const python = join(stub, "python3");
+    writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\n');
+    chmodSync(python, 0o755);
+    const base = { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app };
+
+    const withApiKey = execFileSync(LAUNCHER, ["--flag"], {
+      env: { ...base, META_API_KEY: "test-key-placeholder" },
+      encoding: "utf8",
+    });
+    expect(withApiKey).toContain("NATIVE args=acp --flag");
+    expect(withApiKey).not.toContain("BROKER");
+
+    const withoutHelper = execFileSync(LAUNCHER, ["--flag"], { env: base, encoding: "utf8" });
+    expect(withoutHelper).toContain("NATIVE args=acp --flag");
+    expect(withoutHelper).not.toContain("BROKER");
   });
 
   it("falls back to the adapter when the installed Muse binary lacks native ACP", () => {

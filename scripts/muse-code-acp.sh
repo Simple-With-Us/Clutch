@@ -14,6 +14,9 @@ set -euo pipefail
 
 die() { printf 'muse-code-acp: %s\n' "$1" >&2; exit 1; }
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+GUI_BROKER="$(cd -- "${SCRIPT_DIR}/../bridges/muse" && pwd -P)/gui-acp.py"
+
 BACKEND="${MUSE_CODE_ACP_BACKEND:-auto}"
 case "$BACKEND" in
   auto|native|adapter) ;;
@@ -97,9 +100,47 @@ native_supported() {
   return 1
 }
 
+find_gui_helper() {
+  local candidate
+  local candidates=()
+  if [ -n "${CLUTCH_MAC_APP:-}" ]; then
+    candidates+=("${CLUTCH_MAC_APP}/Contents/Helpers/ClutchMuseACP.app")
+  fi
+  candidates+=("${HOME}/Applications/Clutch.app/Contents/Helpers/ClutchMuseACP.app")
+  candidates+=("/Applications/Clutch.app/Contents/Helpers/ClutchMuseACP.app")
+  for candidate in "${candidates[@]}"; do
+    if [[ "$candidate" = /* && -x "$candidate/Contents/MacOS/ClutchMuseACP" ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+find_python3() {
+  local found
+  if found="$(command -v python3 2>/dev/null)" && [[ "$found" != /usr/bin/python3 && -x "$found" ]]; then
+    printf '%s' "$found"
+    return 0
+  fi
+  local candidate
+  for candidate in "${HOME}/.local/bin/python3" /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if [ -x "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 if [ "$BACKEND" != "adapter" ]; then
   if native_supported; then
     export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
+    if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] && [ -z "${META_API_KEY:-}" ]; then
+      if HELPER_APP="$(find_gui_helper)" && PYTHON3="$(find_python3)" && [ -f "$GUI_BROKER" ]; then
+        exec "$PYTHON3" "$GUI_BROKER" "$HELPER_APP" "$MUSE_HOST" "$@"
+      fi
+    fi
     exec "$MUSE_HOST" acp "$@"
   fi
   if [ "$BACKEND" = "native" ]; then

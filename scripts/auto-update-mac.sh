@@ -84,7 +84,7 @@ CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 # publish nothing, so matching them would force a local native build for
 # nothing.  tests/mac-release-pipeline.test.ts pins this.
 CODE_EXCLUDE_RE='^(docs/|tests/|e2e/|ios/|assets/|\.github/|[^/]+\.md$)'
-DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|scripts/(install-dock-app|build-mac-app)\.sh$|scripts/lib/clutch-build-lock\.sh$)'
+DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|native/muse-gui-helper/|scripts/(install-dock-app|build-mac-app|build-muse-gui-helper)\.sh$|scripts/lib/clutch-build-lock\.sh$)'
 
 # C-78: the deprecated WKWebView shell and the native app install to the same
 # path.  The native app keeps codes.clutch.macos; the shell is

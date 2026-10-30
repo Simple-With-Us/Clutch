@@ -5,7 +5,7 @@
   "displayName": "Muse Code",
   "defaultCli": "muse-code-acp.sh",
   "nativeSource": "muse.acp",
-  "loginNote": "Current Muse Code builds speak ACP v1 directly through the experimental `muse acp` command.\u00A0 Clutch enables the gate and falls back to the community MSP adapter on older hosts.\u00A0 Run `muse login` as the service user before starting headless sessions.",
+  "loginNote": "Current Muse Code builds speak ACP v1 directly through the experimental `muse acp` command.\u00A0 On macOS, the Clutch app includes an on-demand helper that launches Muse in your desktop session so it can use the saved login from `muse login`.\u00A0 Clutch enables the experimental gate and falls back to the community MSP adapter on older hosts.",
 
   "images": true,
   "mcpServers": true,
@@ -18,7 +18,7 @@
         "id": "muse-spark-1.3-contributor",
         "label": "Muse Spark 1.3 (contributor)",
         "badge": "1 model",
-        "badgeTitle": "The complete catalog this adapter advertises on Muse Code 1.4.4 with adapter 0.7.0. It was observed identical both signed-out and with an authenticated account on this Mac, so the list does not grow with a login. No model turn has completed here yet, because a GUI-spawned host cannot read the login keychain credential (see the login note)."
+        "badgeTitle": "This is the configured model catalog.\u00A0 Signing in does not expand the model list; availability depends on the installed Muse runtime and account."
       }
     ]
   },

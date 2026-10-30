@@ -206,7 +206,7 @@ describe("Muse auth sidecar endpoints", () => {
       expect(failed).toMatchObject({
         failureCategory: "keychain-access",
         failureCode: -32000,
-        error: "Muse could not access the macOS Keychain.\u00A0 Check the credential's access settings for Muse Code, then try again.",
+        error: "Muse could not access the macOS Keychain.\u00A0 Check that the login keychain is unlocked and Muse is allowed to read its credential.",
       });
       expect(serialized).not.toContain("private.example.test");
       expect(serialized).not.toContain("fixture-secret");

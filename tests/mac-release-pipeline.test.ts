@@ -15,6 +15,7 @@ const ROOT = join(__dirname, "..");
 const read = (...p: string[]) => readFileSync(join(ROOT, ...p), "utf8");
 
 const BUILD = read("scripts", "build-mac-app.sh");
+const BUILD_HELPER = read("scripts", "build-muse-gui-helper.sh");
 const INSTALL = read("scripts", "install-dock-app.sh");
 const UPDATER = read("scripts", "auto-update-mac.sh");
 const UPDATE_CMD = read("scripts", "update-mac-app.sh");
@@ -81,17 +82,59 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     return i;
   };
 
-  it("stops the running app only after xcodebuild has produced a replacement", () => {
-    // A failed build used to leave the Mac with no app, and the auto-updater
-    // does not retry a commit it already attempted.
+  it("finishes the staged build before stopping and replacing the installed app", () => {
     const build = at('xcodebuild "${XCODE_ARGS[@]}" build');
     const produced = at('if [[ ! -d "$BUILT" ]]');
+    const helper = at('bash "$HERE/build-muse-gui-helper.sh"');
+    const sign = at('codesign --force --deep -s - "$STAGED_APP"');
+    const verify = at('codesign --verify --deep --strict "$STAGED_APP"');
+    const manifest = at('python3 - "$MANIFEST_OUT"');
     const kill = at("pkill");
-    const replace = at('rm -rf "$APP"');
+    const backup = at('mv "$APP" "$PREVIOUS_APP"');
+    const install = at('mv "$STAGED_APP" "$APP"');
     expect(body.match(/pkill/g)).toHaveLength(1);
-    expect(kill).toBeGreaterThan(build);
-    expect(kill).toBeGreaterThan(produced);
-    expect(kill).toBeLessThan(replace);
+    expect(helper).toBeGreaterThan(produced);
+    expect(sign).toBeGreaterThan(helper);
+    expect(verify).toBeGreaterThan(sign);
+    expect(manifest).toBeGreaterThan(verify);
+    expect(kill).toBeGreaterThan(manifest);
+    expect(backup).toBeGreaterThan(kill);
+    expect(install).toBeGreaterThan(backup);
+    expect(body).not.toContain('rm -rf "$APP"');
+  });
+
+  it("packages and verifies the helper before the outer app is signed", () => {
+    const helper = at('bash "$HERE/build-muse-gui-helper.sh"');
+    const versionRead = at('APP_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c \'Print :CFBundleShortVersionString\' "$STAGED_APP/Contents/Info.plist")"');
+    const buildNumberRead = at('APP_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c \'Print :CFBundleVersion\' "$STAGED_APP/Contents/Info.plist")"');
+    const versionSet = at('/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_MARKETING_VERSION" "$NESTED_HELPER/Contents/Info.plist"');
+    const buildSet = at('/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "$NESTED_HELPER/Contents/Info.plist"');
+    const nestedSign = at('codesign --force --deep -s - "$NESTED_HELPER"');
+    const outerSign = at('codesign --force --deep -s - "$STAGED_APP"');
+    const nestedVerify = at('codesign --verify --strict "$NESTED_HELPER"');
+    const outerVerify = at('codesign --verify --deep --strict "$STAGED_APP"');
+    expect(helper).toBeLessThan(nestedSign);
+    expect(versionRead).toBeGreaterThan(helper);
+    expect(buildNumberRead).toBeGreaterThan(versionRead);
+    expect(versionSet).toBeGreaterThan(buildNumberRead);
+    expect(buildSet).toBeGreaterThan(versionSet);
+    expect(buildSet).toBeLessThan(nestedSign);
+    expect(nestedSign).toBeLessThan(outerSign);
+    expect(outerSign).toBeLessThan(nestedVerify);
+    expect(nestedVerify).toBeLessThan(outerVerify);
+    expect(code(BUILD)).toContain('xcrun lipo -archs "$MAIN_EXECUTABLE"');
+    expect(code(BUILD)).toContain('"${APP_ARCHS[@]}"');
+    expect(BUILD_HELPER).toContain('native/muse-gui-helper/main.swift');
+    expect(BUILD_HELPER).toContain('"$arch-apple-macosx14.0"');
+    expect(BUILD_HELPER).toContain('xcrun lipo -create');
+    expect(BUILD_HELPER).toContain('xcrun lipo -verify_arch');
+  });
+
+  it("does not look up a private signing identity for ad-hoc mode", () => {
+    const adhoc = BUILD.split('  adhoc)')[1]?.split('  developer-id)')[0] ?? "";
+    expect(adhoc).toContain('codesign --force --deep -s -');
+    expect(adhoc).not.toContain('CLUTCH_MAC_CODESIGN_IDENTITY');
+    expect(adhoc).not.toContain('security find-identity');
   });
 
   it("checks for a usable xcodebuild before touching anything", () => {
@@ -107,7 +150,7 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     expect(dd, "DD must be assigned").toBeTruthy();
     expect(dd).not.toContain("TMP");
     expect(dd).toContain("CLUTCH_MAC_DERIVED_DATA");
-    expect(body).not.toContain("mktemp");
+    expect(body).toContain('STAGE_ROOT="$(mktemp -d "$(dirname "$APP")/.clutch-app-build.XXXXXX")"');
     expect(body).not.toMatch(/trap '[^']*rm -rf "\$DD"/);
   });
 
@@ -143,7 +186,8 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     const acquire = at('clutch_build_lock_acquire "$DD/.build.lock"');
     expect(acquire).toBeGreaterThan(at('mkdir -p "$DD"'));
     expect(acquire).toBeLessThan(at('rm -rf "$BUILT"'));
-    expect(body).toMatch(/trap '[^']*clutch_build_lock_release[^']*' EXIT/);
+    expect(body).toContain("trap cleanup_build EXIT");
+    expect(body).toContain("clutch_build_lock_release");
   });
 
   it("regenerates the project from project.yml when asked, or when it is missing", () => {
@@ -203,7 +247,13 @@ describe("the auto-updater can see the native Mac sources", () => {
 
   it("rebuilds for the scripts that build the bundle", () => {
     const re = dockRe();
-    for (const p of ["scripts/install-dock-app.sh", "scripts/build-mac-app.sh", "scripts/lib/clutch-build-lock.sh"]) {
+    for (const p of [
+      "scripts/install-dock-app.sh",
+      "scripts/build-mac-app.sh",
+      "scripts/build-muse-gui-helper.sh",
+      "scripts/lib/clutch-build-lock.sh",
+      "native/muse-gui-helper/main.swift",
+    ]) {
       expect(re.test(p), `DOCK_RE must match ${p}`).toBe(true);
     }
   });
@@ -317,4 +367,5 @@ describe("the release workflow can see the native Mac sources", () => {
     // path filters mention the script too, so count the run steps specifically.
     expect(WORKFLOW.match(/run: bash scripts\/build-mac-app\.sh/g) ?? []).toHaveLength(2);
   });
+
 });
