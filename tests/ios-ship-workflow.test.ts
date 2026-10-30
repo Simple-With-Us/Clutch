@@ -113,12 +113,12 @@ function onBlock(yml: string): string {
 
 /** Values from an on.push.paths list: single, double or no quotes. */
 function pushPathsFrom(listBlock: string): string[] {
-  return Array.from(listBlock.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*$/gm), (m) => m[1] as string);
+  return Array.from(listBlock.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*(?:#.*)?$/gm), (m) => m[1] as string);
 }
 
 /** --path-prefix values: single, double or no quotes. */
 function gatePrefixesFrom(gateBlock: string): string[] {
-  return Array.from(gateBlock.matchAll(/--path-prefix\s+['"]?([^'"\s]+)['"]?/g), (m) => m[1] as string);
+  return Array.from(gateBlock.matchAll(/--path-prefix\s+['"]?([^'"\s]+)['"]?\s*(?:#.*)?/g), (m) => m[1] as string);
 }
 
 describe("ios-ship.yml auto-ship contract", () => {
@@ -155,14 +155,16 @@ describe("ios-ship.yml auto-ship contract", () => {
   });
 
   it("extracts single-, double- and unquoted values", () => {
-    expect(pushPathsFrom("      - 'ios/**'\n      - \"scripts/foo/**\"\n      - scripts/bar.sh\n")).toEqual([
-      "ios/**",
-      "scripts/foo/**",
-      "scripts/bar.sh",
-    ]);
     expect(
-      gatePrefixesFrom("--path-prefix 'ios/**' --path-prefix \"scripts/foo/**\" --path-prefix scripts/bar.sh"),
-    ).toEqual(["ios/**", "scripts/foo/**", "scripts/bar.sh"]);
+      pushPathsFrom(
+        "      - 'ios/**'\n      - \"scripts/foo/**\"\n      - scripts/bar.sh\n      - 'a/**' # reason\n",
+      ),
+    ).toEqual(["ios/**", "scripts/foo/**", "scripts/bar.sh", "a/**"]);
+    expect(
+      gatePrefixesFrom(
+        "--path-prefix 'ios/**' --path-prefix \"scripts/foo/**\" --path-prefix scripts/bar.sh --path-prefix 'a/**' # reason",
+      ),
+    ).toEqual(["ios/**", "scripts/foo/**", "scripts/bar.sh", "a/**"]);
   });
 
   it("carries the last-ship state between hosted runs", () => {
