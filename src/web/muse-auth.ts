@@ -159,8 +159,8 @@ export class MuseAuthController {
   private receiveElicitation(elicitation: MuseUrlElicitation): boolean {
     const active = this.active;
     const safeUrl = urlForUser(elicitation.url);
-    if (!active || active.snapshot.state !== "pending" || !safeUrl || !elicitation.elicitationId) return false;
-    active.elicitationId = elicitation.elicitationId.slice(0, 256);
+    if (!active || active.snapshot.state !== "pending" || !safeUrl || !elicitation.elicitationId || elicitation.elicitationId.length > 4096) return false;
+    active.elicitationId = elicitation.elicitationId;
     active.bridgeRequestId = elicitation.requestId;
     active.snapshot.url = safeUrl;
     active.snapshot.message = elicitation.message.slice(0, MAX_MESSAGE_LENGTH);

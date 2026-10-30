@@ -31,7 +31,13 @@ struct EngineSignInView: View {
             } else if let attempt, let url = attempt.verificationURL {
                 Text(attempt.message ?? "Open the Muse login page and approve the code.")
                     .textSelection(.enabled)
-                Text(url.host ?? "").font(.callout.monospaced()).foregroundStyle(.secondary)
+                ScrollView {
+                    Text(url.absoluteString)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 90)
                 if didOpenBrowser {
                     ProgressView("Waiting For Browser Approval…")
                     Button("Open Login Page Again") { openURL(url) }
@@ -93,14 +99,17 @@ struct EngineSignInView: View {
             activeAttemptId = started.attemptId
             try Task.checkCancellation()
             attempt = started
-            for _ in 0..<600 {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(600))
+            var interval = 1.0
+            while ContinuousClock.now < deadline {
                 guard let current = attempt else { return }
                 if current.state == "complete" { completed = true; return }
                 if current.state == "failed" {
                     failure = current.error ?? "Muse could not finish signing in."
                     return
                 }
-                try await Task.sleep(for: .seconds(1))
+                try await Task.sleep(for: .seconds(interval))
+                interval = min(interval * 1.5, 5)
                 let latest = try await client.status(current.attemptId)
                 try Task.checkCancellation()
                 attempt = latest

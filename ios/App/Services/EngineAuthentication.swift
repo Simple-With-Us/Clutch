@@ -18,9 +18,8 @@ struct EngineAuthenticationAttempt: Decodable, Equatable {
 
     static func isRequired(_ message: String?) -> Bool {
         guard let message else { return false }
-        let lower = message.lowercased()
-        return lower.contains("log in to muse") || lower.contains("sign in to muse") || lower.contains("not logged in")
-            || lower.contains("muse login") || lower.contains("credentials")
+        return ["log in to muse", "sign in to muse", "not logged in", "muse login", "credentials"]
+            .contains { message.range(of: $0, options: .caseInsensitive) != nil }
     }
 }
 

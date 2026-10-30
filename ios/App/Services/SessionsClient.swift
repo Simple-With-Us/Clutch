@@ -15,6 +15,17 @@ public struct SessionsClient {
         self.host = host
     }
 
+    /// Session failures retain the sidecar's bounded, user-facing reason.
+    static func loadFailure(status: Int, data: Data) -> Error {
+        struct Payload: Decodable { var error: String }
+        guard status == 409 || status == 502,
+              let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              !payload.error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ChatClientError.http(status)
+        }
+        return SessionLoadFailure(message: String(payload.error.prefix(2048)))
+    }
+
     private func authorized(_ url: URL, timeout: TimeInterval = 90) throws -> URLRequest {
         guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
         var req = URLRequest(url: url)
@@ -215,7 +226,7 @@ public struct SessionsClient {
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+            throw Self.loadFailure(status: (resp as? HTTPURLResponse)?.statusCode ?? -1, data: data)
         }
         struct Payload: Decodable {
             var sessionId: String
@@ -252,4 +263,9 @@ public struct SessionsClient {
             self.history = history
         }
     }
+}
+
+private struct SessionLoadFailure: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
 }

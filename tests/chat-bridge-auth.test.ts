@@ -6,6 +6,8 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { safeMuseBridgeError } from "../src/web/chat-bridge.ts";
+
 const TOKEN = `muse-auth-test-${"x".repeat(48)}`;
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
@@ -102,6 +104,17 @@ afterAll(() => {
 });
 
 describe("Muse auth sidecar endpoints", () => {
+  it("preserves the safe actionable session-conflict message through repeated sanitization", () => {
+    const mapped = safeMuseBridgeError({
+      code: -32000,
+      message: "This session is already being opened by another process: /private/path and provider diagnostics",
+    });
+    expect(mapped).toBe("This Muse thread is open in another process; choose another thread or wait until it is released.");
+    expect(safeMuseBridgeError(Object.assign(new Error(mapped), { code: -32000 }))).toBe(mapped);
+    expect(mapped).not.toContain("/private/path");
+    expect(mapped).not.toContain("provider diagnostics");
+  });
+
   it("does not auto-authenticate a failed new session, then completes explicit device-code login", async () => {
     for (const [path, method, body] of [
       ["/clutch/v1/auth/start", "POST", { engine: "muse" }],
