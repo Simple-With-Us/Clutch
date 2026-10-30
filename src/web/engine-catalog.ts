@@ -89,6 +89,7 @@ const CATALOG_TTL_MS = 5 * 60 * 1000;
 interface CacheEntry {
   at: number;
   catalog: EngineCatalog;
+  museProviderModels: EngineModel[];
 }
 
 let cache: CacheEntry | null = null;
@@ -432,10 +433,9 @@ export interface CatalogSources {
   readMuseSessionOptions?: () => unknown;
 }
 
-function museDescriptor(sources: CatalogSources): EngineDescriptor {
+function museDescriptor(sources: CatalogSources, provider: EngineModel[]): EngineDescriptor {
   const options = sources.readMuseSessionOptions?.();
   const advertised = modelsFromConfigOptions(options);
-  const provider = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
   const models = mergeMuseModels(advertised, provider);
   const efforts = effortsFromConfigOptions(options, EFFORT_CONFIG_IDS.muse!);
   return {
@@ -455,8 +455,8 @@ function museDescriptor(sources: CatalogSources): EngineDescriptor {
 }
 
 /** Session choices and installation changes bypass the other engines' TTL. */
-function withCurrentMuse(catalog: EngineCatalog, sources: CatalogSources): EngineCatalog {
-  return { engines: catalog.engines.map((engine) => engine.id === "muse" ? museDescriptor(sources) : engine) };
+function withCurrentMuse(entry: CacheEntry, sources: CatalogSources): EngineCatalog {
+  return { engines: entry.catalog.engines.map((engine) => engine.id === "muse" ? museDescriptor(sources, entry.museProviderModels) : engine) };
 }
 
 /**
@@ -464,6 +464,10 @@ function withCurrentMuse(catalog: EngineCatalog, sources: CatalogSources): Engin
  * Only MiniMax Code is probed; Muse uses passive local and warm-session data.
  */
 export async function buildEngineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
+  return (await buildCatalogEntry(sources)).catalog;
+}
+
+async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEntry, "at">> {
   const engines: EngineDescriptor[] = [];
 
   const probeTargets: Engine[] = ["mcode"];
@@ -482,9 +486,10 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
     }),
   );
 
+  const museProviderModels = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
   for (const engine of ["deepseek", "minimax", "mcode", "muse"] as Engine[]) {
     if (engine === "muse") {
-      engines.push(museDescriptor(sources));
+      engines.push(museDescriptor(sources, museProviderModels));
       continue;
     }
     const available = sources.available[engine];
@@ -513,20 +518,19 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
     engines.push(descriptor);
   }
 
-  return { engines };
+  return { catalog: { engines }, museProviderModels };
 }
 
 /** The catalog, cached for a few minutes. */
 export async function engineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
   const now = Date.now();
-  if (cache && now - cache.at < CATALOG_TTL_MS) return withCurrentMuse(cache.catalog, sources);
-  // One probe per engine, however many clients ask at once: two phones
-  // opening the Code tab must not spawn four probe processes.
+  if (cache && now - cache.at < CATALOG_TTL_MS) return withCurrentMuse(cache, sources);
+  // Concurrent readers share one build and one provider-catalog read.
   if (!inflight) {
-    inflight = buildEngineCatalog(sources)
-      .then((catalog) => {
-        cache = { at: Date.now(), catalog };
-        return catalog;
+    inflight = buildCatalogEntry(sources)
+      .then((entry) => {
+        cache = { at: Date.now(), ...entry };
+        return cache;
       })
       .finally(() => {
         inflight = null;
@@ -536,7 +540,7 @@ export async function engineCatalog(sources: CatalogSources): Promise<EngineCata
 }
 
 /** The probe currently running, so a second reader waits for it. */
-let inflight: Promise<EngineCatalog> | null = null;
+let inflight: Promise<CacheEntry> | null = null;
 
 /**
  * The value to send for a requested model.

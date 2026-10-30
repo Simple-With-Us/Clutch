@@ -102,7 +102,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const { id, method, params } = JSON.parse(line);
   if (method === "session/cancel") { process.exit(0); }
   const phase = method === "session/load" ? "load" : "new";
-  const configOptions = params?.sessionId === "no-options" ? undefined : [
+  const configOptions = params?.sessionId === "no-options" ? undefined
+    : params?.sessionId === "malformed-options" ? { unexpected: true }
+    : [
     { id: "model", options: [{ name: "muse-" + phase, value: "wire-" + phase }] },
     { id: "reasoningEffort", options: [{ value: phase === "new" ? "high" : "low" }] },
   ];
@@ -135,6 +137,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       expect((await muse()).models).toEqual([{ id: "muse-load", label: "muse-load", value: "wire-load" }]);
       expect((await muse()).effortLevels).toEqual(["low"]);
       await bridge.loadSession("no-options", dir);
+      expect((await muse()).models).toEqual([]);
+      expect((await muse()).effortLevels).toEqual([]);
+      await bridge.loadSession("malformed-options", dir);
       expect((await muse()).models).toEqual([]);
       expect((await muse()).effortLevels).toEqual([]);
       expect(readFileSync(marker, "utf8")).toBe("start\n");

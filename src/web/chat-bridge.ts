@@ -886,6 +886,10 @@ export function safeMuseBridgeError(error: unknown): string {
   return "Muse request failed; retry or sign in to Muse.";
 }
 
+const SessionOptionsResultSchema = z.object({
+  configOptions: z.array(z.unknown()).optional(),
+}).loose();
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 export class Bridge implements MuseAuthBridge {
   private child: ChildProcess | null = null;
@@ -917,10 +921,8 @@ export class Bridge implements MuseAuthBridge {
   }
 
   private rememberSessionOptions(result: unknown): void {
-    const options = result && typeof result === "object" && !Array.isArray(result)
-      ? (result as Record<string, unknown>).configOptions
-      : null;
-    this.advertisedConfigOptions = Array.isArray(options) ? options : [];
+    const parsed = SessionOptionsResultSchema.safeParse(result);
+    this.advertisedConfigOptions = parsed.success ? parsed.data.configOptions ?? [] : [];
   }
 
   setUpdateHandler(fn: (u: AcpUpdate) => void): void {
