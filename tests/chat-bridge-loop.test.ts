@@ -394,12 +394,15 @@ describe("chat sidecar full loop", () => {
     expect(foreign.status).toBe(404);
 
     // The real answer still works, so the refused one did not consume it.
+    const answersBefore = stubAnswerCount();
     const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
       method: "POST",
       headers: chatHeaders(),
       body: JSON.stringify({ sessionId: chatId, requestId, optionId: "allow-once" }),
     });
     expect(answered.status).toBe(200);
+    const engineAnswer = await waitForStubAnswer(answersBefore);
+    expect(engineAnswer).toMatchObject({ optionId: "allow-once", outcome: "selected" });
   }, 60000);
 
   it("refuses an answer that names another turn's request", async () => {
@@ -495,6 +498,7 @@ describe("chat sidecar full loop", () => {
     });
     expect(unknown.status).toBe(400);
 
+    const answersBefore = stubAnswerCount();
     const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
       method: "POST",
       headers: chatHeaders(),
@@ -502,6 +506,8 @@ describe("chat sidecar full loop", () => {
     });
     expect(answered.status).toBe(200);
     expect(await answered.json()).toEqual({ ok: true });
+    const engineAnswer = await waitForStubAnswer(answersBefore);
+    expect(engineAnswer).toMatchObject({ optionId: "allow-once", outcome: "selected" });
   }, 60000);
 
   it("releases a blocked engine when the turn ends without an answer", async () => {
