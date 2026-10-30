@@ -8,6 +8,8 @@
     <string>ClutchMuseACP</string>
     <key>CFBundleName</key>
     <string>Clutch Muse ACP</string>
+    <key>CFBundleDisplayName</key>
+    <string>Clutch Muse Code</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>
@@ -18,5 +20,7 @@
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Clutch needs access to the project folder you selected so Muse Code can read and edit its files.</string>
 </dict>
 </plist>

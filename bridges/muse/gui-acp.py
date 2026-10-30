@@ -6,6 +6,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import plistlib
 import selectors
 import signal
 import socket
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import stat
 from pathlib import Path
 from typing import Callable, NamedTuple
 
@@ -23,6 +25,8 @@ IO_CHUNK_BYTES = 65_536
 STARTUP_TIMEOUT_SECONDS = 30.0
 HELPER_WAIT_SECONDS = 5.0
 GROUP_TERM_SECONDS = 1.0
+HELPER_TERM_SECONDS = 0.5
+GUI_OPEN_ENV_KEYS = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE")
 SAFE_FAILURE_STAGES = {
     "launch-failed",
     "config-failed",
@@ -64,6 +68,12 @@ class MuseProcessIdentity(NamedTuple):
     pid: int
     uid: int
     pgid: int
+    birth: str
+
+
+class HelperProcessIdentity(NamedTuple):
+    pid: int
+    uid: int
     birth: str
 
 
@@ -158,20 +168,103 @@ def _process_snapshot(pid: int) -> tuple[int, int, int, str] | None:
     return ppid, uid, pgid, birth
 
 
-def _helper_executable(helper_app: str) -> str:
+def _bundle_path_stat(path: Path, *, directory: bool) -> os.stat_result:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        raise BrokerFailure("launch-failed") from None
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        not expected_type(metadata.st_mode)
+        or metadata.st_uid not in (0, os.getuid())
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise BrokerFailure("launch-failed")
+    return metadata
+
+
+def _verify_code_integrity(outer_app: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--deep", "--strict", outer_app],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            check=False,
+            timeout=15.0,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _validate_helper_bundle(
+    helper_app: str,
+    *,
+    verify_integrity: Callable[[str], bool] = _verify_code_integrity,
+) -> str:
+    """Check expected bundle identity and code integrity, not publisher trust."""
     if not os.path.isabs(helper_app):
         raise BrokerFailure("launch-failed")
-    app = Path(helper_app)
-    executable = app / "Contents" / "MacOS" / "ClutchMuseACP"
-    if not app.is_dir() or not executable.is_file() or not os.access(executable, os.X_OK):
+    app = Path(os.path.realpath(helper_app))
+    if app.name != "ClutchMuseACP.app" or app.parent.name != "Helpers" or app.parent.parent.name != "Contents":
         raise BrokerFailure("launch-failed")
-    return os.path.realpath(app)
+    outer_app = app.parents[2]
+    if outer_app.suffix != ".app":
+        raise BrokerFailure("launch-failed")
+
+    directories = (
+        outer_app,
+        outer_app / "Contents",
+        outer_app / "Contents" / "Helpers",
+        app,
+        app / "Contents",
+        app / "Contents" / "MacOS",
+    )
+    for directory in directories:
+        _bundle_path_stat(directory, directory=True)
+
+    outer_info = outer_app / "Contents" / "Info.plist"
+    helper_info = app / "Contents" / "Info.plist"
+    executable = app / "Contents" / "MacOS" / "ClutchMuseACP"
+    _bundle_path_stat(outer_info, directory=False)
+    _bundle_path_stat(helper_info, directory=False)
+    executable_metadata = _bundle_path_stat(executable, directory=False)
+    if not executable_metadata.st_mode & 0o111:
+        raise BrokerFailure("launch-failed")
+
+    try:
+        with outer_info.open("rb") as source:
+            outer_metadata = plistlib.load(source)
+        with helper_info.open("rb") as source:
+            helper_metadata = plistlib.load(source)
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        raise BrokerFailure("launch-failed") from None
+    if (
+        not isinstance(outer_metadata, dict)
+        or outer_metadata.get("CFBundleIdentifier") != "codes.clutch.macos"
+        or not isinstance(helper_metadata, dict)
+        or helper_metadata.get("CFBundleIdentifier") != "codes.clutch.muse-acp"
+        or helper_metadata.get("CFBundleExecutable") != "ClutchMuseACP"
+    ):
+        raise BrokerFailure("launch-failed")
+    outer_path = str(outer_app)
+    if not verify_integrity(outer_path):
+        raise BrokerFailure("launch-failed")
+    return str(app)
+
+
+def _gui_open_environment(source: dict[str, str] | os._Environ[str] | None = None) -> dict[str, str]:
+    environment = os.environ if source is None else source
+    return {key: environment[key] for key in GUI_OPEN_ENV_KEYS if key in environment}
 
 
 def _launch_helper(helper_app: str, socket_path: str) -> subprocess.Popen[bytes]:
     if sys.platform != "darwin":
         raise BrokerFailure("launch-failed")
-    app_path = _helper_executable(helper_app)
+    app_path = _validate_helper_bundle(helper_app)
     try:
         return subprocess.Popen(
             ["/usr/bin/open", "-g", "-n", "-a", app_path, "--args", "--socket", socket_path],
@@ -179,6 +272,7 @@ def _launch_helper(helper_app: str, socket_path: str) -> subprocess.Popen[bytes]
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True,
+            env=_gui_open_environment(),
         )
     except OSError:
         raise BrokerFailure("launch-failed") from None
@@ -217,6 +311,45 @@ def _group_matches(identity: MuseProcessIdentity) -> bool:
         and identity.pgid == identity.pid
         and identity.pgid != os.getpgrp()
     )
+
+
+def _helper_matches(identity: HelperProcessIdentity) -> bool:
+    process = _process_snapshot(identity.pid)
+    return bool(process and process[1] == identity.uid and process[3] == identity.birth)
+
+
+def _helper_running(
+    identity: HelperProcessIdentity,
+    launcher_process: subprocess.Popen[bytes] | None,
+) -> bool:
+    if launcher_process is not None and launcher_process.pid == identity.pid and launcher_process.poll() is not None:
+        return False
+    return _helper_matches(identity)
+
+
+def _stop_helper(
+    identity: HelperProcessIdentity | None,
+    launcher_process: subprocess.Popen[bytes] | None = None,
+) -> None:
+    if identity is None:
+        return
+    deadline = time.monotonic() + HELPER_WAIT_SECONDS
+    while time.monotonic() < deadline and _helper_running(identity, launcher_process):
+        time.sleep(0.05)
+    if not _helper_running(identity, launcher_process):
+        return
+    try:
+        os.kill(identity.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    deadline = time.monotonic() + HELPER_TERM_SECONDS
+    while time.monotonic() < deadline and _helper_running(identity, launcher_process):
+        time.sleep(0.025)
+    if _helper_running(identity, launcher_process):
+        try:
+            os.kill(identity.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
 
 def _terminate_group(identity: MuseProcessIdentity | None) -> None:
@@ -343,13 +476,13 @@ class GuiAcpBroker:
         self.helper_app = helper_app
         self.executable = os.path.abspath(executable)
         self.arguments = arguments
-        self.cwd = os.path.abspath(os.getcwd())
         self.path = os.environ.get("PATH", "")
         self.open_helper = open_helper
         self.directory: str | None = None
         self.socket_path: str | None = None
         self.listener: socket.socket | None = None
         self.open_process: subprocess.Popen[bytes] | None = None
+        self.helper_identity: HelperProcessIdentity | None = None
         self.muse_identity: MuseProcessIdentity | None = None
 
     def _prepare(self) -> None:
@@ -399,10 +532,16 @@ class GuiAcpBroker:
             peer_pid, peer_uid = _peer_credentials(conn)
             if peer_pid <= 1 or peer_uid != os.getuid():
                 raise BrokerFailure("peer-identity-rejected")
+            helper_process = _process_snapshot(peer_pid)
+            if helper_process is None or helper_process[1] != peer_uid or not helper_process[3]:
+                raise BrokerFailure("peer-identity-rejected")
+            self.helper_identity = HelperProcessIdentity(peer_pid, peer_uid, helper_process[3])
             config = {
                 "version": 1,
                 "executable": self.executable,
-                "cwd": self.cwd,
+                # ACP supplies the workspace in session/new or session/load.
+                # Startup must not depend on access to the sidecar checkout.
+                "cwd": self.directory,
                 "arguments": self.arguments,
                 "path": self.path,
             }
@@ -430,18 +569,14 @@ class GuiAcpBroker:
             except OSError:
                 pass
             self.listener = None
+        if self.open_process is not None:
+            self.open_process.poll()
+        _stop_helper(self.helper_identity, self.open_process)
         if self.open_process is not None and self.open_process.poll() is None:
             try:
                 self.open_process.wait(timeout=HELPER_WAIT_SECONDS)
             except subprocess.TimeoutExpired:
-                try:
-                    self.open_process.terminate()
-                    self.open_process.wait(timeout=0.5)
-                except (OSError, subprocess.TimeoutExpired):
-                    try:
-                        self.open_process.kill()
-                    except OSError:
-                        pass
+                pass
         _terminate_group(self.muse_identity)
         if self.socket_path is not None:
             try:

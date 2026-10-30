@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import plistlib
 import signal
 import socket
 import stat
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -50,6 +52,11 @@ def fake_muse(marker_path: str) -> int:
 
 
 def helper(socket_path: str, record_path: str, scenario: str) -> int:
+    def record_helper_term(_signum: int, _frame: object) -> None:
+        Path(record_path + ".helper-terminated").write_text("terminated", encoding="utf-8")
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, record_helper_term)
     deadline = time.monotonic() + 10
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     while True:
@@ -112,6 +119,10 @@ def helper(socket_path: str, record_path: str, scenario: str) -> int:
         # while Muse is still its child, then exercise fallback cleanup.
         time.sleep(0.5)
         return 0
+    if scenario == "helper-hung":
+        connection.close()
+        while True:
+            time.sleep(1)
     while True:
         chunk = connection.recv(65_536)
         if not chunk:
@@ -143,6 +154,89 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
     spec.loader.exec_module(module)
     GuiAcpBroker = module.GuiAcpBroker
     BrokerFailure = module.BrokerFailure
+
+    if scenario.startswith("bundle-"):
+        with tempfile.TemporaryDirectory(prefix="muse-bundle-fixture-") as outer:
+            app = Path(outer) / ("Renamed.app" if scenario == "bundle-renamed" else "Clutch.app")
+            helper_app = app / "Contents" / "Helpers" / "ClutchMuseACP.app"
+            executable = helper_app / "Contents" / "MacOS" / "ClutchMuseACP"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("fixture executable", encoding="utf-8")
+            executable.chmod(0o700)
+            (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "codes.clutch.macos"}))
+            helper_bundle_id = "wrong.id" if scenario == "bundle-bad-id" else "codes.clutch.muse-acp"
+            helper_executable = "WrongExecutable" if scenario == "bundle-bad-executable" else "ClutchMuseACP"
+            (helper_app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({
+                "CFBundleIdentifier": helper_bundle_id,
+                "CFBundleExecutable": helper_executable,
+            }))
+            if scenario == "bundle-writable":
+                helper_app.chmod(0o777)
+            verified: list[str] = []
+            verifier_result = scenario != "bundle-bad-signature"
+            original_lstat = Path.lstat
+            if scenario == "bundle-wrong-owner":
+                def foreign_owner(path: Path) -> SimpleNamespace:
+                    metadata = original_lstat(path)
+                    return SimpleNamespace(st_mode=metadata.st_mode, st_uid=99_999)
+                Path.lstat = foreign_owner
+            try:
+                valid_path = module._validate_helper_bundle(
+                    str(helper_app),
+                    verify_integrity=lambda path: verified.append(path) is None and verifier_result,
+                )
+                result = {"valid": True, "pathMatches": valid_path == str(helper_app)}
+            except BrokerFailure as failure:
+                result = {"valid": False, "stage": failure.stage}
+            finally:
+                Path.lstat = original_lstat
+            result["integrityChecks"] = len(verified)
+            result["integrityOuterApp"] = bool(verified and verified[0] == str(app))
+            with open(record_path, "w", encoding="utf-8") as target:
+                json.dump(result, target)
+        return 0
+
+    if scenario == "open-environment":
+        source = {
+            "PATH": "/safe/path",
+            "HOME": "/safe/home",
+            "USER": "fixture-user",
+            "LOGNAME": "fixture-user",
+            "TMPDIR": "/safe/tmp",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "LC_CTYPE": "C.UTF-8",
+            "META_API_KEY": "fixture-secret-marker",
+            "AGENT_SEAT": "fixture-seat",
+            "SSH_AUTH_SOCK": "/tmp/fixture-sock",
+        }
+        value = module._gui_open_environment(source)
+        with open(record_path, "w", encoding="utf-8") as target:
+            json.dump({"keys": sorted(value), "containsForbidden": any(key in value for key in ("META_API_KEY", "AGENT_SEAT", "SSH_AUTH_SOCK"))}, target)
+        return 0
+
+    if scenario == "codesign-command":
+        calls: list[tuple[list[str], set[str], float]] = []
+        original_run = module.subprocess.run
+
+        def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+            calls.append((command, set(kwargs), kwargs.get("timeout", 0)))
+            return SimpleNamespace(returncode=0)
+
+        module.subprocess.run = fake_run
+        try:
+            verified = module._verify_code_integrity("/safe/Clutch.app")
+        finally:
+            module.subprocess.run = original_run
+        command, options, timeout = calls[0]
+        with open(record_path, "w", encoding="utf-8") as target:
+            json.dump({
+                "verified": verified,
+                "fixedCommand": command == ["/usr/bin/codesign", "--verify", "--deep", "--strict", "/safe/Clutch.app"],
+                "bounded": timeout == 15.0,
+                "captured": {"stdout": "stdout" in options, "stderr": "stderr" in options},
+            }, target)
+        return 0
 
     with tempfile.TemporaryDirectory(prefix="muse-gui-helper-fixture-") as outer:
         app = Path(outer) / "Fixture.app"
@@ -180,10 +274,13 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
             value["brokerDirectoryRemoved"] = not Path(value["brokerDirectory"]).exists()
             value["fallbackSignalObserved"] = Path(record_path + ".terminated").exists()
             value["fakeMuseStarted"] = Path(record_path + ".terminated.started").exists()
+            value["helperTerminatedBySignal"] = Path(record_path + ".helper-terminated").exists()
             if value.get("musePid"):
                 value["processSnapshotAfter"] = module._process_snapshot(value["musePid"])
             if broker is not None and broker.muse_identity is not None:
                 value["brokerIdentity"] = broker.muse_identity._asdict()
+            if broker is not None and broker.helper_identity is not None:
+                value["helperIdentity"] = broker.helper_identity._asdict()
             Path(record_path).write_text(json.dumps(value), encoding="utf-8")
         return code
 

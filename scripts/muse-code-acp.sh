@@ -130,6 +130,15 @@ find_python3() {
       return 0
     fi
   done
+  # Apple's python3 shim can open the Command Line Tools installer when its
+  # toolchain is absent; accept it only after finding the installed tool.
+  local developer_dir
+  if [[ -x /usr/bin/python3 && -x /usr/bin/xcode-select ]] &&
+     developer_dir="$(/usr/bin/xcode-select -p 2>/dev/null)" &&
+     [[ -x "$developer_dir/usr/bin/python3" ]]; then
+    printf '%s' /usr/bin/python3
+    return 0
+  fi
   return 1
 }
 
@@ -137,7 +146,8 @@ if [ "$BACKEND" != "adapter" ]; then
   if native_supported; then
     export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
     if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] && [ -z "${META_API_KEY:-}" ]; then
-      if HELPER_APP="$(find_gui_helper)" && PYTHON3="$(find_python3)" && [ -f "$GUI_BROKER" ]; then
+      if HELPER_APP="$(find_gui_helper)" && [ -f "$GUI_BROKER" ]; then
+        PYTHON3="$(find_python3)" || die "Python 3 is unavailable for the bundled Muse desktop helper"
         exec "$PYTHON3" "$GUI_BROKER" "$HELPER_APP" "$MUSE_HOST" "$@"
       fi
     fi

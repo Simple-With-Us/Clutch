@@ -93,11 +93,13 @@ describe("Muse GUI ACP broker", () => {
     expect(firstMetadata.brokerDirectory).not.toBe(secondMetadata.brokerDirectory);
     expect(firstMetadata.brokerDirectoryRemoved).toBe(true);
     expect(secondMetadata.brokerDirectoryRemoved).toBe(true);
+    expect(firstMetadata.helperTerminatedBySignal).toBe(false);
+    expect(secondMetadata.helperTerminatedBySignal).toBe(false);
     const firstConfig = firstMetadata.config as Record<string, unknown>;
     expect(Object.keys(firstConfig).sort()).toEqual(["arguments", "cwd", "executable", "path", "version"]);
     expect(firstConfig).toMatchObject({ version: 1, arguments: ["--fixture-argument"] });
     expect(isAbsolute(String(firstConfig.executable))).toBe(true);
-    expect(firstConfig.cwd).toBe(ROOT);
+    expect(firstConfig.cwd).toBe(firstMetadata.brokerDirectory);
   }, 30_000);
 
   it("runs the CLI with no extra ACP arguments and relays through the real socket", async () => {
@@ -114,6 +116,7 @@ describe("Muse GUI ACP broker", () => {
     expect(config.arguments).toEqual([]);
     expect(metadata.brokerDirectoryRemoved).toBe(true);
     expect(metadata.fakeMuseStarted).toBe(true);
+    expect(metadata.helperTerminatedBySignal).toBe(false);
   }, 30_000);
 
   it("cleans the invocation socket after a bounded helper startup failure", async () => {
@@ -154,5 +157,82 @@ describe("Muse GUI ACP broker", () => {
     expect(metadata.fakeMuseStarted).toBe(true);
     expect(metadata.fallbackSignalObserved).toBe(true);
     expect(metadata.brokerDirectoryRemoved).toBe(true);
+    expect(metadata.helperTerminatedBySignal).toBe(false);
   }, 30_000);
+
+  it("reaps a normally exiting helper without sending it a signal", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "normal-helper", "normal-helper");
+    await feedFragmented(fixture, pattern(12_345, 61));
+    const result = await fixture.result;
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, "normal-helper.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata.helperTerminatedBySignal).toBe(false);
+    expect(metadata.helperIdentity).toMatchObject({ pid: metadata.helperPid });
+  }, 30_000);
+
+  it("signals only the verified helper process when it hangs after disconnect", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "hung-helper", "helper-hung");
+    fixture.end();
+    const result = await fixture.result;
+
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, "hung-helper.json"), "utf8")) as Record<string, unknown>;
+    const identity = metadata.helperIdentity as Record<string, unknown>;
+    expect(identity).toMatchObject({ pid: metadata.helperPid });
+    expect(identity.uid).toBeTypeOf("number");
+    expect(identity.birth).toBeTypeOf("string");
+    expect(metadata.helperTerminatedBySignal).toBe(true);
+    expect(metadata.fallbackSignalObserved).toBe(true);
+    expect(metadata.brokerDirectoryRemoved).toBe(true);
+  }, 30_000);
+
+  it.each([
+    ["bundle-valid", true, 1],
+    ["bundle-renamed", true, 1],
+    ["bundle-bad-id", false, 0],
+    ["bundle-bad-executable", false, 0],
+    ["bundle-wrong-owner", false, 0],
+    ["bundle-writable", false, 0],
+    ["bundle-bad-signature", false, 1],
+  ])("validates helper bundle integrity for %s", async (scenario, valid, integrityChecks) => {
+    const directory = scratch();
+    const fixture = startFixture(directory, String(scenario), String(scenario));
+    fixture.end();
+    const result = await fixture.result;
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, `${scenario}.json`), "utf8")) as Record<string, unknown>;
+    expect(metadata.valid).toBe(valid);
+    expect(metadata.integrityChecks).toBe(integrityChecks);
+    if (valid) expect(metadata.integrityOuterApp).toBe(true);
+    else expect(metadata.stage).toBe("launch-failed");
+  });
+
+  it("passes only the explicit benign environment allowlist to LaunchServices", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "open-environment", "open-environment");
+    fixture.end();
+    const result = await fixture.result;
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, "open-environment.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata.keys).toEqual(["HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "TMPDIR", "USER"]);
+    expect(metadata.containsForbidden).toBe(false);
+  });
+
+  it("runs the fixed bounded codesign integrity check without exposing output", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "codesign-command", "codesign-command");
+    fixture.end();
+    const result = await fixture.result;
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, "codesign-command.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      verified: true,
+      fixedCommand: true,
+      bounded: true,
+      captured: { stdout: true, stderr: true },
+    });
+  });
 });

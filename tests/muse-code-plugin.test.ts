@@ -47,7 +47,7 @@ describe("the shipped Muse Code plugin", () => {
     expect(support.driverKind).toBe("museCodeAgent");
     expect(support.displayName).toBe("Muse Code");
     // Current Muse builds speak ACP v1 directly.  Recording that here keeps a
-    // future reader from routing Muse through dsh or adding a Python bridge.
+    // future reader from routing Muse through dsh or the MSP adapter by default.
     expect(support.nativeSource).toBe("muse.acp");
     expect(support.defaultCli).toBe("muse-code-acp.sh");
     expect(support.resumeMethod).toBe("session/load");
