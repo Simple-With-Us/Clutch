@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
-import { parseAcpMessage, readMuseProviderCatalog } from "../src/web/engine-catalog.ts";
+import { Bridge, compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { engineCatalog, parseAcpMessage, readMuseProviderCatalog, resetEngineCatalogCache } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -38,7 +38,7 @@ describe("routeForModel", () => {
 });
 
 describe("museInstalled", () => {
-  it("accepts native ACP or the compatibility adapter", async () => {
+  it("checks selected backend files without probing native capabilities", async () => {
     const none = { hosts: [] as string[], adapters: [] as string[] };
     // `process.execPath` stands in for "a path that really exists".  It is
     // always present, on every platform; `/bin/true` is not, because macOS
@@ -48,23 +48,113 @@ describe("museInstalled", () => {
     const present = process.execPath;
     await expect(museInstalled(
       { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" },
-      { ...none, nativeProbe: async () => true },
+      none,
     )).resolves.toBe(true);
     await expect(museInstalled(
       { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: present },
-      { ...none, nativeProbe: () => false },
+      none,
     )).resolves.toBe(true);
     await expect(museInstalled(
       { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "" },
-      { ...none, nativeProbe: () => false },
-    )).resolves.toBe(false);
+      none,
+    )).resolves.toBe(true);
     await expect(museInstalled({ MUSE_CODE_EXECUTABLE: "", MUSE_CODE_ACP_BIN: present }, none)).resolves.toBe(false);
     await expect(museInstalled(
       { MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BIN: "", MUSE_CODE_ACP_BACKEND: "adapter" },
-      { ...none, nativeProbe: () => true },
+      none,
     )).resolves.toBe(false);
     // A stale override path must not count as installed.
     await expect(museInstalled({ MUSE_CODE_EXECUTABLE: "/nope/muse", MUSE_CODE_ACP_BIN: "/nope/adapter" }, none)).resolves.toBe(false);
+    await expect(museInstalled({ MUSE_CODE_EXECUTABLE: present, MUSE_CODE_ACP_BACKEND: "invalid" }, none)).resolves.toBe(false);
+  });
+
+  it("never executes Muse during repeated availability checks", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-muse-passive-"));
+    try {
+      const marker = join(dir, "executed");
+      const executable = join(dir, "muse");
+      writeFileSync(executable, `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "started");\n`);
+      chmodSync(executable, 0o755);
+      for (let request = 0; request < 5; request += 1) {
+        await expect(museInstalled(
+          { MUSE_CODE_EXECUTABLE: executable, MUSE_CODE_ACP_BACKEND: "native" },
+          { hosts: [], adapters: [] },
+        )).resolves.toBe(true);
+      }
+      expect(existsSync(marker)).toBe(false);
+      chmodSync(executable, 0o644);
+      await expect(museInstalled({ MUSE_CODE_EXECUTABLE: executable }, { hosts: [], adapters: [] })).resolves.toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("warm Muse session catalog", () => {
+  it("uses actual new/load options immediately and clears them after process loss", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-muse-options-"));
+    const stub = join(dir, "session-options.mjs");
+    const marker = join(dir, "starts");
+    writeFileSync(stub, `import readline from "node:readline";
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(marker)}, "start\\n");
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const { id, method, params } = JSON.parse(line);
+  if (method === "session/cancel") { process.exit(0); }
+  const phase = method === "session/load" ? "load" : "new";
+  const configOptions = params?.sessionId === "no-options" ? undefined : [
+    { id: "model", options: [{ name: "muse-" + phase, value: "wire-" + phase }] },
+    { id: "reasoningEffort", options: [{ value: phase === "new" ? "high" : "low" }] },
+  ];
+  const result = method === "initialize" ? {} : { sessionId: "user-session", configOptions };
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+});
+`);
+    const bridge = new Bridge("muse", { ...process.env }, { command: process.execPath, args: [stub] });
+    const stopped = new Promise<void>((resolve) => bridge.setProcessFailureHandler(resolve));
+    const sources = {
+      launchers: {
+        deepseek: { command: "/unavailable", args: [] }, minimax: { command: "/unavailable", args: [] },
+        mcode: { command: "/unavailable", args: [] }, muse: { command: "/never-catalog", args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: true },
+      probeCwd: dir,
+      readMuseCatalog: () => [],
+      readMuseSessionOptions: () => bridge.catalogOptions(),
+    };
+    const muse = async () => (await engineCatalog(sources)).engines.find((entry) => entry.id === "muse")!;
+    resetEngineCatalogCache();
+    try {
+      expect((await muse()).effortLevels).toEqual([]);
+      expect(existsSync(marker)).toBe(false);
+      await bridge.initialize();
+      await bridge.newSession(dir);
+      expect((await muse()).models).toEqual([{ id: "muse-new", label: "muse-new", value: "wire-new" }]);
+      expect((await muse()).effortLevels).toEqual(["high"]);
+      await bridge.loadSession("user-session", dir);
+      expect((await muse()).models).toEqual([{ id: "muse-load", label: "muse-load", value: "wire-load" }]);
+      expect((await muse()).effortLevels).toEqual(["low"]);
+      await bridge.loadSession("no-options", dir);
+      expect((await muse()).models).toEqual([]);
+      expect((await muse()).effortLevels).toEqual([]);
+      expect(readFileSync(marker, "utf8")).toBe("start\n");
+    } finally {
+      bridge.cancel("user-session");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          stopped,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("fixture bridge did not stop")), 2_000);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+        resetEngineCatalogCache();
+        rmSync(dir, { recursive: true, force: true });
+      }
+      expect(bridge.catalogOptions()).toBeNull();
+    }
   });
 });
 

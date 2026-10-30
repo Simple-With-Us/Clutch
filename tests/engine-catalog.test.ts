@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   buildEngineCatalog,
+  engineCatalog,
   effortsFromConfigOptions,
   mergeMuseModels,
   modelsFromConfigOptions,
   probeEngineOptions,
   readMuseProviderCatalog,
+  resetEngineCatalogCache,
   resolveModelValue,
   threadSupportFromInitialize,
   type EngineCatalog,
@@ -141,7 +143,43 @@ describe("buildEngineCatalog", () => {
     const muse = catalog.engines[3];
     expect(muse.available).toBe(false);
     expect(muse.effortConfigId).toBe("reasoningEffort");
-    expect(muse.effortLevels).toContain("ultra");
+    expect(muse.effortLevels).toEqual([]);
+  });
+
+  it("never starts Muse on repeated catalog misses and reads its local provider models", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-muse-catalog-passive-"));
+    const marker = join(dir, "muse-started");
+    const sentinel = join(dir, "muse");
+    writeFileSync(sentinel, `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "started");\n`);
+    chmodSync(sentinel, 0o755);
+    const providerDirectory = join(dir, ".local", "share", "muse", "model-catalog");
+    mkdirSync(providerDirectory, { recursive: true });
+    writeFileSync(join(providerDirectory, "public-models.json"), JSON.stringify({ rows: [
+      { model_id: "muse-local", display_label: "Local Muse Model", provider_id: "meta", profile_id: null },
+      { model_id: "muse-hidden", visibility: "hidden" },
+    ] }));
+    const sources = {
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: "/unused", args: [] }, muse: { command: sentinel, args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: true },
+      probeCwd: dir,
+      readMuseCatalog: () => readMuseProviderCatalog(dir),
+    };
+    try {
+      for (let request = 0; request < 3; request += 1) {
+        resetEngineCatalogCache();
+        const catalog = await engineCatalog(sources);
+        const muse = catalog.engines.find((entry) => entry.id === "muse")!;
+        expect(muse.models.map((model) => model.id)).toEqual(["muse-local"]);
+        expect(muse.effortLevels).toEqual([]);
+      }
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      resetEngineCatalogCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("publishes that every engine's threads can be listed and resumed", async () => {
