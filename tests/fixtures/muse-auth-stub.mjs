@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import readline from "node:readline";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, unlinkSync } from "node:fs";
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -53,9 +53,21 @@ rl.on("line", (line) => {
   } else if (id === "muse-elicitation" && pendingAuthId !== null) {
     record({ method: "elicitation/answer", action: message.result?.action });
     if (message.result?.action === "accept") {
-      authenticated = true;
       send({ jsonrpc: "2.0", method: "elicitation/complete", params: { elicitationId: "muse-auth-fixture-1" } });
-      send({ jsonrpc: "2.0", id: pendingAuthId, result: {} });
+      let failure;
+      if (process.env.MUSE_AUTH_STUB_FAILURE_FILE) {
+        try {
+          failure = JSON.parse(readFileSync(process.env.MUSE_AUTH_STUB_FAILURE_FILE, "utf8"));
+          unlinkSync(process.env.MUSE_AUTH_STUB_FAILURE_FILE);
+        } catch {
+          /* No configured fixture failure; preserve the normal success path. */
+        }
+      }
+      if (failure) send({ jsonrpc: "2.0", id: pendingAuthId, error: failure });
+      else {
+        authenticated = true;
+        send({ jsonrpc: "2.0", id: pendingAuthId, result: {} });
+      }
     } else {
       send({ jsonrpc: "2.0", id: pendingAuthId, error: { code: -32800, message: "sign-in canceled" } });
     }

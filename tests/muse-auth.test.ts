@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "../src/web/muse-auth.ts";
+import { attachMuseAuthFailure, classifyMuseAuthFailure, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "../src/web/muse-auth.ts";
 
 class FakeMuseBridge implements MuseAuthBridge {
   methods: Array<{ id: string; name?: string; description?: string }> = [{ id: "muse-login" }];
@@ -83,6 +83,57 @@ describe("Muse ACP authentication", () => {
     await Promise.resolve();
 
     expect(auth.get(started.attemptId)).toMatchObject({ state: "failed", error: "Muse sign-in did not complete; please try again." });
+  });
+
+  it("carries a safe Keychain classification from the bridge error into the attempt status", async () => {
+    const bridge = new FakeMuseBridge();
+    const auth = new MuseAuthController(bridge);
+    const started = await auth.start();
+    bridge.elicit();
+    auth.answer(started.attemptId, "accept");
+
+    const rawError = {
+      code: -32000,
+      message: "Keychain access was denied for https://private.example.test/callback?token=raw-secret",
+      data: { credential: "raw-secret" },
+    };
+    const bridgeError = new Error("Muse request failed (ACP code -32000).");
+    attachMuseAuthFailure(bridgeError, rawError);
+    bridge.failAuthentication(bridgeError);
+    await Promise.resolve();
+
+    const status = auth.get(started.attemptId)!;
+    expect(status).toMatchObject({
+      state: "failed",
+      failureCategory: "keychain-access",
+      failureCode: -32000,
+      error: "Muse could not access the macOS Keychain.\u00A0 Check the credential's access settings for Muse Code, then try again.",
+    });
+    expect(JSON.stringify(status)).not.toContain("private.example.test");
+    expect(JSON.stringify(status)).not.toContain("raw-secret");
+    expect(JSON.stringify(status)).not.toContain("Keychain access was denied");
+    expect(bridgeError.message).not.toContain("private.example.test");
+    expect(bridgeError.message).not.toContain("raw-secret");
+  });
+
+  it("classifies only allowlisted failure text and keeps generic errors bounded", async () => {
+    expect(classifyMuseAuthFailure({ message: "A Muse login is already in progress" }).category).toBe("already-active");
+    expect(classifyMuseAuthFailure({ message: "The login was canceled" }).category).toBe("canceled");
+    expect(classifyMuseAuthFailure({ message: "The device code expired or was declined" }).category).toBe("expired-or-declined");
+    expect(classifyMuseAuthFailure({ message: "https://private.example.test/?token=raw-secret", code: 1.5, nested: "raw-secret" })).toEqual({ category: "generic" });
+
+    const bridge = new FakeMuseBridge();
+    const auth = new MuseAuthController(bridge);
+    const started = await auth.start();
+    const generic = new Error("Muse request failed.");
+    attachMuseAuthFailure(generic, { message: "https://private.example.test/?token=raw-secret", nested: "raw-secret" });
+    bridge.failAuthentication(generic);
+    await Promise.resolve();
+
+    const status = auth.get(started.attemptId)!;
+    expect(status).toMatchObject({ state: "failed", failureCategory: "generic", error: "Muse sign-in did not complete; please try again." });
+    expect(JSON.stringify(status)).not.toContain("private.example.test");
+    expect(JSON.stringify(status)).not.toContain("raw-secret");
   });
 
   it("rejects an unsupported method and an unsafe URL without forwarding either", async () => {
