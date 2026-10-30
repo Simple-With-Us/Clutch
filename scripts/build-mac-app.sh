@@ -28,11 +28,9 @@
 #                                    dependency and incremental state survive
 #   CLUTCH_MAC_BUILD_LOCK_WAIT       seconds to wait for another build on the same
 #                                    DerivedData before giving up (default 3600)
-#   CLUTCH_MAC_BUILD_NUMBER          CFBundleVersion; default is the commit count
-#   CLUTCH_MAC_MARKETING_VERSION     CFBundleShortVersionString; default 1.0.<count>
-#                                    (this bundle is not on App Store Connect, so
-#                                    it does not follow the TestFlight ship
-#                                    version scheme)
+#   CLUTCH_MAC_BUILD_NUMBER          CFBundleVersion; default is the commit's
+#                                    America/Chicago merge timestamp (YYYYMMDDHHMM)
+#   CLUTCH_MAC_MARKETING_VERSION     CFBundleShortVersionString; default 0.1.0
 #
 # Never prints secret values.
 set -euo pipefail
@@ -101,27 +99,29 @@ mkdir -p "$DD"
 # the build and the swap into $APP and is released on every exit path.
 clutch_build_lock_acquire "$DD/.build.lock" "${CLUTCH_MAC_BUILD_LOCK_WAIT:-3600}"
 
-# Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise the
-# bundle is stamped from the commit count:  CFBundleVersion is the commit count
-# and CFBundleShortVersionString is 1.0.<commit count>, so a Mac bundle says
-# which commit it came from instead of the target's checked-in record forever.
-# This is the DOCK APP's own stamping, not the App Store Connect scheme:  the
-# TestFlight ship (scripts/ios-fleet/ship-testflight.sh) numbers the marketing
-# version as the next patch on the app's train and keeps the build number
-# independent of it (AFC-517), but this bundle is released as a GitHub zip and
-# is never uploaded to App Store Connect, so it has no train to advance.
-# A shallow clone under-counts and would stamp a LOWER number
-# than an earlier full build, so there the target's own values stay; the release
-# workflow checks out with fetch-depth 0 for this reason.
-COMMIT_COUNT=""
-if [[ "$(git -C "$LIVE" rev-parse --is-shallow-repository 2>/dev/null || true)" == "false" ]]; then
-  COMMIT_COUNT="$(git -C "$LIVE" rev-list --count HEAD 2>/dev/null || true)"
-  [[ "$COMMIT_COUNT" =~ ^[0-9]+$ ]] || COMMIT_COUNT=""
+# Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise every
+# Clutch platform uses marketing version 0.1.0 and the build number names the
+# commit's merge minute in America/Chicago.  The release workflow invokes this
+# fallback, which keeps local builds honest too.
+BUILD_COMMIT="${CLUTCH_MAC_BUILD_COMMIT:-HEAD}"
+COMMIT_EPOCH="$(git -C "$LIVE" show -s --format=%ct "$BUILD_COMMIT" 2>/dev/null || true)"
+DEFAULT_BUILD_NUMBER=""
+if [[ "$COMMIT_EPOCH" =~ ^[0-9]+$ ]]; then
+  if date -r "$COMMIT_EPOCH" '+%Y%m%d%H%M' >/dev/null 2>&1; then
+    DEFAULT_BUILD_NUMBER="$(TZ=America/Chicago date -r "$COMMIT_EPOCH" '+%Y%m%d%H%M')"
+  else
+    DEFAULT_BUILD_NUMBER="$(TZ=America/Chicago date -d "@$COMMIT_EPOCH" '+%Y%m%d%H%M')"
+  fi
 fi
-BUILD_NUMBER="${CLUTCH_MAC_BUILD_NUMBER:-$COMMIT_COUNT}"
-MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-}"
-if [[ -z "$MARKETING_VERSION_VALUE" && -n "$COMMIT_COUNT" ]]; then
-  MARKETING_VERSION_VALUE="1.0.${COMMIT_COUNT}"
+BUILD_NUMBER="${CLUTCH_MAC_BUILD_NUMBER:-$DEFAULT_BUILD_NUMBER}"
+MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-0.1.0}"
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]; then
+  echo "CLUTCH_MAC_BUILD_NUMBER must be a 12-digit YYYYMMDDHHMM value" >&2
+  exit 1
+fi
+if [[ ! "$MARKETING_VERSION_VALUE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CLUTCH_MAC_MARKETING_VERSION must be a dotted numeric version" >&2
+  exit 1
 fi
 
 # Build unsigned and sign below.  The target declares CODE_SIGN_STYLE
@@ -217,10 +217,23 @@ if [[ -n "$MANIFEST_OUT" ]]; then
     echo "built app has no CFBundleIdentifier; refusing to write a manifest" >&2
     exit 1
   fi
-  python3 - "$MANIFEST_OUT" "$COMMIT" "$SIGNED_AS" "$BUNDLE_ID" <<'PY'
+  BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  BUILT_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -z "$BUILT_MARKETING_VERSION" || -z "$BUILT_BUILD_NUMBER" ]]; then
+    echo "built app has no version stamp; refusing to write a manifest" >&2
+    exit 1
+  fi
+  python3 - "$MANIFEST_OUT" "$COMMIT" "$SIGNED_AS" "$BUNDLE_ID" "$BUILT_MARKETING_VERSION" "$BUILT_BUILD_NUMBER" <<'PY'
 import json, sys
-path, commit, signed, bundle_id = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-json.dump({"schemaVersion": 1, "commit": commit, "signedAs": signed, "bundleId": bundle_id}, open(path, "w"), indent=2)
+path, commit, signed, bundle_id, marketing_version, build_number = sys.argv[1:]
+json.dump({
+    "schemaVersion": 1,
+    "commit": commit,
+    "signedAs": signed,
+    "bundleId": bundle_id,
+    "marketingVersion": marketing_version,
+    "buildNumber": build_number,
+}, open(path, "w"), indent=2)
 PY
 fi
 
