@@ -8,10 +8,21 @@ struct RootView: View {
         Group {
             if let host = store.activeHost {
                 TabView(selection: $selectedTab) {
-                    // One workspace for every engine the host runs: the
-                    // thread rail, the transcript and the engine picker are
-                    // one surface, so the phone and the Mac answer the same
-                    // question the same way.
+                    #if os(macOS)
+                    ChatView(activeHost: host, store: store, initialSurface: .workspace)
+                        .tabItem {
+                            Label("Workspace", systemImage: "terminal.fill")
+                        }
+                        .tag(0)
+
+                    if !host.isMiniMaxCodeOnly {
+                        ChatView(activeHost: host, store: store, initialSurface: .agent)
+                            .tabItem {
+                                Label("Agent Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                            }
+                            .tag(1)
+                    }
+                    #else
                     SessionsView(host: host)
                         .tabItem {
                             Label("Workspace", systemImage: "terminal.fill")
@@ -23,6 +34,7 @@ struct RootView: View {
                             Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
                         }
                         .tag(1)
+                    #endif
 
                     if !host.isMiniMaxCodeOnly {
                         ClutchScreen(host: host, store: store)
@@ -45,11 +57,18 @@ struct RootView: View {
                         .tag(4)
                 }
                 .tint(.accentColor)
+                #if os(macOS)
+                .frame(minWidth: 760, minHeight: 560)
+                #endif
                 .onAppear {
-                    // A MiniMax Code server host has no chat relay or web
-                    // canvas behind it; land on its threads, not an empty
-                    // agent chat.
+                    // A MiniMax Code server host has no agent chat or web
+                    // canvas; keep it on the coding workspace.
                     if host.isMiniMaxCodeOnly, selectedTab == 1 { selectedTab = 0 }
+                }
+                .onChange(of: host.id) { _, _ in
+                    if host.isMiniMaxCodeOnly, [1, 2, 3].contains(selectedTab) {
+                        selectedTab = 0
+                    }
                 }
             } else {
                 PairView { payload in

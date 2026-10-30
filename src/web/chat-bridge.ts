@@ -55,6 +55,7 @@ import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { readSessionUsage, withRate, type SessionUsage } from "./session-usage.ts";
+import { isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
 import {
   loadSessionMeta,
   newProjectId,
@@ -903,8 +904,21 @@ function hostOutcomeFor(optionId: string | null): HostApprovalOutcome {
   return optionId === "allow-once" ? "allowed-once" : "rejected";
 }
 
+function safeMuseBridgeError(error: unknown): string {
+  if (!error || typeof error !== "object") return "Muse request failed; retry or sign in to Muse.";
+  const row = error as { message?: unknown; code?: unknown };
+  const message = typeof row.message === "string" ? row.message : "";
+  if (/log in to muse|not logged in|login required|not authenticated/i.test(message)) {
+    return "Log in to Muse before opening a session.";
+  }
+  if (typeof row.code === "number" && Number.isSafeInteger(row.code)) {
+    return `Muse request failed (ACP code ${row.code}).`;
+  }
+  return "Muse request failed; retry or sign in to Muse.";
+}
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
-export class Bridge {
+export class Bridge implements MuseAuthBridge {
   private child: ChildProcess | null = null;
   private initialized: Promise<unknown> | null = null;
   private nextId = 1;
@@ -912,6 +926,9 @@ export class Bridge {
   private onUpdate: ((u: AcpUpdate) => void) | null = null;
   private onProcessFailure: (() => void) | null = null;
   private onPermission: ((request: PermissionRequest) => void) | null = null;
+  private onUrlElicitation: ((elicitation: MuseUrlElicitation) => boolean) | null = null;
+  private onElicitationComplete: ((elicitationId: string) => void) | null = null;
+  private offeredAuthMethods: Array<{ id: string; name?: string; description?: string }> = [];
   private pendingPermissions = new Map<
     string,
     { bridgeRequestId: number | string; options: PermissionOption[] }
@@ -939,6 +956,18 @@ export class Bridge {
    */
   setPermissionHandler(fn: (request: PermissionRequest) => void): void {
     this.onPermission = fn;
+  }
+
+  setUrlElicitationHandler(handler: ((elicitation: MuseUrlElicitation) => boolean) | null): void {
+    this.onUrlElicitation = handler;
+  }
+
+  setElicitationCompleteHandler(handler: ((elicitationId: string) => void) | null): void {
+    this.onElicitationComplete = handler;
+  }
+
+  authMethods(): Array<{ id: string; name?: string; description?: string }> {
+    return this.offeredAuthMethods.map((method) => ({ ...method }));
   }
 
   /**
@@ -972,7 +1001,10 @@ export class Bridge {
     if (launcher.command.includes("/") && !existsSync(launcher.command)) {
       throw new Error(`missing launcher ${launcher.command}`);
     }
-    const child = spawn(launcher.command, launcher.args, { stdio: ["pipe", "pipe", "inherit"], env: this.env });
+    const child = spawn(launcher.command, launcher.args, {
+      stdio: ["pipe", "pipe", this.engine === "muse" ? "ignore" : "inherit"],
+      env: this.env,
+    });
     this.child = child;
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
@@ -998,6 +1030,7 @@ export class Bridge {
     if (this.child !== child) return;
     this.child = null;
     this.initialized = null;
+    this.offeredAuthMethods = [];
     // Drop any partial line left by a mid-line crash; the next spawn starts
     // fresh instead of framing new stdout onto the old fragment.
     this.buffer = "";
@@ -1013,10 +1046,27 @@ export class Bridge {
       const line = this.buffer.slice(0, nl).trim();
       this.buffer = this.buffer.slice(nl + 1);
       if (!line) continue;
-      let msg: { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: string } };
+      let msg: { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: unknown; code?: unknown } };
       try {
         msg = JSON.parse(line) as typeof msg;
       } catch {
+        continue;
+      }
+      if (msg.method === "elicitation/create" && msg.id !== undefined) {
+        const params = msg.params ?? {};
+        const elicitation: MuseUrlElicitation = {
+          requestId: msg.id,
+          elicitationId: typeof params.elicitationId === "string" ? params.elicitationId : "",
+          url: typeof params.url === "string" ? params.url : "",
+          message: typeof params.message === "string" ? params.message : "",
+        };
+        if (this.engine === "muse" && params.mode === "url" && this.onUrlElicitation?.(elicitation)) continue;
+        this.child?.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "unsupported elicitation" } })}\n`);
+        continue;
+      }
+      if (msg.method === "elicitation/complete") {
+        const elicitationId = typeof msg.params?.elicitationId === "string" ? msg.params.elicitationId : "";
+        if (elicitationId) this.onElicitationComplete?.(elicitationId);
         continue;
       }
       if (msg.method === "session/request_permission" && msg.id !== undefined) {
@@ -1036,7 +1086,17 @@ export class Bridge {
         const p = this.pending.get(msg.id);
         if (!p) continue;
         this.pending.delete(msg.id);
-        if (msg.error) p.reject(new Error(String(msg.error.message ?? "bridge error")));
+        if (msg.error) {
+          if (this.engine === "muse") {
+            const error = new Error(safeMuseBridgeError(msg.error));
+            if (typeof msg.error.code === "number" && Number.isSafeInteger(msg.error.code)) {
+              Object.assign(error, { code: msg.error.code });
+            }
+            p.reject(error);
+          } else {
+            p.reject(new Error(String(msg.error.message ?? "bridge error")));
+          }
+        }
         else p.resolve(msg.result);
       }
     }
@@ -1093,15 +1153,52 @@ export class Bridge {
     if (!this.initialized) {
       const initialization = this.send("initialize", {
         protocolVersion: 1,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false } },
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          ...(this.engine === "muse" ? { elicitation: { url: {} } } : {}),
+        },
       });
-      const tracked = initialization.catch((error) => {
+      const tracked = initialization.then((result) => {
+        if (this.engine === "muse" && result && typeof result === "object" && !Array.isArray(result)) {
+          const raw = (result as Record<string, unknown>).authMethods;
+          this.offeredAuthMethods = Array.isArray(raw)
+            ? raw.flatMap((item) => {
+                if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+                const row = item as Record<string, unknown>;
+                if (typeof row.id !== "string" || !row.id) return [];
+                return [{
+                  id: row.id,
+                  ...(typeof row.name === "string" ? { name: row.name.slice(0, 200) } : {}),
+                  ...(typeof row.description === "string" ? { description: row.description.slice(0, 500) } : {}),
+                }];
+              })
+            : [];
+        }
+        return result;
+      }).catch((error) => {
         if (this.initialized === tracked) this.initialized = null;
         throw error;
       });
       this.initialized = tracked;
     }
     return this.initialized;
+  }
+
+  authenticate(methodId: string): Promise<unknown> {
+    if (this.engine !== "muse" || !this.offeredAuthMethods.some((method) => method.id === methodId)) {
+      return Promise.reject(new Error("unsupported Muse authentication method"));
+    }
+    return this.send("authenticate", { methodId });
+  }
+
+  answerElicitation(requestId: number | string, action: "accept" | "cancel"): boolean {
+    if (!this.child?.stdin) return false;
+    try {
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result: { action } })}\n`);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async newSession(cwd: string): Promise<string> {
@@ -1366,6 +1463,7 @@ async function main(): Promise<void> {
 
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
+  let museAuth: MuseAuthController | null = null;
   // The operator's permission posture wins, so the sidecar does not force
   // one over the top of it: `danger-full-access` (the default) means the
   // engine never asks, and anything else means it asks and the native app
@@ -1395,6 +1493,7 @@ async function main(): Promise<void> {
         for (const session of sessions.values()) {
           if (session.engine === engine) session.bridgeSessionId = "";
         }
+        if (engine === "muse") museAuth?.bridgeFailed();
       });
       // A permission request belongs to the turn that asked for it, so it is
       // routed the same way an update is: by the ACP session that raised it.
@@ -1417,6 +1516,8 @@ async function main(): Promise<void> {
     }
     return b;
   }
+
+  museAuth = new MuseAuthController(bridgeFor("muse"));
 
   /**
    * The dsh host client, created on first use.
@@ -1675,6 +1776,75 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/clutch/v1/auth/start") {
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body) || (body as Record<string, unknown>).engine !== "muse") {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "engine must be muse" }));
+        return;
+      }
+      try {
+        const attempt = await museAuth!.start();
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(attempt));
+      } catch {
+        const active = museAuth!.activeSnapshot();
+        res.writeHead(409, { "content-type": "application/json", "cache-control": "no-store" }).end(
+          JSON.stringify(active ?? { state: "failed", error: "A Muse sign-in attempt is already active." }),
+        );
+      }
+      return;
+    }
+
+    const authStatus = /^\/clutch\/v1\/auth\/([^/]+)$/.exec(url.pathname);
+    const authAnswer = /^\/clutch\/v1\/auth\/([^/]+)\/answer$/.exec(url.pathname);
+    if ((req.method === "GET" && authStatus) || (req.method === "DELETE" && authStatus)) {
+      const attemptId = authStatus![1]!;
+      if (!isMuseAuthAttemptId(attemptId)) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown Muse sign-in attempt" }));
+        return;
+      }
+      const attempt = req.method === "GET" ? museAuth!.get(attemptId) : museAuth!.cancel(attemptId);
+      if (!attempt) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown Muse sign-in attempt" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(attempt));
+      return;
+    }
+    if (req.method === "POST" && authAnswer) {
+      const attemptId = authAnswer[1]!;
+      if (!isMuseAuthAttemptId(attemptId)) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown Muse sign-in attempt" }));
+        return;
+      }
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      const action = body && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, unknown>).action
+        : undefined;
+      if (action !== "accept" && action !== "cancel") {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "action must be accept or cancel" }));
+        return;
+      }
+      const attempt = museAuth!.answer(attemptId, action);
+      if (!attempt) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "no pending Muse sign-in request" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(attempt));
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/clutch/v1/health") {
       res.writeHead(200, { "content-type": "application/json" }).end(
         JSON.stringify({
@@ -1836,9 +2006,10 @@ async function main(): Promise<void> {
         const sessions = attachUsage(page.slice(0, USAGE_ENRICH_CAP)).concat(page.slice(USAGE_ENRICH_CAP));
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions }));
       } catch (err) {
-        log(`${listEngine} list failed message=${(err as Error).message.slice(0, 120)}`);
+        if (listEngine === "muse") log("muse list failed");
+        else log(`${listEngine} list failed message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
-          JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
+          JSON.stringify({ error: listEngine === "muse" ? safeMuseBridgeError(err) : (err as Error).message.slice(0, 300) }),
         );
       }
       return;
@@ -1912,9 +2083,10 @@ async function main(): Promise<void> {
         );
       } catch (err) {
         sessions.delete(chatId);
-        log(`${loadEngine} load failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+        if (loadEngine === "muse") log(`muse load failed session=${chatId}`);
+        else log(`${loadEngine} load failed session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
-          JSON.stringify({ error: (err as Error).message.slice(0, 300) }),
+          JSON.stringify({ error: loadEngine === "muse" ? safeMuseBridgeError(err) : (err as Error).message.slice(0, 300) }),
         );
       }
       return;
@@ -2469,7 +2641,8 @@ async function main(): Promise<void> {
         }
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId, remoteSessionId: remoteId() });
       } catch (err) {
-        log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+        if (engine === "muse") log(`chat error session=${chatId} engine=muse`);
+        else log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
         // Only process loss invalidates the child-local session state.  ACP
         // application errors (rate limits, provider failures) leave the native
         // thread attached.  A direct mcode session is reloaded after a respawn.
@@ -2481,7 +2654,11 @@ async function main(): Promise<void> {
             /* relay failures must not change the error surfaced to the client */
           }
         }
-        finish("error", { message: (err as Error).message.slice(0, 300), sessionId: chatId, remoteSessionId: remoteId() });
+        finish("error", {
+          message: engine === "muse" ? safeMuseBridgeError(err) : (err as Error).message.slice(0, 300),
+          sessionId: chatId,
+          remoteSessionId: remoteId(),
+        });
       }
       return;
     }

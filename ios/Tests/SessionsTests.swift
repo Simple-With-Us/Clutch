@@ -2,6 +2,20 @@ import XCTest
 @testable import Clutch
 
 final class AcpSessionTests: XCTestCase {
+    func testMuseAuthenticationOnlyAcceptsSafeBrowserURLs() throws {
+        let valid = EngineAuthenticationAttempt(attemptId: "a", state: "waiting", url: "https://auth.meta.ai/device", message: "Enter the code", error: nil)
+        XCTAssertEqual(valid.verificationURL?.host, "auth.meta.ai")
+        for address in ["file:///etc/passwd", "javascript:alert(1)", "http://example.com", "https://user:password@example.com"] {
+            var attempt = valid
+            attempt.url = address
+            XCTAssertNil(attempt.verificationURL)
+        }
+        let payload = Data(#"{"attemptId":"a","state":"complete"}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(EngineAuthenticationAttempt.self, from: payload).state, "complete")
+        XCTAssertTrue(EngineAuthenticationAttempt.isRequired("log in to Muse before opening a session"))
+        XCTAssertFalse(EngineAuthenticationAttempt.isRequired("Session already open"))
+    }
+
     func testDecodesAPermissionRequestFromTheStream() throws {
         let payload = """
         {"requestId":"perm-7","title":"Run rm -rf build","toolName":"bash",
