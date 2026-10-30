@@ -122,6 +122,8 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     expect(body).toContain('MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-0.1.0}"');
     expect(body).toContain('if [[ ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]');
     expect(body).toContain("must be a 12-digit YYYYMMDDHHMM value");
+    expect(body).toContain('if [[ ! "$MARKETING_VERSION_VALUE" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]');
+    expect(body).toContain("CLUTCH_MAC_MARKETING_VERSION must be a dotted numeric version");
     expect(body).toContain('"CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"');
     expect(body).toContain('"MARKETING_VERSION=${MARKETING_VERSION_VALUE}"');
   });

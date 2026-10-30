@@ -119,6 +119,10 @@ if [[ ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]; then
   echo "CLUTCH_MAC_BUILD_NUMBER must be a 12-digit YYYYMMDDHHMM value" >&2
   exit 1
 fi
+if [[ ! "$MARKETING_VERSION_VALUE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CLUTCH_MAC_MARKETING_VERSION must be a dotted numeric version" >&2
+  exit 1
+fi
 
 # Build unsigned and sign below.  The target declares CODE_SIGN_STYLE
 # Automatic with a development team, which cannot resolve on a runner with no
