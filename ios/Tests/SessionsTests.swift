@@ -2,6 +2,20 @@ import XCTest
 @testable import Clutch
 
 final class AcpSessionTests: XCTestCase {
+    func testSessionLoadFailurePreservesLoginAndConflictReasons() throws {
+        for message in [
+            "Log in to Muse before opening a session.",
+            "This Muse thread is open in another process; choose another thread or wait until it is released."
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: ["error": message])
+            XCTAssertEqual(SessionsClient.loadFailure(status: 502, data: data).localizedDescription, message)
+        }
+        let invalid = SessionsClient.loadFailure(status: 502, data: Data("not JSON".utf8))
+        XCTAssertEqual(invalid.localizedDescription, ChatClientError.http(502).localizedDescription)
+        let unauthorized = try JSONSerialization.data(withJSONObject: ["error": "not logged in"])
+        XCTAssertEqual(SessionsClient.loadFailure(status: 401, data: unauthorized).localizedDescription, ChatClientError.http(401).localizedDescription)
+    }
+
     func testMuseAuthenticationOnlyAcceptsSafeBrowserURLs() throws {
         let valid = EngineAuthenticationAttempt(attemptId: "a", state: "waiting", url: "https://auth.meta.ai/device", message: "Enter the code", error: nil)
         XCTAssertEqual(valid.verificationURL?.host, "auth.meta.ai")
