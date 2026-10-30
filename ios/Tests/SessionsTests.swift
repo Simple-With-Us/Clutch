@@ -13,6 +13,7 @@ final class AcpSessionTests: XCTestCase {
         let payload = Data(#"{"attemptId":"a","state":"complete"}"#.utf8)
         XCTAssertEqual(try JSONDecoder().decode(EngineAuthenticationAttempt.self, from: payload).state, "complete")
         XCTAssertTrue(EngineAuthenticationAttempt.isRequired("log in to Muse before opening a session"))
+        XCTAssertTrue(EngineAuthenticationAttempt.isRequired(String(repeating: "x", count: 600) + " log in to Muse"))
         XCTAssertFalse(EngineAuthenticationAttempt.isRequired("Session already open"))
     }
 

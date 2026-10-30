@@ -111,6 +111,20 @@ describe("Muse ACP authentication", () => {
     expect(bridge.answers).toEqual([{ requestId: "request-1", action: "cancel" }]);
   });
 
+  it("preserves long opaque elicitation ids for completion matching and bounds oversized ids", async () => {
+    vi.useFakeTimers();
+    const bridge = new FakeMuseBridge();
+    const auth = new MuseAuthController(bridge);
+    const started = await auth.start();
+    expect(bridge.elicit({ elicitationId: "x".repeat(4097) })).toBe(false);
+    const id = "x".repeat(300);
+    expect(bridge.elicit({ elicitationId: id })).toBe(true);
+    auth.answer(started.attemptId, "accept");
+    bridge.completeHandler?.(id);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(auth.get(started.attemptId)?.error).toBe("Muse reported the browser flow complete, but ACP sign-in timed out.");
+  });
+
   it("cancels a pending URL elicitation when the attempt expires", async () => {
     vi.useFakeTimers();
     const bridge = new FakeMuseBridge();

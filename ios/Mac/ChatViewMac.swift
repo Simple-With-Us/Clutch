@@ -1248,9 +1248,9 @@ public struct ChatView: View {
     /// Keep a failed resume actionable without surfacing an engine's raw ACP
     /// reason, which can contain an entire prompt or other long payload.
     private func codeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
-        let summary = String(((error as? ChatClientError)?.localizedDescription ?? error.localizedDescription).prefix(500))
-            .lowercased()
-        if engine == .muse && EngineAuthenticationAttempt.isRequired(summary) {
+        let detail = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        let summary = String(detail.prefix(500)).lowercased()
+        if engine == .muse && EngineAuthenticationAttempt.isRequired(detail) {
             return Copy.gap("Sign in to Muse to open this thread.", "Use Sign In To Muse above, then select the thread again.")
         }
         if engine == .muse, summary.contains("open in another process") {
