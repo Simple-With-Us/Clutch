@@ -115,14 +115,19 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     expect(at('rm -rf "$BUILT"')).toBeLessThan(at('xcodebuild "${XCODE_ARGS[@]}" build'));
   });
 
-  it("stamps the version from the commit count and lets explicit values win", () => {
-    expect(body).toContain("rev-list --count HEAD");
-    expect(body).toContain("--is-shallow-repository");
-    expect(body).toMatch(/BUILD_NUMBER="\$\{CLUTCH_MAC_BUILD_NUMBER:-\$COMMIT_COUNT\}"/);
-    expect(body).toMatch(/MARKETING_VERSION_VALUE="\$\{CLUTCH_MAC_MARKETING_VERSION:-\}"/);
-    expect(body).toContain('MARKETING_VERSION_VALUE="1.0.${COMMIT_COUNT}"');
+  it("stamps 0.1.0 with the Central merge-minute build number and lets explicit values win", () => {
+    expect(body).toContain("show -s --format=%ct");
+    expect(body).toContain("TZ=America/Chicago");
+    expect(body).toMatch(/BUILD_NUMBER="\$\{CLUTCH_MAC_BUILD_NUMBER:-\$DEFAULT_BUILD_NUMBER\}"/);
+    expect(body).toContain('MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-0.1.0}"');
+    expect(body).toContain("must be a 12-digit YYYYMMDDHHMM value");
     expect(body).toContain('"CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"');
     expect(body).toContain('"MARKETING_VERSION=${MARKETING_VERSION_VALUE}"');
+  });
+
+  it("records both version fields in the release manifest", () => {
+    expect(body).toContain('"marketingVersion": marketing_version');
+    expect(body).toContain('"buildNumber": build_number');
   });
 
   it("serializes builds that share the DerivedData directory", () => {
@@ -293,7 +298,7 @@ describe("the release workflow can see the native Mac sources", () => {
     }
   });
 
-  it("checks the release build out with full history for the commit-count version", () => {
+  it("checks the release build out with full history for the commit timestamp version", () => {
     const lines = WORKFLOW.split("\n");
     const start = lines.findIndex((l) => l === "  build:");
     const rest = lines.slice(start + 1);

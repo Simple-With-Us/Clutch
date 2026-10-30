@@ -56,6 +56,15 @@ describe("Mac release workflow", () => {
     expect(text.match(/action-gh-release@/g)).toHaveLength(1);
   });
 
+  it("uses the owner version policy and refuses an unnumbered same-commit rebuild", () => {
+    expect(build).toContain("Plan Mac version");
+    expect(build).toContain("TZ=America/Chicago");
+    expect(build).toContain('echo "marketing_version=0.1.0"');
+    expect(build).toContain("release mac-${GITHUB_SHA} already exists");
+    expect(build).toContain("CLUTCH_MAC_BUILD_NUMBER: ${{ steps.version.outputs.build_number }}");
+    expect(build).toContain("CLUTCH_MAC_MARKETING_VERSION: ${{ steps.version.outputs.marketing_version }}");
+  });
+
   it("rejects a manifest that does not match the zip", () => {
     const source = verifierSource(publish);
     const dir = mkdtempSync(join(tmpdir(), "clutch-mac-release-"));
@@ -69,6 +78,8 @@ describe("Mac release workflow", () => {
         artifact: "Clutch-mac-arm64.zip",
         sha256,
         bytes: zip.length,
+        marketingVersion: "0.1.0",
+        buildNumber: "202610291849",
       }));
       const run = (sha: string) => {
         try {
@@ -103,8 +114,15 @@ describe("Mac release workflow", () => {
       const badHash = run("abc123");
       expect(badHash.code).not.toBe(0);
       expect(badHash.stderr).toContain("sha256 mismatch");
+
+      manifest.sha256 = sha256;
+      (manifest as { marketingVersion?: string }).marketingVersion = "1.0.148";
+      writeFileSync(join(dir, "clutch-mac-build.json"), JSON.stringify(manifest));
+      const badVersion = run("abc123");
+      expect(badVersion.code).not.toBe(0);
+      expect(badVersion.stderr).toContain("unexpected marketing version");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
