@@ -76,6 +76,9 @@ public struct HostSwitcher: View {
                     .foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
+        .menuIndicator(.hidden)
+        #endif
         .accessibilityLabel("Host: \(host.name)")
         // One sheet, not two: SwiftUI honours only the last sheet modifier on
         // a view, so the picker picks which one to present.

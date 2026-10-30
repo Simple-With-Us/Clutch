@@ -410,6 +410,7 @@ struct NewThreadSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: NewThreadModel
+    @State private var showMuseSignIn = false
 
     init(host: ClutchHost, engine: String = "mcode", onCreated: @escaping (AcpSessionInfo) -> Void) {
         self.host = host
@@ -431,6 +432,10 @@ struct NewThreadSheet: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
                         .foregroundStyle(.red)
+                    if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
+                        Button("Sign In To Muse") { showMuseSignIn = true }
+                            .buttonStyle(.borderedProminent)
+                    }
                 }
 
                 // The engine is blocked on this request until the answer
@@ -476,6 +481,9 @@ struct NewThreadSheet: View {
             }
             .padding(16)
             .navigationTitle("New Thread")
+            .sheet(isPresented: $showMuseSignIn) {
+                EngineSignInView(host: host) { model.errorText = nil }
+            }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif

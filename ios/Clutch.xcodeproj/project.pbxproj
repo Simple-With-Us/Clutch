@@ -8,6 +8,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C10800000000000000000001 /* EngineAuthentication.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10800000000000000000005 /* EngineAuthentication.swift */; };
+		C10800000000000000000002 /* EngineAuthentication.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10800000000000000000005 /* EngineAuthentication.swift */; };
+		C10800000000000000000003 /* EngineSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10800000000000000000006 /* EngineSignInView.swift */; };
+		C10800000000000000000004 /* EngineSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C10800000000000000000006 /* EngineSignInView.swift */; };
 		0052618044571AFA352AAC9A /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
 		00699F7A281CCA4B7ACF5836 /* OpenPanelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26F4CE67072841C84782F3D9 /* OpenPanelTests.swift */; };
 		01F640467AF34AB84BCFD592 /* TranscriptExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF732EB1367BF423728AA22B /* TranscriptExport.swift */; };
@@ -133,6 +137,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		C10800000000000000000005 /* EngineAuthentication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineAuthentication.swift; sourceTree = "<group>"; };
+		C10800000000000000000006 /* EngineSignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineSignInView.swift; sourceTree = "<group>"; };
 		011331E126F79B28AE6B1DCE /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
 		06F0339A3E0FBDCCAEC93ECE /* SentryTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryTelemetry.swift; sourceTree = "<group>"; };
@@ -260,6 +266,7 @@
 				6C52D1A65B23047FCDBB2582 /* DictationController.swift */,
 				93FA3C641650A7D1F057E290 /* DshHostClient.swift */,
 				C2CE776C209986B86CD7C869 /* EngineCatalogClient.swift */,
+				C10800000000000000000005 /* EngineAuthentication.swift */,
 				8B230414D3E70E3F7388F580 /* FilesClient.swift */,
 				6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */,
 				9AC4915BE0E639FD34ED398C /* HostProbe.swift */,
@@ -326,6 +333,7 @@
 				F81457A11AE35E90469E20EF /* ChatView.swift */,
 				3A746740508B5BB1A82B2C68 /* ClutchWebView.swift */,
 				C751E4317B2017C34E8463DA /* DshHostView.swift */,
+				C10800000000000000000006 /* EngineSignInView.swift */,
 				BEFFD4634096ECB238C1735B /* FilesView.swift */,
 				370F89587447F8A4277926BD /* FleetRecallView.swift */,
 				24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */,
@@ -542,6 +550,8 @@
 				7C579079FD019800EE5BAF81 /* DshHostView.swift in Sources */,
 				E1D2C71A753F18E298FB6779 /* EngineCatalog.swift in Sources */,
 				D7C51A53984270FEAE52567F /* EngineCatalogClient.swift in Sources */,
+				C10800000000000000000001 /* EngineAuthentication.swift in Sources */,
+				C10800000000000000000003 /* EngineSignInView.swift in Sources */,
 				921E2749415FAE5E1D0F4E8B /* FilesClient.swift in Sources */,
 				04795499A6FF3E8BB30869F6 /* FilesView.swift in Sources */,
 				AF2BFF1ABDEF5AA3823510E4 /* FleetRecallClient.swift in Sources */,
@@ -594,6 +604,8 @@
 				D70F73684B5F296C2F5D3403 /* DshHostView.swift in Sources */,
 				BBD5DD21F1527DA995140810 /* EngineCatalog.swift in Sources */,
 				CC4B8B53426FC7953BEF792C /* EngineCatalogClient.swift in Sources */,
+				C10800000000000000000002 /* EngineAuthentication.swift in Sources */,
+				C10800000000000000000004 /* EngineSignInView.swift in Sources */,
 				61C3CEDF6B6E374D58A8E5DF /* FilesClient.swift in Sources */,
 				4BB1DEA9EEAB64C18DE09607 /* FilesView.swift in Sources */,
 				F3480DF81D27F97BDFD2AF2A /* FleetRecallClient.swift in Sources */,

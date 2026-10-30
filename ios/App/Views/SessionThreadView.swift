@@ -312,6 +312,8 @@ final class SessionThreadModel {
 }
 
 public struct SessionThreadView: View {
+    private let host: ClutchHost
+    private let engine: String
     let session: AcpSessionInfo
     @State private var model: SessionThreadModel
     @State private var showFind = DebugLaunch.showsFind
@@ -320,8 +322,11 @@ public struct SessionThreadView: View {
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
     @State private var pickedPhoto: PhotosPickerItem?
+    @State private var showMuseSignIn = false
 
     public init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
+        self.host = host
+        self.engine = engine
         self.session = session
         _model = State(initialValue: SessionThreadModel(host: host, session: session, engine: engine))
     }
@@ -374,6 +379,9 @@ public struct SessionThreadView: View {
             }
         }
         .task { await model.load() }
+        .sheet(isPresented: $showMuseSignIn) {
+            EngineSignInView(host: host) { Task { await model.load() } }
+        }
         .onChange(of: dictation.transcript) { _, text in
             guard dictation.isRecording || !text.isEmpty else { return }
             model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
@@ -518,6 +526,9 @@ public struct SessionThreadView: View {
             } description: {
                 Text(message)
             } actions: {
+                if engine == "muse", EngineAuthenticationAttempt.isRequired(message) {
+                    Button("Sign In To Muse") { showMuseSignIn = true }
+                }
                 Button("Try Again") { Task { await model.load() } }
             }
         case .ready:
@@ -540,6 +551,9 @@ public struct SessionThreadView: View {
                                 .font(.caption)
                                 .foregroundStyle(.red)
                                 .padding(.horizontal, 12)
+                            if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
+                                Button("Sign In To Muse") { showMuseSignIn = true }
+                            }
                         }
                         // Sentinel to scroll to: the transcript grows during a
                         // stream, and ScrollViewProxy has no content size to
