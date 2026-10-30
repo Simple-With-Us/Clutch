@@ -101,8 +101,8 @@ clutch_build_lock_acquire "$DD/.build.lock" "${CLUTCH_MAC_BUILD_LOCK_WAIT:-3600}
 
 # Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise every
 # Clutch platform uses marketing version 0.1.0 and the build number names the
-# commit's merge minute in America/Chicago.  The workflow supplies the same
-# values explicitly; this fallback keeps local builds honest too.
+# commit's merge minute in America/Chicago.  The release workflow invokes this
+# fallback, which keeps local builds honest too.
 BUILD_COMMIT="${CLUTCH_MAC_BUILD_COMMIT:-HEAD}"
 COMMIT_EPOCH="$(git -C "$LIVE" show -s --format=%ct "$BUILD_COMMIT" 2>/dev/null || true)"
 DEFAULT_BUILD_NUMBER=""
@@ -115,7 +115,7 @@ if [[ "$COMMIT_EPOCH" =~ ^[0-9]+$ ]]; then
 fi
 BUILD_NUMBER="${CLUTCH_MAC_BUILD_NUMBER:-$DEFAULT_BUILD_NUMBER}"
 MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-0.1.0}"
-if [[ -n "$BUILD_NUMBER" && ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]; then
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]; then
   echo "CLUTCH_MAC_BUILD_NUMBER must be a 12-digit YYYYMMDDHHMM value" >&2
   exit 1
 fi
@@ -213,8 +213,12 @@ if [[ -n "$MANIFEST_OUT" ]]; then
     echo "built app has no CFBundleIdentifier; refusing to write a manifest" >&2
     exit 1
   fi
-  BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-  BUILT_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+  BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  BUILT_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -z "$BUILT_MARKETING_VERSION" || -z "$BUILT_BUILD_NUMBER" ]]; then
+    echo "built app has no version stamp; refusing to write a manifest" >&2
+    exit 1
+  fi
   python3 - "$MANIFEST_OUT" "$COMMIT" "$SIGNED_AS" "$BUNDLE_ID" "$BUILT_MARKETING_VERSION" "$BUILT_BUILD_NUMBER" <<'PY'
 import json, sys
 path, commit, signed, bundle_id, marketing_version, build_number = sys.argv[1:]

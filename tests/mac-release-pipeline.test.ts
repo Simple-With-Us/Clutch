@@ -120,6 +120,7 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     expect(body).toContain("TZ=America/Chicago");
     expect(body).toMatch(/BUILD_NUMBER="\$\{CLUTCH_MAC_BUILD_NUMBER:-\$DEFAULT_BUILD_NUMBER\}"/);
     expect(body).toContain('MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-0.1.0}"');
+    expect(body).toContain('if [[ ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]');
     expect(body).toContain("must be a 12-digit YYYYMMDDHHMM value");
     expect(body).toContain('"CURRENT_PROJECT_VERSION=${BUILD_NUMBER}"');
     expect(body).toContain('"MARKETING_VERSION=${MARKETING_VERSION_VALUE}"');
@@ -128,6 +129,9 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
   it("records both version fields in the release manifest", () => {
     expect(body).toContain('"marketingVersion": marketing_version');
     expect(body).toContain('"buildNumber": build_number');
+    expect(body).toContain("built app has no version stamp; refusing to write a manifest");
+    expect(body).toContain("Print :CFBundleShortVersionString");
+    expect(body).toContain("Print :CFBundleVersion");
   });
 
   it("serializes builds that share the DerivedData directory", () => {
