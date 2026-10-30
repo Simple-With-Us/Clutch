@@ -106,7 +106,7 @@ Driver and bridge changes belong in this repository.  BotFleet and other consume
 
 The MiniMax headless bridge launches `dsh --profile minimax-headless`, using MiniMax as the model provider within the upstream coding stack.  DeepSeek and MiniMax profiles share parts of that stack, but model responses, provider features, and tool support can differ.
 
-Muse Code is a different shape of engine.  It is a Meta coding agent that is not part of the DeepSeek stack, and it has no Python bridge: `scripts/muse-code-acp.sh` probes for native `muse acp`, enables its experimental gate when supported, and falls back to the community `@bex-co/muse-code-acp` adapter on older hosts.  It needs a Muse login for the native route; the compatibility adapter also accepts `META_API_KEY` for headless use.
+Muse Code is Meta's coding agent, separate from the DeepSeek stack.  The Mac app's saved-login route starts native `muse acp` through its bundled desktop helper and private Python broker, without a preliminary background Muse process.  Other launch paths probe native support and retain the community `@bex-co/muse-code-acp` fallback.  With the bundled helper, older Muse versions without native ACP require `MUSE_CODE_ACP_BACKEND=adapter` explicitly.  The compatibility adapter also accepts `META_API_KEY` for headless use.
 
 The sidecar reads the live native catalog and capabilities.  The compatibility manifest keeps two conservative fallbacks for older adapter consumers:
 

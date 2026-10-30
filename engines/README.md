@@ -63,9 +63,11 @@ what a future revision should re-run before claiming more than this.
 
 Muse Code is Meta's coding agent.  Current builds expose experimental ACP
 v1 directly through `muse acp`; older builds expose MSP through `muse serve`
-and need the community `@bex-co/muse-code-acp` adapter.  The launcher
-probes the native command, prefers it when available, and falls back to the
-adapter, so neither route needs a Clutch Python bridge.
+and need the community `@bex-co/muse-code-acp` adapter.  The Mac app's
+saved-login route starts native ACP directly through its bundled desktop
+helper and private Python broker.  It does not run Muse in a background
+context first to check native support.  With that helper installed, older
+Muse versions require `MUSE_CODE_ACP_BACKEND=adapter` explicitly.
 
 ```sh
 npm install -g @bex-co/muse-code-acp   # fallback for older Muse builds
@@ -73,12 +75,16 @@ muse login                             # as the service user
 ```
 
 Install Muse Code itself separately.  The launcher resolves the `muse`
-launcher rather than a versioned `muse-bin-*`, probes native support with
-`MUSE_EXPERIMENTAL_ACP=on muse acp --help`, and accepts
+launcher rather than a versioned `muse-bin-*` and accepts
 `MUSE_CODE_ACP_BACKEND=auto|native|adapter` for an explicit compatibility
-choice.
+choice.  Linux, explicit API-key configurations and hosts without the helper
+retain native support probing and automatic adapter fallback.
 
 ### What is verified, and what is not
+
+Current desktop verification and its Keychain limitations are recorded in
+the [desktop-session rollout](../docs/rollouts/2026-10-30-muse-desktop-session.md).  The
+results below describe earlier compatibility checks.
 
 Native ACP was verified against Muse Code 1.4.14.  ACP `initialize` and
 `session/new` complete through the shipped launcher, the host advertises its

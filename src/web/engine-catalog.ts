@@ -6,12 +6,13 @@
  * The web canvas (upstream `dsh web`) shows a model picker with a per-model
  * effort control, and the native chat wanted the same thing.  Rather than
  * hardcode a list that goes stale the moment a provider ships a model, this
- * asks the engines themselves:
+ * reads the engine choices:
  *
- *   - **MiniMax Code** and **Muse Code** advertise their real choices on
+ *   - **MiniMax Code** advertises its real choices on
  *     ACP `session/new` (`configOptions`), so a probe session reads the
  *     engine's own catalog.  The probe session is closed again right after.
- *   - **Muse Code** additionally publishes a provider catalog on disk
+ *   - **Muse Code** uses config options from the existing user session and
+ *     publishes a provider catalog on disk
  *     (`~/.local/share/muse/model-catalog/*.json`), which is where a model
  *     the account can reach but the ACP session does not advertise (Muse
  *     Wonder, for one) shows up.  Reading it is what lets the picker offer
@@ -20,8 +21,8 @@
  *     advertise config options, so their catalog comes from the repo's
  *     tracked model lists.
  *
- * Everything here is read-only and cached for a few minutes: a catalog read
- * must never cost a model turn.
+ * Muse catalog browsing never starts a process or creates a session.
+ * Other engine catalogs are cached for a few minutes.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -88,11 +89,12 @@ const CATALOG_TTL_MS = 5 * 60 * 1000;
 interface CacheEntry {
   at: number;
   catalog: EngineCatalog;
+  museProviderModels: EngineModel[];
 }
 
 let cache: CacheEntry | null = null;
 
-/** Drop the cached catalog; the next read probes the engines again. */
+/** Drop the cached catalog; the next read refreshes its sources. */
 export function resetEngineCatalogCache(): void {
   cache = null;
 }
@@ -113,7 +115,6 @@ const EFFORT_LEVELS: Record<string, string[]> = {
   deepseek: ["none", "low", "medium", "high", "xhigh", "max"],
   minimax: ["none", "low", "medium", "high", "xhigh", "max"],
   mcode: ["default", "low", "medium", "high", "xhigh", "max"],
-  muse: ["none", "minimal", "low", "medium", "high", "xhigh", "ultra"],
 };
 
 const EFFORT_CONFIG_IDS: Record<string, string> = {
@@ -428,17 +429,48 @@ export interface CatalogSources {
   probeCwd: string;
   /** Reads Muse's provider catalog; injectable for tests. */
   readMuseCatalog?: () => EngineModel[];
+  /** Reads advertised options from an existing warm Muse bridge without starting it. */
+  readMuseSessionOptions?: () => unknown;
+}
+
+function museDescriptor(sources: CatalogSources, provider: EngineModel[]): EngineDescriptor {
+  const options = sources.readMuseSessionOptions?.();
+  const advertised = modelsFromConfigOptions(options);
+  const models = mergeMuseModels(advertised, provider);
+  const efforts = effortsFromConfigOptions(options, EFFORT_CONFIG_IDS.muse!);
+  return {
+    id: "muse",
+    label: "Muse Code",
+    available: sources.available.muse,
+    supportsThreads: supportsThreads("muse"),
+    models,
+    effortLevels: efforts,
+    effortConfigId: EFFORT_CONFIG_IDS.muse!,
+    modelConfigId: "model",
+    ...(!models.length ? { note: "Start a Muse session to read its available models and effort choices." }
+      : provider.length > 0 && advertised.length < models.length
+        ? { note: "Includes models from the local Muse provider catalog." }
+        : {}),
+  };
+}
+
+/** Session choices and installation changes bypass the other engines' TTL. */
+function withCurrentMuse(entry: CacheEntry, sources: CatalogSources): EngineCatalog {
+  return { engines: entry.catalog.engines.map((engine) => engine.id === "muse" ? museDescriptor(sources, entry.museProviderModels) : engine) };
 }
 
 /**
- * The catalog for every engine this host can run.  Probes only the engines
- * that advertise models (MiniMax Code and Muse Code); the dsh bridges answer
- * from the tracked lists.
+ * The catalog for every engine this host can run.
+ * Only MiniMax Code is probed; Muse uses passive local and warm-session data.
  */
 export async function buildEngineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
+  return (await buildCatalogEntry(sources)).catalog;
+}
+
+async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEntry, "at">> {
   const engines: EngineDescriptor[] = [];
 
-  const probeTargets: Engine[] = ["mcode", "muse"];
+  const probeTargets: Engine[] = ["mcode"];
   const probes = new Map<Engine, ProbeResult>();
   await Promise.all(
     probeTargets.map(async (engine) => {
@@ -454,23 +486,19 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
     }),
   );
 
+  const museProviderModels = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
   for (const engine of ["deepseek", "minimax", "mcode", "muse"] as Engine[]) {
+    if (engine === "muse") {
+      engines.push(museDescriptor(sources, museProviderModels));
+      continue;
+    }
     const available = sources.available[engine];
     const probed = probes.get(engine);
     let models: EngineModel[] = DSH_MODELS[engine] ?? [];
     let effortLevels = EFFORT_LEVELS[engine] ?? [];
     let note: string | undefined;
 
-    if (engine === "muse") {
-      const provider = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
-      models = mergeMuseModels(probed?.models ?? [], provider);
-      effortLevels = probed?.initialized ? probed.efforts : effortLevels;
-      if (!models.length) {
-        note = "Muse Code did not advertise a model catalog on this host.";
-      } else if (provider.length > 0 && probed && probed.models.length < provider.length) {
-        note = "Includes models from the Muse provider catalog that this session does not advertise.";
-      }
-    } else if (engine === "mcode") {
+    if (engine === "mcode") {
       models = probed?.models ?? [];
       effortLevels = probed?.initialized ? probed.efforts : effortLevels;
       if (!models.length) note = "MiniMax Code did not advertise a model catalog on this host.";
@@ -478,7 +506,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
 
     const descriptor: EngineDescriptor = {
       id: engine,
-      label: engine === "mcode" ? "MiniMax Code" : engine === "muse" ? "Muse Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
+      label: engine === "mcode" ? "MiniMax Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
       available,
       supportsThreads: probed?.initialized ? probed.supportsThreads : supportsThreads(engine),
       models,
@@ -490,30 +518,29 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
     engines.push(descriptor);
   }
 
-  return { engines };
+  return { catalog: { engines }, museProviderModels };
 }
 
 /** The catalog, cached for a few minutes. */
 export async function engineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
   const now = Date.now();
-  if (cache && now - cache.at < CATALOG_TTL_MS) return cache.catalog;
-  // One probe per engine, however many clients ask at once: two phones
-  // opening the Code tab must not spawn four probe processes.
+  if (cache && now - cache.at < CATALOG_TTL_MS) return withCurrentMuse(cache, sources);
+  // Concurrent readers share one build and one provider-catalog read.
   if (!inflight) {
-    inflight = buildEngineCatalog(sources)
-      .then((catalog) => {
-        cache = { at: Date.now(), catalog };
-        return catalog;
+    inflight = buildCatalogEntry(sources)
+      .then((entry) => {
+        cache = { at: Date.now(), ...entry };
+        return cache;
       })
       .finally(() => {
         inflight = null;
       });
   }
-  return inflight;
+  return withCurrentMuse(await inflight, sources);
 }
 
 /** The probe currently running, so a second reader waits for it. */
-let inflight: Promise<EngineCatalog> | null = null;
+let inflight: Promise<CacheEntry> | null = null;
 
 /**
  * The value to send for a requested model.

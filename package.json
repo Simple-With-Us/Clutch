@@ -17,6 +17,7 @@
     "src",
     "engines",
     "bridges",
+    "native",
     "scripts",
     "docs",
     "assets",

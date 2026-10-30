@@ -44,6 +44,9 @@ CONFIGURATION="${CLUTCH_MAC_CONFIGURATION:-Release}"
 SIGN_MODE="${CLUTCH_MAC_SIGN:-adhoc}"
 MANIFEST_OUT="${CLUTCH_MAC_MANIFEST_OUT:-}"
 PROJECT="${CLUTCH_MAC_XCODEPROJ:-${IOS_DIR}/Clutch.xcodeproj}"
+STAGE_ROOT=""
+STAGED_APP=""
+PREVIOUS_APP=""
 
 if [[ ! -d "$IOS_DIR" ]]; then
   echo "missing ${IOS_DIR}" >&2
@@ -85,7 +88,25 @@ ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/clutch-build-lock.sh
 . "$HERE/lib/clutch-build-lock.sh"
-trap 'rm -f "$KEY_PATH" "$ZIP"; clutch_build_lock_release' EXIT
+cleanup_build() {
+  local keep_stage=0
+  rm -f "$KEY_PATH" "$ZIP"
+  if [[ -n "$STAGE_ROOT" && -d "$STAGE_ROOT" ]]; then
+    if [[ -e "$PREVIOUS_APP" || -L "$PREVIOUS_APP" ]]; then
+      if [[ ! -e "$APP" && ! -L "$APP" ]]; then
+        if ! mv "$PREVIOUS_APP" "$APP"; then
+          echo "could not restore previous Clutch.app from $PREVIOUS_APP" >&2
+          keep_stage=1
+        fi
+      else
+        rm -rf "$PREVIOUS_APP"
+      fi
+    fi
+    if [[ "$keep_stage" == "0" ]]; then rm -rf "$STAGE_ROOT"; fi
+  fi
+  clutch_build_lock_release
+}
+trap cleanup_build EXIT
 
 # DerivedData lives OUTSIDE anything the exit trap removes.  A throwaway one
 # re-resolves CometChatUIKitSwift and recompiles the whole app on every install,
@@ -159,25 +180,56 @@ if [[ ! -d "$BUILT" ]]; then
   exit 1
 fi
 
-# Stop the running app only now that there is a built replacement.  Killing it
-# before the build meant a failed build left the Mac with no app, and the
-# auto-updater does not retry a commit it has already attempted.
-if [[ "${CLUTCH_MAC_KILL_RUNNING:-1}" == "1" ]]; then
-  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
-fi
-
 mkdir -p "$(dirname "$APP")"
-rm -rf "$APP"
-ditto "$BUILT" "$APP"
+STAGE_ROOT="$(mktemp -d "$(dirname "$APP")/.clutch-app-build.XXXXXX")"
+STAGED_APP="$STAGE_ROOT/Clutch.app"
+PREVIOUS_APP="$STAGE_ROOT/Previous.app"
+ditto "$BUILT" "$STAGED_APP"
+
+MAIN_EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$STAGED_APP/Contents/Info.plist")"
+MAIN_EXECUTABLE="$STAGED_APP/Contents/MacOS/$MAIN_EXECUTABLE_NAME"
+if [[ ! -x "$MAIN_EXECUTABLE" ]]; then
+  echo "built app has no executable at $MAIN_EXECUTABLE" >&2
+  exit 1
+fi
+APP_ARCH_TEXT="$(xcrun lipo -archs "$MAIN_EXECUTABLE")"
+read -r -a APP_ARCHS <<< "$APP_ARCH_TEXT"
+if [[ ${#APP_ARCHS[@]} -eq 0 ]]; then
+  echo "built app has no supported architectures" >&2
+  exit 1
+fi
+for arch in "${APP_ARCHS[@]}"; do
+  case "$arch" in
+    arm64|x86_64) ;;
+    *) echo "unsupported built app architecture: $arch" >&2; exit 1 ;;
+  esac
+done
+
+NESTED_HELPER="$STAGED_APP/Contents/Helpers/ClutchMuseACP.app"
+bash "$HERE/build-muse-gui-helper.sh" "$NESTED_HELPER" "${APP_ARCHS[@]}"
+APP_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGED_APP/Contents/Info.plist")"
+APP_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$STAGED_APP/Contents/Info.plist")"
+if [[ -z "$APP_MARKETING_VERSION" || -z "$APP_BUILD_NUMBER" ]]; then
+  echo "built app is missing bundle version fields; refusing to package Muse helper" >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_MARKETING_VERSION" "$NESTED_HELPER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "$NESTED_HELPER/Contents/Info.plist"
 
 case "$SIGN_MODE" in
   adhoc)
-    codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
+    codesign --force --deep -s - "$NESTED_HELPER"
+    codesign --force --deep -s - "$STAGED_APP"
+    codesign --verify --strict "$NESTED_HELPER"
+    codesign --verify --deep --strict "$STAGED_APP"
     SIGNED_AS="adhoc"
     ;;
   developer-id)
     : "${CLUTCH_MAC_CODESIGN_IDENTITY:?CLUTCH_MAC_CODESIGN_IDENTITY required for developer-id signing}"
-    codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$APP"
+    codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$NESTED_HELPER"
+    codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$STAGED_APP"
+    codesign --verify --strict "$NESTED_HELPER"
+    codesign --verify --deep --strict "$STAGED_APP"
     SIGNED_AS="developer-id"
     if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" && -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
       case "$APPLE_API_KEY_P8_BASE64" in
@@ -192,9 +244,10 @@ case "$SIGN_MODE" in
         echo "notary key did not decode to a PEM private key" >&2
         exit 1
       fi
-      ditto -c -k --keepParent "$APP" "$ZIP"
+      ditto -c -k --keepParent "$STAGED_APP" "$ZIP"
       xcrun notarytool submit "$ZIP" --wait --key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
-      xcrun stapler staple "$APP" || true
+      xcrun stapler staple "$STAGED_APP" || true
+      codesign --verify --deep --strict "$STAGED_APP"
       SIGNED_AS="developer-id-notarized"
     fi
     ;;
@@ -212,13 +265,13 @@ if [[ -n "$MANIFEST_OUT" ]]; then
   # Read the identity off the product instead of repeating it here.  Two builds
   # that both claim codes.clutch.macos is the exact bug C-86 exists to kill, so
   # the manifest must not be able to assert one the bundle does not carry.
-  BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
   if [[ -z "$BUNDLE_ID" ]]; then
     echo "built app has no CFBundleIdentifier; refusing to write a manifest" >&2
     exit 1
   fi
-  BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
-  BUILT_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+  BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+  BUILT_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
   if [[ -z "$BUILT_MARKETING_VERSION" || -z "$BUILT_BUILD_NUMBER" ]]; then
     echo "built app has no version stamp; refusing to write a manifest" >&2
     exit 1
@@ -235,6 +288,19 @@ json.dump({
     "buildNumber": build_number,
 }, open(path, "w"), indent=2)
 PY
+fi
+
+# Signing, optional notarization and manifest generation finish before replacing
+# the installed app.
+if [[ "${CLUTCH_MAC_KILL_RUNNING:-1}" == "1" ]]; then
+  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
+fi
+if [[ -e "$APP" || -L "$APP" ]]; then
+  mv "$APP" "$PREVIOUS_APP"
+fi
+if ! mv "$STAGED_APP" "$APP"; then
+  echo "could not install staged Clutch.app at $APP" >&2
+  exit 1
 fi
 
 echo "built ${APP} (${SIGNED_AS})"

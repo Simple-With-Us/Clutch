@@ -37,7 +37,9 @@ afterEach(() => {
 });
 
 function writeRaw(body: string, mode = 0o600): void {
-  writeFileSync(join(home, "infisical.json"), body, { mode });
+  const path = join(home, "infisical.json");
+  writeFileSync(path, body, { mode });
+  chmodSync(path, mode);
 }
 
 describe("infisicalIdentityPath", () => {

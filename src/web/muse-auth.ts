@@ -55,7 +55,7 @@ const MAX_MESSAGE_LENGTH = 1000;
 const GENERIC_AUTH_FAILURE = "Muse sign-in did not complete; please try again.";
 
 const AUTH_FAILURE_COPY: Record<MuseAuthFailureCategory, string> = {
-  "keychain-access": "Muse could not access the macOS Keychain.\u00A0 Check the credential's access settings for Muse Code, then try again.",
+  "keychain-access": "Muse could not access the macOS Keychain.\u00A0 Check that the login keychain is unlocked and Muse is allowed to read its credential.",
   "already-active": "A Muse sign-in is already in progress.\u00A0 Finish it before trying again.",
   canceled: "Muse sign-in was canceled.\u00A0 Try again if you still want to sign in.",
   "expired-or-declined": "Muse sign-in was declined or expired.\u00A0 Start a new sign-in attempt.",

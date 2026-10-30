@@ -34,7 +34,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -281,61 +281,30 @@ export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
   return launcher.command.includes("/") ? existsSync(launcher.command) : true;
 }
 
-const pendingMuseNativeProbes = new Map<string, Promise<boolean>>();
-
-function probeNativeMuseAcp(host: string, env: Record<string, string | undefined>): Promise<boolean> {
-  const gate = env.MUSE_EXPERIMENTAL_ACP || "on";
-  const key = `${host}\0${gate}\0${env.MUSE_EXPERIMENTAL_SDK_ENABLED ?? ""}`;
-  const pending = pendingMuseNativeProbes.get(key);
-  if (pending) return pending;
-  const probe = new Promise<boolean>((resolve) => {
-    const child = spawn(host, ["acp", "--help"], {
-      env: {
-        ...process.env,
-        ...env,
-        MUSE_EXPERIMENTAL_ACP: gate,
-      },
-      stdio: "ignore",
-    });
-    const timeout = setTimeout(() => {
-      child.kill();
-      resolve(false);
-    }, 5_000);
-    child.once("error", () => {
-      clearTimeout(timeout);
-      resolve(false);
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      resolve(code === 0);
-    });
-  });
-  pendingMuseNativeProbes.set(key, probe);
-  void probe.finally(() => {
-    if (pendingMuseNativeProbes.get(key) === probe) pendingMuseNativeProbes.delete(key);
-  });
-  return probe;
+function executableFile(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Whether Muse Code can run here.
- *
- * The official native ACP server is preferred when the installed `muse`
- * supports it.  Older hosts can still use the community adapter, whose bin
- * usually lands in the npm global prefix; the launcher script searches the
- * same paths as this availability check.
+ * Passive installation check for the selected Muse backend.
+ * The launcher validates native ACP support only when a user starts it.
  */
 export async function museInstalled(
   env: Record<string, string | undefined> = process.env,
   candidates: {
     hosts?: string[];
     adapters?: string[];
-    nativeProbe?: (host: string, env: Record<string, string | undefined>) => boolean | Promise<boolean>;
   } = {},
 ): Promise<boolean> {
   // An explicit override only counts when the path is really there: a stale
   // variable must not make the catalog claim Muse Code is installed.
   const hostPaths = candidates.hosts ?? [
+    ...(env.PATH ?? "").split(":").filter(Boolean).map((dir) => join(dir, "muse")),
     "/usr/local/bin/muse",
     "/opt/homebrew/bin/muse",
     join(homedir(), ".local", "bin", "muse"),
@@ -344,6 +313,7 @@ export async function museInstalled(
   // outside the global npm prefix (the fleet runtime does) still reads as
   // installed.
   const adapterPaths = candidates.adapters ?? [
+    ...(env.PATH ?? "").split(":").filter(Boolean).map((dir) => join(dir, "muse-code-acp")),
     ...(env.MUSE_CODE_ACP_SEARCH_PATHS ?? "")
       .split(":")
       .filter((dir) => dir.length > 0)
@@ -353,19 +323,15 @@ export async function museInstalled(
     join(homedir(), ".local", "bin", "muse-code-acp"),
   ];
   const override = env.MUSE_CODE_EXECUTABLE?.trim();
-  const host = (override && existsSync(override) ? override : undefined)
-    || hostPaths.find(existsSync);
+  const host = (override && executableFile(override) ? override : undefined)
+    || hostPaths.find(executableFile);
   if (!host) return false;
   const backend = env.MUSE_CODE_ACP_BACKEND?.trim() || "auto";
   if (backend !== "auto" && backend !== "native" && backend !== "adapter") return false;
-  if (backend !== "adapter") {
-    const probe = candidates.nativeProbe ?? probeNativeMuseAcp;
-    if (await probe(host, env)) return true;
-    if (backend === "native") return false;
-  }
+  if (backend !== "adapter") return true;
   const adapterOverride = env.MUSE_CODE_ACP_BIN?.trim();
-  const adapter = (adapterOverride && existsSync(adapterOverride) ? adapterOverride : undefined)
-    || adapterPaths.find(existsSync);
+  const adapter = (adapterOverride && executableFile(adapterOverride) ? adapterOverride : undefined)
+    || adapterPaths.find(executableFile);
   return Boolean(adapter);
 }
 
@@ -920,6 +886,10 @@ export function safeMuseBridgeError(error: unknown): string {
   return "Muse request failed; retry or sign in to Muse.";
 }
 
+const SessionOptionsResultSchema = z.object({
+  configOptions: z.array(z.unknown()).optional(),
+}).loose();
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 export class Bridge implements MuseAuthBridge {
   private child: ChildProcess | null = null;
@@ -932,6 +902,7 @@ export class Bridge implements MuseAuthBridge {
   private onUrlElicitation: ((elicitation: MuseUrlElicitation) => boolean) | null = null;
   private onElicitationComplete: ((elicitationId: string) => void) | null = null;
   private offeredAuthMethods: Array<{ id: string; name?: string; description?: string }> = [];
+  private advertisedConfigOptions: unknown[] | null = null;
   private pendingPermissions = new Map<
     string,
     { bridgeRequestId: number | string; options: PermissionOption[] }
@@ -941,7 +912,18 @@ export class Bridge implements MuseAuthBridge {
   constructor(
     readonly engine: Engine,
     private env: NodeJS.ProcessEnv,
+    private launcher: Launcher = LAUNCHERS[engine],
   ) {}
+
+  /** Options from the latest successful user session/new or session/load. */
+  catalogOptions(): unknown[] | null {
+    return this.advertisedConfigOptions;
+  }
+
+  private rememberSessionOptions(result: unknown): void {
+    const parsed = SessionOptionsResultSchema.safeParse(result);
+    this.advertisedConfigOptions = parsed.success ? parsed.data.configOptions ?? [] : [];
+  }
 
   setUpdateHandler(fn: (u: AcpUpdate) => void): void {
     this.onUpdate = fn;
@@ -1000,7 +982,7 @@ export class Bridge implements MuseAuthBridge {
   }
 
   private spawn(): void {
-    const launcher = LAUNCHERS[this.engine];
+    const launcher = this.launcher;
     if (launcher.command.includes("/") && !existsSync(launcher.command)) {
       throw new Error(`missing launcher ${launcher.command}`);
     }
@@ -1034,6 +1016,7 @@ export class Bridge implements MuseAuthBridge {
     this.child = null;
     this.initialized = null;
     this.offeredAuthMethods = [];
+    this.advertisedConfigOptions = null;
     // Drop any partial line left by a mid-line crash; the next spawn starts
     // fresh instead of framing new stdout onto the old fragment.
     this.buffer = "";
@@ -1210,6 +1193,7 @@ export class Bridge implements MuseAuthBridge {
     if (typeof result?.sessionId !== "string" || result.sessionId.length === 0) {
       throw new Error("bridge returned no sessionId");
     }
+    this.rememberSessionOptions(result);
     return result.sessionId;
   }
 
@@ -1260,8 +1244,10 @@ export class Bridge implements MuseAuthBridge {
     return sessions;
   }
 
-  loadSession(sessionId: string, cwd: string): Promise<unknown> {
-    return this.send("session/load", { sessionId, cwd, mcpServers: [] });
+  async loadSession(sessionId: string, cwd: string): Promise<unknown> {
+    const result = await this.send("session/load", { sessionId, cwd, mcpServers: [] });
+    this.rememberSessionOptions(result);
+    return result;
   }
 
   /**
@@ -1710,6 +1696,7 @@ async function main(): Promise<void> {
       launchers: LAUNCHERS,
       available: Object.fromEntries(availability) as Record<Engine, boolean>,
       probeCwd: process.env.HOME ?? "/tmp",
+      readMuseSessionOptions: () => bridges.get("muse")?.catalogOptions() ?? null,
     });
   }
 

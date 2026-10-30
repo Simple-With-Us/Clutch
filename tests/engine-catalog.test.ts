@@ -1,15 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   buildEngineCatalog,
+  engineCatalog,
   effortsFromConfigOptions,
   mergeMuseModels,
   modelsFromConfigOptions,
   probeEngineOptions,
   readMuseProviderCatalog,
+  resetEngineCatalogCache,
   resolveModelValue,
   threadSupportFromInitialize,
   type EngineCatalog,
@@ -41,6 +43,11 @@ const MCPRODE_OPTIONS = [
     ],
   },
 ];
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetEngineCatalogCache();
+});
 
 describe("modelsFromConfigOptions", () => {
   it("reads the engine's own model choices in its order", () => {
@@ -141,7 +148,43 @@ describe("buildEngineCatalog", () => {
     const muse = catalog.engines[3];
     expect(muse.available).toBe(false);
     expect(muse.effortConfigId).toBe("reasoningEffort");
-    expect(muse.effortLevels).toContain("ultra");
+    expect(muse.effortLevels).toEqual([]);
+  });
+
+  it("never starts Muse on repeated catalog misses and reads its local provider models", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-muse-catalog-passive-"));
+    const marker = join(dir, "muse-started");
+    const sentinel = join(dir, "muse");
+    writeFileSync(sentinel, `#!${process.execPath}\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "started");\n`);
+    chmodSync(sentinel, 0o755);
+    const providerDirectory = join(dir, ".local", "share", "muse", "model-catalog");
+    mkdirSync(providerDirectory, { recursive: true });
+    writeFileSync(join(providerDirectory, "public-models.json"), JSON.stringify({ rows: [
+      { model_id: "muse-local", display_label: "Local Muse Model", provider_id: "meta", profile_id: null },
+      { model_id: "muse-hidden", visibility: "hidden" },
+    ] }));
+    const sources = {
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: "/unused", args: [] }, muse: { command: sentinel, args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: true },
+      probeCwd: dir,
+      readMuseCatalog: () => readMuseProviderCatalog(dir),
+    };
+    try {
+      for (let request = 0; request < 3; request += 1) {
+        resetEngineCatalogCache();
+        const catalog = await engineCatalog(sources);
+        const muse = catalog.engines.find((entry) => entry.id === "muse")!;
+        expect(muse.models.map((model) => model.id)).toEqual(["muse-local"]);
+        expect(muse.effortLevels).toEqual([]);
+      }
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      resetEngineCatalogCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("publishes that every engine's threads can be listed and resumed", async () => {
@@ -180,6 +223,69 @@ describe("buildEngineCatalog", () => {
     expect(mcode?.note).toContain("did not advertise");
     expect(mcode?.effortLevels).toEqual(["default", "low", "medium", "high", "xhigh", "max"]);
     expect(mcode?.supportsThreads).toBe(true);
+  });
+});
+
+describe("engineCatalog provider caching", () => {
+  it("reads provider data once per cache build while session options stay fresh across sequential and concurrent requests", async () => {
+    let clock = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    let provider = "muse-provider-one";
+    let options: unknown = [
+      { id: "model", options: [{ name: "muse-new", value: "wire-new" }] },
+      { id: "reasoningEffort", options: [{ value: "high" }] },
+    ];
+    const readMuseCatalog = vi.fn(() => [{ id: provider, label: provider, value: provider }]);
+    const sources = {
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: "/unused", args: [] }, muse: { command: "/never-start-muse", args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: true },
+      probeCwd: "/unused",
+      readMuseCatalog,
+      readMuseSessionOptions: () => options,
+    };
+    const muse = (catalog: EngineCatalog) => catalog.engines.find((engine) => engine.id === "muse")!;
+
+    resetEngineCatalogCache();
+    const cold = await Promise.all([engineCatalog(sources), engineCatalog(sources), engineCatalog(sources)]);
+    expect(readMuseCatalog).toHaveBeenCalledTimes(1);
+    for (const catalog of cold) {
+      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-new", "muse-provider-one"]);
+      expect(muse(catalog).effortLevels).toEqual(["high"]);
+    }
+    await engineCatalog(sources);
+    expect(readMuseCatalog).toHaveBeenCalledTimes(1);
+
+    options = [
+      { id: "model", options: [{ name: "muse-loaded", value: "wire-loaded" }] },
+      { id: "reasoningEffort", options: [{ value: "low" }] },
+    ];
+    sources.available.muse = false;
+    provider = "muse-provider-two";
+    const cached = await Promise.all([engineCatalog(sources), engineCatalog(sources)]);
+    expect(readMuseCatalog).toHaveBeenCalledTimes(1);
+    for (const catalog of cached) {
+      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-loaded", "muse-provider-one"]);
+      expect(muse(catalog).effortLevels).toEqual(["low"]);
+      expect(muse(catalog).available).toBe(false);
+    }
+
+    clock += 5 * 60 * 1_000 + 1;
+    const expired = await Promise.all([engineCatalog(sources), engineCatalog(sources)]);
+    expect(readMuseCatalog).toHaveBeenCalledTimes(2);
+    for (const catalog of expired) {
+      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-loaded", "muse-provider-two"]);
+    }
+
+    resetEngineCatalogCache();
+    provider = "muse-provider-three";
+    options = null;
+    const reset = await engineCatalog(sources);
+    expect(readMuseCatalog).toHaveBeenCalledTimes(3);
+    expect(muse(reset).models.map((model) => model.id)).toEqual(["muse-provider-three"]);
+    expect(muse(reset).effortLevels).toEqual([]);
   });
 });
 
