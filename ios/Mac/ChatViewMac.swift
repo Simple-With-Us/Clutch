@@ -1250,7 +1250,7 @@ public struct ChatView: View {
     private func codeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
         let detail = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
         if engine == .muse && EngineAuthenticationAttempt.isRequired(detail) {
-            return Copy.gap("Sign in to Muse to open this thread.", "Use Sign In To Muse above, then select the thread again.")
+            return Copy.gap("Sign in to Muse to open this thread.", "Open Muse Account above, then select the thread again.")
         }
         if engine == .muse, detail.range(of: "open in another process", options: .caseInsensitive) != nil {
             return "This Muse thread is open in another process; choose another thread or wait until it is released."

@@ -160,6 +160,22 @@ describe("Muse GUI ACP broker", () => {
     expect(metadata.brokerDirectoryRemoved).toBe(true);
   });
 
+  it("rejects a helper identity that changes across executable verification", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "identity-race", "identity-race");
+    fixture.end();
+    const result = await fixture.result;
+
+    expect(result).toMatchObject({ code: 1, stdout: Buffer.alloc(0), stderr: "muse-gui-acp: peer-identity-rejected\n" });
+    const metadata = JSON.parse(readFileSync(join(directory, "identity-race.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata.configBytesReceived).toBe(0);
+    expect(metadata.helperIdentity).toBeUndefined();
+    expect(metadata.signalsSent).toEqual([]);
+    expect(metadata.helperTerminatedBySignal).toBe(false);
+    expect(metadata.fakeMuseStarted).toBe(false);
+    expect(metadata.brokerDirectoryRemoved).toBe(true);
+  });
+
   it.each([
     ["peer-path-equal", true],
     ["peer-path-canonical", true],

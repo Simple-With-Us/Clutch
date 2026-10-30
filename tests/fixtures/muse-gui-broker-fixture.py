@@ -67,7 +67,7 @@ def helper(socket_path: str, record_path: str, scenario: str) -> int:
             if time.monotonic() >= deadline:
                 return 4
             time.sleep(0.01)
-    if scenario == "imposter-peer":
+    if scenario in {"imposter-peer", "identity-race"}:
         connection.settimeout(3)
         received = connection.recv(1)
         Path(record_path).write_text(json.dumps({
@@ -361,6 +361,7 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
         executable.chmod(0o700)
 
         launched_helper: list[subprocess.Popen[bytes]] = []
+        identity_race_original_snapshot = module._process_snapshot
 
         def open_helper(helper_app: str, socket_path: str) -> subprocess.Popen[bytes]:
             if helper_app != str(app):
@@ -379,6 +380,15 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
         def verify_helper_peer(pid: int, helper_app: str) -> bool:
             if scenario == "imposter-peer":
                 return module._verify_helper_executable(pid, helper_app, process_executable=lambda _: sys.executable)
+            if scenario == "identity-race":
+                def recycled_snapshot(snapshot_pid: int):
+                    snapshot = identity_race_original_snapshot(snapshot_pid)
+                    if snapshot is None:
+                        return None
+                    return snapshot[0], snapshot[1], snapshot[2], snapshot[3] + " recycled"
+
+                module._process_snapshot = recycled_snapshot
+                return True
             return bool(launched_helper and pid == launched_helper[0].pid and helper_app == str(app))
 
         sent_signals = []
@@ -410,6 +420,8 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
                 code = 1
             else:
                 code = 0
+        if scenario == "identity-race":
+            module._process_snapshot = identity_race_original_snapshot
         if Path(record_path).exists():
             value = json.loads(Path(record_path).read_text(encoding="utf-8"))
             value["brokerDirectoryRemoved"] = not Path(value["brokerDirectory"]).exists()

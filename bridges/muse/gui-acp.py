@@ -567,10 +567,17 @@ class GuiAcpBroker:
             peer_pid, peer_uid = _peer_credentials(conn)
             if peer_pid <= 1 or peer_uid != os.getuid():
                 raise BrokerFailure("peer-identity-rejected")
-            if not self.verify_helper_peer(peer_pid, self.helper_app):
-                raise BrokerFailure("peer-identity-rejected")
             helper_process = _process_snapshot(peer_pid)
             if helper_process is None or helper_process[1] != peer_uid or not helper_process[3]:
+                raise BrokerFailure("peer-identity-rejected")
+            if not self.verify_helper_peer(peer_pid, self.helper_app):
+                raise BrokerFailure("peer-identity-rejected")
+            confirmed_helper_process = _process_snapshot(peer_pid)
+            if (
+                confirmed_helper_process is None
+                or confirmed_helper_process[1] != peer_uid
+                or confirmed_helper_process[3] != helper_process[3]
+            ):
                 raise BrokerFailure("peer-identity-rejected")
             self.helper_identity = HelperProcessIdentity(peer_pid, peer_uid, helper_process[3])
             config = {
