@@ -55,7 +55,7 @@ import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { readSessionUsage, withRate, type SessionUsage } from "./session-usage.ts";
-import { isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
+import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
 import {
   loadSessionMeta,
   newProjectId,
@@ -1092,6 +1092,7 @@ export class Bridge implements MuseAuthBridge {
         if (msg.error) {
           if (this.engine === "muse") {
             const error = new Error(safeMuseBridgeError(msg.error));
+            attachMuseAuthFailure(error, msg.error);
             if (typeof msg.error.code === "number" && Number.isSafeInteger(msg.error.code)) {
               Object.assign(error, { code: msg.error.code });
             }

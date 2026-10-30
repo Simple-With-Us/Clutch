@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { attachMuseAuthFailure } from "../src/web/muse-auth.ts";
 import { safeMuseBridgeError } from "../src/web/chat-bridge.ts";
 
 const TOKEN = `muse-auth-test-${"x".repeat(48)}`;
@@ -17,6 +18,7 @@ let port = 0;
 let tokenFile = "";
 let tempDir = "";
 let stubLogFile = "";
+let authFailureFile = "";
 let stderr = "";
 
 function freePort(): Promise<number> {
@@ -74,10 +76,21 @@ async function waitForState(attemptId: string, state: string): Promise<Record<st
   throw new Error(`Muse auth did not reach ${state}`);
 }
 
+async function waitForStubEvent(predicate: (event: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
+  const started = Date.now();
+  while (Date.now() - started < 5000) {
+    const event = stubEvents().find(predicate);
+    if (event) return event;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Muse auth fixture did not record the expected event");
+}
+
 beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), "clutch-muse-auth-"));
   tokenFile = join(tempDir, "chat-token");
   stubLogFile = join(tempDir, "muse-auth-stub.jsonl");
+  authFailureFile = join(tempDir, "muse-auth-failure.json");
   const launcher = join(tempDir, "muse-auth-stub.mjs");
   writeFileSync(launcher, readFileSync(FIXTURE), { mode: 0o755 });
   writeFileSync(tokenFile, `${TOKEN}\n`, { mode: 0o600 });
@@ -92,6 +105,7 @@ beforeAll(async () => {
       CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
       CLUTCH_CHAT_LAUNCHER_MUSE: launcher,
       MUSE_AUTH_STUB_LOG: stubLogFile,
+      MUSE_AUTH_STUB_FAILURE_FILE: authFailureFile,
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -113,6 +127,22 @@ describe("Muse auth sidecar endpoints", () => {
     expect(safeMuseBridgeError(Object.assign(new Error(mapped), { code: -32000 }))).toBe(mapped);
     expect(mapped).not.toContain("/private/path");
     expect(mapped).not.toContain("provider diagnostics");
+  });
+
+  it("attaches only allowlisted auth metadata to sanitized ACP errors", () => {
+    const raw = {
+      code: -32000,
+      message: "Keychain access failed at https://private.example.test/callback?token=raw-secret",
+      data: { providerToken: "raw-secret" },
+    };
+    const error = new Error(safeMuseBridgeError(raw));
+    attachMuseAuthFailure(error, raw);
+
+    expect(error.message).toBe("Muse request failed (ACP code -32000).");
+    expect(error).toMatchObject({ museAuthFailure: { category: "keychain-access", code: -32000 } });
+    expect(JSON.stringify(error)).not.toContain("private.example.test");
+    expect(JSON.stringify(error)).not.toContain("raw-secret");
+    expect(JSON.stringify(error)).not.toContain("Keychain access failed");
   });
 
   it("does not auto-authenticate a failed new session, then completes explicit device-code login", async () => {
@@ -154,6 +184,41 @@ describe("Muse auth sidecar endpoints", () => {
     expect(stderr).not.toContain("login.example.test");
   });
 
+  it("preserves safe Keychain guidance after browser consent and hides raw ACP details", async () => {
+    const fakeUrl = "https://private.example.test/callback?token=fixture-secret";
+    const rawMessage = `Keychain access was denied for ${fakeUrl}`;
+    writeFileSync(authFailureFile, JSON.stringify({
+      code: -32000,
+      message: rawMessage,
+      data: { providerToken: "fixture-secret" },
+    }));
+
+    try {
+      const start = await jsonRequest("/clutch/v1/auth/start", "POST", { engine: "muse" });
+      expect(start.status).toBe(200);
+      const started = await start.json() as { attemptId: string };
+      await waitForState(started.attemptId, "waiting");
+
+      const answered = await jsonRequest(`/clutch/v1/auth/${started.attemptId}/answer`, "POST", { action: "accept" });
+      expect(answered.status).toBe(200);
+      const failed = await waitForState(started.attemptId, "failed");
+      const serialized = JSON.stringify(failed);
+      expect(failed).toMatchObject({
+        failureCategory: "keychain-access",
+        failureCode: -32000,
+        error: "Muse could not access the macOS Keychain.\u00A0 Check the credential's access settings for Muse Code, then try again.",
+      });
+      expect(serialized).not.toContain("private.example.test");
+      expect(serialized).not.toContain("fixture-secret");
+      expect(serialized).not.toContain("Keychain access was denied");
+      expect(stderr).not.toContain("private.example.test");
+      expect(stderr).not.toContain("fixture-secret");
+      expect(stderr).not.toContain(rawMessage);
+    } finally {
+      if (existsSync(authFailureFile)) unlinkSync(authFailureFile);
+    }
+  });
+
   it("cancels the current URL request and rejects unknown attempt ids", async () => {
     const start = await jsonRequest("/clutch/v1/auth/start", "POST", { engine: "muse" });
     const started = await start.json() as { attemptId: string };
@@ -164,6 +229,6 @@ describe("Muse auth sidecar endpoints", () => {
     const canceled = await jsonRequest(`/clutch/v1/auth/${started.attemptId}`, "DELETE");
     expect(canceled.status).toBe(200);
     expect(await canceled.json()).toMatchObject({ state: "failed", error: "Muse sign-in was canceled." });
-    expect(stubEvents().some((entry) => entry.method === "elicitation/answer" && entry.action === "cancel")).toBe(true);
+    await waitForStubEvent((entry) => entry.method === "elicitation/answer" && entry.action === "cancel");
   });
 });

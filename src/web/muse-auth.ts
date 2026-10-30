@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 
 export type MuseAuthState = "pending" | "waiting" | "complete" | "failed";
 export type MuseElicitationAction = "accept" | "cancel";
+export type MuseAuthFailureCategory = "keychain-access" | "already-active" | "canceled" | "expired-or-declined" | "generic";
+
+export interface MuseAuthFailureInfo {
+  category: MuseAuthFailureCategory;
+  code?: number;
+}
 
 export interface MuseAuthSnapshot {
   attemptId: string;
@@ -9,6 +15,8 @@ export interface MuseAuthSnapshot {
   url?: string;
   message?: string;
   error?: string;
+  failureCategory?: MuseAuthFailureCategory;
+  failureCode?: number;
 }
 
 export interface MuseAuthMethod {
@@ -44,6 +52,55 @@ interface ActiveMuseAuthAttempt {
 
 const ATTEMPT_TTL_MS = 10 * 60 * 1000;
 const MAX_MESSAGE_LENGTH = 1000;
+const GENERIC_AUTH_FAILURE = "Muse sign-in did not complete; please try again.";
+
+const AUTH_FAILURE_COPY: Record<MuseAuthFailureCategory, string> = {
+  "keychain-access": "Muse could not access the macOS Keychain.\u00A0 Check the credential's access settings for Muse Code, then try again.",
+  "already-active": "A Muse sign-in is already in progress.\u00A0 Finish it before trying again.",
+  canceled: "Muse sign-in was canceled.\u00A0 Try again if you still want to sign in.",
+  "expired-or-declined": "Muse sign-in was declined or expired.\u00A0 Start a new sign-in attempt.",
+  generic: GENERIC_AUTH_FAILURE,
+};
+
+/** Classify only the ACP error message and safe numeric code; never retain its raw payload. */
+export function classifyMuseAuthFailure(error: unknown): MuseAuthFailureInfo {
+  const row = error && typeof error === "object" ? error as { message?: unknown; code?: unknown } : {};
+  const message = typeof row.message === "string" ? row.message : "";
+  let category: MuseAuthFailureCategory = "generic";
+
+  if (/keychain|errSecInteractionNotAllowed|interaction not allowed|user interaction is not allowed/i.test(message)) {
+    category = "keychain-access";
+  } else if (/(?:muse )?(?:login|sign[ -]?in) is already in progress|already active login/i.test(message)) {
+    category = "already-active";
+  } else if (/\b(cancelled|canceled|cancellation|cancelation)\b/i.test(message)) {
+    category = "canceled";
+  } else if (/\b(expired|declined|timed out)\b/i.test(message)) {
+    category = "expired-or-declined";
+  }
+
+  return {
+    category,
+    ...(typeof row.code === "number" && Number.isSafeInteger(row.code) ? { code: row.code } : {}),
+  };
+}
+
+/** Attach allowlisted metadata to a sanitized bridge error without copying provider text. */
+export function attachMuseAuthFailure(error: Error, rawError: unknown): void {
+  Object.assign(error, { museAuthFailure: classifyMuseAuthFailure(rawError) });
+}
+
+function museAuthFailureFrom(error: unknown): MuseAuthFailureInfo | null {
+  if (!error || typeof error !== "object") return null;
+  const candidate = (error as { museAuthFailure?: unknown }).museAuthFailure;
+  if (!candidate || typeof candidate !== "object") return null;
+  const row = candidate as { category?: unknown; code?: unknown };
+  const categories: MuseAuthFailureCategory[] = ["keychain-access", "already-active", "canceled", "expired-or-declined", "generic"];
+  if (typeof row.category !== "string" || !categories.includes(row.category as MuseAuthFailureCategory)) return null;
+  return {
+    category: row.category as MuseAuthFailureCategory,
+    ...(typeof row.code === "number" && Number.isSafeInteger(row.code) ? { code: row.code } : {}),
+  };
+}
 
 function urlForUser(raw: string): string | null {
   if (raw.length === 0 || raw.length > 2048) return null;
@@ -115,7 +172,7 @@ export class MuseAuthController {
     if (!this.bridge.answerElicitation(active.bridgeRequestId, action)) return null;
     delete active.bridgeRequestId;
     if (action === "accept") active.acceptedUrl = true;
-    else this.failAttempt(active, "Muse sign-in was canceled.");
+    else this.failAttempt(active, "Muse sign-in was canceled.", { category: "canceled" });
     return { ...active.snapshot };
   }
 
@@ -131,6 +188,7 @@ export class MuseAuthController {
       active.acceptedUrl
         ? "Stopped waiting for Muse sign-in; the browser flow may still complete."
         : "Muse sign-in was canceled.",
+      active.acceptedUrl ? undefined : { category: "canceled" },
     );
     return { ...active.snapshot };
   }
@@ -148,10 +206,11 @@ export class MuseAuthController {
         attempt.snapshot.state = "complete";
         this.clearTimer(attempt);
       }
-    } catch {
+    } catch (error) {
       const currentState = attempt.snapshot.state as MuseAuthState;
       if (this.active === attempt && currentState !== "complete" && currentState !== "failed") {
-        this.failAttempt(attempt, "Muse sign-in did not complete; please try again.");
+        const failure = museAuthFailureFrom(error) ?? { category: "generic" as const };
+        this.failAttempt(attempt, AUTH_FAILURE_COPY[failure.category], failure);
       }
     }
   }
@@ -190,9 +249,15 @@ export class MuseAuthController {
     );
   }
 
-  private failAttempt(active: ActiveMuseAuthAttempt, message: string): void {
+  private failAttempt(active: ActiveMuseAuthAttempt, message: string, failure?: MuseAuthFailureInfo): void {
     if (active.snapshot.state === "complete" || active.snapshot.state === "failed") return;
-    active.snapshot = { attemptId: active.snapshot.attemptId, state: "failed", error: message };
+    active.snapshot = {
+      attemptId: active.snapshot.attemptId,
+      state: "failed",
+      error: message,
+      ...(failure ? { failureCategory: failure.category } : {}),
+      ...(failure?.code !== undefined ? { failureCode: failure.code } : {}),
+    };
     delete active.bridgeRequestId;
     this.clearTimer(active);
   }
