@@ -26,6 +26,7 @@ STARTUP_TIMEOUT_SECONDS = 30.0
 HELPER_WAIT_SECONDS = 5.0
 GROUP_TERM_SECONDS = 1.0
 HELPER_TERM_SECONDS = 0.5
+PROC_PIDPATHINFO_MAXSIZE = 4096
 GUI_OPEN_ENV_KEYS = ("PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE")
 SAFE_FAILURE_STAGES = {
     "launch-failed",
@@ -166,6 +167,38 @@ def _process_snapshot(pid: int) -> tuple[int, int, int, str] | None:
         return None
     birth = " ".join(fields[3:])
     return ppid, uid, pgid, birth
+
+
+def _process_executable(pid: int) -> str | None:
+    if sys.platform != "darwin" or pid <= 1 or pid > 2_147_483_647:
+        return None
+    try:
+        # Darwin libproc.h declares int proc_pidpath(int, void *, uint32_t).
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidpath = library.proc_pidpath
+        proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        proc_pidpath.restype = ctypes.c_int
+        buffer = ctypes.create_string_buffer(PROC_PIDPATHINFO_MAXSIZE)
+        length = proc_pidpath(pid, buffer, len(buffer))
+    except (AttributeError, OSError):
+        return None
+    if length <= 0 or length >= len(buffer) or buffer.raw[length] != 0:
+        return None
+    path = os.fsdecode(buffer.raw[:length])
+    if not os.path.isabs(path) or "\0" in path:
+        return None
+    return os.path.realpath(path)
+
+
+def _verify_helper_executable(
+    pid: int,
+    helper_app: str,
+    *,
+    process_executable: Callable[[int], str | None] = _process_executable,
+) -> bool:
+    expected = os.path.realpath(os.path.join(helper_app, "Contents", "MacOS", "ClutchMuseACP"))
+    actual = process_executable(pid)
+    return bool(actual and os.path.isabs(actual) and os.path.realpath(actual) == expected)
 
 
 def _bundle_path_stat(path: Path, *, directory: bool) -> os.stat_result:
@@ -335,7 +368,7 @@ def _stop_helper(
         return
     deadline = time.monotonic() + HELPER_WAIT_SECONDS
     while time.monotonic() < deadline and _helper_running(identity, launcher_process):
-        time.sleep(0.05)
+        time.sleep(0.5)
     if not _helper_running(identity, launcher_process):
         return
     try:
@@ -344,7 +377,7 @@ def _stop_helper(
         return
     deadline = time.monotonic() + HELPER_TERM_SECONDS
     while time.monotonic() < deadline and _helper_running(identity, launcher_process):
-        time.sleep(0.025)
+        time.sleep(0.1)
     if _helper_running(identity, launcher_process):
         try:
             os.kill(identity.pid, signal.SIGKILL)
@@ -470,6 +503,7 @@ class GuiAcpBroker:
         arguments: list[str],
         *,
         open_helper: Callable[[str, str], subprocess.Popen[bytes]] = _launch_helper,
+        verify_helper_peer: Callable[[int, str], bool] = _verify_helper_executable,
     ):
         if not os.path.isabs(executable):
             raise BrokerFailure("config-failed")
@@ -478,6 +512,7 @@ class GuiAcpBroker:
         self.arguments = arguments
         self.path = os.environ.get("PATH", "")
         self.open_helper = open_helper
+        self.verify_helper_peer = verify_helper_peer
         self.directory: str | None = None
         self.socket_path: str | None = None
         self.listener: socket.socket | None = None
@@ -531,6 +566,8 @@ class GuiAcpBroker:
         try:
             peer_pid, peer_uid = _peer_credentials(conn)
             if peer_pid <= 1 or peer_uid != os.getuid():
+                raise BrokerFailure("peer-identity-rejected")
+            if not self.verify_helper_peer(peer_pid, self.helper_app):
                 raise BrokerFailure("peer-identity-rejected")
             helper_process = _process_snapshot(peer_pid)
             if helper_process is None or helper_process[1] != peer_uid or not helper_process[3]:
@@ -613,6 +650,7 @@ def main(
     argv: list[str],
     *,
     open_helper: Callable[[str, str], subprocess.Popen[bytes]] = _launch_helper,
+    verify_helper_peer: Callable[[int, str], bool] = _verify_helper_executable,
 ) -> int:
     def interrupt(signum: int, _frame: object) -> None:
         raise BrokerInterrupted(signum)
@@ -625,7 +663,8 @@ def main(
         return 2
     helper_app, executable, *arguments = argv
     try:
-        broker = GuiAcpBroker(helper_app, executable, arguments, open_helper=open_helper)
+        broker = GuiAcpBroker(helper_app, executable, arguments, open_helper=open_helper,
+                              verify_helper_peer=verify_helper_peer)
         broker.run()
         return 0
     except BrokerFailure as failure:

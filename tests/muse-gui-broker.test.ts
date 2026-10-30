@@ -144,6 +144,46 @@ describe("Muse GUI ACP broker", () => {
     expect(metadata.fallbackSignalObserved).toBe(false);
   });
 
+  it("rejects a same-user imposter before sending configuration or authorizing cleanup signals", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "imposter-peer", "imposter-peer");
+    fixture.end();
+    const result = await fixture.result;
+
+    expect(result).toMatchObject({ code: 1, stdout: Buffer.alloc(0), stderr: "muse-gui-acp: peer-identity-rejected\n" });
+    const metadata = JSON.parse(readFileSync(join(directory, "imposter-peer.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata.configBytesReceived).toBe(0);
+    expect(metadata.helperIdentity).toBeUndefined();
+    expect(metadata.signalsSent).toEqual([]);
+    expect(metadata.helperTerminatedBySignal).toBe(false);
+    expect(metadata.fakeMuseStarted).toBe(false);
+    expect(metadata.brokerDirectoryRemoved).toBe(true);
+  });
+
+  it.each([
+    ["peer-path-equal", true],
+    ["peer-path-canonical", true],
+    ["peer-path-mismatch", false],
+    ["peer-path-unavailable", false],
+    ["peer-path-relative", false],
+  ])("checks the canonical helper executable for %s", async (scenario, verified) => {
+    const directory = scratch();
+    const fixture = startFixture(directory, String(scenario), String(scenario));
+    fixture.end();
+    expect(await fixture.result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, `${scenario}.json`), "utf8")) as Record<string, unknown>;
+    expect(metadata).toEqual({ verified, pids: [12345] });
+  });
+
+  it("uses the fixed libproc binding and bounded executable path buffer", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "pidpath-binding", "pidpath-binding");
+    fixture.end();
+    expect(await fixture.result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, "pidpath-binding.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata).toEqual({ pathMatches: true, fixedLibrary: true, boundedBuffer: true, typedArguments: true, typedResult: true });
+  });
+
   it("terminates only the verified Muse group after helper loss", async () => {
     const directory = scratch();
     const fixture = startFixture(directory, "helper-loss", "helper-loss");
@@ -188,6 +228,18 @@ describe("Muse GUI ACP broker", () => {
     expect(metadata.fallbackSignalObserved).toBe(true);
     expect(metadata.brokerDirectoryRemoved).toBe(true);
   }, 30_000);
+
+  it("bounds process snapshots while a helper hangs and rechecks identity immediately before each signal", async () => {
+    const directory = scratch();
+    const fixture = startFixture(directory, "helper-polling", "helper-polling");
+    fixture.end();
+    expect(await fixture.result).toMatchObject({ code: 0, stderr: "" });
+    const metadata = JSON.parse(readFileSync(join(directory, "helper-polling.json"), "utf8")) as Record<string, unknown>;
+    expect(metadata.snapshotCount).toBeLessThanOrEqual(20);
+    expect(metadata.sleepIntervals).toEqual([0.1, 0.5]);
+    expect(metadata.signals).toEqual(metadata.expectedSignals);
+    expect(metadata.signalsRechecked).toBe(true);
+  });
 
   it.each([
     ["bundle-valid", true, 1],
