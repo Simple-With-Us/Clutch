@@ -1253,6 +1253,9 @@ public struct ChatView: View {
         if engine == .muse && EngineAuthenticationAttempt.isRequired(summary) {
             return Copy.gap("Sign in to Muse to open this thread.", "Use Sign In To Muse above, then select the thread again.")
         }
+        if engine == .muse, summary.contains("open in another process") {
+            return "This Muse thread is open in another process; choose another thread or wait until it is released."
+        }
         let authRelated = ["auth", "sign in", "login", "credential", "unauthorized", "401", "403"]
             .contains { summary.contains($0) }
         let title = session.displayTitle

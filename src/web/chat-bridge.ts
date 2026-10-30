@@ -904,12 +904,15 @@ function hostOutcomeFor(optionId: string | null): HostApprovalOutcome {
   return optionId === "allow-once" ? "allowed-once" : "rejected";
 }
 
-function safeMuseBridgeError(error: unknown): string {
+export function safeMuseBridgeError(error: unknown): string {
   if (!error || typeof error !== "object") return "Muse request failed; retry or sign in to Muse.";
   const row = error as { message?: unknown; code?: unknown };
   const message = typeof row.message === "string" ? row.message : "";
   if (/log in to muse|not logged in|login required|not authenticated/i.test(message)) {
     return "Log in to Muse before opening a session.";
+  }
+  if (/(?:this\s+)?session (?:is )?(?:already being opened|already open|already in use|open in another process)|session (?:is )?open in another process|this muse thread is open in another process/i.test(message)) {
+    return "This Muse thread is open in another process; choose another thread or wait until it is released.";
   }
   if (typeof row.code === "number" && Number.isSafeInteger(row.code)) {
     return `Muse request failed (ACP code ${row.code}).`;
