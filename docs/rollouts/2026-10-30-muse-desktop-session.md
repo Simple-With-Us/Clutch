@@ -14,7 +14,7 @@ Before launching, the broker validates the nested and outer bundle identifiers, 
 
 The helper supervises its Muse child and process group.  Connection loss and normal shutdown close input and terminate that group with a bounded grace period.  The helper does not add a LaunchAgent, pm2 job, public port or persistent listener.  Deliberately detached tool processes remain outside normal process-group cleanup.
 
-Linux, explicit API-key configurations, forced adapter mode and hosts without the helper retain their existing direct launch behavior.  Once GUI launch has started, failures are reported instead of retrying the request through another runtime.
+The saved-login Mac route selects the desktop helper before any Muse capability probe, so no preliminary Muse process starts in the background security session.  Linux, explicit API-key configurations, forced adapter mode and hosts without the helper retain their existing launch behavior.  With a bundled helper, older Muse builds without native ACP require `MUSE_CODE_ACP_BACKEND=adapter` explicitly.  Once GUI launch has started, failures are reported instead of retrying the request through another runtime.
 
 Catalog browsing checks Muse installation through the filesystem and reads its existing local provider catalog.  It does not start Muse or create a probe session.  Advertised model and effort choices come from successful user-requested new or resumed sessions on the existing warm bridge.  This removes unnecessary Muse launches during browsing; it does not identify the source of the reported password dialogs.
 

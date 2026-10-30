@@ -4,9 +4,9 @@
 #
 # Current Muse Code builds expose experimental ACP v1 directly as `muse acp`.
 # Older builds still work through the community `@bex-co/muse-code-acp`
-# MSP-to-ACP adapter.  Auto mode probes the installed Muse binary and prefers
-# the native route when it proves support; the adapter remains a compatibility
-# backend and the fallback for older hosts.
+# MSP-to-ACP adapter.  The Mac saved-login route starts the bundled desktop
+# helper directly; other hosts probe native support before adapter fallback.
+# Older Muse builds with the helper require explicit adapter mode.
 #
 # Deliberately does not source lib/clutch-env.sh: Muse Code is not the DSH
 # engine, so it has no use for Clutch's engine home.  Same rule as grok.
@@ -143,14 +143,15 @@ find_python3() {
 }
 
 if [ "$BACKEND" != "adapter" ]; then
+  if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] && [ -z "${META_API_KEY:-}" ]; then
+    if HELPER_APP="$(find_gui_helper)" && [ -f "$GUI_BROKER" ]; then
+      export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
+      PYTHON3="$(find_python3)" || die "Python 3 is unavailable for the bundled Muse desktop helper"
+      exec "$PYTHON3" "$GUI_BROKER" "$HELPER_APP" "$MUSE_HOST" "$@"
+    fi
+  fi
   if native_supported; then
     export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
-    if [ "$(uname -s 2>/dev/null || true)" = "Darwin" ] && [ -z "${META_API_KEY:-}" ]; then
-      if HELPER_APP="$(find_gui_helper)" && [ -f "$GUI_BROKER" ]; then
-        PYTHON3="$(find_python3)" || die "Python 3 is unavailable for the bundled Muse desktop helper"
-        exec "$PYTHON3" "$GUI_BROKER" "$HELPER_APP" "$MUSE_HOST" "$@"
-      fi
-    fi
     exec "$MUSE_HOST" acp "$@"
   fi
   if [ "$BACKEND" = "native" ]; then

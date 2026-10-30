@@ -5,7 +5,7 @@
   "displayName": "Muse Code",
   "defaultCli": "muse-code-acp.sh",
   "nativeSource": "muse.acp",
-  "loginNote": "Current Muse Code builds speak ACP v1 directly through the experimental `muse acp` command.\u00A0 On macOS, the Clutch app includes an on-demand helper that launches Muse in your desktop session so it can use the saved login from `muse login`.\u00A0 Clutch enables the experimental gate and falls back to the community MSP adapter on older hosts.",
+  "loginNote": "Current Muse Code builds speak ACP v1 directly through the experimental `muse acp` command.\u00A0 On macOS, the Clutch app starts Muse through an on-demand desktop helper so it can use the saved login from `muse login`, without a preliminary background Muse process.\u00A0 Older Muse versions without native ACP require MUSE_CODE_ACP_BACKEND=adapter when that helper is installed.",
 
   "images": true,
   "mcpServers": true,
