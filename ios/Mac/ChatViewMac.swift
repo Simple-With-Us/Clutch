@@ -1249,23 +1249,17 @@ public struct ChatView: View {
     /// reason, which can contain an entire prompt or other long payload.
     private func codeLoadErrorMessage(_ error: Error, session: AcpSessionInfo) -> String {
         let detail = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
-        let summary = String(detail.prefix(500)).lowercased()
         if engine == .muse && EngineAuthenticationAttempt.isRequired(detail) {
             return Copy.gap("Sign in to Muse to open this thread.", "Use Sign In To Muse above, then select the thread again.")
         }
-        if engine == .muse, summary.contains("open in another process") {
+        if engine == .muse, detail.range(of: "open in another process", options: .caseInsensitive) != nil {
             return "This Muse thread is open in another process; choose another thread or wait until it is released."
         }
-        let authRelated = ["auth", "sign in", "login", "credential", "unauthorized", "401", "403"]
-            .contains { summary.contains($0) }
         let title = session.displayTitle
         let boundedTitle = title.count > 70 ? String(title.prefix(69)) + "…" : title
-        let nextStep = authRelated
-            ? "Check the engine sign-in on the host, then retry."
-            : "Check the engine sign-in and working folder on the host, then retry."
         return Copy.gap(
             "Could not resume \"\(boundedTitle)\".",
-            nextStep
+            "Refresh the thread list and try again."
         )
     }
 
