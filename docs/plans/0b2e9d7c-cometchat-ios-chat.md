@@ -1,7 +1,7 @@
 # iOS Chat Tab: CometChat UI Kit + Real Host Wiring
 
 Board: `0b2e9d7c` (CK, P2, In Progress) · Branch: `clutch/0b2e9d7c-cometchat-ios-chat`
-Zulip: `#Work-In-Progress` › `Clutch 0b2e9d7c CometChat iOS chat`
+Zulip: the fleet coordination channel › `Clutch 0b2e9d7c CometChat iOS chat`
 
 ## Decision
 
