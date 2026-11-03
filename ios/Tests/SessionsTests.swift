@@ -162,6 +162,56 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertNotNil(session.updated)
     }
 
+    func testMuseDetailsResponseRequiresReadOnlyAndMatchingSessionIdentity() throws {
+        let data = Data(#"{"readOnly":true,"sessionId":"muse-1","cwd":"/srv/work","title":"Thread","model":"muse-spark-1.3-contributor","provider":"meta","usage":{"model":"muse-spark-1.3-contributor","provider":"meta","inputTokens":10,"outputTokens":2,"totalTokens":12,"responseTokensPerSecond":12.5,"contextWindow":1000,"contextUsedTokens":400}}"#.utf8)
+        let details = try SessionsClient.decodeDetailsResponse(data, expectedSessionId: "muse-1")
+
+        XCTAssertEqual(details.sessionId, "muse-1")
+        XCTAssertEqual(details.cwd, "/srv/work")
+        XCTAssertEqual(details.model, "muse-spark-1.3-contributor")
+        XCTAssertEqual(details.provider, "meta")
+        XCTAssertEqual(details.usage?.responseTokensPerSecond, 12.5)
+
+        let wrongIdentity = Data(#"{"readOnly":true,"sessionId":"other"}"#.utf8)
+        XCTAssertThrowsError(try SessionsClient.decodeDetailsResponse(wrongIdentity, expectedSessionId: "muse-1"))
+
+        let notReadOnly = Data(#"{"readOnly":false,"sessionId":"muse-1"}"#.utf8)
+        XCTAssertThrowsError(try SessionsClient.decodeDetailsResponse(notReadOnly, expectedSessionId: "muse-1"))
+    }
+
+    func testMuseDetailsMergeUsesDetailsAndKeepsSummaryFallbacks() throws {
+        let summary = AcpSessionInfo(
+            sessionId: "muse-1",
+            cwd: "/srv/summary",
+            title: "Summary title",
+            updatedAt: "2026-11-03T12:00:00Z",
+            provider: "summary-provider",
+            model: "summary-model",
+            usage: AcpSessionUsage(inputTokens: 9, outputTokens: 2),
+            projectId: "project-1",
+            archived: false
+        )
+        let details = AcpSessionInfo(
+            sessionId: "muse-1",
+            title: "Detailed title",
+            model: "detail-model"
+        )
+
+        let merged = try XCTUnwrap(SessionsClient.mergeDetails(details, into: summary))
+        XCTAssertEqual(merged.title, "Detailed title")
+        XCTAssertEqual(merged.cwd, "/srv/summary")
+        XCTAssertEqual(merged.model, "detail-model")
+        XCTAssertEqual(merged.provider, "summary-provider")
+        XCTAssertEqual(merged.usage?.outputTokens, 2)
+        XCTAssertEqual(merged.usage?.inputTokens, 9)
+        XCTAssertEqual(merged.usage?.model, "detail-model")
+        XCTAssertEqual(merged.projectId, "project-1")
+        XCTAssertEqual(merged.archived, false)
+        XCTAssertEqual(merged.updatedAt, summary.updatedAt)
+
+        XCTAssertNil(SessionsClient.mergeDetails(AcpSessionInfo(sessionId: "other"), into: summary))
+    }
+
     func testDisplayTitleFallsBackToWorkspaceThenUntitled() {
         let titled = AcpSessionInfo(sessionId: "a", cwd: "/tmp/x", title: "Named")
         XCTAssertEqual(titled.displayTitle, "Named")

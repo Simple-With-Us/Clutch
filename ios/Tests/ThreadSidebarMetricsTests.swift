@@ -40,4 +40,35 @@ final class ThreadSidebarMetricsTests: XCTestCase {
         XCTAssertEqual(ThreadMetricPresentation.responseRateLabel(wholeResponseRate), "14.3 tok/s")
         XCTAssertEqual(ThreadMetricPresentation.responseRateLabel(invalidResponseRate), "Not reported")
     }
+
+    func testUsageStripUsesWholeResponseRateForMuse() {
+        let usage = AcpSessionUsage(outputTokensPerSecond: 22, responseTokensPerSecond: 14.26)
+
+        XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "muse", usage: usage), "Response 14.3 tok/s")
+    }
+
+    func testUsageStripUsesIntervalRateFallbackForMcode() {
+        let intervalRateOnly = AcpSessionUsage(outputTokensPerSecond: 22)
+
+        XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: intervalRateOnly), "Interval 22.0 tok/s")
+    }
+
+    func testUsageStripDoesNotInventOrMislabelMissingRates() {
+        XCTAssertNil(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: nil))
+        XCTAssertNil(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: AcpSessionUsage()))
+        XCTAssertNil(ThreadMetricPresentation.usageStripRateLabel(engineID: "muse", usage: AcpSessionUsage(outputTokensPerSecond: 22)))
+        XCTAssertNil(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: AcpSessionUsage(outputTokensPerSecond: .infinity)))
+    }
+
+    func testUsageStripPrefersWholeResponseRateWhenBothArePresent() {
+        let usage = AcpSessionUsage(outputTokensPerSecond: 22, responseTokensPerSecond: 14.26)
+
+        XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: usage), "Response 14.3 tok/s")
+    }
+
+    func testUsageStripFallsBackToValidMcodeIntervalWhenResponseRateIsInvalid() {
+        let usage = AcpSessionUsage(outputTokensPerSecond: 22, responseTokensPerSecond: .infinity)
+
+        XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: usage), "Interval 22.0 tok/s")
+    }
 }

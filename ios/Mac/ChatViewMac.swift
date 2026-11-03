@@ -462,6 +462,13 @@ public struct ChatView: View {
                             loadingId: previewLoadingId ?? sidebarLoadingId,
                             errorText: sidebarError,
                             projects: sidebarProjects,
+                            onLoadDetails: engine == .muse ? { session in
+                                guard let host = activeHost else { throw ChatClientError.badHost }
+                                return try await SessionsClient(host: host).details(
+                                    sessionId: session.sessionId,
+                                    cwd: session.cwd
+                                )
+                            } : nil,
                             onSelect: selectSidebarSession,
                             onNew: { startMcodeThread() },
                             onNewWindow: openNewThreadWindow,
@@ -1176,16 +1183,19 @@ public struct ChatView: View {
     @ViewBuilder
     private var usageStrip: some View {
         if engine == .mcode || engine == .muse {
-            let responseRate = activeUsage?.responseTokensPerSecond.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            let rateLabel = ThreadMetricPresentation.usageStripRateLabel(
+                engineID: engine.rawValue,
+                usage: activeUsage
+            )
             let occupancy = currentContextOccupancyLabel
             HStack(spacing: 8) {
-                if let rate = responseRate {
-                    metric(icon: "speedometer", value: String(format: "Response %.1f tok/s", rate))
+                if let rateLabel {
+                    metric(icon: "speedometer", value: rateLabel)
                 }
                 if let occupancy {
                     metric(icon: "chart.pie.fill", value: occupancy)
                 }
-                if responseRate == nil && occupancy == nil {
+                if rateLabel == nil && occupancy == nil {
                     Text("Context and response rate not reported yet")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
