@@ -58,12 +58,28 @@ except Exception:
     sys.exit(2)
 if not isinstance(data, dict):
     sys.exit(2)
+if not set(data).issubset({"projectId", "serviceToken", "writeServiceToken"}):
+    sys.exit(2)
 
-read_token = str(data.get("serviceToken") or "").strip()
-write_token = str(data.get("writeServiceToken") or "").strip()
-project_id = str(data.get("projectId") or "").strip()
 def valid(token):
     return token.startswith("st.") and 20 <= len(token) <= 2048 and not any(ch.isspace() for ch in token)
+
+read_value = data.get("serviceToken")
+if not isinstance(read_value, str):
+    sys.exit(2)
+read_token = read_value.strip()
+if not valid(read_token):
+    sys.exit(2)
+
+project_value = data.get("projectId")
+if "projectId" in data and not isinstance(project_value, str):
+    sys.exit(2)
+project_id = (project_value or "").strip()
+
+write_value = data.get("writeServiceToken")
+write_token = write_value.strip() if isinstance(write_value, str) else ""
+if write_token and not valid(write_token):
+    write_token = ""
 
 exports = []
 for value, name in ((read_token, "INFISICAL_TOKEN"), (write_token, "INFISICAL_WRITE_TOKEN")):
