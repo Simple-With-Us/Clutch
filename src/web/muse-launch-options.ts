@@ -24,17 +24,27 @@ const CONTRIBUTOR_IDS = new Set([
   "muse-wonder-full-1.0-contributor",
 ]);
 
-/** Both supported ACP spellings identify the same model. */
-export function museContributorModelId(value: unknown): string | null {
+function museModelId(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 512) return null;
-  if (CONTRIBUTOR_IDS.has(value)) return value;
-  if (!value.startsWith("muse-model:")) return null;
+  if (!value.startsWith("muse-model:")) return value;
   try {
-    const parsed = z.tuple([z.string().nullable(), z.string().nullable(), z.string()]).safeParse(JSON.parse(decodeURIComponent(value.slice("muse-model:".length))));
-    return parsed.success && CONTRIBUTOR_IDS.has(parsed.data[2]) ? parsed.data[2] : null;
+    // Provider and profile selectors are opaque; only the model ID is ours to interpret.
+    const parsed = z.tuple([z.unknown(), z.unknown(), z.string()]).safeParse(JSON.parse(decodeURIComponent(value.slice("muse-model:".length))));
+    return parsed.success ? parsed.data[2] : null;
   } catch {
     return null;
   }
+}
+
+/** Both supported ACP spellings identify the same allowlisted picker model. */
+export function museContributorModelId(value: unknown): string | null {
+  const id = museModelId(value);
+  return id && CONTRIBUTOR_IDS.has(id) ? id : null;
+}
+
+/** The effort restriction also covers contributor IDs outside the picker allowlist. */
+export function isMuseContributorModel(value: unknown): boolean {
+  return museModelId(value)?.endsWith("-contributor") ?? false;
 }
 
 export function contributorDefaultModel(currentModel?: string): string {

@@ -56,7 +56,7 @@ import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
-import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
+import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
 import { museSessionUsage, withMuseContext } from "./muse-session-metrics.ts";
 import { normalizeSessionFolder, sessionIsInFolder } from "./session-folder-scope.ts";
@@ -2370,7 +2370,7 @@ async function main(): Promise<void> {
           const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
           const usage = museSessionUsage(log);
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
-            readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot,
+            readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
             title: entry?.title ?? log.name, model: log.modelId, provider: log.providerId,
             history: sliceThreadHistory(compactToolHistory(log.transcript), limit),
             ...(usage ? { usage } : {}), running, truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
@@ -3082,7 +3082,7 @@ async function main(): Promise<void> {
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, false);
         }
         if (engine === "muse" && active.effort === "max" &&
-            museContributorModelId(active.model ?? active.modelMetadata?.model)) {
+            isMuseContributorModel(active.model ?? active.modelMetadata?.model)) {
           throw new MuseSettingsError("effort");
         }
         // The model's and the effort's choices land before the turn, so the
