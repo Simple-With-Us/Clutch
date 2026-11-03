@@ -56,7 +56,7 @@ import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
-import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
+import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { attachMuseErrorDiagnostics, museErrorDiagnostics } from "./muse-error-diagnostics.ts";
 import { createTurnDiagnostics, type TurnDiagnosticHandle, type TurnOutcome } from "./turn-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
@@ -2930,7 +2930,7 @@ async function main(): Promise<void> {
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, false);
         }
         if (engine === "muse" && active.effort === "max" &&
-            museContributorModelId(active.model ?? active.modelMetadata?.model)) {
+            isMuseContributorModel(active.model ?? active.modelMetadata?.model)) {
           throw new MuseSettingsError("effort");
         }
         // The model's and the effort's choices land before the turn, so the
