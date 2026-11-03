@@ -10,7 +10,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +35,7 @@ let tokenFile = "";
 let metaFile = "";
 /** Where the stub records what the sidecar did to the engine. */
 let stubLogFile = "";
+let stubSessionsFile = "";
 let museDataRoot = "";
 const PREVIEW_ID = "01a11111-2222-7333-8444-555555555555";
 let museLogFile = "";
@@ -120,6 +121,7 @@ beforeAll(async () => {
   writeFileSync(tokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
   metaFile = join(dir, "session-meta.json");
   stubLogFile = join(dir, "stub-log.jsonl");
+  stubSessionsFile = join(dir, "stub-sessions.json");
   chatPort = await freePort();
 
   sidecar = spawn(TSX, [BRIDGE], { env: sidecarEnv(tokenFile), stdio: ["ignore", "pipe", "pipe"] });
@@ -142,6 +144,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MUSE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CHAT_BRIDGE_STUB_LOG: stubLogFile,
+    CHAT_BRIDGE_STUB_SESSIONS_FILE: stubSessionsFile,
     COMETCHAT_APP_ID: "loop",
     COMETCHAT_REGION: "us",
     COMETCHAT_AUTH_KEY: "loop-auth-key",
@@ -239,6 +242,49 @@ it("keeps the selected folder when preview metadata omits its workspace root", a
     expect(stubLog()).toEqual(before);
   } finally {
     writeFileSync(museLogFile, original);
+  }
+});
+
+it("bounds list enrichment while reading details for an older row without acquiring it", async () => {
+  const created: string[] = [];
+  const rows = Array.from({ length: 60 }, (_, index) => ({
+    sessionId: `a1111111-2222-4333-8444-${index.toString(16).padStart(12, "0")}`,
+    cwd: "/tmp/bulk-project", title: `Recorded thread ${index}`,
+    updatedAt: new Date(1_800_000_000_000 + index * 1_000).toISOString(),
+  }));
+  const ownershipEvents = () => stubLog().filter((row) => ["session-new", "session-load", "active-turn"].includes(String(row.event)));
+  const before = ownershipEvents();
+  try {
+    for (const row of rows) {
+      const directory = join(museDataRoot, "muse", "sessions", "2026", "11", "01", row.sessionId);
+      mkdirSync(directory, { recursive: true });
+      created.push(directory);
+      writeFileSync(join(directory, "session.jsonl"), JSON.stringify({
+        payload_type: "runtime.session.metadata",
+        payload: { record: { model_id: "muse-spark-1.3-contributor", provider_id: "meta", workspace_root: row.cwd } },
+      }) + "\n");
+    }
+    writeFileSync(stubSessionsFile, JSON.stringify(rows));
+    let page: Array<{ sessionId: string; model?: string }> = [];
+    // Newly created logs become visible after the location index's short miss cache expires.
+    await expect.poll(async () => {
+      const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse&limit=60`, { headers: chatHeaders() });
+      expect(response.status).toBe(200);
+      page = (await response.json()).sessions;
+      return page.filter((row) => row.model).length;
+    }, { timeout: 5_000, interval: 50 }).toBe(50);
+    expect(page).toHaveLength(60);
+    const older = page[59]!;
+    expect(older.model).toBeUndefined();
+    const details = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/details?engine=muse&sessionId=${older.sessionId}`, { headers: chatHeaders() });
+    expect(details.status).toBe(200);
+    const detail = await details.json();
+    expect(detail).toMatchObject({ readOnly: true, sessionId: older.sessionId, model: "muse-spark-1.3-contributor", provider: "meta", cwd: "/tmp/bulk-project" });
+    expect(detail).not.toHaveProperty("history");
+    expect(ownershipEvents()).toEqual(before);
+  } finally {
+    rmSync(stubSessionsFile, { force: true });
+    for (const directory of created) rmSync(directory, { recursive: true, force: true });
   }
 });
 

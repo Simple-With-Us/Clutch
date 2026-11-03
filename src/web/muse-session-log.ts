@@ -16,7 +16,9 @@ const MAX_TOTAL_TEXT_CHARS = 120_000;
 const MAX_CACHE_ENTRIES = 32;
 const MAX_SUMMARY_BYTES = 256 * 1024;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
-const MAX_LOCATION_CACHE_ENTRIES = 4_096;
+const MAX_LOCATION_SCAN_ENTRIES = 20_000;
+const MAX_LOCATION_INDEX_ROOTS = 8;
+const LOCATION_INDEX_TTL_MS = 500;
 
 export interface MuseSessionUsage {
   /** Totals from unique, provider-reported attribution records only. */
@@ -69,7 +71,14 @@ interface ParsedRecord {
 
 const cache = new Map<string, { result: MuseSessionLog; mtimeMs: number; size: number }>();
 const summaryCache = new Map<string, { result: MuseSessionLog; mtimeMs: number; size: number }>();
-const locationCache = new Map<string, string>();
+
+interface LocationIndex {
+  paths: Map<string, string>;
+  expiresAt: number;
+  inFlight?: Promise<void>;
+}
+
+const locationIndexes = new Map<string, LocationIndex>();
 
 /** Muse stores sessions below XDG_DATA_HOME, or ~/.local/share by default. */
 export function museSessionsRoot(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
@@ -359,6 +368,97 @@ function isInside(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}${sep}`);
 }
 
+function compareNames(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function touchLocationIndex(root: string, index: LocationIndex): void {
+  locationIndexes.delete(root);
+  locationIndexes.set(root, index);
+}
+
+function locationIndexFor(root: string): LocationIndex | null {
+  const existing = locationIndexes.get(root);
+  if (existing) {
+    touchLocationIndex(root, existing);
+    return existing;
+  }
+
+  if (locationIndexes.size >= MAX_LOCATION_INDEX_ROOTS) {
+    const evictable = [...locationIndexes].find(([, index]) => !index.inFlight);
+    if (!evictable) return null;
+    locationIndexes.delete(evictable[0]);
+  }
+
+  const index: LocationIndex = { paths: new Map(), expiresAt: 0 };
+  locationIndexes.set(root, index);
+  return index;
+}
+
+async function scanMuseSessionLocations(root: string): Promise<Map<string, string>> {
+  const paths = new Map<string, string>();
+  let visited = 0;
+  let stop = false;
+  const descendingDirectories = (entries: import("node:fs").Dirent[]) => entries
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .sort((left, right) => compareNames(right.name, left.name));
+
+  const years = descendingDirectories(await readdir(root, { withFileTypes: true }))
+    .filter((entry) => /^\d{4}$/.test(entry.name));
+  for (const yearEntry of years) {
+    if (stop) break;
+    const yearPath = join(root, yearEntry.name);
+    const months = descendingDirectories(await readdir(yearPath, { withFileTypes: true }))
+      .filter((entry) => /^\d{2}$/.test(entry.name));
+    for (const monthEntry of months) {
+      if (stop) break;
+      const monthPath = join(yearPath, monthEntry.name);
+      const days = descendingDirectories(await readdir(monthPath, { withFileTypes: true }))
+        .filter((entry) => validDatePath(yearEntry.name, monthEntry.name, entry.name));
+      for (const dayEntry of days) {
+        if (stop) break;
+        const dayPath = join(monthPath, dayEntry.name);
+        const sessions = (await readdir(dayPath, { withFileTypes: true }))
+          .sort((left, right) => compareNames(left.name, right.name));
+        for (const sessionEntry of sessions) {
+          if (visited >= MAX_LOCATION_SCAN_ENTRIES) {
+            stop = true;
+            break;
+          }
+          visited += 1;
+          if (!SESSION_ID.test(sessionEntry.name) || !sessionEntry.isDirectory() || sessionEntry.isSymbolicLink()) continue;
+          if (!paths.has(sessionEntry.name)) {
+            paths.set(sessionEntry.name, join(dayPath, sessionEntry.name, "session.jsonl"));
+          }
+        }
+      }
+    }
+  }
+  return paths;
+}
+
+async function refreshLocationIndex(root: string, index: LocationIndex): Promise<void> {
+  if (index.inFlight) {
+    await index.inFlight;
+    return;
+  }
+  const refresh = (async () => {
+    try {
+      index.paths = await scanMuseSessionLocations(root);
+      index.expiresAt = Date.now() + LOCATION_INDEX_TTL_MS;
+    } catch {
+      index.paths.clear();
+      index.expiresAt = Date.now() + LOCATION_INDEX_TTL_MS;
+    }
+  })();
+  index.inFlight = refresh;
+  try {
+    await refresh;
+  } finally {
+    if (index.inFlight === refresh) delete index.inFlight;
+  }
+}
+
 /** Find a session file only below YYYY/MM/DD/<strict UUID>, rejecting symlinks. */
 export async function findMuseSessionLog(
   sessionId: string,
@@ -370,38 +470,30 @@ export async function findMuseSessionLog(
     const rootStat = await lstat(rootPath);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) return null;
     const root = await realpath(rootPath);
-    const cacheKey = `${root}\u0000${sessionId}`;
-    const cachedPath = locationCache.get(cacheKey);
+    const index = locationIndexFor(root);
+    if (!index) return null;
+
+    if (index.inFlight) await index.inFlight;
+
+    const cachedPath = index.paths.get(sessionId);
     if (cachedPath && await isSafeSessionPath(root, sessionId, cachedPath)) return cachedPath;
-    if (cachedPath) locationCache.delete(cacheKey);
-    const years = await readdir(root, { withFileTypes: true });
-    let visited = 0;
-    for (const yearEntry of years) {
-      if (!/^\d{4}$/.test(yearEntry.name) || !yearEntry.isDirectory() || yearEntry.isSymbolicLink()) continue;
-      const yearPath = join(root, yearEntry.name);
-      for (const monthEntry of await readdir(yearPath, { withFileTypes: true })) {
-        if (!/^\d{2}$/.test(monthEntry.name) || !monthEntry.isDirectory() || monthEntry.isSymbolicLink()) continue;
-        const monthPath = join(yearPath, monthEntry.name);
-        for (const dayEntry of await readdir(monthPath, { withFileTypes: true })) {
-          if (!dayEntry.isDirectory() || dayEntry.isSymbolicLink() || !validDatePath(yearEntry.name, monthEntry.name, dayEntry.name)) continue;
-          const dayPath = join(monthPath, dayEntry.name);
-          for (const sessionEntry of await readdir(dayPath, { withFileTypes: true })) {
-            visited += 1;
-            if (visited > 20_000) return null;
-            if (sessionEntry.name !== sessionId || !sessionEntry.isDirectory() || sessionEntry.isSymbolicLink()) continue;
-            const candidate = join(dayPath, sessionId, "session.jsonl");
-            if (!await isSafeSessionPath(root, sessionId, candidate)) continue;
-            locationCache.set(cacheKey, candidate);
-            while (locationCache.size > MAX_LOCATION_CACHE_ENTRIES) locationCache.delete(locationCache.keys().next().value!);
-            return candidate;
-          }
-        }
-      }
+    if (cachedPath) {
+      index.paths.delete(sessionId);
+      index.expiresAt = 0;
     }
+
+    if (index.expiresAt <= Date.now()) await refreshLocationIndex(root, index);
+
+    const refreshedPath = index.paths.get(sessionId);
+    if (!refreshedPath) return null;
+    if (await isSafeSessionPath(root, sessionId, refreshedPath)) return refreshedPath;
+
+    index.paths.delete(sessionId);
+    index.expiresAt = Date.now() + LOCATION_INDEX_TTL_MS;
+    return null;
   } catch {
     return null;
   }
-  return null;
 }
 
 async function isSafeSessionPath(root: string, sessionId: string, path: string): Promise<boolean> {
