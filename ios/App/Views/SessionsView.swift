@@ -564,7 +564,8 @@ final class NewThreadModel {
             model: "",
             sessionId: nil,
             relayReceiverUid: "",
-            engine: engine
+            engine: engine,
+            museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil
         )
         Task {
             var text = ""
