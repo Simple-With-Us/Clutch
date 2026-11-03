@@ -1572,6 +1572,9 @@ public struct ChatView: View {
             sendError = "The queue is full; remove a queued message before adding another."
             return
         }
+        // A newly created queue resumes automatic delivery; a paused queue
+        // that still contains messages keeps its explicit review boundary.
+        if queuedMessages.isEmpty { queuePaused = false }
         queuedMessages.append(QueuedMessage(text: text, images: attachments, model: selectedModel ?? "", effort: selectedEffort, hostId: activeHost?.id, engine: engine, surface: surface, remoteId: isWorkspace ? codeRemoteId : sessionId))
         draft = ""
         attachments = []
