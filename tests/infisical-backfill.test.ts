@@ -259,8 +259,40 @@ describe("clutch-infisical-env backfill", () => {
     }
   });
 
+  it("treats whitespace-only environment credentials as unset and falls back to the file tuple", async () => {
+    metadataFixture = VALID_METADATA;
+    const home = mkdtempSync(join(tmpdir(), "clutch-whitespace-env-token-"));
+    writeFileSync(join(home, "infisical.json"), `${JSON.stringify({
+      projectId: "fixture-file-project",
+      serviceToken: FILE_READ_TOKEN,
+      writeServiceToken: FILE_WRITE_TOKEN,
+    })}\n`, { mode: 0o600 });
+    try {
+      for (const whitespace of ["  \t\n", "\u00a0"]) {
+        seenAuthorization = "";
+        seenWorkspaceId = "";
+        secretListRequests = 0;
+        await runBackfill({
+          CLUTCH_HOME: home,
+          INFISICAL_TOKEN: whitespace,
+          INFISICAL_WRITE_TOKEN: whitespace,
+          INFISICAL_PROJECT_ID: whitespace,
+        });
+        expect(seenAuthorization).toBe(expectedAuthorization(FILE_READ_TOKEN));
+        expect(seenWorkspaceId).toBe("fixture-file-project");
+        expect(secretListRequests).toBe(1);
+      }
+    } finally {
+      metadataFixture = VALID_METADATA;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("does not pair an explicit read token with a saved file project", async () => {
     metadataFixture = VALID_METADATA;
+    seenAuthorization = "";
+    seenWorkspaceId = "";
+    secretListRequests = 0;
     const home = mkdtempSync(join(tmpdir(), "clutch-partial-env-token-"));
     writeFileSync(join(home, "infisical.json"), `${JSON.stringify({
       projectId: "fixture-file-project",
@@ -272,14 +304,15 @@ describe("clutch-infisical-env backfill", () => {
         CLUTCH_HOME: home,
         INFISICAL_TOKEN: EXPLICIT_READ_TOKEN,
         INFISICAL_WRITE_TOKEN: "",
-        INFISICAL_PROJECT_ID: "",
+        INFISICAL_PROJECT_ID: " \t\n",
       });
       expect(stdout).toContain("READ_SET=yes");
       expect(stdout).toContain("WRITE_SET=\n");
-      expect(stdout).toContain("PROJECT_SET=\n");
+      expect(stdout).toContain("PROJECT_SET=yes");
       expect(stdout).not.toContain(FILE_WRITE_TOKEN);
       expect(seenAuthorization).toBe(expectedAuthorization(EXPLICIT_READ_TOKEN));
       expect(seenWorkspaceId).toBe(PROJECT);
+      expect(secretListRequests).toBe(1);
     } finally {
       metadataFixture = VALID_METADATA;
       rmSync(home, { recursive: true, force: true });

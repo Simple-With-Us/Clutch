@@ -32,7 +32,6 @@ CLUTCH_INFISICAL_URL="${CLUTCH_INFISICAL_URL:-https://app.infisical.com}"
 # short-lived backfill subprocess and never exported by the launcher shell.
 CLUTCH_INFISICAL_CREDENTIALS_TMP=""
 _clutch_infisical_credentials() {
-  if [[ -n "${INFISICAL_TOKEN:-}" && -n "${INFISICAL_WRITE_TOKEN:-}" && -n "${INFISICAL_PROJECT_ID:-}" ]]; then return 0; fi
   command -v python3 >/dev/null 2>&1 || return 0
   local credentials_file="${CLUTCH_HOME:-$HOME/.clutch}/infisical.json"
   [[ -r "$credentials_file" ]] || return 0
@@ -83,9 +82,9 @@ if write_token and not valid(write_token):
 
 exports = []
 for value, name in ((read_token, "INFISICAL_TOKEN"), (write_token, "INFISICAL_WRITE_TOKEN")):
-    if value and not os.environ.get(name) and valid(value):
+    if value and not os.environ.get(name, "").strip() and valid(value):
         exports.append("export " + shlex.quote(name) + "=" + shlex.quote(value) + "\n")
-if project_id and not os.environ.get("INFISICAL_PROJECT_ID") and not os.environ.get("INFISICAL_TOKEN"):
+if project_id and not os.environ.get("INFISICAL_PROJECT_ID", "").strip() and not os.environ.get("INFISICAL_TOKEN", "").strip():
     exports.append("export INFISICAL_PROJECT_ID=" + shlex.quote(project_id) + "\n")
 with open(os.environ["CLUTCH_INFISICAL_CREDENTIALS_OUTPUT"], "w", encoding="utf-8") as output:
     output.writelines(exports)

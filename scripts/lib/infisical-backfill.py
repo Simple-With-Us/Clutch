@@ -92,7 +92,7 @@ def verify_service_token(site: str, token: str, project: str, environment: str, 
 
 def main() -> int:
     token = os.environ.get("INFISICAL_TOKEN", "").strip()
-    project = (os.environ.get("INFISICAL_PROJECT_ID") or os.environ.get("CLUTCH_INFISICAL_PROJECT_ID") or "").strip()
+    project = os.environ.get("INFISICAL_PROJECT_ID", "").strip() or os.environ.get("CLUTCH_INFISICAL_PROJECT_ID", "").strip()
     output = os.environ.get("CLUTCH_INFISICAL_OUTPUT_FILE", "")
     site = os.environ.get("CLUTCH_INFISICAL_URL") or os.environ.get("INFISICAL_SITE_URL") or "https://app.infisical.com"
     keys = os.environ.get("CLUTCH_MANAGED_KEYS", "").split()
