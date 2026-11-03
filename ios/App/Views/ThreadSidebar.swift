@@ -21,6 +21,10 @@ public enum ThreadSidebarAction {
     case setArchived(AcpSessionInfo, Bool)
     /// Open the thread's working directory in Finder.
     case revealInFinder(AcpSessionInfo)
+    /// Rename the Clutch-side title without changing the engine session.
+    case renameThread(AcpSessionInfo)
+    /// Open a read-only preview in an independent Mac window.
+    case openInNewWindow(AcpSessionInfo)
 }
 
 /// The thread rail, shared by the Mac chat surface and the iPhone/iPad
@@ -49,6 +53,8 @@ struct ThreadSidebar: View {
     var projects: [SessionsClient.Project] = []
     var onSelect: (AcpSessionInfo) -> Void
     var onNew: () -> Void
+    /// Open a fresh workspace in another Mac window.  Unused on iOS.
+    var onNewWindow: (() -> Void)? = nil
     var onRefresh: () -> Void
     /// Retry the failed thread action; defaults to refreshing the list.
     var onRetry: (() -> Void)? = nil
@@ -64,6 +70,14 @@ struct ThreadSidebar: View {
     /// own group above the date buckets when non-empty.
     var pinnedIds: Set<String> = []
     var onTogglePin: ((AcpSessionInfo) -> Void)?
+    /// Current folder filter.  nil means all folders.
+    var folderScope: String? = nil
+    /// Folder roots discovered in the loaded session pages.
+    var folders: [String] = []
+    var onChooseFolderScope: ((String?) -> Void)? = nil
+    var canLoadMore: Bool = false
+    var isLoadingMore: Bool = false
+    var onLoadMore: (() -> Void)? = nil
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
     var fixedWidth: CGFloat? = 248
@@ -102,6 +116,22 @@ struct ThreadSidebar: View {
         let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
+    static func promptForThreadTitle(currentTitle: String?) -> String?? {
+        let alert = NSAlert()
+        alert.messageText = "Rename Thread"
+        alert.informativeText = "Leave the title blank to use the default thread name."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "Thread Name"
+        field.stringValue = currentTitle ?? ""
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .some(trimmed.isEmpty ? nil : trimmed)
+    }
     #endif
 
     @State private var query: String = ""
@@ -120,6 +150,11 @@ struct ThreadSidebar: View {
             VStack(spacing: 0) {
                 header
                 searchField
+                #if os(macOS)
+                if let onChooseFolderScope {
+                    folderScopePicker(onChooseFolderScope)
+                }
+                #endif
                 Divider()
 
                 if let errorText, !errorText.isEmpty {
@@ -246,6 +281,18 @@ struct ThreadSidebar: View {
             .keyboardShortcut("n", modifiers: .command)
             #endif
 
+            #if os(macOS)
+            if let onNewWindow {
+                Button(action: onNewWindow) {
+                    Image(systemName: "macwindow.badge.plus")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New Thread In New Window")
+                .help("New Thread In New Window")
+            }
+            #endif
+
             Text("Threads")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -296,6 +343,45 @@ struct ThreadSidebar: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
     }
+
+    #if os(macOS)
+    private func folderScopePicker(_ choose: @escaping (String?) -> Void) -> some View {
+        Menu {
+            Button("All Folders") { choose(nil) }
+            if !folders.isEmpty { Divider() }
+            ForEach(folders.sorted(), id: \.self) { folder in
+                Button {
+                    choose(folder)
+                } label: {
+                    if folder == folderScope {
+                        Label(folder, systemImage: "checkmark")
+                    } else {
+                        Text(folder)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                Text(folderScope.map { "Folder + Subfolders: \(($0 as NSString).lastPathComponent)" } ?? "All Folders")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .menuStyle(.borderlessButton)
+        .help(folderScope.map { "Showing this folder and its subfolders: \($0)" } ?? "Showing threads from all folders")
+        .padding(.horizontal, 10)
+        .padding(.bottom, 7)
+    }
+    #endif
 
     /// One search field for the rail.  `AcpSessionInfo.filtered` matches the
     /// thread name, folder, session id, model, provider and project, so a user
@@ -349,24 +435,46 @@ struct ThreadSidebar: View {
 
     @ViewBuilder
     private var footer: some View {
-        if let selected = sessions.first(where: { $0.sessionId == selectedId }), let cwd = selected.cwd, !cwd.isEmpty {
-            Divider()
-            HStack(spacing: 5) {
-                Image(systemName: "folder")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-                Text(cwd)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Spacer(minLength: 0)
+        if (sessions.first(where: { $0.sessionId == selectedId })?.cwd?.isEmpty == false) || canLoadMore {
+            VStack(spacing: 0) {
+                if let selected = sessions.first(where: { $0.sessionId == selectedId }), let cwd = selected.cwd, !cwd.isEmpty {
+                    Divider()
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                        Text(cwd)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    #if os(macOS)
+                    .help(cwd)
+                    #endif
+                }
+                if canLoadMore {
+                    Button {
+                        onLoadMore?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isLoadingMore { ProgressView().controlSize(.small) }
+                            Text(isLoadingMore ? "Loading More Threads…" : "Load More Threads")
+                            Spacer(minLength: 0)
+                        }
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tint)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isLoadingMore)
+                }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            #if os(macOS)
-            .help(cwd)
-            #endif
         }
     }
 
@@ -464,7 +572,8 @@ struct ThreadSidebarRow: View {
                         // The one usage fact cheap enough to show inline on every
                         // row.  Absent rather than estimated when the engine has not
                         // reported a window.
-                        if let occupancy = session.usage?.occupancyLabel {
+                        if let usage = session.usage,
+                           let occupancy = ThreadMetricPresentation.contextOccupancyLabel(usage) {
                             Text(occupancy)
                                 .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.tertiary)
@@ -512,7 +621,7 @@ struct ThreadSidebarRow: View {
     #if os(macOS)
     @ViewBuilder
     private var menu: some View {
-        Button("Open Thread") { onSelect(session) }
+        Button("Preview Thread") { onSelect(session) }
         Button("Show Thread Details") { showingDetails = true }
 
         if let onTogglePin {
@@ -528,6 +637,9 @@ struct ThreadSidebarRow: View {
         }
 
         if let onAction {
+            Button("Open In New Window") { onAction(.openInNewWindow(session), session) }
+            Button("Rename Thread…") { onAction(.renameThread(session), session) }
+            Divider()
             if let cwd = session.cwd, !cwd.isEmpty {
                 Button("Reveal Working Folder In Finder") {
                     onAction(.revealInFinder(session), session)
@@ -604,19 +716,23 @@ struct ThreadDetailsCard: View {
 
             if let usage = session.usage {
                 Divider()
+                if let basis = usage.basis {
+                    detail("Usage Basis", basis == "session-totals" ? "Session Totals" : basis == "latest-response" ? "Latest Response" : basis)
+                }
                 detail(
                     "Context Used",
-                    usage.occupancyLabel ?? "Not reported",
+                    ThreadMetricPresentation.contextOccupancyLabel(usage) ?? "Not reported",
                     monospaced: true
                 )
+                let totalsArePartial = usage.totalsComplete == false && usage.basis != "latest-response"
+                tokenDetail("Input Tokens", value: usage.inputTokens, reported: usage.inputTokensReported, partial: totalsArePartial)
+                tokenDetail("Output Tokens", value: usage.outputTokens, reported: usage.outputTokensReported, partial: totalsArePartial)
+                responseRateDetail(usage)
                 detail(
-                    "Output Rate",
-                    usage.rateLabel ?? "Not enough data yet",
+                    totalsArePartial ? "Cached Input Tokens (Partial)" : "Cached Input Tokens",
+                    (usage.cachedTokens ?? usage.cacheReadTokens).map(AcpSessionUsage.compact) ?? "Not reported",
                     monospaced: true
                 )
-                if let cache = usage.cacheReadTokens {
-                    detail("Cached Input", AcpSessionUsage.compact(cache), monospaced: true)
-                }
             } else {
                 Divider()
                 Text("No usage reported for this thread yet.")
@@ -651,6 +767,34 @@ struct ThreadDetailsCard: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
         }
+    }
+
+    private func tokenDetail(_ label: String, value: Int, reported: Bool?, partial: Bool) -> some View {
+        let hasValue = reported == true || (reported == nil && value > 0)
+        let displayLabel = partial ? "\(label) (Partial)" : label
+        return detail(displayLabel, hasValue ? AcpSessionUsage.compact(value) : "Not reported", monospaced: true)
+    }
+
+    private func responseRateDetail(_ usage: AcpSessionUsage) -> some View {
+        let value = ThreadMetricPresentation.responseRateLabel(usage)
+        let duration = usage.completionDurationMs.map { milliseconds in
+            milliseconds >= 1000 ? String(format: "%.2f seconds", milliseconds / 1000) : String(format: "%.0f milliseconds", milliseconds)
+        } ?? "Not reported"
+        return detail("Response Rate", value, monospaced: true)
+            .help(Copy.gap("Rate for the most recent response.", "Completion duration, including latency: \(duration)."))
+    }
+}
+
+enum ThreadMetricPresentation {
+    static func contextOccupancyLabel(_ usage: AcpSessionUsage) -> String? {
+        // `totalTokens == 0` is a placeholder when context is unreported; an explicit context count may be a real zero.
+        guard usage.contextUsedTokens != nil || usage.totalTokens > 0 else { return nil }
+        return usage.occupancyLabel
+    }
+
+    static func responseRateLabel(_ usage: AcpSessionUsage) -> String {
+        guard let rate = usage.responseTokensPerSecond, rate.isFinite, rate >= 0 else { return "Not reported" }
+        return String(format: "%.1f tok/s", rate)
     }
 }
 
