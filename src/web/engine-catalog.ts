@@ -501,7 +501,7 @@ export interface CatalogSources {
   readMuseCatalog?: () => EngineModel[];
   /** Reads advertised options from an existing warm Muse bridge without starting it. */
   readMuseSessionOptions?: () => unknown;
-  /** Limits the ACP probe work to the caller's selection. Omitted means legacy full catalog. */
+  /** Limits ACP probe work to the selection, with legacy full discovery as the default. */
   probeScope?: CatalogProbeScope;
 }
 
