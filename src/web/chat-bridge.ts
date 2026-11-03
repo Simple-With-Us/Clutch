@@ -56,7 +56,7 @@ import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
-import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
+import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { attachMuseErrorDiagnostics, museErrorDiagnostics } from "./muse-error-diagnostics.ts";
 import { createTurnDiagnostics, type TurnDiagnosticHandle, type TurnOutcome } from "./turn-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
@@ -2924,7 +2924,9 @@ async function main(): Promise<void> {
         }
         if (engine === "muse" && museOptions && active.bridgeSessionId) {
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, museOptions.yolo);
-          if (!active.model) active.model = contributorDefaultModel(active.modelMetadata?.model);
+          if (!active.model && !museContributorModelId(active.modelMetadata?.model)) {
+            active.model = contributorDefaultModel(active.modelMetadata?.model);
+          }
         } else if (engine === "muse" && active.bridgeSessionId && bridge.hasMuseApprovalModes(active.bridgeSessionId)) {
           // Legacy clients did not opt into YOLO for this turn.
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, false);
