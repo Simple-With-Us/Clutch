@@ -11,18 +11,18 @@
 //
 // Two operations, deliberately separated because they have different rules:
 //
-//   GET  -> redacted view of the machine identity + the managed key inventory.
+//   GET  -> redacted view of the per-host service-token state + managed keys.
 //           Secret VALUES never cross the wire; only presence does.  Non-secret
 //           values (config/knob) are returned so a settings panel can show the
 //           current value in an editable field.
 //
-//   PUT  -> saves the machine identity to $CLUTCH_HOME/infisical.json, and/or
+//   PUT  -> saves service tokens to $CLUTCH_HOME/infisical.json, and/or
 //           writes one managed setting through to Infisical via
 //           ClutchSettings.set() (Infisical first, cache only on success).
 //
 // Why a PUT that changes credentials cannot also write a setting: the running
-// process is still holding the OLD client credentials, so a write-through in
-// the same request would silently persist under credentials the operator just
+// process is still holding the OLD service tokens, so a write-through in the
+// same request would silently persist under credentials the operator just
 // replaced.  That request is refused with 409 and a restart prompt instead —
 // the operator saves credentials, restarts, then writes settings.
 //
@@ -30,7 +30,7 @@
 // bearer token is the auth boundary (documented no-op admin gate — see
 // INFISICAL.md).  Values are never logged here; keys and metadata only.
 //
-// See infisicalIdentity.ts for the on-disk contract and INFISICAL.md for the
+// See infisicalCredentials.ts for the on-disk contract and INFISICAL.md for the
 // policy this whole surface exists to serve.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -44,12 +44,12 @@ import {
   CLUTCH_INFISICAL_PROJECT_ID,
 } from "../shared/clutchSettings.ts";
 import {
-  infisicalIdentityPath,
-  readInfisicalIdentity,
-  resolveInfisicalIdentity,
-  summarizeInfisicalIdentity,
-  writeInfisicalIdentity,
-} from "../shared/infisicalIdentity.ts";
+  infisicalCredentialsPath,
+  readInfisicalCredentials,
+  resolveInfisicalCredentials,
+  summarizeInfisicalCredentials,
+  writeInfisicalCredentials,
+} from "../shared/infisicalCredentials.ts";
 
 /** Bounds the request body so a malformed client cannot exhaust memory. */
 const MAX_BODY_BYTES = 8 * 1024;
@@ -117,12 +117,12 @@ export async function handleInfisicalSettingsRequest(
   const env = deps.env ?? process.env;
 
   if (req.method === "GET") {
-    const identity = resolveInfisicalIdentity({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
+    const credentials = resolveInfisicalCredentials({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
     sendJson(res, 200, {
-      identity: summarizeInfisicalIdentity(identity, env),
+      credentials: summarizeInfisicalCredentials(credentials, env),
       // Where the managed settings themselves are read from.
       source: settings.source,
-      identityPath: infisicalIdentityPath(env as NodeJS.ProcessEnv),
+      credentialsPath: infisicalCredentialsPath(env as NodeJS.ProcessEnv),
       restartRequired: false,
       keys: describeKeys(settings),
     });
@@ -149,59 +149,70 @@ export async function handleInfisicalSettingsRequest(
     return true;
   }
 
-  // -- identity ---------------------------------------------------------------
-  const identityInput = asRecord(payload["identity"]);
+  // -- service-token credentials ---------------------------------------------
+  const credentialsInput = asRecord(payload["credentials"]);
   const settingInput = asRecord(payload["setting"]);
   const settingKey = settingInput === undefined ? "" : str(settingInput["key"]);
   const settingValue = settingInput === undefined ? "" : str(settingInput["value"]);
 
-  const current = resolveInfisicalIdentity({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
-  let identityChanged = false;
-  let savedIdentity: typeof current | undefined;
+  const current = resolveInfisicalCredentials({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
+  let credentialsChanged = false;
+  let savedCredentials: typeof current | undefined;
 
-  if (identityInput !== undefined) {
-    const nextProjectId = str(identityInput["projectId"]);
-    const nextClientId = str(identityInput["clientId"]);
-    const nextClientSecret = typeof identityInput["clientSecret"] === "string" ? identityInput["clientSecret"] : "";
-    // An omitted or empty secret means "keep the stored one" so a panel that
-    // masks the field never wipes the credential on save.
+  if (credentialsInput !== undefined) {
+    const nextProjectId = str(credentialsInput["projectId"]);
+    const nextReadToken = str(credentialsInput["readToken"]);
+    const nextWriteToken = str(credentialsInput["writeToken"]);
+    const clearWriteToken = credentialsInput["clearWriteToken"] === true;
+    if (nextProjectId && str(env.INFISICAL_PROJECT_ID) && nextProjectId !== str(env.INFISICAL_PROJECT_ID)) {
+      sendJson(res, 409, { error: "INFISICAL_PROJECT_ID is set in the Mac environment and overrides the saved project ID" });
+      return true;
+    }
+    if (nextReadToken && str(env.INFISICAL_TOKEN)) {
+      sendJson(res, 409, { error: "INFISICAL_TOKEN is set in the Mac environment and overrides the saved read service token" });
+      return true;
+    }
+    if ((nextWriteToken || clearWriteToken) && str(env.INFISICAL_WRITE_TOKEN)) {
+      sendJson(res, 409, { error: "INFISICAL_WRITE_TOKEN is set in the Mac environment and overrides the saved write service token" });
+      return true;
+    }
     const merged = {
       projectId: nextProjectId || current.projectId,
-      clientId: nextClientId || current.clientId,
-      clientSecret: nextClientSecret.length > 0 ? nextClientSecret : current.clientSecret,
+      readToken: nextReadToken || current.readToken,
+      writeToken: clearWriteToken ? "" : nextWriteToken || current.writeToken,
     };
-    identityChanged =
+    credentialsChanged =
       merged.projectId !== current.projectId ||
-      merged.clientId !== current.clientId ||
-      merged.clientSecret !== current.clientSecret;
+      merged.readToken !== current.readToken ||
+      merged.writeToken !== current.writeToken;
 
-    if (!merged.clientId || !merged.clientSecret) {
+    if (!merged.readToken) {
       sendJson(res, 400, {
-        error: "a machine identity needs both a client ID and a client secret",
+        error: "a scoped read service token is required",
       });
       return true;
     }
-    if (identityChanged) {
+    if (credentialsChanged) {
       if (settingKey) {
         // See the file header: writing settings here would persist them under
         // the credentials the operator just replaced.
         sendJson(res, 409, {
           error:
-            "save the machine identity and restart Clutch first — a setting cannot be " +
+            "save the service tokens and restart Clutch first — a setting cannot be " +
             "written in the same request that changes the credentials it would use",
           restartRequired: true,
         });
         return true;
       }
       try {
-        writeInfisicalIdentity(merged, env as NodeJS.ProcessEnv);
+        writeInfisicalCredentials(merged, env as NodeJS.ProcessEnv);
       } catch (error) {
         sendJson(res, 500, {
-          error: error instanceof Error ? error.message : "failed to save the machine identity",
+          error: error instanceof Error ? error.message : "failed to save the service tokens",
         });
         return true;
       }
-      savedIdentity = merged;
+      savedCredentials = merged;
     }
   }
 
@@ -225,18 +236,18 @@ export async function handleInfisicalSettingsRequest(
     }
   }
 
-  const identity = savedIdentity ?? resolveInfisicalIdentity({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
+  const credentials = savedCredentials ?? resolveInfisicalCredentials({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
   sendJson(res, 200, {
-    identity: summarizeInfisicalIdentity(identity, env),
+    credentials: summarizeInfisicalCredentials(credentials, env),
     source: settings.source,
-    restartRequired: identityChanged,
-    identitySaved: identityChanged,
+    restartRequired: credentialsChanged,
+    credentialsSaved: credentialsChanged,
     settingSaved: settingKey ? settingKey : "",
     keys: describeKeys(settings),
   });
   return true;
 }
 
-/** Re-exported so callers can report whether a local identity file exists. */
-export const hasLocalIdentityFile = (env: NodeJS.ProcessEnv = process.env): boolean =>
-  readInfisicalIdentity(env as never) !== undefined;
+/** Re-exported so callers can report whether a local service-token file exists. */
+export const hasLocalCredentialsFile = (env: NodeJS.ProcessEnv = process.env): boolean =>
+  readInfisicalCredentials(env) !== undefined;

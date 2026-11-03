@@ -2157,7 +2157,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    // Clutch-owned settings surface (machine identity + managed key
+    // Clutch-owned settings surface (service-token bootstrap + managed key
     // write-through), consumed by the native Hosts and Settings sheet.
     if (await handleQuotasRequest(req, res, url.pathname, token)) return;
     if (await handleInfisicalSettingsRequest(req, res, url.pathname, { settings })) return;
