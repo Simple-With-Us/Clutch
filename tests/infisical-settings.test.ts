@@ -15,11 +15,13 @@ interface CallLog {
   url: string;
   method: string;
   order: number;
+  redirect?: RequestRedirect;
 }
 
 const TEST_PROJECT_ID = "6a953a29-8397-4a9d-a5a5-7d1b61e4a5e7";
 const TEST_ENV = "dev";
-const LOGIN_URL = "https://app.infisical.com/api/v1/auth/universal-auth/login";
+const READ_TOKEN = "st.fixture-read-token-value-123456789";
+const WRITE_TOKEN = "st.fixture-write-token-value-123456789";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -37,7 +39,6 @@ function makeScenario() {
   const calls: CallLog[] = [];
   let counter = 0;
   const state = {
-    loginOk: true,
     listSecretsOk: true,
     patchStatus: 200,
     postStatus: 200,
@@ -52,14 +53,10 @@ function makeScenario() {
     const url = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     counter += 1;
-    calls.push({ url, method, order: counter });
+    calls.push({ url, method, order: counter, redirect: init?.redirect });
 
-    if (url === LOGIN_URL && method === "POST") {
-      return state.loginOk
-        ? jsonResponse({ accessToken: "test-access-token", expiresIn: 2592000 })
-        : jsonResponse({ message: "unauthorized" }, 401);
-    }
     if (url.includes("/api/v3/secrets/raw?") && method === "GET") {
+      if ((init?.headers as Record<string, string>)?.Authorization !== `Bearer ${READ_TOKEN}`) return jsonResponse({}, 401);
       return state.listSecretsOk
         ? jsonResponse({ secrets: state.serverSecrets })
         : jsonResponse({ message: "boom" }, 500);
@@ -68,6 +65,7 @@ function makeScenario() {
       const key = decodeURIComponent(url.split("/api/v3/secrets/raw/")[1] ?? "");
       const exists = state.serverSecrets.some((s) => s.secretKey === key);
       if (method === "PATCH") {
+        if ((init?.headers as Record<string, string>)?.Authorization !== `Bearer ${WRITE_TOKEN}`) return jsonResponse({}, 401);
         if (!exists) {
           return jsonResponse({ message: "not found" }, 404);
         }
@@ -76,6 +74,7 @@ function makeScenario() {
           : jsonResponse({ message: "write failed" }, state.patchStatus);
       }
       if (method === "POST") {
+        if ((init?.headers as Record<string, string>)?.Authorization !== `Bearer ${WRITE_TOKEN}`) return jsonResponse({}, 401);
         return state.postStatus === 200
           ? jsonResponse({ secret: { secretKey: key } }, 200)
           : jsonResponse({ message: "create failed" }, state.postStatus);
@@ -89,8 +88,8 @@ function makeScenario() {
       projectId: TEST_PROJECT_ID,
       environment: TEST_ENV,
       refreshIntervalMs: 0, // No background timer in tests; refresh() is called manually.
-      clientId: "test-client-id",
-      clientSecret: "test-client-secret",
+      readToken: READ_TOKEN,
+      writeToken: WRITE_TOKEN,
       fetchImpl: fetchMock as typeof fetch,
       ...overrides,
     });
@@ -122,7 +121,8 @@ describe("infisicalSettings", () => {
     expect(settings.getAll()).toEqual({ FEATURE_FLAG: "true", POLL_INTERVAL_MS: "60000" });
     expect(settings.getRequired("FEATURE_FLAG")).toBe("true");
     expect(() => settings.getRequired("MISSING")).toThrow(/MISSING/);
-    expect(calls.some((c) => c.method === "POST" && c.url === LOGIN_URL)).toBe(true);
+    expect(calls.every((c) => !c.url.includes("/auth/"))).toBe(true);
+    expect(calls.every((c) => c.redirect === "error")).toBe(true);
     expect(calls.some((c) => c.method === "GET" && c.url.includes("/api/v3/secrets/raw?"))).toBe(true);
   });
 
@@ -141,8 +141,8 @@ describe("infisicalSettings", () => {
       projectId: TEST_PROJECT_ID,
       environment: TEST_ENV,
       refreshIntervalMs: 0,
-      clientId: "test-client-id",
-      clientSecret: "test-client-secret",
+      readToken: READ_TOKEN,
+      writeToken: WRITE_TOKEN,
       fetchImpl: countingFetch,
     });
     await settings2.init();
@@ -177,6 +177,18 @@ describe("infisicalSettings", () => {
     settings.stop();
   });
 
+  it("refuses writes without the separate write token and never sends the read token for writes", async () => {
+    const { calls, makeSettings } = makeScenario();
+    const settings = makeSettings({ writeToken: "" });
+    await settings.init();
+    calls.length = 0;
+
+    await expect(settings.set("FEATURE_FLAG", "false")).rejects.toBeInstanceOf(InfisicalWriteError);
+    expect(calls).toEqual([]);
+    expect(settings.get("FEATURE_FLAG")).toBe("true");
+    settings.stop();
+  });
+
   it("set issues the Infisical write before the cache value changes", async () => {
     const scenario = makeScenario();
     const settings = scenario.makeSettings();
@@ -195,8 +207,8 @@ describe("infisicalSettings", () => {
       projectId: TEST_PROJECT_ID,
       environment: TEST_ENV,
       refreshIntervalMs: 0,
-      clientId: "test-client-id",
-      clientSecret: "test-client-secret",
+      readToken: READ_TOKEN,
+      writeToken: WRITE_TOKEN,
       fetchImpl: instrumentedFetch,
     });
     await settings2.init();
@@ -281,10 +293,28 @@ describe("infisicalSettings", () => {
 
   it("init fails fast when Infisical is unreachable", async () => {
     const { makeSettings, state } = makeScenario();
-    state.loginOk = false;
+    state.listSecretsOk = false;
     const settings = makeSettings();
     await expect(settings.init()).rejects.toThrow();
     settings.stop();
+  });
+
+  it("rejects unsafe Infisical URLs before sending a bearer token", () => {
+    const { fetchMock } = makeScenario();
+    for (const infisicalUrl of [
+      "http://infisical.example",
+      "https://user:password@infisical.example",
+      "https://infisical.example/base",
+      "https://infisical.example/?redirect=elsewhere",
+    ]) {
+      expect(() => createInfisicalSettings({
+        projectId: TEST_PROJECT_ID,
+        environment: TEST_ENV,
+        readToken: READ_TOKEN,
+        fetchImpl: fetchMock as typeof fetch,
+        infisicalUrl,
+      })).toThrow(/infisicalUrl/);
+    }
   });
 
   it("reads before init throw a clear error", () => {

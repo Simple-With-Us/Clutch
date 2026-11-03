@@ -28,8 +28,8 @@ describe("sync-profiles.ts", () => {
 
       const env: NodeJS.ProcessEnv = { ...process.env, CLUTCH_HOME: home };
       // Force the offline settings path so the test never waits on Infisical.
-      delete env.INFISICAL_CLIENT_ID;
-      delete env.INFISICAL_CLIENT_SECRET;
+      delete env.INFISICAL_TOKEN;
+      delete env.INFISICAL_WRITE_TOKEN;
       execFileSync(TSX, [SCRIPT], { env, stdio: "pipe" });
 
       // The engine's trees are left alone.
