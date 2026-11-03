@@ -384,6 +384,21 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(minimax.supportsThreads)
     }
 
+    func testEngineCatalogNormalizesEffortChoicesAndKeepsMaxForNonContributors() throws {
+        let json = #"""
+        {"engines":[
+          {"id":"muse","label":"Muse Code","available":true,"models":[],"effortLevels":["none","ultra","max"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
+          {"id":"deepseek","label":"DeepSeek","available":true,"models":[],"effortLevels":["none","low","ultra","max"],"effortConfigId":"reasoning_effort","modelConfigId":"model"},
+          {"id":"minimax","label":"MiniMax","available":true,"models":[],"effortLevels":[],"effortConfigId":"reasoning_effort","modelConfigId":"model"}
+        ]}
+        """#
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+
+        XCTAssertEqual(catalog.descriptor("muse")?.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
+        XCTAssertEqual(catalog.descriptor("deepseek")?.effortLevels, ["minimal", "low", "medium", "high", "xhigh", "max"])
+        XCTAssertEqual(catalog.descriptor("minimax")?.effortLevels, [])
+    }
+
     func testModelVisibilityDefaultsMuseToContributorModelsAndOtherEnginesToAll() {
         let models = [
             EngineModel(id: "muse-spark-1.3", label: "Spark", value: "wire-spark"),

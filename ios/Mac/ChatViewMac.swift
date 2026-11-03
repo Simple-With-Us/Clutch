@@ -129,6 +129,7 @@ public enum MacSurface: String {
 /// owns the send path through `ChatSessionClient`, and the turn streams back
 /// live into a pending bubble before the authoritative refresh.
 public struct ChatView: View {
+    @Environment(\.openWindow) private var openWindow
     private enum Phase: Equatable {
         case loading
         case ready
@@ -171,12 +172,27 @@ public struct ChatView: View {
     /// was left; the drag itself lives in `ThreadSidebar`'s trailing edge.
     @State private var sidebarWidth: CGFloat = MacSidebarWidth.current
     @State private var sidebarProjects: [SessionsClient.Project] = []
+    @State private var sidebarFolderScope: String?
+    @State private var sidebarFolders: Set<String> = []
+    @State private var sidebarLimit = MacThreadFolderScope.pageSize
+    @State private var sidebarHasMore = false
+    @State private var loadingMoreSidebar = false
+    @State private var previewSession: SessionsClient.PreviewSession?
+    @State private var previewTarget: AcpSessionInfo?
+    @State private var previewLoadingId: String?
+    @State private var previewError: String?
+    @State private var previewToken = UUID()
+    @State private var didConsumeInitialThreadRequest = false
+    @State private var runningSessionRegistry = MacRunningSessionRegistry.shared
+    @State private var runningRegistryOwner = UUID()
     /// When true the sidebar also lists archived threads so they can be
     /// restored; archiving a thread would otherwise make it unreachable.
     @State private var showArchived = false
     /// Newest real usage record for the open thread, pushed by the sidecar's
     /// SSE stream.  Nil until the engine reports one.
     @State private var activeUsage: AcpSessionUsage?
+    @State private var activeContextControls: MuseContextControls?
+    @State private var contextControlsRevision = UUID()
     @State private var draft: String = ""
     @State private var sessionId: String?
     @State private var sending: Bool = false
@@ -195,6 +211,7 @@ public struct ChatView: View {
         let model: String
         let effort: String?
         let museOptions: MuseLaunchOptions?
+        let contextPolicy: MuseContextPolicy?
         let hostId: UUID?
         let engine: ChatEngine
         let surface: MacSurface
@@ -248,6 +265,8 @@ public struct ChatView: View {
     private var modelVisibilityPreferencesJSON = ""
     @AppStorage(MuseLaunchPreferences.storageKey)
     private var museLaunchPreferencesJSON = ""
+    @AppStorage(MuseContextPreferences.storageKey)
+    private var museContextPreferencesJSON = ""
 
     let activeHost: ClutchHost?
 
@@ -255,15 +274,18 @@ public struct ChatView: View {
     /// does, so the chat surface can point at another machine — a Linux
     /// server running Muse Code, for example — instead of only this Mac.
     let store: HostStore?
+    private let initialThreadRequest: MacThreadWindowRequest?
 
     public init(
         activeHost: ClutchHost? = nil,
         store: HostStore? = nil,
-        initialSurface: MacSurface = .workspace
+        initialSurface: MacSurface = .workspace,
+        initialThreadRequest: MacThreadWindowRequest? = nil
     ) {
         self.activeHost = activeHost
         self.store = store
         self.surface = initialSurface
+        self.initialThreadRequest = initialThreadRequest
     }
 
     private var deviceUid: String { MacChatIdentity.deviceUid }
@@ -324,6 +346,23 @@ public struct ChatView: View {
             hostKey: modelVisibilityHostKey,
             preferencesJSON: museLaunchPreferencesJSON
         )
+    }
+
+    private var museContextPolicy: MuseContextPolicy? {
+        guard engine == .muse, activeHost != nil else { return nil }
+        return MuseContextPreferences.policy(
+            hostKey: modelVisibilityHostKey,
+            preferencesJSON: museContextPreferencesJSON
+        )
+    }
+
+    private var canManuallyCompactContext: Bool {
+        isWorkspace && engine == .muse && codeRemoteId != nil && codeChatId != nil
+            && !sending && !isPreviewingThread && activeContextControls?.supportsCompaction == true
+    }
+
+    private var sidebarFolderOptions: [String] {
+        MacThreadFolderScope.folderOptions(from: sidebarFolders)
     }
 
     /// The effort levels the picked engine accepts, from the catalog.
@@ -418,13 +457,14 @@ public struct ChatView: View {
                     if isWorkspace && showingSidebar {
                         ThreadSidebar(
                             sessions: sidebarSessions,
-                            selectedId: codeRemoteId,
+                            selectedId: previewTarget?.sessionId ?? previewSession?.remoteSessionId ?? codeRemoteId,
                             loading: sidebarLoading,
-                            loadingId: sidebarLoadingId,
+                            loadingId: previewLoadingId ?? sidebarLoadingId,
                             errorText: sidebarError,
                             projects: sidebarProjects,
-                            onSelect: { session in openSession(session, fromSidebar: true) },
+                            onSelect: selectSidebarSession,
                             onNew: { startMcodeThread() },
+                            onNewWindow: openNewThreadWindow,
                             onRefresh: { Task { await loadSidebarSessions() } },
                             onRetry: {
                                 if let failedSidebarSession {
@@ -445,6 +485,18 @@ public struct ChatView: View {
                                 ThreadPinStore.toggle(session.sessionId, forHost: host.id)
                                 pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
                             },
+                            folderScope: sidebarFolderScope,
+                            folders: sidebarFolderOptions,
+                            onChooseFolderScope: { folder in
+                                guard folder != sidebarFolderScope else { return }
+                                sidebarFolderScope = folder
+                                sidebarLimit = MacThreadFolderScope.pageSize
+                                sidebarHasMore = false
+                                Task { await loadSidebarSessions() }
+                            },
+                            canLoadMore: sidebarHasMore,
+                            isLoadingMore: loadingMoreSidebar,
+                            onLoadMore: loadMoreSidebarSessions,
                             fixedWidth: visibleSidebarWidth,
                             onResize: { width in
                                 sidebarWidth = min(width, maximumSidebarWidth)
@@ -515,8 +567,8 @@ public struct ChatView: View {
         }
         .sheet(isPresented: $showingSessions) {
             if let host = activeHost {
-                MacSessionsSheet(host: host, engine: engine.sidecarId) { _, chatId, remoteId, cwd, history in
-                    adopt(chatId: chatId, remoteId: remoteId, cwd: cwd, history: history, for: engine)
+                MacSessionsSheet(host: host, engine: engine.sidecarId) { _, chatId, remoteId, cwd, history, contextControls in
+                    adopt(chatId: chatId, remoteId: remoteId, cwd: cwd, history: history, for: engine, contextControls: contextControls)
                 }
             }
         }
@@ -538,22 +590,44 @@ public struct ChatView: View {
             codeRemoteId = nil
             codeLoaded = []
             codePending = []
+            previewSession = nil
+            previewTarget = nil
+            setContextControls(nil)
+            previewError = nil
+            previewLoadingId = nil
+            sidebarFolderScope = nil
+            sidebarFolders = []
+            sidebarLimit = MacThreadFolderScope.pageSize
+            sidebarHasMore = false
             resetTurnState()
             Task { await prepare() }
+        }
+        .background {
+            MacWindowCloseObserver {
+                Task { @MainActor in
+                    runningSessionRegistry.release(owner: runningRegistryOwner)
+                }
+            }
+            .frame(width: 1, height: 1)
+            .opacity(0)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
         }
     }
 
     private var chatPane: some View {
         VStack(spacing: 0) {
-            modelStrip
-            if isWorkspace {
+            if !isPreviewingThread {
+                modelStrip
+            }
+            if isWorkspace && !isPreviewingThread {
                 cwdBar
             }
-            if showFind {
+            if showFind && !isPreviewingThread {
                 findBar
             }
             Divider()
-            if hasActivity {
+            if hasActivity && !isPreviewingThread {
                 MacWorkspacePanels(responseText: streamingText) {
                     threadSurface
                 } activity: {
@@ -562,15 +636,35 @@ public struct ChatView: View {
             } else {
                 threadSurface
             }
-            if let request = pendingPermission {
+            if let request = pendingPermission, !isPreviewingThread {
                 PermissionCard(request: request) { optionId in
                     answerPermission(optionId)
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
-            if !queuedMessages.isEmpty {
+            if !queuedMessages.isEmpty && !isPreviewingThread {
                 queuedMessagesPanel
+            }
+            if let previewSession {
+                previewActionBar(for: previewSession)
+            }
+            if canManuallyCompactContext {
+                HStack(spacing: 8) {
+                    if let occupancy = activeContextControls?.occupancyPercent {
+                        Text("Context \(occupancy, specifier: "%.0f")%")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Compact Context", systemImage: "arrow.down.right.and.arrow.up.left") {
+                        compactContext()
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Ask Muse to compact this thread's context")
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
             }
             MacChatInputBar(
                 draft: $draft,
@@ -592,6 +686,7 @@ public struct ChatView: View {
                     attachments.removeAll { $0.id == attachment.id }
                 }
             )
+            .disabled(previewSession != nil || previewLoadingId != nil || previewError != nil)
         }
         .onChange(of: dictation.transcript) { _, text in
             guard dictation.isRecording || !text.isEmpty else { return }
@@ -601,6 +696,10 @@ public struct ChatView: View {
 
     private var hasActivity: Bool {
         sending || !plan.isEmpty || sendError != nil
+    }
+
+    private var isPreviewingThread: Bool {
+        previewSession != nil || previewLoadingId != nil || previewError != nil
     }
 
     private var activitySurface: some View {
@@ -1076,22 +1175,41 @@ public struct ChatView: View {
     /// derived from a character count.
     @ViewBuilder
     private var usageStrip: some View {
-        if engine == .mcode {
+        if engine == .mcode || engine == .muse {
+            let responseRate = activeUsage?.responseTokensPerSecond.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            let occupancy = currentContextOccupancyLabel
             HStack(spacing: 8) {
-                if let usage = activeUsage {
-                    if let rate = usage.rateLabel {
-                        metric(icon: "speedometer", value: rate)
-                    }
-                    if let occupancy = usage.occupancyLabel {
-                        metric(icon: "chart.pie.fill", value: occupancy)
-                    }
-                } else {
-                    Text("Usage not reported yet")
+                if let rate = responseRate {
+                    metric(icon: "speedometer", value: String(format: "Response %.1f tok/s", rate))
+                }
+                if let occupancy {
+                    metric(icon: "chart.pie.fill", value: occupancy)
+                }
+                if responseRate == nil && occupancy == nil {
+                    Text("Context and response rate not reported yet")
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                 }
             }
         }
+    }
+
+    private var currentContextOccupancyLabel: String? {
+        if let usage = activeUsage,
+           (usage.contextUsedTokens != nil || usage.totalTokens > 0),
+           let occupancy = usage.occupancyLabel {
+            return occupancy
+        }
+        guard let controls = activeContextControls,
+              let percent = controls.occupancyPercent,
+              let used = controls.contextUsedTokens,
+              let window = controls.contextWindow else { return nil }
+        return String(
+            format: "%.0f%% · %@ / %@",
+            percent,
+            AcpSessionUsage.compact(used),
+            AcpSessionUsage.compact(window)
+        )
     }
 
     private func metric(icon: String, value: String) -> some View {
@@ -1137,6 +1255,15 @@ public struct ChatView: View {
         }
         cancelSessionLoad()
         engine = next
+        previewSession = nil
+        previewTarget = nil
+        setContextControls(nil)
+        previewError = nil
+        previewLoadingId = nil
+        sidebarFolderScope = nil
+        sidebarFolders = []
+        sidebarLimit = MacThreadFolderScope.pageSize
+        sidebarHasMore = false
         // Each surface keeps its own engine: the workspace's choice is what
         // a relaunch returns to, and the agent chat's choice never
         // overwrites it.
@@ -1210,7 +1337,39 @@ public struct ChatView: View {
             )
             Spacer()
         } else {
-            switch phase {
+            if let previewSession {
+                previewSurface(previewSession)
+            } else if let previewLoadingId {
+                VStack(spacing: 10) {
+                    ProgressView("Loading Thread Preview…")
+                    Text(previewLoadingId)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Return To Current Thread") {
+                        returnFromPreview()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let previewError {
+                MacChatSetupCard(
+                    symbol: "eye.slash",
+                    title: "Preview Unavailable",
+                    message: previewError
+                )
+                if let previewTarget {
+                    Button("Resume Thread") { resumePreviewTarget(previewTarget) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canResumePreviewTarget(previewTarget))
+                        .help(previewResumeHelp(for: previewTarget))
+                }
+                Button("Return To Current Thread") {
+                    returnFromPreview()
+                }
+                Spacer()
+            } else {
+                switch phase {
             case .loading:
                 Spacer()
                 ProgressView("Loading thread…")
@@ -1280,6 +1439,7 @@ public struct ChatView: View {
                         }
                     }
                 }
+                }
             }
         }
     }
@@ -1301,6 +1461,100 @@ public struct ChatView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
+    }
+
+    private func previewSurface(_ preview: SessionsClient.PreviewSession) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "eye")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(preview.title ?? "Untitled Session")
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        if let cwd = preview.cwd, !cwd.isEmpty {
+                            Label(cwd, systemImage: "folder")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        if let model = preview.model, !model.isEmpty {
+                            Text(model).lineLimit(1).truncationMode(.middle)
+                        }
+                        if preview.running {
+                            Label("Running In Clutch", systemImage: "circle.fill")
+                                .foregroundStyle(.orange)
+                                .help("This Clutch sidecar reports an active turn; other processes may not be visible.")
+                        }
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            Divider()
+            if preview.truncated {
+                Label("Showing The Most Recent Messages", systemImage: "info.circle")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+            }
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(Array(preview.history.enumerated()), id: \.offset) { index, entry in
+                        if entry.isVisible || entry.isTool {
+                            MacChatRow(row: Row(
+                                id: "preview-\(index)",
+                                text: entry.text,
+                                date: Date(),
+                                fromAgent: !entry.isUser,
+                                isCard: false,
+                                isThought: false,
+                                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil
+                            ))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    private func previewActionBar(for preview: SessionsClient.PreviewSession) -> some View {
+        HStack(spacing: 8) {
+            Label("Preview Only", systemImage: "eye")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("Resume to send messages in this thread.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            Spacer()
+            Button(codeRemoteId == nil ? "New Thread" : "Current Thread") {
+                returnFromPreview()
+            }
+            .buttonStyle(.bordered)
+            Button("Open In New Window") {
+                openPreviewInNewWindow(preview)
+            }
+            .buttonStyle(.bordered)
+            Button("Resume") { resumePreview(preview) }
+                .buttonStyle(.borderedProminent)
+                .disabled(!queuedMessages.isEmpty || preview.running || isSessionRunning(preview.remoteSessionId))
+                .help(
+                    !queuedMessages.isEmpty
+                        ? "Send or remove queued messages before resuming another thread"
+                        : preview.running || isSessionRunning(preview.remoteSessionId)
+                            ? "This thread is already running in another window"
+                            : "Resume this thread"
+                )
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.clutchSecondaryBackground.opacity(0.7))
     }
 
     private func thoughtRow(_ thought: String) -> some View {
@@ -1334,6 +1588,11 @@ public struct ChatView: View {
             return
         }
         cancelSessionLoad()
+        previewSession = nil
+        previewTarget = nil
+        previewError = nil
+        previewLoadingId = nil
+        setContextControls(nil)
         MacEngineStore.save(engine)
         resetTurnState()
         // A fresh conversation keeps the user's current model, effort, and
@@ -1361,7 +1620,7 @@ public struct ChatView: View {
     }
 
     /// Adopt a freshly loaded code-engine thread into the chat pane.
-    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry], for engine: ChatEngine, model: String? = nil, provider: String? = nil) {
+    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry], for engine: ChatEngine, model: String? = nil, provider: String? = nil, contextControls: MuseContextControls? = nil) {
         self.engine = engine
         MacEngineStore.save(engine)
         resetTurnState()
@@ -1379,6 +1638,11 @@ public struct ChatView: View {
         codeCwd = cwd
         codeLoaded = history
         codePending = []
+        setContextControls(contextControls)
+        previewSession = nil
+        previewTarget = nil
+        previewError = nil
+        previewLoadingId = nil
         // The plan belongs to the thread that was open, so the thread being
         // adopted brings its own: the last one the engine reported in that
         // thread's history, and none when that thread never had one.
@@ -1386,6 +1650,18 @@ public struct ChatView: View {
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.save(remoteId: remoteId, cwd: cwd, engine: engine.sidecarId, for: host)
+            if contextControls == nil && engine == .muse {
+                let expectedRevision = contextControlsRevision
+                Task {
+                    guard let controls = try? await SessionsClient(host: host).contextControls(sessionId: chatId),
+                          contextControlsRevision == expectedRevision,
+                          activeHost?.id == host.id,
+                          self.engine == engine,
+                          codeRemoteId == remoteId,
+                          codeChatId == chatId else { return }
+                    setContextControls(controls)
+                }
+            }
         }
     }
 
@@ -1394,6 +1670,10 @@ public struct ChatView: View {
     /// thread whose persisted workspace is elsewhere.
     private func openSession(_ session: AcpSessionInfo, fromSidebar: Bool) {
         guard let host = activeHost else { return }
+        guard !isSessionRunning(session.sessionId, engineID: engine.sidecarId, hostID: host.id) else {
+            sidebarError = "This thread is already running in another window."
+            return
+        }
         guard queuedMessages.isEmpty else {
             sidebarError = "Send or remove queued messages before opening another thread."
             return
@@ -1429,7 +1709,7 @@ public struct ChatView: View {
                 )
                 guard !Task.isCancelled, sessionLoadToken == token,
                       activeHost?.id == host.id, engine == target else { return }
-                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target, model: loaded.model, provider: loaded.provider)
+                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target, model: loaded.model, provider: loaded.provider, contextControls: loaded.contextControls)
             } catch {
                 guard !Task.isCancelled, sessionLoadToken == token else { return }
                 if fromSidebar {
@@ -1440,6 +1720,126 @@ public struct ChatView: View {
                 }
             }
         }
+    }
+
+    private func selectSidebarSession(_ session: AcpSessionInfo) {
+        guard let host = activeHost else { return }
+        if sending {
+            openWindow(value: MacThreadWindowRequest(
+                hostID: host.id,
+                engineID: engine.sidecarId,
+                sessionID: session.sessionId,
+                cwd: session.cwd,
+                title: session.title
+            ))
+            return
+        }
+        Task { await loadPreview(session) }
+    }
+
+    private func loadPreview(_ session: AcpSessionInfo) async {
+        guard let host = activeHost else { return }
+        let requestedEngine = engine
+        previewToken = UUID()
+        let token = previewToken
+        previewSession = nil
+        previewTarget = session
+        previewError = nil
+        previewLoadingId = session.sessionId
+        do {
+            let preview = try await SessionsClient(host: host).preview(
+                sessionId: session.sessionId,
+                cwd: session.cwd,
+                engine: requestedEngine.sidecarId,
+                limit: 200
+            )
+            guard previewToken == token, activeHost?.id == host.id, engine == requestedEngine else { return }
+            previewSession = preview
+            previewLoadingId = nil
+        } catch {
+            guard previewToken == token, activeHost?.id == host.id, engine == requestedEngine else { return }
+            previewLoadingId = nil
+            previewError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+
+    private func resumePreview(_ preview: SessionsClient.PreviewSession) {
+        guard queuedMessages.isEmpty, !isSessionRunning(preview.remoteSessionId) else { return }
+        openSession(
+            AcpSessionInfo(
+                sessionId: preview.remoteSessionId,
+                cwd: preview.cwd,
+                title: preview.title,
+                provider: preview.provider,
+                model: preview.model,
+                usage: preview.usage
+            ),
+            fromSidebar: true
+        )
+    }
+
+    private func canResumePreviewTarget(_ target: AcpSessionInfo) -> Bool {
+        queuedMessages.isEmpty && !sending && !isSessionRunning(target.sessionId)
+    }
+
+    private func previewResumeHelp(for target: AcpSessionInfo) -> String {
+        if !queuedMessages.isEmpty { return "Send or remove queued messages before resuming another thread" }
+        if sending { return "Finish or stop the current turn before resuming another thread" }
+        if isSessionRunning(target.sessionId) { return "This thread is already running in another window" }
+        return "Resume this thread"
+    }
+
+    private func resumePreviewTarget(_ target: AcpSessionInfo) {
+        guard canResumePreviewTarget(target) else { return }
+        openSession(target, fromSidebar: true)
+    }
+
+    private func returnFromPreview() {
+        previewToken = UUID()
+        previewSession = nil
+        previewTarget = nil
+        previewLoadingId = nil
+        previewError = nil
+    }
+
+    private func isSessionRunning(_ sessionID: String, engineID: String? = nil, hostID: UUID? = nil) -> Bool {
+        guard let host = activeHost else { return false }
+        return runningSessionRegistry.isRunning(
+            hostID: hostID ?? host.id,
+            engineID: engineID ?? engine.sidecarId,
+            sessionID: sessionID
+        )
+    }
+
+    private func openNewThreadWindow() {
+        guard let host = activeHost else { return }
+        openWindow(value: MacThreadWindowRequest(
+            hostID: host.id,
+            engineID: engine.sidecarId,
+            cwd: previewSession?.cwd ?? codeCwd
+        ))
+    }
+
+    private func openSessionInNewWindow(_ session: AcpSessionInfo) {
+        guard let host = activeHost else { return }
+        openWindow(value: MacThreadWindowRequest(
+            hostID: host.id,
+            engineID: engine.sidecarId,
+            sessionID: session.sessionId,
+            cwd: session.cwd,
+            title: session.title
+        ))
+    }
+
+    private func openPreviewInNewWindow(_ preview: SessionsClient.PreviewSession) {
+        guard let host = activeHost else { return }
+        openWindow(value: MacThreadWindowRequest(
+            hostID: host.id,
+            engineID: engine.sidecarId,
+            sessionID: preview.remoteSessionId,
+            cwd: preview.cwd,
+            title: preview.title
+        ))
     }
 
     private func cancelSessionLoad() {
@@ -1455,16 +1855,37 @@ public struct ChatView: View {
         guard let host = activeHost, isWorkspace else { return }
         let requestedEngine = engine
         let requestedArchived = showArchived
+        let requestedFolder = sidebarFolderScope
+        let requestedLimit = sidebarLimit
         sidebarLoading = true
         defer {
-            if activeHost?.id == host.id, engine == requestedEngine { sidebarLoading = false }
+            if activeHost?.id == host.id,
+               engine == requestedEngine,
+               showArchived == requestedArchived,
+               sidebarFolderScope == requestedFolder,
+               sidebarLimit == requestedLimit {
+                sidebarLoading = false
+            }
         }
         do {
             let client = SessionsClient(host: host)
-            let listed = try await client.list(engine: requestedEngine.sidecarId, includingArchived: requestedArchived)
+            let listed = try await client.list(
+                engine: requestedEngine.sidecarId,
+                limit: requestedLimit,
+                includingArchived: requestedArchived,
+                folder: requestedFolder,
+                includeDescendants: true
+            )
             guard activeHost?.id == host.id, engine == requestedEngine,
-                  showArchived == requestedArchived else { return }
+                  showArchived == requestedArchived,
+                  sidebarFolderScope == requestedFolder,
+                  sidebarLimit == requestedLimit else { return }
             sidebarSessions = listed
+            sidebarHasMore = requestedLimit < 1000 && listed.count >= requestedLimit
+            sidebarFolders.formUnion(listed.compactMap { session in
+                guard let cwd = session.cwd, !cwd.isEmpty else { return nil }
+                return cwd
+            })
             sidebarError = nil
             // Project names live only in the metadata store, so the sidebar
             // needs its own read.  A failure here must not blank the thread
@@ -1474,11 +1895,25 @@ public struct ChatView: View {
                 sidebarProjects = meta.projects
             }
         } catch {
-            guard activeHost?.id == host.id, engine == requestedEngine else { return }
+            guard activeHost?.id == host.id,
+                  engine == requestedEngine,
+                  showArchived == requestedArchived,
+                  sidebarFolderScope == requestedFolder,
+                  sidebarLimit == requestedLimit else { return }
             // Keep whatever list we already have; a retry is one click away.
             if sidebarSessions.isEmpty {
                 sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
             }
+        }
+    }
+
+    private func loadMoreSidebarSessions() {
+        guard let nextLimit = MacThreadFolderScope.nextLimit(after: sidebarLimit), !loadingMoreSidebar else { return }
+        sidebarLimit = nextLimit
+        loadingMoreSidebar = true
+        Task {
+            await loadSidebarSessions()
+            loadingMoreSidebar = false
         }
     }
 
@@ -1490,7 +1925,11 @@ public struct ChatView: View {
             if let cwd = session.cwd, !cwd.isEmpty {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: cwd)])
             }
-
+        case let .renameThread(session):
+            guard let title = ThreadSidebar.promptForThreadTitle(currentTitle: session.title) else { return }
+            Task { await applyMeta(sessionId: session.sessionId, title: title) }
+        case let .openInNewWindow(session):
+            openSessionInNewWindow(session)
         case let .assignProject(session, projectId):
             // `.some(projectId)` keeps the key on the wire even when the inner
             // value is nil (unassign sends null); a plain nil would mean
@@ -1506,13 +1945,14 @@ public struct ChatView: View {
         }
     }
 
-    private func applyMeta(sessionId: String, projectId: String?? = nil, archived: Bool? = nil) async {
+    private func applyMeta(sessionId: String, projectId: String?? = nil, archived: Bool? = nil, title: String?? = nil) async {
         guard let host = activeHost else { return }
         do {
             let meta = try await SessionsClient(host: host).updateMeta(
                 sessionId: sessionId,
                 projectId: projectId,
-                archived: archived
+                archived: archived,
+                title: title
             )
             sidebarProjects = meta.projects
             await loadSidebarSessions()
@@ -1561,6 +2001,8 @@ public struct ChatView: View {
 
     private func resetTurnState() {
         turnGeneration = UUID()
+        runningSessionRegistry.release(owner: runningRegistryOwner)
+        setContextControls(nil)
         sendTask?.cancel()
         sendTask = nil
         sending = false
@@ -1570,6 +2012,11 @@ public struct ChatView: View {
         activeUsage = nil
         thoughtLine = nil
         sendError = nil
+    }
+
+    private func setContextControls(_ controls: MuseContextControls?) {
+        contextControlsRevision = UUID()
+        activeContextControls = controls
     }
 
     private func prepare(preferredEngine: ChatEngine? = nil) async {
@@ -1598,26 +2045,43 @@ public struct ChatView: View {
             engine = first
         }
         if isWorkspace {
-            // Reopen the last thread for this host when there is one, so a
-            // finished turn survives relaunch instead of going nowhere.
+            if let request = initialThreadRequest {
+                guard !didConsumeInitialThreadRequest else {
+                    phase = .ready
+                    return
+                }
+                didConsumeInitialThreadRequest = true
+                if let requestedEngine = ChatEngine(rawValue: request.engineID), offeredEngines.contains(requestedEngine) {
+                    engine = requestedEngine
+                }
+                codeCwd = request.cwd
+                phase = .ready
+                if let sessionID = request.sessionID {
+                    await loadPreview(AcpSessionInfo(
+                        sessionId: sessionID,
+                        cwd: request.cwd,
+                        title: request.title
+                    ))
+                }
+                return
+            }
+            // Show the last thread after relaunch without taking ownership.
+            // Sending in it requires an explicit Resume action.
             if let saved = MacMcodeStore.load(for: host) {
                 let savedEngine = ChatEngine(rawValue: saved.engine ?? "mcode") ?? .mcode
-                do {
-                    let loaded = try await SessionsClient(host: host).load(
+                if offeredEngines.contains(savedEngine) {
+                    engine = savedEngine
+                    codeCwd = saved.cwd
+                    phase = .ready
+                    await loadPreview(AcpSessionInfo(
                         sessionId: saved.remoteId,
                         cwd: saved.cwd,
-                        engine: savedEngine.sidecarId
-                    )
+                        title: sidebarSessions.first(where: { $0.sessionId == saved.remoteId })?.title
+                    ))
                     guard turnGeneration == generation,
                           activeHost?.id == host.id,
                           MacMcodeStore.load(for: host)?.remoteId == saved.remoteId else { return }
-                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: savedEngine, model: loaded.model, provider: loaded.provider)
                     return
-                } catch {
-                    guard turnGeneration == generation,
-                          activeHost?.id == host.id,
-                          MacMcodeStore.load(for: host)?.remoteId == saved.remoteId else { return }
-                    MacMcodeStore.clear(for: host)
                 }
             }
             guard turnGeneration == generation, activeHost?.id == host.id else { return }
@@ -1664,6 +2128,9 @@ public struct ChatView: View {
                 codeCwd = loaded.cwd
                 codeLoaded = loaded.history
                 codePending = []
+                if requestedEngine == .muse, let controls = loaded.contextControls {
+                    setContextControls(controls)
+                }
             } catch {
                 // Keep the in-view thread; the next send or pull retries.
             }
@@ -1717,6 +2184,7 @@ public struct ChatView: View {
             model: selectedModel ?? "",
             effort: selectedEffort,
             museOptions: museLaunchOptions,
+            contextPolicy: museContextPolicy,
             hostId: activeHost?.id,
             engine: engine,
             surface: surface,
@@ -1724,6 +2192,17 @@ public struct ChatView: View {
         ))
         draft = ""
         attachments = []
+    }
+
+    private func compactContext() {
+        guard canManuallyCompactContext else { return }
+        let savedDraft = draft
+        let savedAttachments = attachments
+        draft = "/compact"
+        attachments = []
+        send("/compact")
+        draft = savedDraft
+        attachments = savedAttachments
     }
 
     private func sendNextQueuedMessage() {
@@ -1784,6 +2263,7 @@ public struct ChatView: View {
 
     private func send(_ text: String, queued: QueuedMessage? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard previewSession == nil, previewLoadingId == nil, previewError == nil else { return }
         guard !prompt.isEmpty, !sending else { return }
         guard sidebarLoadingId == nil else {
             sendError = "Wait for the selected thread to open before sending."
@@ -1793,6 +2273,17 @@ public struct ChatView: View {
         guard host.chatToken?.isEmpty == false else {
             sendError = chatErrorMessage(ChatClientError.missingToken)
             return
+        }
+        if isWorkspace, let remoteID = codeRemoteId {
+            guard runningSessionRegistry.claim(
+                hostID: host.id,
+                engineID: engine.sidecarId,
+                sessionID: remoteID,
+                owner: runningRegistryOwner
+            ) else {
+                sendError = "This thread is already running in another window."
+                return
+            }
         }
         let outgoingImages = queued?.images ?? attachments
         if queued == nil {
@@ -1826,6 +2317,7 @@ public struct ChatView: View {
             cwd: isWorkspace ? codeCwd : nil,
             effort: queued == nil ? selectedEffort : queued?.effort,
             museOptions: queued == nil ? museLaunchOptions : queued?.museOptions,
+            contextPolicy: queued == nil ? museContextPolicy : queued?.contextPolicy,
             images: outgoingImages
         )
         sendTask = Task {
@@ -1863,6 +2355,8 @@ public struct ChatView: View {
                         pendingPermissions.append(request)
                     case .plan(let entries):
                         plan = entries
+                    case .contextControls(let controls):
+                        setContextControls(controls)
                     case .done(let stop, let id, let remoteId):
                         if isWorkspace {
                             codeChatId = id
@@ -1888,6 +2382,11 @@ public struct ChatView: View {
                         return
                     case .usage(let usage):
                         activeUsage = usage
+                        if engine == .muse, var controls = activeContextControls {
+                            controls.contextUsedTokens = usage.contextUsedTokens ?? controls.contextUsedTokens
+                            controls.contextWindow = usage.contextWindow ?? controls.contextWindow
+                            setContextControls(controls)
+                        }
                         if let index = sidebarSessions.firstIndex(where: { $0.sessionId == codeRemoteId }) {
                             sidebarSessions[index].usage = usage
                             sidebarSessions[index].model = usage.model ?? sidebarSessions[index].model
@@ -1915,6 +2414,9 @@ public struct ChatView: View {
     }
 
     private func retainTurnOutput(finishing: Bool = true) {
+        if finishing {
+            runningSessionRegistry.release(owner: runningRegistryOwner)
+        }
         let output: ChatTurnBuffer.Snapshot
         if finishing {
             guard let finished = liveTurn.finish() else { return }
@@ -2022,6 +2524,50 @@ public struct ChatView: View {
     }
 }
 
+private struct MacWindowCloseObserver: NSViewRepresentable {
+    let onClose: () -> Void
+
+    func makeNSView(context: Context) -> MacWindowCloseObservingView {
+        let view = MacWindowCloseObservingView()
+        view.onClose = onClose
+        return view
+    }
+
+    func updateNSView(_ view: MacWindowCloseObservingView, context: Context) {
+        view.onClose = onClose
+    }
+}
+
+private final class MacWindowCloseObservingView: NSView {
+    var onClose: (() -> Void)?
+    private weak var observedWindow: NSWindow?
+    private var closeObserver: NSObjectProtocol?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Keep observing the owning window when SwiftUI temporarily detaches an inactive tab's view; a new window replaces the old registration, and its close notification releases the lease.
+        guard let window, observedWindow !== window else { return }
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+            self.closeObserver = nil
+        }
+        observedWindow = window
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onClose?()
+        }
+    }
+
+    deinit {
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+        }
+    }
+}
+
 /// MiniMax Code thread browser: list, resume, and hand the replayed
 /// history back to the Chat tab.
 struct MacSessionsSheet: View {
@@ -2029,7 +2575,7 @@ struct MacSessionsSheet: View {
     /// The engine whose threads the sheet lists.
     var engine: String = "mcode"
     /// Carries the listed session so the resume can send its own `cwd`.
-    var onLoaded: (AcpSessionInfo, String, String, String?, [AcpHistoryEntry]) -> Void
+    var onLoaded: (AcpSessionInfo, String, String, String?, [AcpHistoryEntry], MuseContextControls?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var sessions: [AcpSessionInfo]?
@@ -2147,7 +2693,7 @@ struct MacSessionsSheet: View {
                 cwd: session.cwd,
                 engine: engine
             )
-            onLoaded(session, loaded.chatId, loaded.remoteSessionId, loaded.cwd, loaded.history)
+            onLoaded(session, loaded.chatId, loaded.remoteSessionId, loaded.cwd, loaded.history, loaded.contextControls)
             dismiss()
         } catch {
             self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
