@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const fsMockState = vi.hoisted(() => ({
   beforeOpen: null as null | ((path: string) => void),
   readdirCalls: 0,
+  readdirFailuresRemaining: 0,
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -15,6 +16,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     readdir: vi.fn(async (...args: Parameters<typeof actual.readdir>) => {
       fsMockState.readdirCalls += 1;
+      if (fsMockState.readdirFailuresRemaining > 0) {
+        fsMockState.readdirFailuresRemaining -= 1;
+        throw new Error("synthetic directory scan failure");
+      }
       return actual.readdir(...args);
     }),
     open: vi.fn(async (...args: Parameters<typeof actual.open>) => {
@@ -35,6 +40,7 @@ function event(payload_type: string, payload: Record<string, unknown>, sequence:
 afterEach(() => {
   fsMockState.beforeOpen = null;
   fsMockState.readdirCalls = 0;
+  fsMockState.readdirFailuresRemaining = 0;
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -79,6 +85,41 @@ describe("Muse session location index", () => {
       writeFileSync(join(newSession, "session.jsonl"), "{}\n");
       await expect(findMuseSessionLog(newlyCreatedId, root)).resolves.toBe(join(newSession, "session.jsonl"));
       expect(fsMockState.readdirCalls).toBe(8);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps validated paths when an expired index refresh fails, then discovers new sessions on retry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clutch-muse-location-refresh-failure-"));
+    const day = join(root, "2026", "11", "03");
+    const knownDirectory = join(day, SESSION_ID);
+    const newId = "d4444444-d444-4444-8444-d44444444444";
+    const newDirectory = join(day, newId);
+    mkdirSync(knownDirectory, { recursive: true });
+    writeFileSync(join(knownDirectory, "session.jsonl"), "{}\n");
+    let clock = 2_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    fsMockState.readdirCalls = 0;
+
+    try {
+      await expect(findMuseSessionLog(SESSION_ID, root)).resolves.toBe(join(knownDirectory, "session.jsonl"));
+      expect(fsMockState.readdirCalls).toBe(4);
+
+      clock += 501;
+      mkdirSync(newDirectory);
+      writeFileSync(join(newDirectory, "session.jsonl"), "{}\n");
+      fsMockState.readdirFailuresRemaining = 1;
+
+      await expect(findMuseSessionLog(newId, root)).resolves.toBeNull();
+      expect(fsMockState.readdirCalls).toBe(5);
+
+      await expect(findMuseSessionLog(SESSION_ID, root)).resolves.toBe(join(knownDirectory, "session.jsonl"));
+      expect(fsMockState.readdirCalls).toBe(5);
+
+      clock += 501;
+      await expect(findMuseSessionLog(newId, root)).resolves.toBe(join(newDirectory, "session.jsonl"));
+      expect(fsMockState.readdirCalls).toBe(9);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

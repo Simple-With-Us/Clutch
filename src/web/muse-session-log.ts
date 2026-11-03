@@ -447,7 +447,6 @@ async function refreshLocationIndex(root: string, index: LocationIndex): Promise
       index.paths = await scanMuseSessionLocations(root);
       index.expiresAt = Date.now() + LOCATION_INDEX_TTL_MS;
     } catch {
-      index.paths.clear();
       index.expiresAt = Date.now() + LOCATION_INDEX_TTL_MS;
     }
   })();
