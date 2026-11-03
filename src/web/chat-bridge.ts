@@ -58,6 +58,7 @@ import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionMod
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
+import { mapWithConcurrency } from "./bounded-map.ts";
 import { museSessionUsage, withMuseContext } from "./muse-session-metrics.ts";
 import { normalizeSessionFolder, sessionIsInFolder } from "./session-folder-scope.ts";
 import { ContextPolicySchema, compactAvailabilityFromUpdate, contextUsageFromUpdate, shouldCompactEarly, type ContextPolicy, type ContextUsage } from "./muse-context.ts";
@@ -2327,7 +2328,7 @@ async function main(): Promise<void> {
           ...row,
         }));
         const sessions = listEngine === "muse"
-          ? await Promise.all(withKnownMetadata.map(async (row) => {
+          ? await mapWithConcurrency(withKnownMetadata, 4, async (row) => {
             const log = await readMuseSessionSummary(row.sessionId);
             if (!log) return row;
             const usage = museSessionUsage(log);
@@ -2337,7 +2338,7 @@ async function main(): Promise<void> {
               ...(log.providerId ? { provider: log.providerId } : {}),
               ...(usage ? { usage } : {}),
             };
-          }))
+          })
           : attachUsage(withKnownMetadata.slice(0, USAGE_ENRICH_CAP)).concat(withKnownMetadata.slice(USAGE_ENRICH_CAP));
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions, hasMore: visible.length > limit || listed.length >= fetchLimit }));
       } catch (err) {
