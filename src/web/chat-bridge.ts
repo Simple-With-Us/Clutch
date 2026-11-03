@@ -57,6 +57,7 @@ import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { museErrorDiagnostics } from "./muse-error-diagnostics.ts";
+import { createTurnDiagnostics, type TurnDiagnosticHandle, type TurnOutcome } from "./turn-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
 import {
   loadSessionMeta,
@@ -1411,6 +1412,7 @@ interface ChatSession {
   resumeSessionId: string | null;
   cwd: string;
   busy: boolean;
+  diagnostics?: TurnDiagnosticHandle;
   stream: ((u: AcpUpdate) => void) | null;
   /** The model this session runs, as the client asked for it. */
   model?: string;
@@ -1563,6 +1565,12 @@ async function main(): Promise<void> {
   // is a separate process from start-web.ts, so it initializes its own
   // instance; this is what backs the native Infisical settings panel.
   const settings = await initClutchSettings();
+  const diagnostics = createTurnDiagnostics({
+    directory: join(dirname(TOKEN_FILE), "diagnostics"),
+    endpoint: settings.get("CLUTCH_TELEMETRY_ENDPOINT"),
+    authorization: settings.get("CLUTCH_TELEMETRY_AUTHORIZATION"),
+  });
+  void diagnostics.flush();
   const tokenFingerprint = createHash("sha256").update(token).digest("hex").slice(0, 12);
   const tailnetHost = await detectTailnetHost();
   if (!tailnetHost) log("no tailnet host detected; remote (Tailscale) requests will 403 until tailscale is up — set CLUTCH_TAILNET_HOST to override");
@@ -1974,6 +1982,8 @@ async function main(): Promise<void> {
           engines: ENGINE_ORDER,
           mcode: { available: mcodeAvailable() },
           tailnetHost,
+          activeTurns: [...sessions.values()].filter((session) => session.busy).length,
+          diagnostics: await diagnostics.status(),
         }),
       );
       return;
@@ -2053,6 +2063,7 @@ async function main(): Promise<void> {
       // The turn knows how to answer: a bridge turn answers the bridge, and a
       // turn that runs in the host answers the host.
       const answered = (await session.answerPermission?.(requestId, optionId)) ?? false;
+      session.diagnostics?.record("permission", { permissionKind: "approval", outcome: answered ? "success" : "error" });
       log(`permission answer session=${chatId} request=${requestId} answered=${answered}`);
       res.writeHead(answered ? 200 : 404, { "content-type": "application/json" }).end(
         JSON.stringify(answered ? { ok: true } : { error: "no such permission request" }),
@@ -2123,9 +2134,11 @@ async function main(): Promise<void> {
       }
       try {
         await bridgeFor("muse").steer(session.bridgeSessionId, text);
+        session.diagnostics?.record("steer", { outcome: "success" });
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ outcome: "injected" }));
       } catch (error) {
         const diagnostic = museErrorDiagnostics(error);
+        session.diagnostics?.record("steer", { outcome: "error", errorCategory: diagnostic.category, errorCode: diagnostic.code });
         log(`chat steer error session=${chatId} engine=muse code=${diagnostic.code ?? "none"} category=${diagnostic.category}`);
         if (error instanceof MuseSteeringError) {
           const failures = {
@@ -2548,12 +2561,14 @@ async function main(): Promise<void> {
         "cache-control": "no-cache",
         connection: "keep-alive",
       });
-      sseSend(res, "start", { sessionId: chatId, engine });
+      const turnDiagnostics = diagnostics.start({ engine });
+      sseSend(res, "start", { sessionId: chatId, engine, diagnosticId: turnDiagnostics.turnId });
       if (engine !== "muse") sseSend(res, "capabilities", { supportsSteering: false });
       log(`chat start session=${chatId} engine=${engine} promptChars=${prompt.length}`);
 
       const active = session;
       active.busy = true;
+      active.diagnostics = turnDiagnostics;
       // Engine diagnostics ride the bridge as [stderr]-prefixed message
       // chunks (the Shellular-visible contract). On a polished surface they
       // are working detail, not the answer — route them to `thought` without
@@ -2576,16 +2591,19 @@ async function main(): Promise<void> {
       }
       active.stream = (u) => {
         if (u.kind === "tool_call" || u.kind === "tool_call_update") {
+          turnDiagnostics.record("tool", { status: u.toolStatus ?? "running" });
           sseSend(res, "tool", { id: u.toolCallId ?? "", name: u.text, status: u.toolStatus ?? "running" });
           return;
         }
         if (u.kind === "plan") {
+          turnDiagnostics.record("plan", { stepCount: u.plan?.length ?? 0 });
           // The plan is a state, not a line of the transcript: the client
           // shows the list the engine last reported.
           sseSend(res, "plan", { entries: u.plan ?? [] });
           return;
         }
         const r = route(u);
+        turnDiagnostics.record("progress", { phase: r.event === "thought" ? "thinking" : "streaming", count: r.text.length });
         sseSend(res, r.event, { text: r.text });
         if (u.kind !== "user_message_chunk") sink?.onUpdate(u.kind, r.text);
       };
@@ -2595,6 +2613,7 @@ async function main(): Promise<void> {
       // answer, which is what the bridge does when no turn is watching.
       if (asksForPermissions) {
         active.permission = (request) => {
+          turnDiagnostics.record("permission", { permissionKind: "approval", outcome: "pending" });
           sseSend(res, "permission", {
             requestId: request.requestId,
             title: request.title,
@@ -2634,6 +2653,12 @@ async function main(): Promise<void> {
       const finish = (event: string, data: unknown): void => {
         if (settled) return;
         settled = true;
+        const parsedTerminal = z.object({ stopReason: z.string().optional() }).safeParse(data);
+        const reason = parsedTerminal.success ? parsedTerminal.data.stopReason : undefined;
+        const outcome: TurnOutcome = event === "error" ? "error" : reason === "cancelled" ? "cancelled" : reason === "endTurn" ? "success" : "unknown";
+        turnDiagnostics.finish(outcome);
+        log(`chat diagnostic id=${turnDiagnostics.turnId} outcome=${outcome}`);
+        delete active.diagnostics;
         stopUsage();
         active.busy = false;
         active.stream = null;
@@ -2749,6 +2774,7 @@ async function main(): Promise<void> {
                   selectHostModel(client, sessionId, provider, wanted ?? null, session.effort ?? null),
                   true,
                 );
+                turnDiagnostics.record("metadata", { model: chosen, provider: provider.provider, sessionId });
                 log(`chat host-model session=${chatId} provider=${provider.provider} model=${chosen}`);
               } else {
                 log(`chat host has no provider for engine=${engine}`);
@@ -2808,6 +2834,7 @@ async function main(): Promise<void> {
           const applied = await applySessionChoices(bridge, active, await catalog());
           log(`chat choices session=${chatId} model=${applied.modelApplied} effort=${applied.effortApplied}`);
         }
+        turnDiagnostics.record("metadata", { ...active.modelMetadata, sessionId: remoteId() });
         if (engine === "mcode" && active.bridgeSessionId) {
           const sessionIdForUsage = active.bridgeSessionId;
           usageTimer = setInterval(() => {
@@ -2817,6 +2844,7 @@ async function main(): Promise<void> {
             if (lastUsage && fresh.updatedAtMs === lastUsage.updatedAtMs) return;
             const measured = withRate(fresh, lastUsage ?? undefined);
             lastUsage = fresh;
+            turnDiagnostics.record("context", { ...measured, basis: "latest-response" });
             if (!settled) sseSend(res, "usage", { sessionId: sessionIdForUsage, usage: measured });
           }, 1500);
           usageTimer.unref?.();
@@ -2833,6 +2861,8 @@ async function main(): Promise<void> {
         }
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId, remoteSessionId: remoteId() });
       } catch (err) {
+        const turnError = museErrorDiagnostics(err);
+        turnDiagnostics.record("progress", { phase: "finalizing", outcome: "error", errorCategory: turnError.category, errorCode: turnError.code });
         if (engine === "muse") {
           const diagnostic = museErrorDiagnostics(err);
           log(`chat error session=${chatId} engine=muse code=${diagnostic.code ?? "none"} category=${diagnostic.category}`);

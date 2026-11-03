@@ -242,6 +242,9 @@ public struct ChatView: View {
     @State private var selectedModel: String?
     /// The reasoning effort the owner picked, if any.
     @State private var selectedEffort: String?
+    @State private var showingModelVisibility = false
+    @AppStorage(ModelVisibilityPreferences.storageKey)
+    private var modelVisibilityPreferencesJSON = ""
 
     let activeHost: ClutchHost?
 
@@ -299,6 +302,19 @@ public struct ChatView: View {
         catalog?.descriptor(engine.sidecarId)?.models ?? []
     }
 
+    private var visibleEngineModels: [EngineModel] {
+        ModelVisibilityPreferences.visibleModels(
+            all: engineModels,
+            engineID: engine.sidecarId,
+            hostKey: modelVisibilityHostKey,
+            preferencesJSON: modelVisibilityPreferencesJSON
+        )
+    }
+
+    private var modelVisibilityHostKey: String {
+        activeHost?.id.uuidString ?? "unpaired"
+    }
+
     /// The effort levels the picked engine accepts, from the catalog.
     private var engineEfforts: [String] {
         catalog?.descriptor(engine.sidecarId)?.effortLevels ?? []
@@ -309,10 +325,11 @@ public struct ChatView: View {
     /// The catalog's first row is only what the picker shows by default; it
     /// is not sent with a turn unless the owner picked it, because a
     /// resumed thread keeps the model and effort it was created with.
-    private func loadCatalog() async {
+    private func loadCatalog(expectedGeneration: UUID? = nil) async {
         guard let host = activeHost else { return }
         let loaded = try? await EngineCatalogClient(host: host).fetch()
-        guard activeHost?.id == host.id else { return }
+        guard activeHost?.id == host.id,
+              expectedGeneration == nil || turnGeneration == expectedGeneration else { return }
         catalog = loaded
         guard let loaded else { return }
         // A choice that the new host does not offer is dropped rather than
@@ -891,7 +908,7 @@ public struct ChatView: View {
                                 }
                             }
                             Divider()
-                            ForEach(engineModels) { entry in
+                            ForEach(visibleEngineModels) { entry in
                                 Button {
                                     selectedModel = entry.id
                                 } label: {
@@ -901,6 +918,13 @@ public struct ChatView: View {
                                         Text(entry.displayLabel)
                                     }
                                 }
+                            }
+                            if visibleEngineModels.isEmpty {
+                                Text("No Models Visible")
+                            }
+                            Divider()
+                            Button("Choose Models…") {
+                                showingModelVisibility = true
                             }
                         } label: {
                             pickerLabel(entryLabel: displayModel, symbol: "cpu")
@@ -950,6 +974,76 @@ public struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.clutchBackground)
+        .sheet(isPresented: $showingModelVisibility) {
+            modelVisibilitySheet
+        }
+    }
+
+    private var modelVisibilitySheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Choose Models")
+                        .font(.headline)
+                    Text("Choose which models appear in the \(engine.label) picker.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Restore Defaults") {
+                    modelVisibilityPreferencesJSON = ModelVisibilityPreferences.restoringDefaultsJSON(
+                        engineID: engine.sidecarId,
+                        hostKey: modelVisibilityHostKey,
+                        preferencesJSON: modelVisibilityPreferencesJSON
+                    ) ?? ""
+                }
+            }
+
+            List {
+                ForEach(engineModels) { model in
+                    Toggle(isOn: modelVisibilityBinding(for: model)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.displayLabel)
+                                .font(.body)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if model.id != model.displayLabel {
+                                Text(model.id)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .padding(.vertical, 3)
+                }
+            }
+            .listStyle(.plain)
+
+            HStack {
+                Spacer()
+                Button("Done") { showingModelVisibility = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 440, minHeight: 380)
+    }
+
+    private func modelVisibilityBinding(for model: EngineModel) -> Binding<Bool> {
+        Binding(
+            get: { visibleEngineModels.contains(where: { $0.id == model.id }) },
+            set: { isVisible in
+                modelVisibilityPreferencesJSON = ModelVisibilityPreferences.settingVisible(
+                    isVisible,
+                    modelID: model.id,
+                    all: engineModels,
+                    engineID: engine.sidecarId,
+                    hostKey: modelVisibilityHostKey,
+                    preferencesJSON: modelVisibilityPreferencesJSON
+                )
+            }
+        )
     }
 
     private func engineShortcut(for engine: ChatEngine) -> KeyEquivalent {
@@ -1231,19 +1325,23 @@ public struct ChatView: View {
         cancelSessionLoad()
         MacEngineStore.save(engine)
         resetTurnState()
-        // The picked model and effort belong to the thread that was open, so
-        // a new thread starts on the engine's own defaults.
-        selectedModel = nil
-        selectedEffort = nil
+        // A fresh conversation keeps the user's current model, effort, and
+        // working-directory choices; only thread-owned content is cleared.
         sessionId = nil
         codeChatId = nil
         codeRemoteId = nil
-        codeCwd = nil
         codeLoaded = []
         codePending = []
-        // The plan belongs to the thread that was open, so a new thread
-        // starts without one.
         plan = []
+        pendingPermissions.removeAll()
+        queuePaused = false
+        draft = ""
+        draftBase = ""
+        attachments = []
+        showFind = false
+        findText = ""
+        findFocusId = nil
+        findNonce += 1
         phase = .ready
         if let host = activeHost {
             MacMcodeStore.clear(for: host)
@@ -1465,11 +1563,13 @@ public struct ChatView: View {
 
     private func prepare(preferredEngine: ChatEngine? = nil) async {
         guard let host = activeHost else { return }
+        let generation = turnGeneration
         pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
         // The catalog can take a while on a cold server, so the thread list
         // and the health check do not wait for it.
-        async let catalogTask = loadCatalog()
+        async let catalogTask = loadCatalog(expectedGeneration: generation)
         await checkSidecar()
+        guard turnGeneration == generation, activeHost?.id == host.id else { return }
         // The engine the owner picked wins, so a relaunch returns to the
         // thread the owner was working in instead of an empty tab.  Each
         // surface keeps its own engine: the agent chat's choice never
@@ -1480,6 +1580,7 @@ public struct ChatView: View {
             engine = saved
         }
         _ = await catalogTask
+        guard turnGeneration == generation, activeHost?.id == host.id else { return }
         // The host's catalog decides which engines this Mac can offer: a
         // server with Muse Code but no MiniMax Code shows Muse Code only.
         if !offeredEngines.contains(where: { $0 == engine }), let first = offeredEngines.first {
@@ -1496,12 +1597,19 @@ public struct ChatView: View {
                         cwd: saved.cwd,
                         engine: savedEngine.sidecarId
                     )
+                    guard turnGeneration == generation,
+                          activeHost?.id == host.id,
+                          MacMcodeStore.load(for: host)?.remoteId == saved.remoteId else { return }
                     adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: savedEngine, model: loaded.model, provider: loaded.provider)
                     return
                 } catch {
+                    guard turnGeneration == generation,
+                          activeHost?.id == host.id,
+                          MacMcodeStore.load(for: host)?.remoteId == saved.remoteId else { return }
                     MacMcodeStore.clear(for: host)
                 }
             }
+            guard turnGeneration == generation, activeHost?.id == host.id else { return }
             codeChatId = nil
             codeRemoteId = nil
             codeLoaded = []
@@ -1511,23 +1619,36 @@ public struct ChatView: View {
         }
         phase = .loading
         do {
-            agentBubbles = try await ChatThreadClient(host: host).fetch(deviceUid: deviceUid)
+            let loaded = try await ChatThreadClient(host: host).fetch(deviceUid: deviceUid)
+            guard turnGeneration == generation, activeHost?.id == host.id else { return }
+            agentBubbles = loaded
             phase = .ready
         } catch {
+            guard turnGeneration == generation, activeHost?.id == host.id else { return }
             phase = .failed(chatErrorMessage(error))
         }
     }
 
     private func refreshThread() async {
         guard let host = activeHost, phase == .ready else { return }
+        let generation = turnGeneration
+        let requestedEngine = engine
         if isWorkspace {
             guard let remoteId = codeRemoteId else { return }
+            let requestedChatId = codeChatId
+            let requestedCwd = codeCwd
             do {
                 let loaded = try await SessionsClient(host: host).load(
                     sessionId: remoteId,
-                    cwd: codeCwd,
-                    engine: engine.sidecarId
+                    cwd: requestedCwd,
+                    engine: requestedEngine.sidecarId
                 )
+                guard turnGeneration == generation,
+                      activeHost?.id == host.id,
+                      engine == requestedEngine,
+                      codeRemoteId == remoteId,
+                      codeChatId == requestedChatId,
+                      codeCwd == requestedCwd else { return }
                 codeChatId = loaded.chatId
                 codeCwd = loaded.cwd
                 codeLoaded = loaded.history
@@ -1538,7 +1659,11 @@ public struct ChatView: View {
             return
         }
         do {
-            agentBubbles = try await ChatThreadClient(host: host).fetch(deviceUid: deviceUid)
+            let loaded = try await ChatThreadClient(host: host).fetch(deviceUid: deviceUid)
+            guard turnGeneration == generation,
+                  activeHost?.id == host.id,
+                  engine == requestedEngine else { return }
+            agentBubbles = loaded
         } catch {
             // Keep the existing thread on a failed refresh; the next send or
             // pull retries. A failed first load reports through prepare().

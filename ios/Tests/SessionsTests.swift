@@ -285,6 +285,129 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(minimax.supportsThreads)
     }
 
+    func testModelVisibilityDefaultsMuseToContributorModelsAndOtherEnginesToAll() {
+        let models = [
+            EngineModel(id: "muse-spark-1.3", label: "Spark", value: "wire-spark"),
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
+            EngineModel(id: "provider/muse-spark-1.3-contributor", label: "Qualified", value: "wire-qualified"),
+        ]
+
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: nil).map(\.id),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor", "provider/muse-spark-1.3-contributor"]
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: models, engineID: "minimax", hostKey: "host-a", preferencesJSON: nil),
+            models
+        )
+        XCTAssertEqual(models.map(\.value), ["wire-spark", "wire-spark-contributor", "wire-wonder-contributor", "wire-wonder-full-contributor", "wire-qualified"])
+    }
+
+    func testModelVisibilityPreferencesAreIsolatedAndCanPersistAnEmptySelection() {
+        let models = [
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+        ]
+        var preferences: String? = nil
+        for model in models {
+            preferences = ModelVisibilityPreferences.settingVisible(
+                false,
+                modelID: model.id,
+                all: models,
+                engineID: "muse",
+                hostKey: "host-a",
+                preferencesJSON: preferences
+            )
+        }
+
+        XCTAssertEqual(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences), Set<String>())
+        XCTAssertEqual(ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: preferences), [])
+        XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-b", preferencesJSON: preferences))
+        XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "minimax", hostKey: "host-a", preferencesJSON: preferences))
+    }
+
+    func testModelVisibilityMutationRetainsUnavailableModelIDs() {
+        let currentModels = [
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+        ]
+        var preferences = ModelVisibilityPreferences.settingVisible(
+            true,
+            modelID: "muse-future-contributor",
+            all: currentModels,
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: nil
+        )
+        preferences = ModelVisibilityPreferences.settingVisible(
+            false,
+            modelID: "muse-spark-1.3-contributor",
+            all: currentModels,
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+
+        XCTAssertEqual(
+            ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences),
+            Set(["muse-wonder-1.0-contributor", "muse-future-contributor"])
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: currentModels, engineID: "muse", hostKey: "host-a", preferencesJSON: preferences).map(\.id),
+            ["muse-wonder-1.0-contributor"]
+        )
+    }
+
+    func testModelVisibilityRestoreDefaultsRemovesOnlyTheRequestedScope() {
+        let models = [
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+        ]
+        var preferences: String? = nil
+        preferences = ModelVisibilityPreferences.settingVisible(
+            false,
+            modelID: "muse-spark-1.3-contributor",
+            all: models,
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+        preferences = ModelVisibilityPreferences.settingVisible(
+            true,
+            modelID: "muse-spark-1.3-contributor",
+            all: models,
+            engineID: "muse",
+            hostKey: "host-b",
+            preferencesJSON: preferences
+        )
+        preferences = ModelVisibilityPreferences.settingVisible(
+            false,
+            modelID: "muse-spark-1.3-contributor",
+            all: models,
+            engineID: "minimax",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+
+        preferences = ModelVisibilityPreferences.restoringDefaultsJSON(
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+
+        XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences))
+        XCTAssertEqual(
+            ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-b", preferencesJSON: preferences),
+            Set(["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor"])
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.selectedModelIDs(engineID: "minimax", hostKey: "host-a", preferencesJSON: preferences),
+            Set(["muse-wonder-1.0-contributor"])
+        )
+    }
+
     func testEngineLabelsCoverEveryEngine() {
         XCTAssertEqual(EngineLabels.label(for: "deepseek"), "DeepSeek")
         XCTAssertEqual(EngineLabels.label(for: "minimax"), "MiniMax")

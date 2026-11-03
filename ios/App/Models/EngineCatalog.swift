@@ -158,3 +158,95 @@ public struct EngineModel: Decodable, Equatable, Sendable, Identifiable {
         return "\(contextWindow)"
     }
 }
+
+/// Pure visibility policy for model pickers
+/// Preferences are JSON for per-host persistence in native settings; filtering never modifies engine availability
+public enum ModelVisibilityPreferences {
+    public static let storageKey = "modelVisibilityPreferences"
+
+    private struct Store: Codable {
+        var hosts: [String: [String: [String]]] = [:]
+    }
+
+    /// Stored selection for this host and engine: `nil` means unset; an empty set explicitly shows no models
+    public static func selectedModelIDs(
+        engineID: String,
+        hostKey: String,
+        preferencesJSON: String?
+    ) -> Set<String>? {
+        guard let store = decode(preferencesJSON),
+              let ids = store.hosts[hostKey]?[engineID] else { return nil }
+        return Set(ids)
+    }
+
+    /// Picker choices in catalog order, without changing catalog availability
+    public static func visibleModels(
+        all: [EngineModel],
+        engineID: String,
+        hostKey: String,
+        preferencesJSON: String?
+    ) -> [EngineModel] {
+        let selected = selectedModelIDs(engineID: engineID, hostKey: hostKey, preferencesJSON: preferencesJSON)
+            ?? defaultModelIDs(all: all, engineID: engineID)
+        return all.filter { selected.contains($0.id) }
+    }
+
+    /// Change one model's visibility and return JSON while retaining unavailable stored IDs
+    public static func settingVisible(
+        _ visible: Bool,
+        modelID: String,
+        all: [EngineModel],
+        engineID: String,
+        hostKey: String,
+        preferencesJSON: String?
+    ) -> String {
+        var store = decode(preferencesJSON) ?? Store()
+        var selected: Set<String>
+        if let stored = store.hosts[hostKey]?[engineID] {
+            selected = Set(stored)
+        } else {
+            selected = defaultModelIDs(all: all, engineID: engineID)
+        }
+        if visible {
+            selected.insert(modelID)
+        } else {
+            selected.remove(modelID)
+        }
+        store.hosts[hostKey, default: [:]][engineID] = selected.sorted()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(store), let json = String(data: data, encoding: .utf8) else {
+            return preferencesJSON ?? "{}"
+        }
+        return json
+    }
+
+    /// Remove only this host and engine's override so future catalog entries follow its default visibility rule
+    public static func restoringDefaultsJSON(
+        engineID: String,
+        hostKey: String,
+        preferencesJSON: String?
+    ) -> String? {
+        guard let preferencesJSON, var store = decode(preferencesJSON) else { return nil }
+        guard store.hosts[hostKey]?[engineID] != nil else { return preferencesJSON }
+        store.hosts[hostKey]?[engineID] = nil
+        if store.hosts[hostKey]?.isEmpty == true {
+            store.hosts[hostKey] = nil
+        }
+        guard !store.hosts.isEmpty else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(store) else { return preferencesJSON }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func defaultModelIDs(all: [EngineModel], engineID: String) -> Set<String> {
+        guard engineID == "muse" else { return Set(all.map(\.id)) }
+        return Set(all.lazy.map(\.id).filter { $0.hasSuffix("-contributor") })
+    }
+
+    private static func decode(_ json: String?) -> Store? {
+        guard let json, let data = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(Store.self, from: data)
+    }
+}

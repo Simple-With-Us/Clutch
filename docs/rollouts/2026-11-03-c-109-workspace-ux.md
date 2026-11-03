@@ -15,6 +15,8 @@ The owner reported a fixed divider above the current response, an unusable compo
 - Show immediate thread-opening feedback, cancel superseded loads, retry the failed thread, and keep details behind an explicit action.
 - Group assigned threads under named project sections; creating a project from a thread retains the existing create-and-assign behavior and makes its result visible.
 - Offer Spark, Wonder, and Wonder Full contributor variants from exact provider catalog IDs and show readable names.
+- Default the Muse picker to contributor models and let users choose visible models for each host and engine through Choose Models.
+- New Thread clears prior content immediately and rejects stale startup or refresh results that could restore the previous conversation.
 - Report exact provider/model metadata from loaded Muse config options independently of token accounting.
 
 ## Performance Evidence

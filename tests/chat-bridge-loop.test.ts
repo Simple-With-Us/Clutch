@@ -25,6 +25,7 @@ interface CcCall {
 }
 
 const ccCalls: CcCall[] = [];
+const telemetryCalls: unknown[] = [];
 let ccServer: Server;
 let ccPort = 0;
 let sidecar: ChildProcess | null = null;
@@ -85,6 +86,11 @@ async function waitFor(url: string, headers: Record<string, string>, timeoutMs =
 beforeAll(async () => {
   ccServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const body = await readBody(req);
+    if (req.url === "/v1/traces") {
+      telemetryCalls.push(body);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ received: 1, written: 1, ignored: 0 }));
+      return;
+    }
     ccCalls.push({
       method: req.method ?? "?",
       path: new URL(req.url ?? "/", "http://x").pathname,
@@ -113,6 +119,8 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     ...process.env,
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
+    CLUTCH_TELEMETRY_ENDPOINT: `http://127.0.0.1:${ccPort}/v1/traces`,
+    CLUTCH_TELEMETRY_AUTHORIZATION: "Bearer diagnostic-test-only-token",
     CLUTCH_SESSION_META_FILE: metaFile,
     CLUTCH_DSH_HOME: join(tmpdir(), "chat-loop-absent-dsh-home"),
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
@@ -186,6 +194,32 @@ async function postChat(body: unknown): Promise<{ status: number; text: string }
 }
 
 describe("chat sidecar full loop", () => {
+  it("records turn diagnostics and exports a correlated summary without transcript content", async () => {
+    const result = await postChat({ prompt: "diagnostic-private-prompt", engine: "mcode", cwd: "/tmp" });
+    const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(result.text);
+    const diagnosticId = (JSON.parse(start![1]!) as { diagnosticId: string }).diagnosticId;
+    expect(diagnosticId).toMatch(/^[a-f0-9-]{36}$/);
+    const logFile = join(tokenFile, "..", "diagnostics", "turn-diagnostics.jsonl");
+    let terminal: { traceId?: string } | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const rows = readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+      const ownRows = rows.filter((row) => row.turnId === diagnosticId);
+      terminal = ownRows.find((row) => row.kind === "terminal");
+      if (terminal && JSON.stringify(telemetryCalls).includes(String(terminal.traceId))) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(terminal).toMatchObject({ outcome: "success", engine: "mcode" });
+    const exported = JSON.stringify(telemetryCalls);
+    expect(exported).toContain(String(terminal?.traceId));
+    expect(exported).not.toContain("diagnostic-private-prompt");
+    expect(exported).not.toContain("stub-answer");
+    expect(exported).not.toContain("gen_ai.usage.input_tokens");
+    const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
+    const status = await health.json() as { diagnostics: Record<string, unknown> };
+    expect(status.diagnostics).toMatchObject({ configured: true, lastAcceptedAtMs: expect.any(Number) });
+    expect(JSON.stringify(status)).not.toContain("diagnostic-test-only-token");
+  });
+
   it("ignores malformed engine frames and keeps the turn and server available", async () => {
     const result = await postChat({ prompt: "malformed-events", engine: "mcode", cwd: "/tmp" });
     expect(result.status).toBe(200);
