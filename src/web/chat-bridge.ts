@@ -2317,9 +2317,7 @@ async function main(): Promise<void> {
         const scoped = requestedCwd ? listed.filter((row) => sessionIsInFolder(row.cwd, requestedCwd, folderScope === "tree")) : listed;
         const visible = applySessionMeta(scoped, loadSessionMeta(SESSION_META_FILE), includeArchived);
         const page = visible.slice(0, limit);
-        // Reading usage means a synchronous zstd log read per session, so cap
-        // how many rows get enriched in one request; rows past the cap simply
-        // report no usage (the UI already renders "not reported").
+        // Bound list I/O; details for an individual Muse row are read on demand.
         const modelPage = isDshHostedEngine(listEngine)
           ? attachSessionModelMetadata(page.slice(0, USAGE_ENRICH_CAP), DSH_HOME).concat(page.slice(USAGE_ENRICH_CAP))
           : page;
@@ -2328,7 +2326,7 @@ async function main(): Promise<void> {
           ...row,
         }));
         const sessions = listEngine === "muse"
-          ? await mapWithConcurrency(withKnownMetadata, 4, async (row) => {
+          ? await mapWithConcurrency(withKnownMetadata.slice(0, USAGE_ENRICH_CAP), 4, async (row) => {
             const log = await readMuseSessionSummary(row.sessionId);
             if (!log) return row;
             const usage = museSessionUsage(log);
@@ -2338,7 +2336,7 @@ async function main(): Promise<void> {
               ...(log.providerId ? { provider: log.providerId } : {}),
               ...(usage ? { usage } : {}),
             };
-          })
+          }).then((enriched) => enriched.concat(withKnownMetadata.slice(USAGE_ENRICH_CAP)))
           : attachUsage(withKnownMetadata.slice(0, USAGE_ENRICH_CAP)).concat(withKnownMetadata.slice(USAGE_ENRICH_CAP));
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions, hasMore: visible.length > limit || listed.length >= fetchLimit }));
       } catch (err) {
@@ -2347,6 +2345,34 @@ async function main(): Promise<void> {
         res.writeHead(502, { "content-type": "application/json" }).end(
           JSON.stringify({ error: listEngine === "muse" ? safeMuseBridgeError(err) : (err as Error).message.slice(0, 300) }),
         );
+      }
+      return;
+    }
+
+    // Details read one bounded log summary and never acquire an ACP session.
+    if (req.method === "GET" && url.pathname === "/clutch/v1/sessions/details") {
+      const engine = url.searchParams.get("engine");
+      const id = url.searchParams.get("sessionId");
+      if (engine !== "muse" || !id || id.length > 200) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "Muse engine and sessionId are required" }));
+        return;
+      }
+      try {
+        const summary = await readMuseSessionSummary(id);
+        if (!summary) {
+          res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Recorded details are unavailable for this thread." }));
+          return;
+        }
+        const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
+        const usage = museSessionUsage(summary);
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
+          readOnly: true, sessionId: id,
+          cwd: summary.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
+          title: entry?.title ?? summary.name, model: summary.modelId, provider: summary.providerId,
+          ...(usage ? { usage } : {}),
+        }));
+      } catch {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: "Recorded thread details could not be read." }));
       }
       return;
     }
@@ -3096,6 +3122,7 @@ async function main(): Promise<void> {
           if (engine === "muse" && active.model && !applied.modelApplied) throw new MuseSettingsError("model");
           if (engine === "muse" && active.effort && !applied.effortApplied) throw new MuseSettingsError("effort");
         }
+        if (settled) return;
         turnDiagnostics.record("metadata", { ...active.modelMetadata, sessionId: remoteId() });
         if (engine === "mcode" && active.bridgeSessionId) {
           const sessionIdForUsage = active.bridgeSessionId;
@@ -3157,6 +3184,7 @@ async function main(): Promise<void> {
             try { await sample; } finally { if (reading === sample) reading = null; }
           };
           await publishMuseState();
+          if (settled) return;
           usageTimer = setInterval(() => { void publishMuseState?.(); }, 2_500);
           usageTimer.unref?.();
           if (prompt.trim() === "/compact" && !bridge.contextControls(nativeId).supportsCompaction) {
