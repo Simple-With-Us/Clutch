@@ -3076,7 +3076,9 @@ async function main(): Promise<void> {
         }
         if (engine === "muse" && museOptions && active.bridgeSessionId) {
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, museOptions.yolo);
-          if (!active.model) active.model = contributorDefaultModel(active.modelMetadata?.model);
+          if (!active.model && !museContributorModelId(active.modelMetadata?.model)) {
+            active.model = contributorDefaultModel(active.modelMetadata?.model);
+          }
         } else if (engine === "muse" && active.bridgeSessionId && bridge.hasMuseApprovalModes(active.bridgeSessionId)) {
           // Legacy clients did not opt into YOLO for this turn.
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, false);

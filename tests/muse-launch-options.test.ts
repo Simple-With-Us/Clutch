@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { Bridge } from "../src/web/chat-bridge.ts";
-import { MuseSettingsError, isMuseContributorModel, museContributorModelId, museLaunchArguments } from "../src/web/muse-launch-options.ts";
+import { MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments } from "../src/web/muse-launch-options.ts";
 
 function fixture(dir: string, modes = ["onRequest", "allowAll"]): string {
   const script = join(dir, "muse-acp-fixture.mjs");
@@ -42,6 +42,15 @@ async function stopBridge(bridge: Bridge, sessionId = "fixture-session"): Promis
 }
 
 describe("Muse launch options", () => {
+  it("preserves an existing contributor's provider/profile wire spelling when resolving defaults", () => {
+    const id = "muse-wonder-full-1.0-contributor";
+    for (const value of [id, `muse-model:${JSON.stringify([7, { profile: 42 }, id])}`, `muse-model:${JSON.stringify(["meta%custom", "profile%custom", id])}`, `muse-model:${encodeURIComponent(JSON.stringify(["meta", "specific-profile", id]))}`]) {
+      expect(contributorDefaultModel(value)).toBe(value);
+      expect(museContributorModelId(value)).toBe(id);
+      expect(isMuseContributorModel(value)).toBe(true);
+    }
+    expect(contributorDefaultModel("muse-wonder-1.0")).toBe("muse-wonder-1.0-contributor");
+  });
   it("blocks max for contributor IDs beyond the picker allowlist in every wire spelling", () => {
     const id = "muse-future-1.0-contributor";
     expect(museContributorModelId(id)).toBeNull();

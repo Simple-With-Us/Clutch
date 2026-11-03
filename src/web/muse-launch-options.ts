@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { decodeMuseModelTuple } from "./muse-session-metadata.ts";
 
 export const MuseLaunchOptionsSchema = z.object({
   yolo: z.boolean(),
@@ -27,13 +28,7 @@ const CONTRIBUTOR_IDS = new Set([
 function museModelId(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 512) return null;
   if (!value.startsWith("muse-model:")) return value;
-  try {
-    // Provider and profile selectors are opaque; only the model ID is ours to interpret.
-    const parsed = z.tuple([z.unknown(), z.unknown(), z.string()]).safeParse(JSON.parse(decodeURIComponent(value.slice("muse-model:".length))));
-    return parsed.success ? parsed.data[2] : null;
-  } catch {
-    return null;
-  }
+  return decodeMuseModelTuple(value)?.[2] ?? null;
 }
 
 /** Both supported ACP spellings identify the same allowlisted picker model. */
@@ -49,7 +44,7 @@ export function isMuseContributorModel(value: unknown): boolean {
 
 export function contributorDefaultModel(currentModel?: string): string {
   const exact = museContributorModelId(currentModel);
-  if (exact) return exact;
+  if (exact && currentModel) return currentModel;
   if (currentModel && CONTRIBUTOR_IDS.has(`${currentModel}-contributor`)) return `${currentModel}-contributor`;
   return "muse-spark-1.3-contributor";
 }
