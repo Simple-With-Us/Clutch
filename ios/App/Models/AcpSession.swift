@@ -1,5 +1,30 @@
 import Foundation
 
+private final class AcpSessionDateParser: @unchecked Sendable {
+    private let lock = NSLock()
+    private let cache = NSCache<NSString, NSDate>()
+    private let fractional = ISO8601DateFormatter()
+    private let plain = ISO8601DateFormatter()
+
+    init() {
+        cache.countLimit = 2048
+        cache.totalCostLimit = 128 * 1024
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        plain.formatOptions = [.withInternetDateTime]
+    }
+
+    func date(from value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let key = value as NSString
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache.object(forKey: key) { return cached as Date }
+        guard let parsed = fractional.date(from: value) ?? plain.date(from: value) else { return nil }
+        cache.setObject(parsed as NSDate, forKey: key, cost: value.utf8.count)
+        return parsed
+    }
+}
+
 /// One entry in the engine's execution plan.
 ///
 /// The engine reports the whole plan every time it changes, so a client
@@ -167,12 +192,17 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
     public var cwd: String?
     public var title: String?
     public var updatedAt: String?
+    /// Exact model identity reported by the engine when available.
+    public var provider: String?
+    public var model: String?
     /// Present only when the sidecar could read the engine's own accounting.
     public var usage: AcpSessionUsage?
     /// Project this session belongs to, set by the sidecar's metadata store.
     public var projectId: String?
     /// True when the user archived it.  Archived threads are hidden, never gone.
     public var archived: Bool?
+
+    private static let dateParser = AcpSessionDateParser()
 
     public var id: String { sessionId }
 
@@ -181,6 +211,8 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
         cwd: String? = nil,
         title: String? = nil,
         updatedAt: String? = nil,
+        provider: String? = nil,
+        model: String? = nil,
         usage: AcpSessionUsage? = nil,
         projectId: String? = nil,
         archived: Bool? = nil
@@ -189,6 +221,8 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
         self.cwd = cwd
         self.title = title
         self.updatedAt = updatedAt
+        self.provider = provider
+        self.model = model
         self.usage = usage
         self.projectId = projectId
         self.archived = archived
@@ -204,13 +238,7 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
     /// The sidecar sends ISO-8601 with milliseconds and a `Z` suffix; tolerate
     /// the plain form too so a thread without them still sorts sensibly.
     public static func updatedDate(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = fractional.date(from: value) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: value)
+        dateParser.date(from: value)
     }
 
     public var updated: Date? { Self.updatedDate(updatedAt) }
@@ -227,6 +255,7 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
         return sessions.filter { session in
             [
                 session.title, session.cwd, session.sessionId,
+                session.model, session.provider,
                 session.usage?.model, session.usage?.provider, session.projectId,
             ]
             .compactMap { $0?.lowercased() }
@@ -250,18 +279,26 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
     /// local, per-host reading aid (see `ThreadPinStore`); a pinned thread
     /// appears once, in Pinned, not again in its date bucket.
     public static func grouped(_ sessions: [AcpSessionInfo], pinned: Set<String>, now: Date = Date(), calendar: Calendar = .current) -> [Group] {
-        guard !pinned.isEmpty else { return grouped(sessions, now: now, calendar: calendar) }
-        let pinnedRows = newestFirst(sessions.filter { pinned.contains($0.sessionId) })
+        let ordered = newestFirst(sessions)
+        return grouped(ordered: ordered, pinned: pinned, now: now, calendar: calendar)
+    }
+
+    static func grouped(ordered sessions: [AcpSessionInfo], pinned: Set<String>, now: Date = Date(), calendar: Calendar = .current) -> [Group] {
+        guard !pinned.isEmpty else { return grouped(ordered: sessions, now: now, calendar: calendar) }
+        let pinnedRows = sessions.filter { pinned.contains($0.sessionId) }
         let rest = sessions.filter { !pinned.contains($0.sessionId) }
-        guard !pinnedRows.isEmpty else { return grouped(sessions, now: now, calendar: calendar) }
-        return [Group(title: "Pinned", sessions: pinnedRows)] + grouped(rest, now: now, calendar: calendar)
+        guard !pinnedRows.isEmpty else { return grouped(ordered: sessions, now: now, calendar: calendar) }
+        return [Group(title: "Pinned", sessions: pinnedRows)] + grouped(ordered: rest, now: now, calendar: calendar)
     }
 
     /// Newest-first sessions bucketed as Today / Yesterday / Previous 7 Days
     /// / Older / Undated, empty buckets dropped.  Undated threads go last:
     /// they still work, they just cannot claim a place in the timeline.
     public static func grouped(_ sessions: [AcpSessionInfo], now: Date = Date(), calendar: Calendar = .current) -> [Group] {
-        let ordered = newestFirst(sessions)
+        grouped(ordered: newestFirst(sessions), now: now, calendar: calendar)
+    }
+
+    private static func grouped(ordered: [AcpSessionInfo], now: Date, calendar: Calendar) -> [Group] {
         let startOfToday = calendar.startOfDay(for: now)
         let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
         let startOfWeek = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfYesterday

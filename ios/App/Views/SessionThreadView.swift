@@ -98,7 +98,9 @@ final class SessionThreadModel {
     /// thread keeps whatever model it was created with — which the client
     /// does not know.
     var pickerLabel: String {
-        if let modelId { return modelId }
+        if let modelId {
+            return catalog?.model(engineId: engine, modelId: modelId)?.displayLabel ?? modelId
+        }
         return engineLabel
     }
 
@@ -197,6 +199,8 @@ final class SessionThreadModel {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
+                    case .capabilities:
+                        break
                     case .started(let id, _):
                         chatId = id
                     case .message(let text):

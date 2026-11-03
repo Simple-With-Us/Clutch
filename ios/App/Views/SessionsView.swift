@@ -571,6 +571,8 @@ final class NewThreadModel {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
+                    case .capabilities:
+                        break
                     case .started(let id, _):
                         chatId = id
                     case .message(let chunk):

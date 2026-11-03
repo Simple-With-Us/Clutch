@@ -164,6 +164,9 @@ public struct ChatView: View {
     @State private var sidebarLoading = false
     @State private var sidebarError: String?
     @State private var sidebarLoadingId: String?
+    @State private var failedSidebarSession: AcpSessionInfo?
+    @State private var sessionLoadTask: Task<Void, Never>?
+    @State private var sessionLoadToken = UUID()
     /// User-resized rail width.  Persisted so the window comes back the way it
     /// was left; the drag itself lives in `ThreadSidebar`'s trailing edge.
     @State private var sidebarWidth: CGFloat = MacSidebarWidth.current
@@ -177,7 +180,25 @@ public struct ChatView: View {
     @State private var draft: String = ""
     @State private var sessionId: String?
     @State private var sending: Bool = false
-    @State private var streamingText: String = ""
+    @State private var liveTurn = ChatTurnBuffer()
+    @State private var turnGeneration = UUID()
+    @State private var queuedMessages: [QueuedMessage] = []
+    @State private var queuePaused = false
+    @State private var steering = false
+    @State private var steeringSupported = false
+    @State private var followLatest = true
+
+    private struct QueuedMessage: Identifiable {
+        let id = UUID()
+        let text: String
+        let images: [ChatAttachment]
+        let model: String
+        let effort: String?
+        let hostId: UUID?
+        let engine: ChatEngine
+        let surface: MacSurface
+        let remoteId: String?
+    }
     @State private var thoughtLine: String?
     @State private var sendError: String?
     /// The engine's execution plan, as it last reported it.
@@ -201,7 +222,8 @@ public struct ChatView: View {
     @State private var cwdDraft: String = ""
     @State private var pinnedIds: Set<String> = []
     /// Tool calls from the in-flight turn; folded into the transcript on done.
-    @State private var liveTools: [LiveTool] = []
+    private var streamingText: String { liveTurn.text }
+    private var liveTools: [ChatTurnBuffer.Tool] { liveTurn.tools }
     @State private var showFind = false
     @State private var findText = ""
     @State private var findFocusId: String?
@@ -220,12 +242,6 @@ public struct ChatView: View {
     @State private var selectedModel: String?
     /// The reasoning effort the owner picked, if any.
     @State private var selectedEffort: String?
-
-    struct LiveTool: Identifiable, Equatable {
-        var id: String
-        var name: String
-        var status: String
-    }
 
     let activeHost: ClutchHost?
 
@@ -296,6 +312,7 @@ public struct ChatView: View {
     private func loadCatalog() async {
         guard let host = activeHost else { return }
         let loaded = try? await EngineCatalogClient(host: host).fetch()
+        guard activeHost?.id == host.id else { return }
         catalog = loaded
         guard let loaded else { return }
         // A choice that the new host does not offer is dropped rather than
@@ -314,7 +331,12 @@ public struct ChatView: View {
     /// an untouched thread keeps whatever model it was created with —
     /// which the client does not know.
     private var displayModel: String {
-        if let selectedModel { return selectedModel }
+        if let selectedModel {
+            return engineModels.first(where: { $0.id == selectedModel })?.displayLabel ?? selectedModel
+        }
+        if let reported = activeUsage?.model ?? sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.model {
+            return engineModels.first(where: { $0.id == reported })?.displayLabel ?? reported
+        }
         return "Default Model"
     }
 
@@ -376,6 +398,13 @@ public struct ChatView: View {
                             onSelect: { session in openSession(session, fromSidebar: true) },
                             onNew: { startMcodeThread() },
                             onRefresh: { Task { await loadSidebarSessions() } },
+                            onRetry: {
+                                if let failedSidebarSession {
+                                    openSession(failedSidebarSession, fromSidebar: true)
+                                } else {
+                                    Task { await loadSidebarSessions() }
+                                }
+                            },
                             onAction: { action, session in handle(action, session) },
                             showArchived: showArchived,
                             onToggleArchived: {
@@ -470,6 +499,7 @@ public struct ChatView: View {
             }
         }
         .onChange(of: activeHost?.id) { _, _ in
+            cancelSessionLoad()
             // A different host means a different engine catalog and a
             // different thread list; both are re-read by prepare(), and the
             // stale list goes first so the rail never shows another
@@ -495,27 +525,14 @@ public struct ChatView: View {
                 findBar
             }
             Divider()
-            threadSurface
-            if sending, !streamingText.isEmpty {
-                liveBubble
-            }
-            if let thought = thoughtLine, !thought.isEmpty {
-                thoughtRow(thought)
-            }
-            if let error = sendError {
-                Text(error)
-                    .font(.system(size: 12))
-                    .foregroundColor(.red)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-            }
-            // The plan and the permission card sit above the input bar, so what the
-            // engine is doing and what it is asking are answered where the
-            // turn is written.
-            if !plan.isEmpty {
-                PlanPanel(entries: plan)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+            if hasActivity {
+                MacWorkspacePanels(responseText: streamingText) {
+                    threadSurface
+                } activity: {
+                    activitySurface
+                }
+            } else {
+                threadSurface
             }
             if let request = pendingPermission {
                 PermissionCard(request: request) { optionId in
@@ -524,11 +541,18 @@ public struct ChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
+            if !queuedMessages.isEmpty {
+                queuedMessagesPanel
+            }
             MacChatInputBar(
                 draft: $draft,
                 sending: sending,
                 onSend: { send(draft) },
                 onStop: { stop() },
+                onQueue: { queueDraft() },
+                onSteer: { steerDraft() },
+                canSteer: steeringSupported,
+                isSteering: steering,
                 isDictating: dictation.isRecording,
                 onMic: {
                     if !dictation.isRecording { draftBase = draft }
@@ -545,6 +569,83 @@ public struct ChatView: View {
             guard dictation.isRecording || !text.isEmpty else { return }
             draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+    }
+
+    private var hasActivity: Bool {
+        sending || !plan.isEmpty || sendError != nil
+    }
+
+    private var activitySurface: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if sending {
+                if !streamingText.isEmpty {
+                    liveBubble
+                } else {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Working…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                }
+            }
+            if let thought = thoughtLine, !thought.isEmpty {
+                thoughtRow(thought)
+            }
+            Color.clear.frame(height: 1).id("current-response-end")
+            if let error = sendError {
+                Text(error)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+            }
+            if !plan.isEmpty {
+                PlanPanel(entries: plan)
+                    .padding(.horizontal, 12)
+            }
+        }
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var queuedMessagesPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Queued Messages (\(queuedMessages.count))")
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                if !sending {
+                    Button("Send Next") {
+                        queuePaused = false
+                        sendNextQueuedMessage()
+                    }
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(queuedMessages) { message in
+                        HStack(spacing: 8) {
+                            Text(message.text)
+                                .font(.system(size: 11))
+                                .lineLimit(1)
+                            Spacer()
+                            Button {
+                                queuedMessages.removeAll { $0.id == message.id }
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove Queued Message")
+                        }
+                    }
+                }
+            }
+            .frame(height: CGFloat(min(queuedMessages.count, 4)) * 22)
+        }
+        .padding(10)
+        .background(Color.clutchSecondaryBackground)
     }
 
     // MARK: - Find In Thread
@@ -770,6 +871,7 @@ public struct ChatView: View {
                 if let host = activeHost, let store {
                     HostSwitcher(host: host, store: store, compact: true)
                         .menuStyle(.borderlessButton)
+                        .disabled(sending || !queuedMessages.isEmpty)
                         .frame(maxWidth: 220, alignment: .trailing)
                         .help(statusHelp(for: host))
                 }
@@ -779,6 +881,16 @@ public struct ChatView: View {
                 HStack(spacing: 8) {
                     if !engineModels.isEmpty {
                         Menu {
+                            Button {
+                                selectedModel = nil
+                            } label: {
+                                if selectedModel == nil {
+                                    Label("Default Model", systemImage: "checkmark")
+                                } else {
+                                    Text("Default Model")
+                                }
+                            }
+                            Divider()
                             ForEach(engineModels) { entry in
                                 Button {
                                     selectedModel = entry.id
@@ -795,7 +907,7 @@ public struct ChatView: View {
                         }
                         .accessibilityLabel(selectedModel.map { "Model: \($0)" } ?? "Model: engine default")
                         .menuIndicator(.hidden)
-                        .help("Choose a model; the default keeps the engine's thread model")
+                        .help(selectedModel ?? "Choose a model; the default keeps the engine's thread model")
                     }
 
                     if !engineEfforts.isEmpty {
@@ -897,7 +1009,7 @@ public struct ChatView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: 170, alignment: .leading)
+                .frame(maxWidth: 280, alignment: .leading)
             Image(systemName: "chevron.down")
                 .font(.system(size: 9, weight: .bold))
                 .foregroundColor(.secondary)
@@ -910,6 +1022,15 @@ public struct ChatView: View {
 
     private func selectEngine(_ next: ChatEngine) {
         guard next != engine else { return }
+        guard queuedMessages.isEmpty else {
+            sidebarError = "Send or remove queued messages before changing engines."
+            return
+        }
+        guard !sending else {
+            sidebarError = "Finish or stop the current turn before changing engines."
+            return
+        }
+        cancelSessionLoad()
         engine = next
         // Each surface keeps its own engine: the workspace's choice is what
         // a relaunch returns to, and the agent chat's choice never
@@ -962,9 +1083,11 @@ public struct ChatView: View {
         guard let host = activeHost else { return }
         do {
             let health = try await SessionsClient(host: host).health()
+            guard activeHost?.id == host.id else { return }
             sidecarReachable = health.ok
             mcodeAvailable = health.mcodeAvailable
         } catch {
+            guard activeHost?.id == host.id else { return }
             sidecarReachable = false
         }
     }
@@ -1027,9 +1150,19 @@ public struct ChatView: View {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
+                            Color.clear.frame(height: 1).id("transcript-end")
+                        }
+                        .contextMenu {
+                            Toggle("Follow Latest Activity", isOn: $followLatest)
                         }
                         .onChange(of: rows.count) {
-                            if let last = rows.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                            if followLatest { proxy.scrollTo("transcript-end", anchor: .bottom) }
+                        }
+                        .onChange(of: liveTools) {
+                            if followLatest { proxy.scrollTo("transcript-end", anchor: .bottom) }
+                        }
+                        .onChange(of: codeLoaded) {
+                            if followLatest { proxy.scrollTo("transcript-end", anchor: .bottom) }
                         }
                         .onChange(of: findNonce) {
                             if let focus = findFocusId { proxy.scrollTo(focus, anchor: .center) }
@@ -1087,6 +1220,15 @@ public struct ChatView: View {
     /// move a Muse Code thread over to MiniMax Code.
     private func startMcodeThread() {
         guard isWorkspace else { return }
+        guard queuedMessages.isEmpty else {
+            sidebarError = "Send or remove queued messages before starting another thread."
+            return
+        }
+        guard !sending else {
+            sidebarError = "Finish or stop the current turn before starting another thread."
+            return
+        }
+        cancelSessionLoad()
         MacEngineStore.save(engine)
         resetTurnState()
         // The picked model and effort belong to the thread that was open, so
@@ -1110,7 +1252,7 @@ public struct ChatView: View {
     }
 
     /// Adopt a freshly loaded code-engine thread into the chat pane.
-    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry], for engine: ChatEngine) {
+    private func adopt(chatId: String, remoteId: String, cwd: String?, history: [AcpHistoryEntry], for engine: ChatEngine, model: String? = nil, provider: String? = nil) {
         self.engine = engine
         MacEngineStore.save(engine)
         resetTurnState()
@@ -1121,6 +1263,10 @@ public struct ChatView: View {
         selectedEffort = nil
         codeChatId = chatId
         codeRemoteId = remoteId
+        if let index = sidebarSessions.firstIndex(where: { $0.sessionId == remoteId }) {
+            sidebarSessions[index].model = model ?? sidebarSessions[index].model
+            sidebarSessions[index].provider = provider ?? sidebarSessions[index].provider
+        }
         codeCwd = cwd
         codeLoaded = history
         codePending = []
@@ -1139,6 +1285,17 @@ public struct ChatView: View {
     /// thread whose persisted workspace is elsewhere.
     private func openSession(_ session: AcpSessionInfo, fromSidebar: Bool) {
         guard let host = activeHost else { return }
+        guard queuedMessages.isEmpty else {
+            sidebarError = "Send or remove queued messages before opening another thread."
+            return
+        }
+        guard !sending else {
+            sidebarError = "Finish or stop the current turn before opening another thread."
+            return
+        }
+        guard sidebarLoadingId != session.sessionId else { return }
+        cancelSessionLoad()
+        let token = sessionLoadToken
         if fromSidebar {
             sidebarLoadingId = session.sessionId
             sidebarError = nil
@@ -1148,17 +1305,26 @@ public struct ChatView: View {
         // so the load carries none.  The local picks are cleared only once
         // the load succeeds (in `adopt`), so a failed load leaves the
         // visible thread's choices untouched.
-        Task {
-            defer { if fromSidebar { sidebarLoadingId = nil } }
+        sessionLoadTask = Task {
+            defer {
+                if sessionLoadToken == token {
+                    sidebarLoadingId = nil
+                    sessionLoadTask = nil
+                }
+            }
             do {
                 let loaded = try await SessionsClient(host: host).load(
                     sessionId: session.sessionId,
                     cwd: session.cwd,
                     engine: target.sidecarId
                 )
-                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target)
+                guard !Task.isCancelled, sessionLoadToken == token,
+                      activeHost?.id == host.id, engine == target else { return }
+                adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target, model: loaded.model, provider: loaded.provider)
             } catch {
+                guard !Task.isCancelled, sessionLoadToken == token else { return }
                 if fromSidebar {
+                    failedSidebarSession = session
                     sidebarError = codeLoadErrorMessage(error, session: session)
                 } else {
                     sendError = codeLoadErrorMessage(error, session: session)
@@ -1167,21 +1333,39 @@ public struct ChatView: View {
         }
     }
 
+    private func cancelSessionLoad() {
+        sessionLoadTask?.cancel()
+        sessionLoadTask = nil
+        sessionLoadToken = UUID()
+        sidebarLoadingId = nil
+        failedSidebarSession = nil
+        sidebarError = nil
+    }
+
     private func loadSidebarSessions() async {
         guard let host = activeHost, isWorkspace else { return }
+        let requestedEngine = engine
+        let requestedArchived = showArchived
         sidebarLoading = true
-        defer { sidebarLoading = false }
+        defer {
+            if activeHost?.id == host.id, engine == requestedEngine { sidebarLoading = false }
+        }
         do {
             let client = SessionsClient(host: host)
-            sidebarSessions = try await client.list(engine: engine.sidecarId, includingArchived: showArchived)
+            let listed = try await client.list(engine: requestedEngine.sidecarId, includingArchived: requestedArchived)
+            guard activeHost?.id == host.id, engine == requestedEngine,
+                  showArchived == requestedArchived else { return }
+            sidebarSessions = listed
             sidebarError = nil
             // Project names live only in the metadata store, so the sidebar
             // needs its own read.  A failure here must not blank the thread
             // list, which is the thing the user actually asked for.
             if let meta = try? await client.meta() {
+                guard activeHost?.id == host.id, engine == requestedEngine else { return }
                 sidebarProjects = meta.projects
             }
         } catch {
+            guard activeHost?.id == host.id, engine == requestedEngine else { return }
             // Keep whatever list we already have; a retry is one click away.
             if sidebarSessions.isEmpty {
                 sidebarError = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
@@ -1257,15 +1441,24 @@ public struct ChatView: View {
         }
         let title = session.displayTitle
         let boundedTitle = title.count > 70 ? String(title.prefix(69)) + "…" : title
+        if let urlError = error as? URLError, urlError.code == .timedOut {
+            return Copy.gap("Opening \"\(boundedTitle)\" timed out.", "Retry to open this thread again.")
+        }
         return Copy.gap(
             "Could not resume \"\(boundedTitle)\".",
-            "Refresh the thread list and try again."
+            "Retry to open this thread again."
         )
     }
 
     private func resetTurnState() {
+        turnGeneration = UUID()
+        sendTask?.cancel()
+        sendTask = nil
         sending = false
-        streamingText = ""
+        steering = false
+        steeringSupported = false
+        liveTurn = ChatTurnBuffer()
+        activeUsage = nil
         thoughtLine = nil
         sendError = nil
     }
@@ -1303,7 +1496,7 @@ public struct ChatView: View {
                         cwd: saved.cwd,
                         engine: savedEngine.sidecarId
                     )
-                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: savedEngine)
+                    adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: savedEngine, model: loaded.model, provider: loaded.provider)
                     return
                 } catch {
                     MacMcodeStore.clear(for: host)
@@ -1371,19 +1564,100 @@ public struct ChatView: View {
         return error.localizedDescription
     }
 
-    private func send(_ text: String) {
+    private func queueDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard sending else { send(text); return }
+        guard queuedMessages.count < 16 else {
+            sendError = "The queue is full; remove a queued message before adding another."
+            return
+        }
+        queuedMessages.append(QueuedMessage(text: text, images: attachments, model: selectedModel ?? "", effort: selectedEffort, hostId: activeHost?.id, engine: engine, surface: surface, remoteId: isWorkspace ? codeRemoteId : sessionId))
+        draft = ""
+        attachments = []
+    }
+
+    private func sendNextQueuedMessage() {
+        guard !sending, !queuePaused, !queuedMessages.isEmpty else { return }
+        let message = queuedMessages[0]
+        guard message.hostId == activeHost?.id, message.engine == engine, message.surface == surface else {
+            sendError = "Return to the original host and engine to send this queued message."
+            queuePaused = true
+            return
+        }
+        if let expected = message.remoteId, expected != (isWorkspace ? codeRemoteId : sessionId) {
+            sendError = "Return to the original thread to send this queued message."
+            queuePaused = true
+            return
+        }
+        send(message.text, queued: message)
+        if sending { queuedMessages.removeFirst() }
+    }
+
+    private func steerDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !steering else { return }
+        guard sending else { send(text); return }
+        guard steeringSupported else {
+            sendError = "This engine has not enabled steering for this turn; queue the message instead."
+            return
+        }
+        guard attachments.isEmpty else {
+            sendError = "Queue image attachments for the next turn; steering currently accepts text."
+            return
+        }
+        guard let host = activeHost, let chatId = isWorkspace ? codeChatId : sessionId else {
+            sendError = "Wait for the turn to connect before steering."
+            return
+        }
+        let generation = turnGeneration
+        steering = true
+        Task {
+            defer { if generation == turnGeneration { steering = false } }
+            do {
+                try await ChatSessionClient.steer(host: host, sessionId: chatId, text: text)
+                guard generation == turnGeneration, sending else { return }
+                retainTurnOutput(finishing: false)
+                if isWorkspace {
+                    codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "user_message_chunk", text: text))
+                } else {
+                    localPrompts.append(LocalPrompt(text: text, at: Date()))
+                    MacChatStore.savePrompts(localPrompts)
+                }
+                if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+                sendError = nil
+            } catch {
+                guard generation == turnGeneration else { return }
+                sendError = error.localizedDescription
+            }
+        }
+    }
+
+    private func send(_ text: String, queued: QueuedMessage? = nil) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, !sending else { return }
+        guard sidebarLoadingId == nil else {
+            sendError = "Wait for the selected thread to open before sending."
+            return
+        }
         guard let host = activeHost else { return }
         guard host.chatToken?.isEmpty == false else {
             sendError = chatErrorMessage(ChatClientError.missingToken)
             return
         }
-        draft = ""
+        let outgoingImages = queued?.images ?? attachments
+        if queued == nil {
+            draft = ""
+            attachments = []
+        }
         sendError = nil
         sending = true
-        streamingText = ""
-        liveTools = []
+        steering = false
+        steeringSupported = false
+        liveTurn = ChatTurnBuffer()
+        turnGeneration = UUID()
+        let generation = turnGeneration
+        plan = []
         if isWorkspace {
             codePending.append(LocalPrompt(text: prompt, at: Date()))
         } else {
@@ -1392,7 +1666,7 @@ public struct ChatView: View {
         }
         let client = ChatSessionClient(
             host: host,
-            model: selectedModel ?? "",
+            model: queued?.model ?? selectedModel ?? "",
             sessionId: isWorkspace ? codeChatId : sessionId,
             relayReceiverUid: deviceUid,
             // The engine always rides along: without it the sidecar routes
@@ -1400,13 +1674,13 @@ public struct ChatView: View {
             // land on DeepSeek.
             engine: engine.sidecarId,
             cwd: isWorkspace ? codeCwd : nil,
-            effort: selectedEffort,
-            images: attachments
+            effort: queued == nil ? selectedEffort : queued?.effort,
+            images: outgoingImages
         )
-        attachments = []
         sendTask = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
+                    guard !Task.isCancelled, turnGeneration == generation else { return }
                     switch event {
                     case .started(let id, _):
                         if isWorkspace {
@@ -1414,18 +1688,19 @@ public struct ChatView: View {
                         } else {
                             sessionId = id
                         }
+                    case .capabilities(let supportsSteering):
+                        steeringSupported = supportsSteering
                     case .message(let chunk):
                         thoughtLine = nil
-                        streamingText += chunk
+                        liveTurn.append(chunk)
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
                     case .tool(let id, let name, let status):
-                        let key = id.isEmpty ? name : id
-                        if let index = liveTools.firstIndex(where: { $0.id == key }) {
-                            liveTools[index].status = status
-                            if !name.isEmpty { liveTools[index].name = name }
+                        if !id.isEmpty, let index = codeLoaded.lastIndex(where: { $0.isTool && $0.toolCallId == id }) {
+                            codeLoaded[index].toolStatus = status
+                            if !name.isEmpty { codeLoaded[index].text = name }
                         } else {
-                            liveTools.append(LiveTool(id: key, name: name.isEmpty ? "Tool call" : name, status: status))
+                            liveTurn.updateTool(id: id, name: name, status: status)
                         }
                     case .permission(let request):
                         // The engine is blocked on this request until the
@@ -1440,45 +1715,78 @@ public struct ChatView: View {
                                 codeRemoteId = remoteId
                                 MacMcodeStore.save(remoteId: remoteId, cwd: codeCwd, engine: engine.sidecarId, for: host)
                             }
-                            if !streamingText.isEmpty {
-                                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: streamingText))
-                            }
-                            for tool in liveTools {
-                                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
-                            }
                         } else {
                             sessionId = id
                         }
-                        liveTools = []
-                        pendingPermissions.removeAll()
+                        retainTurnOutput()
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? engine.label) : (selectedModel ?? engine.label))
-                        sending = false
-                        streamingText = ""
-                        thoughtLine = nil
                         if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         } else if !isWorkspace {
                             await refreshThread()
                         }
+                        if stop == "endTurn" || stop == "end_turn" {
+                            sendNextQueuedMessage()
+                        } else {
+                            queuePaused = true
+                        }
+                        return
                     case .usage(let usage):
                         activeUsage = usage
+                        if let index = sidebarSessions.firstIndex(where: { $0.sessionId == codeRemoteId }) {
+                            sidebarSessions[index].usage = usage
+                            sidebarSessions[index].model = usage.model ?? sidebarSessions[index].model
+                            sidebarSessions[index].provider = usage.provider ?? sidebarSessions[index].provider
+                        }
                     case .failed(let message):
-                        sending = false
-                        streamingText = ""
-                        thoughtLine = nil
+                        retainTurnOutput()
+                        queuePaused = true
                         sendError = message
-                        liveTools = []
-                        pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? engine.label : (selectedModel ?? engine.label), failed: true)
+                        return
                     }
                 }
-                sending = false
+                guard !Task.isCancelled, turnGeneration == generation else { return }
+                retainTurnOutput()
+                queuePaused = true
+                sendError = "The connection closed before a completion update arrived."
             } catch {
-                sending = false
-                streamingText = ""
-                thoughtLine = nil
+                guard !Task.isCancelled, turnGeneration == generation else { return }
+                retainTurnOutput()
+                queuePaused = true
                 sendError = error.localizedDescription
             }
+        }
+    }
+
+    private func retainTurnOutput(finishing: Bool = true) {
+        let output: ChatTurnBuffer.Snapshot
+        if finishing {
+            guard let finished = liveTurn.finish() else { return }
+            output = finished
+        } else {
+            output = liveTurn.drain()
+        }
+        if isWorkspace {
+            codeLoaded += codePending.map {
+                AcpHistoryEntry(sessionId: "local", kind: "user_message_chunk", text: $0.text)
+            }
+            codePending = []
+            for tool in output.tools {
+                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
+            }
+            if !output.text.isEmpty {
+                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: output.text))
+            }
+        } else if !output.text.isEmpty {
+            agentBubbles.append(ThreadBubble(id: "local-\(turnGeneration)", senderUid: "agent", text: output.text, sentAt: Date().timeIntervalSince1970 * 1000, kind: "text"))
+        }
+        if finishing {
+            sending = false
+            steering = false
+            turnGeneration = UUID()
+            thoughtLine = nil
+            pendingPermissions.removeAll()
         }
     }
 
@@ -1544,14 +1852,14 @@ public struct ChatView: View {
 
     private func stop() {
         guard sending else { return }
+        queuePaused = true
         if let host = activeHost, let chatId = isWorkspace ? codeChatId : sessionId {
             Task { await ChatSessionClient.cancel(host: host, sessionId: chatId) }
         }
         sendTask?.cancel()
         sendTask = nil
-        sending = false
-        streamingText = ""
-        thoughtLine = nil
+        retainTurnOutput()
+        turnGeneration = UUID()
         // A stopped turn cannot answer a question any more, so the card goes
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
@@ -1786,111 +2094,6 @@ struct MacChatRow: View {
         .buttonStyle(.plain)
         .accessibilityLabel(copied ? "Copied" : "Copy Message")
         .help(copied ? "Copied" : "Copy Message")
-    }
-}
-
-/// Native input bar (no voice on Mac v1 — hold-to-record is a stub on iOS too).
-struct MacChatInputBar: View {
-    @Binding var draft: String
-    var sending: Bool
-    var onSend: () -> Void
-    var onStop: () -> Void
-    var isDictating: Bool = false
-    var onMic: () -> Void = {}
-    /// Images attached to the next turn.
-    var attachments: [ChatAttachment] = []
-    var onAttach: () -> Void = {}
-    var onRemoveAttachment: (ChatAttachment) -> Void = { _ in }
-
-    var body: some View {
-        VStack(spacing: 4) {
-            if !attachments.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(attachments) { attachment in
-                        HStack(spacing: 4) {
-                            Image(systemName: "photo")
-                                .font(.system(size: 10))
-                            Text(attachment.displayName)
-                                .font(.system(size: 11))
-                                .lineLimit(1)
-                            Button {
-                                onRemoveAttachment(attachment)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Remove \(attachment.displayName)")
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.clutchSecondaryBackground, in: Capsule())
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 12)
-            }
-            HStack(alignment: .bottom, spacing: 8) {
-                Button(action: onMic) {
-                    Image(systemName: isDictating ? "mic.fill" : "mic")
-                        .font(.system(size: 15))
-                        .foregroundStyle(isDictating ? Color.red : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(sending)
-                .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
-                .help(isDictating ? "Stop Dictation" : "Dictate A Message")
-                Button(action: onAttach) {
-                    Image(systemName: "paperclip")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(sending)
-                .accessibilityLabel("Attach Image")
-                .help("Attach An Image")
-                TextField("Message The Agent…", text: $draft, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...8)
-                    .disabled(sending)
-                    .onSubmit(onSend)
-                if sending {
-                    Button(action: onStop) {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(.red)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Stop")
-                    .help("Stop This Turn")
-                } else {
-                    Button(action: onSend) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 24))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("Send Message")
-                    .help("Send (Return)")
-                    .keyboardShortcut(.return, modifiers: .command)
-                }
-            }
-            HStack(spacing: 8) {
-                Text(sending ? Copy.gap("Working…", "Stop Ends The Turn And Keeps The Thread.") : "Return Sends · Shift+Return Adds A Line · ⌘Return Also Sends.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 0)
-                if draft.count >= 200 {
-                    Text("\(draft.count)")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.clutchBackground)
     }
 }
 

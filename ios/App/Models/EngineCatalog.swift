@@ -22,6 +22,10 @@ public struct EngineCatalog: Decodable, Equatable, Sendable {
         engines.first { $0.id == id }
     }
 
+    public func model(engineId: String, modelId: String) -> EngineModel? {
+        descriptor(engineId)?.models.first { $0.id == modelId }
+    }
+
     /// The engine to start on: the first available one, in the server's order.
     public var defaultEngineId: String? {
         availableEngines.first?.id

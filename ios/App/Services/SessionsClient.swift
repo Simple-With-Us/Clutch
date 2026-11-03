@@ -233,6 +233,8 @@ public struct SessionsClient {
             var remoteSessionId: String?
             var cwd: String?
             var history: [AcpHistoryEntry]?
+            var model: String?
+            var provider: String?
         }
         guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
             throw ChatClientError.http(200)
@@ -243,7 +245,9 @@ public struct SessionsClient {
             chatId: payload.sessionId,
             remoteSessionId: payload.remoteSessionId ?? sessionId,
             cwd: payload.cwd ?? cwd,
-            history: payload.history ?? []
+            history: payload.history ?? [],
+            model: payload.model,
+            provider: payload.provider
         )
     }
 
@@ -255,12 +259,16 @@ public struct SessionsClient {
         public var remoteSessionId: String
         public var cwd: String?
         public var history: [AcpHistoryEntry]
+        public var model: String?
+        public var provider: String?
 
-        public init(chatId: String, remoteSessionId: String, cwd: String?, history: [AcpHistoryEntry]) {
+        public init(chatId: String, remoteSessionId: String, cwd: String?, history: [AcpHistoryEntry], model: String? = nil, provider: String? = nil) {
             self.chatId = chatId
             self.remoteSessionId = remoteSessionId
             self.cwd = cwd
             self.history = history
+            self.model = model
+            self.provider = provider
         }
     }
 }

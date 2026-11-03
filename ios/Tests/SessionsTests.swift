@@ -65,6 +65,18 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(entries[1].isActive)
     }
 
+    func testDecodesRuntimeSteeringCapabilityFromTheStream() {
+        XCTAssertEqual(
+            ChatSessionClient.decode(event: "capabilities", payload: #"{"supportsSteering":true}"#),
+            .capabilities(supportsSteering: true)
+        )
+        XCTAssertEqual(
+            ChatSessionClient.decode(event: "capabilities", payload: #"{"supportsSteering":false}"#),
+            .capabilities(supportsSteering: false)
+        )
+        XCTAssertNil(ChatSessionClient.decode(event: "capabilities", payload: #"{}"#))
+    }
+
     func testPermissionHeadlineFallsBackToTheToolName() {
         let request = AcpPermissionRequest(
             requestId: "perm-1",
@@ -104,15 +116,26 @@ final class AcpSessionTests: XCTestCase {
     func testUpdatedDateToleratesBothISO8601Forms() {
         let fractional = AcpSessionInfo.updatedDate("2026-10-16T09:41:07.412Z")
         let plain = AcpSessionInfo.updatedDate("2026-10-16T09:41:07Z")
+        let offset = AcpSessionInfo.updatedDate("2026-10-16T11:41:07.412+02:00")
         XCTAssertNotNil(fractional)
         XCTAssertNotNil(plain)
+        XCTAssertNotNil(offset)
         // Both forms name the same wall-clock second, and the fractional one
         // simply carries the extra precision, so they land well inside a
         // second of each other rather than in different minutes or days.
         XCTAssertEqual(fractional?.timeIntervalSince1970 ?? 0, plain?.timeIntervalSince1970 ?? -1, accuracy: 1.0)
+        XCTAssertEqual(fractional?.timeIntervalSince1970 ?? 0, offset?.timeIntervalSince1970 ?? -1, accuracy: 0.001)
         XCTAssertNil(AcpSessionInfo.updatedDate(nil))
         XCTAssertNil(AcpSessionInfo.updatedDate(""))
         XCTAssertNil(AcpSessionInfo.updatedDate("not a date"))
+    }
+
+    func testUpdatedDateCacheUsesCurrentTimestampAfterMutation() throws {
+        var session = AcpSessionInfo(sessionId: "s", updatedAt: "2026-10-15T09:00:00Z")
+        let first = try XCTUnwrap(session.updated)
+        session.updatedAt = "2026-10-16T09:00:00Z"
+        let second = try XCTUnwrap(session.updated)
+        XCTAssertEqual(second.timeIntervalSince(first), 86_400, accuracy: 0.001)
     }
 
     func testHistoryVisibilityKeepsConversationAndDropsToolChatter() {
@@ -221,7 +244,7 @@ final class AcpSessionTests: XCTestCase {
         let json = """
         {"engines":[
           {"id":"muse","label":"Muse Code","available":true,
-           "models":[{"id":"muse-wonder-1.0","label":"muse-wonder-1.0","value":"muse-wonder-1.0","contextWindow":1007997}],
+           "models":[{"id":"muse-wonder-1.0","label":"Muse Wonder 1.0","value":"muse-wonder-1.0","contextWindow":1007997}],
            "effortLevels":["none","high"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
           {"id":"mcode","label":"MiniMax Code","available":false,"models":[],"effortLevels":[],"effortConfigId":"thinkingEffort","modelConfigId":"model"}
         ]}
@@ -235,6 +258,8 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(muse.supportsThreads)
         XCTAssertEqual(muse.models.map(\.id), ["muse-wonder-1.0"])
         XCTAssertEqual(muse.models[0].contextSummary, "1.0M")
+        XCTAssertEqual(catalog.model(engineId: "muse", modelId: "muse-wonder-1.0")?.displayLabel, "Muse Wonder 1.0")
+        XCTAssertNil(catalog.model(engineId: "muse", modelId: "unknown"))
         XCTAssertEqual(muse.effortLevels, ["none", "high"])
 
         let mcode = try XCTUnwrap(catalog.descriptor("mcode"))

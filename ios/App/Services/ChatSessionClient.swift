@@ -5,6 +5,7 @@ import Foundation
 /// drives the sending state, the thought line, and turn completion.
 public enum ChatStreamEvent: Equatable {
     case started(sessionId: String, engine: String)
+    case capabilities(supportsSteering: Bool)
     case message(String)
     case thought(String)
     /// One tool call the agent ran, or a status update to one already shown.
@@ -71,7 +72,7 @@ public struct ChatSessionClient {
     /// problems arrive as `.failed` instead.
     public func stream(prompt: String) -> AsyncThrowingStream<ChatStreamEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     guard let url = chatURL() else { throw ChatClientError.badHost }
                     guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
@@ -124,6 +125,9 @@ public struct ChatSessionClient {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
+            }
         }
     }
 
@@ -146,6 +150,33 @@ public struct ChatSessionClient {
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["sessionId": sessionId])
         req.timeoutInterval = 10
         _ = try? await URLSession.shared.data(for: req)
+    }
+
+    /// Injects a correction into the active Muse turn (`POST /clutch/v1/chat/steer`).  The request succeeds only when the existing turn accepts it.
+    public static func steer(host: ClutchHost, sessionId: String, text: String) async throws {
+        guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
+        var comps = URLComponents()
+        comps.scheme = host.origin.scheme
+        comps.host = host.origin.host
+        comps.port = host.chatPort
+        comps.path = "/clutch/v1/chat/steer"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["sessionId": sessionId, "text": text])
+        req.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw ChatClientError.http(-1) }
+        guard http.statusCode == 200 else {
+            let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            throw ChatClientError.steerRejected((payload?["error"] as? String) ?? "Chat bridge answered \(http.statusCode).")
+        }
+        guard let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              payload["outcome"] as? String == "injected" else {
+            throw ChatClientError.steerRejected("Muse did not confirm the steering request.")
+        }
     }
 
     /// Answer a permission request the engine is waiting on
@@ -185,6 +216,9 @@ public struct ChatSessionClient {
         guard let data = payload.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         switch event {
+        case "capabilities":
+            guard let supported = json["supportsSteering"] as? Bool else { return nil }
+            return .capabilities(supportsSteering: supported)
         case "start":
             guard let id = json["sessionId"] as? String else { return nil }
             return .started(sessionId: id, engine: (json["engine"] as? String) ?? "")
@@ -246,6 +280,7 @@ public enum ChatClientError: Error, LocalizedError {
     case badHost
     case missingToken
     case http(Int)
+    case steerRejected(String)
 
     public var errorDescription: String? {
         switch self {
@@ -255,6 +290,8 @@ public enum ChatClientError: Error, LocalizedError {
             return "Pair again to enable native chat."
         case .http(let code):
             return "Chat bridge answered \(code)."
+        case .steerRejected(let message):
+            return message
         }
     }
 }

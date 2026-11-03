@@ -7,22 +7,71 @@ import SwiftUI
 /// shows rather than adding to it.
 struct PlanPanel: View {
     let entries: [AcpPlanEntry]
+    @State private var expanded = false
 
     private var done: Int { entries.filter(\.isDone).count }
 
+    private var summary: AcpPlanEntry? {
+        entries.first(where: \.isActive) ?? entries.first(where: { !$0.isDone }) ?? entries.last
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "list.bullet.rectangle")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text("Plan")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("\(done)/\(entries.count)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Plan")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("\(done)/\(entries.count)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(expanded ? "Collapse Plan" : "Expand Plan")
+            .accessibilityValue("\(done) of \(entries.count) steps complete")
+
+            if expanded {
+                #if os(iOS)
+                ScrollView {
+                    steps
+                }
+                .frame(maxHeight: 160)
+                #else
+                steps
+                #endif
+            } else if let summary {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: mark(for: summary))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(color(for: summary))
+                        .frame(width: 12)
+                    Text(done == entries.count ? "All steps complete." : summary.content)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.clutchSecondaryBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var steps: some View {
+        VStack(alignment: .leading, spacing: 8) {
             ForEach(entries) { entry in
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: mark(for: entry))
@@ -38,9 +87,6 @@ struct PlanPanel: View {
                 }
             }
         }
-        .padding(10)
-        .background(Color.clutchSecondaryBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     /// The mark that says where the entry stands.
