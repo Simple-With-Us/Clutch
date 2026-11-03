@@ -28,9 +28,11 @@ CLUTCH_INFISICAL_ENV="prod"
 CLUTCH_INFISICAL_URL="${CLUTCH_INFISICAL_URL:-https://app.infisical.com}"
 
 # Per-host service tokens live in $CLUTCH_HOME/infisical.json. Environment
-# values override each file field. Temporary exports are private and removed.
+# values override each file field. File-backed tokens are loaded only in the
+# short-lived backfill subprocess and never exported by the launcher shell.
+CLUTCH_INFISICAL_CREDENTIALS_TMP=""
 _clutch_infisical_credentials() {
-  if [[ -n "${INFISICAL_TOKEN:-}" && -n "${INFISICAL_WRITE_TOKEN:-}" ]]; then return 0; fi
+  if [[ -n "${INFISICAL_TOKEN:-}" && -n "${INFISICAL_WRITE_TOKEN:-}" && -n "${INFISICAL_PROJECT_ID:-}" ]]; then return 0; fi
   command -v python3 >/dev/null 2>&1 || return 0
   local credentials_file="${CLUTCH_HOME:-$HOME/.clutch}/infisical.json"
   [[ -r "$credentials_file" ]] || return 0
@@ -73,39 +75,52 @@ with open(os.environ["CLUTCH_INFISICAL_CREDENTIALS_OUTPUT"], "w", encoding="utf-
     output.writelines(exports)
 PY
   then
-    # shellcheck disable=SC1090
-    source "$tmp"
+    CLUTCH_INFISICAL_CREDENTIALS_TMP="$tmp"
+  else
+    rm -f "$tmp"
   fi
-  rm -f "$tmp"
   return 0
 }
 
 _clutch_infisical_backfill() {
-  if [[ -z "${INFISICAL_TOKEN:-}" ]]; then
+  local credentials_tmp="${CLUTCH_INFISICAL_CREDENTIALS_TMP:-}"
+  if [[ -z "${INFISICAL_TOKEN:-}" && -z "$credentials_tmp" ]]; then
     return 0
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     echo "clutch-infisical-env: python3 missing — skipping Infisical backfill" >&2
+    [[ -z "$credentials_tmp" ]] || rm -f "$credentials_tmp"
     return 0
   fi
 
   local tmp helper_dir
   # The helper writes shell exports into an owner-only file, never stdout.
-  tmp="$(mktemp -t clutch-infisical-env.XXXXXX)" || return 0
+  tmp="$(mktemp -t clutch-infisical-env.XXXXXX)" || {
+    [[ -z "$credentials_tmp" ]] || rm -f "$credentials_tmp"
+    return 0
+  }
   chmod 600 "$tmp"
   helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if CLUTCH_MANAGED_KEYS="$CLUTCH_MANAGED_KEYS" \
-    CLUTCH_INFISICAL_PROJECT_ID="$CLUTCH_INFISICAL_PROJECT_ID" \
-    CLUTCH_INFISICAL_URL="$CLUTCH_INFISICAL_URL" \
-    CLUTCH_INFISICAL_OUTPUT_FILE="$tmp" \
-    python3 "$helper_dir/infisical-backfill.py"; then
+  if (
+    if [[ -n "$credentials_tmp" ]]; then
+      # shellcheck disable=SC1090
+      source "$credentials_tmp"
+    fi
+    CLUTCH_MANAGED_KEYS="$CLUTCH_MANAGED_KEYS" \
+      CLUTCH_INFISICAL_PROJECT_ID="$CLUTCH_INFISICAL_PROJECT_ID" \
+      CLUTCH_INFISICAL_URL="$CLUTCH_INFISICAL_URL" \
+      CLUTCH_INFISICAL_OUTPUT_FILE="$tmp" \
+      python3 "$helper_dir/infisical-backfill.py"
+  ); then
     # shellcheck disable=SC1090
     source "$tmp"
   fi
   rm -f "$tmp"
+  [[ -z "$credentials_tmp" ]] || rm -f "$credentials_tmp"
   return 0
 }
 
 _clutch_infisical_credentials
 _clutch_infisical_backfill
 unset -f _clutch_infisical_credentials _clutch_infisical_backfill
+unset CLUTCH_INFISICAL_CREDENTIALS_TMP

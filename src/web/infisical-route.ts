@@ -156,6 +156,7 @@ export async function handleInfisicalSettingsRequest(
   const settingValue = settingInput === undefined ? "" : str(settingInput["value"]);
 
   const current = resolveInfisicalCredentials({ projectId: CLUTCH_INFISICAL_PROJECT_ID }, env);
+  const fileCredentials = readInfisicalCredentials(env);
   let credentialsChanged = false;
   let savedCredentials: typeof current | undefined;
 
@@ -176,17 +177,27 @@ export async function handleInfisicalSettingsRequest(
       sendJson(res, 409, { error: "INFISICAL_WRITE_TOKEN is set in the Mac environment and overrides the saved write service token" });
       return true;
     }
+    // Merge only values already stored in the credential file.  Explicit
+    // process environment values remain authoritative at runtime, but must
+    // never be copied into the file by a partial settings-panel update.
+    const stored = {
+      projectId: fileCredentials?.projectId || CLUTCH_INFISICAL_PROJECT_ID,
+      readToken: fileCredentials?.readToken || "",
+      writeToken: fileCredentials?.writeToken || "",
+    };
     const merged = {
-      projectId: nextProjectId || current.projectId,
-      readToken: nextReadToken || current.readToken,
-      writeToken: clearWriteToken ? "" : nextWriteToken || current.writeToken,
+      projectId: nextProjectId && !str(env.INFISICAL_PROJECT_ID)
+        ? nextProjectId
+        : stored.projectId,
+      readToken: nextReadToken || stored.readToken,
+      writeToken: clearWriteToken ? "" : nextWriteToken || stored.writeToken,
     };
     credentialsChanged =
-      merged.projectId !== current.projectId ||
-      merged.readToken !== current.readToken ||
-      merged.writeToken !== current.writeToken;
+      merged.projectId !== stored.projectId ||
+      merged.readToken !== stored.readToken ||
+      merged.writeToken !== stored.writeToken;
 
-    if (!merged.readToken) {
+    if (credentialsChanged && !merged.readToken) {
       sendJson(res, 400, {
         error: "a scoped read service token is required",
       });
