@@ -25,6 +25,34 @@ afterEach(async () => {
 });
 
 describe("turn diagnostics", () => {
+  it("clears a prior numeric step code when the terminal error has no code", async () => {
+    const directory = await makeDirectory();
+    const diagnostics = createTurnDiagnostics({ directory });
+    const turn = diagnostics.start({ engine: "muse" });
+    turn.record("steer", { outcome: "error", errorCategory: "timeout", errorCode: -32603 });
+    turn.record("progress", { phase: "finalizing", outcome: "error", errorCategory: "process", errorCode: null });
+    turn.finish("error");
+    await diagnostics.flush();
+    const span = JSON.parse((await readFile(join(directory, "turn-diagnostics.outbox.jsonl"), "utf8")).trim()) as Record<string, unknown>;
+    expect(span).toMatchObject({ outcome: "error", errorCategory: "process" });
+    expect(span).not.toHaveProperty("errorCode");
+  });
+
+  it("flushes before coalesced progress would exceed the per-record bound", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-03T10:00:00Z"));
+    const directory = await makeDirectory();
+    const diagnostics = createTurnDiagnostics({ directory });
+    const turn = diagnostics.start({ engine: "muse" });
+    for (let index = 0; index < 3; index += 1) turn.record("progress", { phase: "streaming", count: 800_000 });
+    turn.finish("success");
+    await diagnostics.flush();
+    const rows = (await readFile(join(directory, "turn-diagnostics.jsonl"), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line) as { kind: string; count?: number });
+    const counts = rows.filter((row) => row.kind === "progress").map((row) => row.count ?? 0);
+    expect(counts.every((count) => count <= 1_000_000)).toBe(true);
+    expect(counts.reduce((total, count) => total + count, 0)).toBe(2_400_000);
+  });
+
   it("keeps recovered step failures in local events without marking a successful span as failed", async () => {
     const directory = await makeDirectory();
     const diagnostics = createTurnDiagnostics({ directory });

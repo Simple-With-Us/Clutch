@@ -584,7 +584,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
           if (terminal) return;
           const clean = safeDetail(kind, details);
           if (kind === "progress" && clean.count !== undefined && !clean.errorCategory && clean.errorCode === undefined) {
-            if (pendingProgress && pendingProgress.phase !== clean.phase) flushProgress();
+            if (pendingProgress && (pendingProgress.phase !== clean.phase || (pendingProgress.count ?? 0) + clean.count > 1_000_000)) flushProgress();
             pendingProgress = { ...clean, count: (pendingProgress?.count ?? 0) + clean.count };
             if (Date.now() - lastProgressWriteAtMs >= 1_000) flushProgress();
             return;
@@ -616,8 +616,13 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
             };
           }
           writeEvent(kind, clean);
-          if (clean.errorCategory) errorCategory = clean.errorCategory;
-          if (clean.errorCode !== undefined) errorCode = clean.errorCode;
+          if (kind === "progress" && clean.phase === "finalizing") {
+            errorCategory = clean.errorCategory;
+            errorCode = clean.errorCode;
+          } else {
+            if (clean.errorCategory) errorCategory = clean.errorCategory;
+            if (clean.errorCode !== undefined) errorCode = clean.errorCode;
+          }
           if (kind === "tool" && clean.toolStatus) toolStatus = clean.toolStatus;
           if (kind === "tool" && clean.tool) toolName = clean.tool;
           if (kind === "tool" && clean.toolType) toolType = clean.toolType;

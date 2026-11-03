@@ -6,7 +6,7 @@ The chat sidecar records safe turn lifecycle details beside its pairing state, i
 
 Each turn has a generated diagnostic ID, trace ID, engine, observed model/provider and supported native session ID, progress sizes, tool states, plan size, permission/steering outcomes, completion state and duration.  Error records preserve signed ACP codes and a finite failure category.  Prompt/reply text, command arguments, tool output, working paths, authorization and arbitrary provider error bodies are excluded.
 
-Streaming progress counts are coalesced between phase changes and terminal events, with at most one ordinary progress write per second.  The recorded counts retain all reported characters; ordinary text chunks do not drain or reread the export outbox.  Failure categories are classified before provider messages are replaced with safe display copy, without retaining the original text.
+Streaming progress counts are coalesced between phase, size and terminal boundaries, with at most one ordinary periodic progress write per second.  Each record retains at most one million reported characters, and the recorded counts retain the full total; ordinary text chunks do not drain or reread the export outbox.  Failure categories are classified before provider messages are replaced with safe display copy, without retaining the original text.
 
 Latest-response token/context observations remain distinct from exact billed calls.  The sidecar records observed occupancy where the engine supplies it and does not invent missing Muse accounting, sum repeated context samples, estimate costs or publish a second cash ledger.
 
