@@ -13,13 +13,16 @@ public struct EngineCatalogClient {
         self.host = host
     }
 
-    public func fetch() async throws -> EngineCatalog {
+    public func fetch(engine: String? = nil) async throws -> EngineCatalog {
         guard let token = host.chatToken, !token.isEmpty else { throw ChatClientError.missingToken }
         var comps = URLComponents()
         comps.scheme = host.origin.scheme
         comps.host = host.origin.host
         comps.port = host.chatPort
         comps.path = "/clutch/v1/engines"
+        if let engine {
+            comps.queryItems = [URLQueryItem(name: "engine", value: engine)]
+        }
         guard let url = comps.url else { throw ChatClientError.badHost }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
