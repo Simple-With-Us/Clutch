@@ -91,7 +91,7 @@ describe("museInstalled", () => {
 });
 
 describe("warm Muse session catalog", () => {
-  it("uses actual new/load options immediately and clears them after process loss", async () => {
+  it("reads actual new/load options, exposes only contributors, and clears them after process loss", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clutch-muse-options-"));
     const stub = join(dir, "session-options.mjs");
     const marker = join(dir, "starts");
@@ -127,24 +127,55 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       readMuseSessionOptions: () => bridge.catalogOptions(),
     };
     const muse = async () => (await engineCatalog(sources)).engines.find((entry) => entry.id === "muse")!;
+    const contributorIds = [
+      "muse-spark-1.3-contributor",
+      "muse-wonder-1.0-contributor",
+      "muse-wonder-full-1.0-contributor",
+    ];
+    const effortLevels = ["minimal", "low", "medium", "high", "xhigh"];
+    const expectContributors = (models: Awaited<ReturnType<typeof muse>>["models"]) => {
+      expect(models.filter((model) => contributorIds.includes(model.id))).toEqual([
+        { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", value: "muse-spark-1.3-contributor" },
+        { id: "muse-wonder-1.0-contributor", label: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor" },
+        { id: "muse-wonder-full-1.0-contributor", label: "Muse Wonder Full 1.0 Contributor", value: "muse-wonder-full-1.0-contributor" },
+      ]);
+    };
     resetEngineCatalogCache();
     try {
-      expect((await muse()).effortLevels).toEqual([]);
+      const emptyWarmCatalog = await muse();
+      expect(emptyWarmCatalog.models.map(({ id }) => id)).toEqual(contributorIds);
+      expect(emptyWarmCatalog.effortLevels).toEqual(effortLevels);
       expect(existsSync(marker)).toBe(false);
       await bridge.initialize();
       expect(bridge.authMethods()).toEqual([{ id: "valid-login" }]);
       await bridge.newSession(dir);
-      expect((await muse()).models).toEqual([{ id: "muse-new", label: "muse-new", value: "wire-new" }]);
-      expect((await muse()).effortLevels).toEqual(["high"]);
+      expect(bridge.catalogOptions()).toEqual([
+        { id: "model", options: [{ name: "muse-new", value: "wire-new" }] },
+        { id: "reasoningEffort", options: [{ value: "high" }] },
+      ]);
+      const newCatalog = await muse();
+      expect(newCatalog.models.map(({ id }) => id)).toEqual(contributorIds);
+      expectContributors(newCatalog.models);
+      expect(newCatalog.effortLevels).toEqual(effortLevels);
       await bridge.loadSession("user-session", dir);
-      expect((await muse()).models).toEqual([{ id: "muse-load", label: "muse-load", value: "wire-load" }]);
-      expect((await muse()).effortLevels).toEqual(["low"]);
+      expect(bridge.catalogOptions()).toEqual([
+        { id: "model", options: [{ name: "muse-load", value: "wire-load" }] },
+        { id: "reasoningEffort", options: [{ value: "low" }] },
+      ]);
+      const loadedCatalog = await muse();
+      expect(loadedCatalog.models.map(({ id }) => id)).toEqual(contributorIds);
+      expectContributors(loadedCatalog.models);
+      expect(loadedCatalog.effortLevels).toEqual(effortLevels);
       await bridge.loadSession("no-options", dir);
-      expect((await muse()).models).toEqual([]);
-      expect((await muse()).effortLevels).toEqual([]);
+      expect(bridge.catalogOptions()).toEqual([]);
+      const noOptionsCatalog = await muse();
+      expect(noOptionsCatalog.models.map(({ id }) => id)).toEqual(contributorIds);
+      expect(noOptionsCatalog.effortLevels).toEqual(effortLevels);
       await bridge.loadSession("malformed-options", dir);
-      expect((await muse()).models).toEqual([]);
-      expect((await muse()).effortLevels).toEqual([]);
+      expect(bridge.catalogOptions()).toEqual([]);
+      const malformedCatalog = await muse();
+      expect(malformedCatalog.models.map(({ id }) => id)).toEqual(contributorIds);
+      expect(malformedCatalog.effortLevels).toEqual(effortLevels);
       expect(readFileSync(marker, "utf8")).toBe("start\n");
     } finally {
       bridge.cancel("user-session");
@@ -516,7 +547,7 @@ describe("Muse model wire values", () => {
       provider_id: "meta",
       profile_id: "tbh",
       rows: [
-        { model_id: "muse-wonder-1.0", display_label: "muse-wonder-1.0", provider_id: "meta", profile_id: "tbh", visibility: "visible", context_limit: 1007997 },
+        { model_id: "muse-wonder-1.0-contributor", display_label: "muse-wonder-1.0-contributor", provider_id: "meta", profile_id: "tbh", visibility: "hidden", context_limit: 1007997 },
         { model_id: "muse-hidden-1.0", display_label: "hidden", provider_id: "meta", profile_id: "tbh", visibility: "hidden" },
       ],
     }));
@@ -524,9 +555,10 @@ describe("Muse model wire values", () => {
     mkdirSync(join(home, ".local", "share", "muse", "model-catalog"), { recursive: true });
     writeFileSync(join(home, ".local", "share", "muse", "model-catalog", "c.json"), readFileSync(join(dir, "catalog.json")));
     const models = readMuseProviderCatalog(home);
-    expect(models.map((model) => model.id)).toEqual(["muse-wonder-1.0"]);
-    expect(models[0].value).toBe("muse-wonder-1.0");
-    expect(models[0].altValue).toBe('muse-model:["meta","tbh","muse-wonder-1.0"]');
+    expect(models.map((model) => model.id)).toEqual(["muse-wonder-1.0-contributor"]);
+    expect(models[0].label).toBe("Muse Wonder 1.0 Contributor");
+    expect(models[0].value).toBe("muse-wonder-1.0-contributor");
+    expect(models[0].altValue).toBe('muse-model:["meta","tbh","muse-wonder-1.0-contributor"]');
     expect(models[0].contextWindow).toBe(1007997);
   });
 });

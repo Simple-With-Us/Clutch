@@ -123,6 +123,7 @@ const EFFORT_CONFIG_IDS: Record<string, string> = {
   mcode: "thinkingEffort",
   muse: "reasoningEffort",
 };
+const MUSE_CONTRIBUTOR_EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"];
 
 /** One ACP `configOptions` entry, as the engines publish it. */
 interface ConfigOption {
@@ -186,15 +187,21 @@ const MUSE_CONTRIBUTOR_MODEL_IDS = new Set([
   "muse-wonder-1.0-contributor",
   "muse-wonder-full-1.0-contributor",
 ]);
+const MUSE_CONTRIBUTOR_MODELS: EngineModel[] = [
+  { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", value: "muse-spark-1.3-contributor" },
+  { id: "muse-wonder-1.0-contributor", label: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor" },
+  { id: "muse-wonder-full-1.0-contributor", label: "Muse Wonder Full 1.0 Contributor", value: "muse-wonder-full-1.0-contributor" },
+];
 
 const MUSE_MODEL_LABELS: Record<string, string> = {
-  "muse-spark-1.3": "Muse Spark 1.3",
   "muse-spark-1.3-contributor": "Muse Spark 1.3 Contributor",
-  "muse-wonder-1.0": "Muse Wonder 1.0",
   "muse-wonder-1.0-contributor": "Muse Wonder 1.0 Contributor",
-  "muse-wonder-full-1.0": "Muse Wonder Full 1.0",
   "muse-wonder-full-1.0-contributor": "Muse Wonder Full 1.0 Contributor",
 };
+
+const MUSE_CONTRIBUTOR_ID_BY_LABEL = new Map(
+  MUSE_CONTRIBUTOR_MODELS.map((model) => [model.label, model.id]),
+);
 
 function museModelLabel(id: string, providerLabel: unknown): string {
   const knownLabel = MUSE_MODEL_LABELS[id];
@@ -204,11 +211,11 @@ function museModelLabel(id: string, providerLabel: unknown): string {
 }
 
 /**
- * The Muse models published in the local provider catalog.
+ * The supported Muse contributor models published in the local provider catalog.
  *
  * `~/.local/share/muse/model-catalog/*.json` is written by the Muse CLI from
- * the provider's own catalog.  Hidden rows are skipped except for the
- * explicitly supported contributor variants.
+ * the provider's own catalog.  Only the explicitly supported contributor
+ * variants are exposed to Clutch.
  */
 export function readMuseProviderCatalog(home: string = homedir()): EngineModel[] {
   const dir = join(home, ".local", "share", "muse", "model-catalog");
@@ -231,8 +238,7 @@ export function readMuseProviderCatalog(home: string = homedir()): EngineModel[]
     for (const row of parsed.rows as MuseCatalogRow[]) {
       if (!isRecord(row)) continue;
       const id = typeof row.model_id === "string" ? row.model_id : "";
-      if (!id) continue;
-      if (row.visibility === "hidden" && !MUSE_CONTRIBUTOR_MODEL_IDS.has(id)) continue;
+      if (!MUSE_CONTRIBUTOR_MODEL_IDS.has(id)) continue;
       const label = museModelLabel(id, row.display_label);
       const model: EngineModel = { id, label, value: id };
       // The provider-qualified form is the other spelling of the same model.
@@ -432,14 +438,62 @@ export function probeEngineOptions(
 
 /** Merge Muse's advertised choices with the provider catalog, advertised first. */
 export function mergeMuseModels(advertised: EngineModel[], provider: EngineModel[]): EngineModel[] {
-  const seen = new Set(advertised.map((model) => model.value));
-  const merged = [...advertised];
-  for (const model of provider) {
-    if (seen.has(model.value)) continue;
-    seen.add(model.value);
-    merged.push(model);
+  const byId = new Map<string, EngineModel>();
+  const seenValues = new Set<string>();
+  const merged: EngineModel[] = [];
+  for (const model of [...advertised, ...provider]) {
+    const existing = byId.get(model.id);
+    if (existing) {
+      // Keep the first wire value, but retain a distinct second spelling of
+      // this same model when ACP or the provider publishes one.
+      const alternate = [model.value, model.altValue].find((value) =>
+        value && value !== existing.value && value !== existing.altValue,
+      );
+      if (!existing.altValue && alternate) {
+        existing.altValue = alternate;
+        seenValues.add(alternate);
+      }
+      continue;
+    }
+    if (seenValues.has(model.value)) continue;
+    const copy = { ...model };
+    byId.set(copy.id, copy);
+    seenValues.add(copy.value);
+    merged.push(copy);
   }
   return merged;
+}
+
+function withKnownMuseContributors(provider: EngineModel[]): EngineModel[] {
+  const knownIds = new Set(provider.map((model) => model.id));
+  return [
+    ...provider,
+    ...MUSE_CONTRIBUTOR_MODELS.filter((model) => !knownIds.has(model.id)).map((model) => ({ ...model })),
+  ];
+}
+
+function museContributorIdFromValue(value: string): string | null {
+  if (MUSE_CONTRIBUTOR_MODEL_IDS.has(value)) return value;
+  if (!value.startsWith("muse-model:")) return null;
+  try {
+    const tuple: unknown = JSON.parse(decodeURIComponent(value.slice("muse-model:".length)));
+    if (Array.isArray(tuple) && tuple.length === 3 && typeof tuple[2] === "string" && MUSE_CONTRIBUTOR_MODEL_IDS.has(tuple[2])) {
+      return tuple[2];
+    }
+  } catch {
+    // An unknown or malformed wire value is not a supported contributor ID.
+  }
+  return null;
+}
+
+function museContributorModelsFromConfigOptions(options: unknown): EngineModel[] {
+  return modelsFromConfigOptions(options).flatMap((model) => {
+    const id = museContributorIdFromValue(model.value)
+      ?? MUSE_CONTRIBUTOR_ID_BY_LABEL.get(model.id)
+      ?? (MUSE_CONTRIBUTOR_MODEL_IDS.has(model.id) ? model.id : null);
+    if (!id) return [];
+    return [{ id, label: MUSE_MODEL_LABELS[id]!, value: model.value }];
+  });
 }
 
 export interface CatalogSources {
@@ -457,16 +511,17 @@ export interface CatalogSources {
 
 function museDescriptor(sources: CatalogSources, provider: EngineModel[]): EngineDescriptor {
   const options = sources.readMuseSessionOptions?.();
-  const advertised = modelsFromConfigOptions(options);
-  const models = mergeMuseModels(advertised, provider);
-  const efforts = effortsFromConfigOptions(options, EFFORT_CONFIG_IDS.muse!);
+  const advertised = museContributorModelsFromConfigOptions(options);
+  const contributorProvider = provider.filter((model) => MUSE_CONTRIBUTOR_MODEL_IDS.has(model.id));
+  const catalogModels = sources.available.muse ? withKnownMuseContributors(contributorProvider) : contributorProvider;
+  const models = mergeMuseModels(advertised, catalogModels);
   return {
     id: "muse",
     label: "Muse Code",
     available: sources.available.muse,
     supportsThreads: supportsThreads("muse"),
     models,
-    effortLevels: efforts,
+    effortLevels: MUSE_CONTRIBUTOR_EFFORT_LEVELS,
     effortConfigId: EFFORT_CONFIG_IDS.muse!,
     modelConfigId: "model",
     ...(!models.length ? { note: "Start a Muse session to read its available models and effort choices." }
