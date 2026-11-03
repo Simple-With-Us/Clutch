@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,6 +33,28 @@ afterEach(() => {
 });
 
 describe("Muse session log path replacement", () => {
+  it("does not cache a false empty transcript when the log grows before open", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clutch-muse-growth-"));
+    const dir = join(root, "2026", "11", "03", SESSION_ID);
+    const file = join(dir, "session.jsonl");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, event("runtime.session.metadata", { record: { provider_id: "echo" } }, 1) + "\n");
+    fsMockState.beforeOpen = (path) => {
+      if (path !== file) return;
+      appendFileSync(file, event("runtime.session", { event: { kind: "user_prompt_display", prompt: "new synthetic row" } }, 2) + "\n");
+      fsMockState.beforeOpen = null;
+    };
+    try {
+      expect(await readMuseSessionLog(SESSION_ID, { sessionsRoot: root })).toBeNull();
+      const next = await readMuseSessionLog(SESSION_ID, { sessionsRoot: root });
+      expect(next?.transcript.map((row) => row.text)).toContain("new synthetic row");
+      expect(next?.usage.totalsComplete).toBe(true);
+    } finally {
+      fsMockState.beforeOpen = null;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a checked file when its date directory becomes a symlink before open", async () => {
     const root = mkdtempSync(join(tmpdir(), "clutch-muse-race-root-"));
     const outsideRoot = mkdtempSync(join(tmpdir(), "clutch-muse-race-outside-"));
