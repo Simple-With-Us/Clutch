@@ -20,6 +20,44 @@ final class MacThreadWindowRequestTests: XCTestCase {
         XCTAssertNil(newThread.title)
     }
 
+    func testPreviewUsesItsCwdOrMatchingSidebarTargetFallback() {
+        XCTAssertEqual(
+            MacThreadPreviewWorkspace.cwd(
+                previewCwd: nil,
+                previewSessionID: "session-a",
+                targetSessionID: "session-a",
+                targetCwd: "/srv/work/a"
+            ),
+            "/srv/work/a"
+        )
+        XCTAssertEqual(
+            MacThreadPreviewWorkspace.cwd(
+                previewCwd: "/srv/work/preview",
+                previewSessionID: "session-a",
+                targetSessionID: "session-a",
+                targetCwd: "/srv/work/a"
+            ),
+            "/srv/work/preview"
+        )
+        XCTAssertNil(
+            MacThreadPreviewWorkspace.cwd(
+                previewCwd: nil,
+                previewSessionID: "session-a",
+                targetSessionID: "session-b",
+                targetCwd: "/srv/work/b"
+            )
+        )
+        XCTAssertEqual(
+            MacThreadPreviewWorkspace.cwd(
+                previewCwd: "  ",
+                previewSessionID: "session-a",
+                targetSessionID: "session-a",
+                targetCwd: "/srv/work/a"
+            ),
+            "/srv/work/a"
+        )
+    }
+
     func testFolderChoicesIncludeAncestorFoldersAndHideFilesystemRoot() {
         XCTAssertEqual(
             MacThreadFolderScope.folderOptions(from: ["/srv/work/clutch", "/srv/work/other"]),

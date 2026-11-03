@@ -20,6 +20,23 @@ public struct MacThreadWindowRequest: Codable, Hashable, Sendable {
     }
 }
 
+enum MacThreadPreviewWorkspace {
+    static func cwd(
+        previewCwd: String?,
+        previewSessionID: String,
+        targetSessionID: String?,
+        targetCwd: String?
+    ) -> String? {
+        if let previewCwd, !previewCwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return previewCwd
+        }
+        guard targetSessionID == previewSessionID,
+              let targetCwd,
+              !targetCwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return targetCwd
+    }
+}
+
 public enum MacThreadFolderScope {
     public static let pageSize = 100
     public static let maximumThreads = 1000

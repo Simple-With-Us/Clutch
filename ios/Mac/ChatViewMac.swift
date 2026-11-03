@@ -1768,7 +1768,12 @@ public struct ChatView: View {
         openSession(
             AcpSessionInfo(
                 sessionId: preview.remoteSessionId,
-                cwd: preview.cwd,
+                cwd: MacThreadPreviewWorkspace.cwd(
+                    previewCwd: preview.cwd,
+                    previewSessionID: preview.remoteSessionId,
+                    targetSessionID: previewTarget?.sessionId,
+                    targetCwd: previewTarget?.cwd
+                ),
                 title: preview.title,
                 provider: preview.provider,
                 model: preview.model,
@@ -1837,7 +1842,12 @@ public struct ChatView: View {
             hostID: host.id,
             engineID: engine.sidecarId,
             sessionID: preview.remoteSessionId,
-            cwd: preview.cwd,
+            cwd: MacThreadPreviewWorkspace.cwd(
+                previewCwd: preview.cwd,
+                previewSessionID: preview.remoteSessionId,
+                targetSessionID: previewTarget?.sessionId,
+                targetCwd: previewTarget?.cwd
+            ),
             title: preview.title
         ))
     }
