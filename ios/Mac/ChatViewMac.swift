@@ -194,6 +194,7 @@ public struct ChatView: View {
         let images: [ChatAttachment]
         let model: String
         let effort: String?
+        let museOptions: MuseLaunchOptions?
         let hostId: UUID?
         let engine: ChatEngine
         let surface: MacSurface
@@ -245,6 +246,8 @@ public struct ChatView: View {
     @State private var showingModelVisibility = false
     @AppStorage(ModelVisibilityPreferences.storageKey)
     private var modelVisibilityPreferencesJSON = ""
+    @AppStorage(MuseLaunchPreferences.storageKey)
+    private var museLaunchPreferencesJSON = ""
 
     let activeHost: ClutchHost?
 
@@ -313,6 +316,14 @@ public struct ChatView: View {
 
     private var modelVisibilityHostKey: String {
         activeHost?.id.uuidString ?? "unpaired"
+    }
+
+    private var museLaunchOptions: MuseLaunchOptions? {
+        guard engine == .muse, activeHost != nil else { return nil }
+        return MuseLaunchPreferences.options(
+            hostKey: modelVisibilityHostKey,
+            preferencesJSON: museLaunchPreferencesJSON
+        )
     }
 
     /// The effort levels the picked engine accepts, from the catalog.
@@ -1700,7 +1711,17 @@ public struct ChatView: View {
         // A newly created queue resumes automatic delivery; a paused queue
         // that still contains messages keeps its explicit review boundary.
         if queuedMessages.isEmpty { queuePaused = false }
-        queuedMessages.append(QueuedMessage(text: text, images: attachments, model: selectedModel ?? "", effort: selectedEffort, hostId: activeHost?.id, engine: engine, surface: surface, remoteId: isWorkspace ? codeRemoteId : sessionId))
+        queuedMessages.append(QueuedMessage(
+            text: text,
+            images: attachments,
+            model: selectedModel ?? "",
+            effort: selectedEffort,
+            museOptions: museLaunchOptions,
+            hostId: activeHost?.id,
+            engine: engine,
+            surface: surface,
+            remoteId: isWorkspace ? codeRemoteId : sessionId
+        ))
         draft = ""
         attachments = []
     }
@@ -1804,6 +1825,7 @@ public struct ChatView: View {
             engine: engine.sidecarId,
             cwd: isWorkspace ? codeCwd : nil,
             effort: queued == nil ? selectedEffort : queued?.effort,
+            museOptions: queued == nil ? museLaunchOptions : queued?.museOptions,
             images: outgoingImages
         )
         sendTask = Task {

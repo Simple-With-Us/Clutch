@@ -110,13 +110,64 @@ lines.on("line", (line) => {
 describe("mergeMuseModels", () => {
   it("keeps the advertised models first and adds the provider ones after", () => {
     const merged = mergeMuseModels(
-      [{ id: "muse-spark-1.2", label: "muse-spark-1.2", value: "muse-spark-1.2" }],
+      [{ id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", value: "muse-spark-1.3-contributor" }],
       [
-        { id: "muse-wonder-1.0", label: "muse-wonder-1.0", value: "muse-wonder-1.0" },
-        { id: "muse-spark-1.2", label: "muse-spark-1.2", value: "muse-spark-1.2" },
+        { id: "muse-wonder-1.0-contributor", label: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor" },
+        { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", value: "muse-spark-1.3-contributor" },
       ],
     );
-    expect(merged.map((model) => model.id)).toEqual(["muse-spark-1.2", "muse-wonder-1.0"]);
+    expect(merged.map((model) => model.id)).toEqual([
+      "muse-spark-1.3-contributor",
+      "muse-wonder-1.0-contributor",
+    ]);
+  });
+
+  it("deduplicates by model id while preserving the advertised wire value and a distinct provider alternate", () => {
+    const merged = mergeMuseModels(
+      [{ id: "muse-spark-1.3-contributor", label: "Spark from ACP", value: 'muse-model:["meta","tbh","muse-spark-1.3-contributor"]' }],
+      [{
+        id: "muse-spark-1.3-contributor",
+        label: "Muse Spark 1.3 Contributor",
+        value: "muse-spark-1.3-contributor",
+        altValue: 'muse-model:["meta","tbh","muse-spark-1.3-contributor"]',
+      }],
+    );
+
+    expect(merged).toEqual([{
+      id: "muse-spark-1.3-contributor",
+      label: "Spark from ACP",
+      value: 'muse-model:["meta","tbh","muse-spark-1.3-contributor"]',
+      altValue: "muse-spark-1.3-contributor",
+    }]);
+
+    const multipleAdvertisedForms = mergeMuseModels(
+      [
+        { id: "muse-wonder-full-1.0-contributor", label: "Muse Wonder Full 1.0 Contributor", value: "muse-wonder-full-1.0-contributor" },
+        { id: "muse-wonder-full-1.0-contributor", label: "Alternate form", value: 'muse-model:["meta","tbh","muse-wonder-full-1.0-contributor"]' },
+      ],
+      [],
+    );
+    expect(multipleAdvertisedForms).toEqual([{
+      id: "muse-wonder-full-1.0-contributor",
+      label: "Muse Wonder Full 1.0 Contributor",
+      value: "muse-wonder-full-1.0-contributor",
+      altValue: 'muse-model:["meta","tbh","muse-wonder-full-1.0-contributor"]',
+    }]);
+
+    const withProviderAlternate = mergeMuseModels(
+      [{ id: "muse-wonder-1.0-contributor", label: "Wonder", value: "muse-wonder-1.0-contributor" }],
+      [{
+        id: "muse-wonder-1.0-contributor",
+        label: "Muse Wonder 1.0 Contributor",
+        value: "muse-wonder-1.0-contributor",
+        altValue: 'muse-model:["meta","tbh","muse-wonder-1.0-contributor"]',
+      }],
+    );
+    expect(withProviderAlternate).toHaveLength(1);
+    expect(withProviderAlternate[0]).toMatchObject({
+      value: "muse-wonder-1.0-contributor",
+      altValue: 'muse-model:["meta","tbh","muse-wonder-1.0-contributor"]',
+    });
   });
 });
 
@@ -125,7 +176,7 @@ describe("readMuseProviderCatalog", () => {
     expect(readMuseProviderCatalog("/nonexistent/home")).toEqual([]);
   });
 
-  it("includes only the supported hidden contributor models with friendly labels and exact wire fallbacks", () => {
+  it("exposes only the supported contributor models with friendly labels and exact wire fallbacks", () => {
     const home = mkdtempSync(join(tmpdir(), "clutch-muse-provider-catalog-"));
     const directory = join(home, ".local", "share", "muse", "model-catalog");
     mkdirSync(directory, { recursive: true });
@@ -142,18 +193,12 @@ describe("readMuseProviderCatalog", () => {
     try {
       const models = readMuseProviderCatalog(home);
       expect(models.map(({ id, label }) => [id, label])).toEqual([
-        ["muse-wonder-full-1.0", "Muse Wonder Full 1.0"],
-        ["muse-wonder-1.0", "Muse Wonder 1.0"],
-        ["muse-spark-1.3", "Muse Spark 1.3"],
         ["muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"],
         ["muse-wonder-1.0-contributor", "Muse Wonder 1.0 Contributor"],
         ["muse-wonder-full-1.0-contributor", "Muse Wonder Full 1.0 Contributor"],
       ]);
       expect(models.map(({ value }) => value)).toEqual(models.map(({ id }) => id));
       expect(models.map(({ altValue }) => altValue)).toEqual([
-        'muse-model:["meta","tbh","muse-wonder-full-1.0"]',
-        'muse-model:["meta","tbh","muse-wonder-1.0"]',
-        'muse-model:["meta","tbh","muse-spark-1.3"]',
         'muse-model:["meta","tbh","muse-spark-1.3-contributor"]',
         'muse-model:["meta","tbh","muse-wonder-1.0-contributor"]',
         'muse-model:["meta","tbh","muse-wonder-full-1.0-contributor"]',
@@ -186,10 +231,10 @@ describe("buildEngineCatalog", () => {
     const muse = catalog.engines[3];
     expect(muse.available).toBe(false);
     expect(muse.effortConfigId).toBe("reasoningEffort");
-    expect(muse.effortLevels).toEqual([]);
+    expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
   });
 
-  it("never starts Muse on repeated catalog misses and reads its local provider models", async () => {
+  it("never starts Muse on repeated catalog misses and exposes only the contributor allowlist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clutch-muse-catalog-passive-"));
     const marker = join(dir, "muse-started");
     const sentinel = join(dir, "muse");
@@ -215,14 +260,107 @@ describe("buildEngineCatalog", () => {
         resetEngineCatalogCache();
         const catalog = await engineCatalog(sources);
         const muse = catalog.engines.find((entry) => entry.id === "muse")!;
-        expect(muse.models.map((model) => model.id)).toEqual(["muse-local"]);
-        expect(muse.effortLevels).toEqual([]);
+        expect(muse.models.map((model) => model.id)).toEqual([
+          "muse-spark-1.3-contributor",
+          "muse-wonder-1.0-contributor",
+          "muse-wonder-full-1.0-contributor",
+        ]);
+        expect(muse.models.some((model) => model.id === "muse-local" || model.id === "muse-hidden")).toBe(false);
+        expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
       }
       expect(existsSync(marker)).toBe(false);
     } finally {
       resetEngineCatalogCache();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("offers only the exact known contributors with a base-only or empty provider catalog when Muse is available", async () => {
+    const baseModels = [
+      { id: "muse-spark-1.2", label: "Muse Spark 1.2", value: "muse-spark-1.2" },
+      { id: "muse-wonder-1.0", label: "Muse Wonder 1.0", value: "muse-wonder-1.0" },
+    ];
+    const sources = (models: typeof baseModels) => ({
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: "/unused", args: [] }, muse: { command: "/never-start-muse", args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: true },
+      probeCwd: "/unused",
+      readMuseCatalog: () => models,
+      readMuseSessionOptions: () => null,
+    });
+    const contributorIds = [
+      "muse-spark-1.3-contributor",
+      "muse-wonder-1.0-contributor",
+      "muse-wonder-full-1.0-contributor",
+    ];
+
+    const baseCatalog = await buildEngineCatalog(sources(baseModels));
+    const baseMuse = baseCatalog.engines.find((engine) => engine.id === "muse")!;
+    expect(baseMuse.models.map(({ id }) => id)).toEqual(contributorIds);
+    expect(baseMuse.models.map(({ id, label, value }) => [id, label, value])).toEqual([
+      ["muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor", "muse-spark-1.3-contributor"],
+      ["muse-wonder-1.0-contributor", "Muse Wonder 1.0 Contributor", "muse-wonder-1.0-contributor"],
+      ["muse-wonder-full-1.0-contributor", "Muse Wonder Full 1.0 Contributor", "muse-wonder-full-1.0-contributor"],
+    ]);
+
+    resetEngineCatalogCache();
+    const emptyCatalog = await buildEngineCatalog(sources([]));
+    const emptyMuse = emptyCatalog.engines.find((engine) => engine.id === "muse")!;
+    expect(emptyMuse.models.map(({ id }) => id)).toEqual(contributorIds);
+    expect(emptyMuse.models.every(({ value, id }) => value === id)).toBe(true);
+  });
+
+  it("keeps advertised contributor wire values and provider alternates while dropping every base option", async () => {
+    const options = [
+      { id: "model", options: [
+        { name: "Muse Spark 1.3 Contributor", value: 'muse-model:["meta","tbh","muse-spark-1.3-contributor"]' },
+        { name: "Muse Wonder 1.0", value: "muse-wonder-1.0" },
+        { name: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor" },
+      ] },
+      { id: "reasoningEffort", options: [
+        { value: "minimal" }, { value: "low" }, { value: "medium" }, { value: "high" },
+        { value: "xhigh" }, { value: "max" },
+      ] },
+    ];
+    const catalog = await buildEngineCatalog({
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: "/unused", args: [] }, muse: { command: "/never-start-muse", args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: true },
+      probeCwd: "/unused",
+      readMuseCatalog: () => [
+        { id: "muse-spark-1.3-contributor", label: "Spark provider", value: "muse-spark-1.3-contributor", altValue: 'muse-model:["meta","tbh","muse-spark-1.3-contributor"]' },
+        { id: "muse-wonder-1.0-contributor", label: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor", altValue: 'muse-model:["meta","tbh","muse-wonder-1.0-contributor"]' },
+        { id: "muse-wonder-full-1.0-contributor", label: "Muse Wonder Full 1.0 Contributor", value: "muse-wonder-full-1.0-contributor", altValue: 'muse-model:["meta","tbh","muse-wonder-full-1.0-contributor"]' },
+        { id: "muse-wonder-1.0", label: "Muse Wonder 1.0", value: "muse-wonder-1.0" },
+      ],
+      readMuseSessionOptions: () => options,
+    });
+    const muse = catalog.engines.find((engine) => engine.id === "muse")!;
+    expect(muse.models.map(({ id }) => id)).toEqual([
+      "muse-spark-1.3-contributor",
+      "muse-wonder-1.0-contributor",
+      "muse-wonder-full-1.0-contributor",
+    ]);
+    expect(muse.models[0]).toEqual({
+      id: "muse-spark-1.3-contributor",
+      label: "Muse Spark 1.3 Contributor",
+      value: 'muse-model:["meta","tbh","muse-spark-1.3-contributor"]',
+      altValue: "muse-spark-1.3-contributor",
+    });
+    expect(muse.models[1]).toMatchObject({
+      value: "muse-wonder-1.0-contributor",
+      altValue: 'muse-model:["meta","tbh","muse-wonder-1.0-contributor"]',
+    });
+    expect(muse.models[2]).toMatchObject({
+      value: "muse-wonder-full-1.0-contributor",
+      altValue: 'muse-model:["meta","tbh","muse-wonder-full-1.0-contributor"]',
+    });
+    expect(muse.effortConfigId).toBe("reasoningEffort");
+    expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
   });
 
   it("publishes that every engine's threads can be listed and resumed", async () => {
@@ -268,7 +406,7 @@ describe("engineCatalog provider caching", () => {
   it("reads provider data once per cache build while session options stay fresh across sequential and concurrent requests", async () => {
     let clock = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
-    let provider = "muse-provider-one";
+    let provider = "muse-spark-1.3-contributor";
     let options: unknown = [
       { id: "model", options: [{ name: "muse-new", value: "wire-new" }] },
       { id: "reasoningEffort", options: [{ value: "high" }] },
@@ -290,8 +428,12 @@ describe("engineCatalog provider caching", () => {
     const cold = await Promise.all([engineCatalog(sources), engineCatalog(sources), engineCatalog(sources)]);
     expect(readMuseCatalog).toHaveBeenCalledTimes(1);
     for (const catalog of cold) {
-      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-new", "muse-provider-one"]);
-      expect(muse(catalog).effortLevels).toEqual(["high"]);
+      expect(muse(catalog).models.map((model) => model.id)).toEqual([
+        "muse-spark-1.3-contributor",
+        "muse-wonder-1.0-contributor",
+        "muse-wonder-full-1.0-contributor",
+      ]);
+      expect(muse(catalog).effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
     }
     await engineCatalog(sources);
     expect(readMuseCatalog).toHaveBeenCalledTimes(1);
@@ -301,12 +443,12 @@ describe("engineCatalog provider caching", () => {
       { id: "reasoningEffort", options: [{ value: "low" }] },
     ];
     sources.available.muse = false;
-    provider = "muse-provider-two";
+    provider = "muse-wonder-1.0-contributor";
     const cached = await Promise.all([engineCatalog(sources), engineCatalog(sources)]);
     expect(readMuseCatalog).toHaveBeenCalledTimes(1);
     for (const catalog of cached) {
-      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-loaded", "muse-provider-one"]);
-      expect(muse(catalog).effortLevels).toEqual(["low"]);
+      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-spark-1.3-contributor"]);
+      expect(muse(catalog).effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
       expect(muse(catalog).available).toBe(false);
     }
 
@@ -314,16 +456,16 @@ describe("engineCatalog provider caching", () => {
     const expired = await Promise.all([engineCatalog(sources), engineCatalog(sources)]);
     expect(readMuseCatalog).toHaveBeenCalledTimes(2);
     for (const catalog of expired) {
-      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-loaded", "muse-provider-two"]);
+      expect(muse(catalog).models.map((model) => model.id)).toEqual(["muse-wonder-1.0-contributor"]);
     }
 
     resetEngineCatalogCache();
-    provider = "muse-provider-three";
+    provider = "muse-wonder-full-1.0-contributor";
     options = null;
     const reset = await engineCatalog(sources);
     expect(readMuseCatalog).toHaveBeenCalledTimes(3);
-    expect(muse(reset).models.map((model) => model.id)).toEqual(["muse-provider-three"]);
-    expect(muse(reset).effortLevels).toEqual([]);
+    expect(muse(reset).models.map((model) => model.id)).toEqual(["muse-wonder-full-1.0-contributor"]);
+    expect(muse(reset).effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
   });
 });
 
@@ -336,8 +478,8 @@ describe("resolveModelValue", () => {
         available: true,
         supportsThreads: true,
         models: [
-          { id: "muse-wonder-1.0", label: "muse-wonder-1.0", value: "muse-wonder-1.0" },
-          { id: "muse-spark-1.2", label: "muse-spark-1.2", value: "muse-model:[\"meta\",null,\"muse-spark-1.2\"]" },
+          { id: "muse-wonder-1.0-contributor", label: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor" },
+          { id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", value: "muse-model:[\"meta\",null,\"muse-spark-1.3-contributor\"]" },
         ],
         effortLevels: ["high"],
         effortConfigId: "reasoningEffort",
@@ -347,8 +489,8 @@ describe("resolveModelValue", () => {
   };
 
   it("maps a model id onto the exact wire value the engine wants", () => {
-    expect(resolveModelValue(catalog, "muse", "muse-wonder-1.0")).toBe("muse-wonder-1.0");
-    expect(resolveModelValue(catalog, "muse", "muse-spark-1.2")).toBe('muse-model:["meta",null,"muse-spark-1.2"]');
+    expect(resolveModelValue(catalog, "muse", "muse-wonder-1.0-contributor")).toBe("muse-wonder-1.0-contributor");
+    expect(resolveModelValue(catalog, "muse", "muse-spark-1.3-contributor")).toBe('muse-model:["meta",null,"muse-spark-1.3-contributor"]');
   });
 
   it("passes an unknown model through so a fresh model still works", () => {

@@ -310,6 +310,30 @@ describe("the Muse Code launcher", () => {
     expect(out).toContain("args=--serve --flag");
   });
 
+  it.each(["auto", "adapter"])("refuses %s adapter fallback for native launch settings", (backend) => {
+    const stub = scratch();
+    const adapter = join(stub, "fake-adapter");
+    const muse = join(stub, "muse");
+    const marker = join(stub, "adapter-started");
+    writeFileSync(adapter, '#!/usr/bin/env bash\ntouch "$ADAPTER_MARKER"\n');
+    writeFileSync(muse, '#!/usr/bin/env bash\nexit 5\n');
+    chmodSync(adapter, 0o755);
+    chmodSync(muse, 0o755);
+    expect(() => execFileSync(LAUNCHER, ["--contributor-mode", "on", "--disable-sandbox", "--trust-workspace"], {
+      env: {
+        PATH: `${stub}:${process.env.PATH ?? ""}`,
+        HOME: stub,
+        MUSE_CODE_EXECUTABLE: muse,
+        MUSE_CODE_ACP_BIN: adapter,
+        MUSE_CODE_ACP_BACKEND: backend,
+        MUSE_CODE_ACP_REQUIRE_NATIVE: "1",
+        ADAPTER_MARKER: marker,
+      },
+      stdio: "pipe",
+    })).toThrow();
+    expect(() => readFileSync(marker)).toThrow();
+  });
+
   it("keeps explicit adapter mode even when the GUI helper is installed", () => {
     const stub = scratch();
     const app = join(stub, "Clutch.app");

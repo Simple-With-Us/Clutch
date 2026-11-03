@@ -2,6 +2,66 @@ import XCTest
 @testable import Clutch
 
 final class AcpSessionTests: XCTestCase {
+    func testMuseLaunchPreferencesDefaultOnAndStayScopedToTheirHost() throws {
+        XCTAssertEqual(MuseLaunchOptions.defaults, MuseLaunchOptions(yolo: true, contributorMode: true))
+
+        let firstHost = MuseLaunchPreferences.setting(
+            MuseLaunchOptions(yolo: false, contributorMode: true),
+            hostKey: "host-a",
+            preferencesJSON: nil
+        )
+        XCTAssertEqual(
+            MuseLaunchPreferences.options(hostKey: "host-a", preferencesJSON: firstHost),
+            MuseLaunchOptions(yolo: false, contributorMode: true)
+        )
+        XCTAssertEqual(MuseLaunchPreferences.options(hostKey: "host-b", preferencesJSON: firstHost), .defaults)
+
+        let bothHosts = MuseLaunchPreferences.setting(
+            MuseLaunchOptions(yolo: false, contributorMode: false),
+            hostKey: "host-b",
+            preferencesJSON: firstHost
+        )
+        XCTAssertEqual(
+            MuseLaunchPreferences.options(hostKey: "host-a", preferencesJSON: bothHosts),
+            MuseLaunchOptions(yolo: false, contributorMode: true)
+        )
+        XCTAssertEqual(
+            MuseLaunchPreferences.options(hostKey: "host-b", preferencesJSON: bothHosts),
+            MuseLaunchOptions(yolo: false, contributorMode: false)
+        )
+    }
+
+    func testMuseOptionsAreSentOnlyForMuseRequests() throws {
+        let host = ClutchHost(name: "Test Host", origin: try XCTUnwrap(URL(string: "https://example.test")))
+        let options = MuseLaunchOptions(yolo: true, contributorMode: false)
+        let museClient = ChatSessionClient(
+            host: host,
+            model: "",
+            relayReceiverUid: "",
+            engine: "muse",
+            museOptions: options
+        )
+        let museBody = museClient.requestPayload(prompt: "hello")
+        let museOptions = try XCTUnwrap(museBody["museOptions"] as? [String: Bool])
+        XCTAssertEqual(museOptions, ["yolo": true, "contributorMode": false])
+        XCTAssertEqual(museBody["model"] as? String, "muse-spark-1.3-contributor")
+        var resumed = museClient
+        resumed.sessionId = "existing-session"
+        XCTAssertEqual(resumed.requestPayload(prompt: "hello")["model"] as? String, "")
+        var selected = museClient
+        selected.model = "muse-wonder-1.0-contributor"
+        XCTAssertEqual(selected.requestPayload(prompt: "hello")["model"] as? String, selected.model)
+
+        let otherClient = ChatSessionClient(
+            host: host,
+            model: "",
+            relayReceiverUid: "",
+            engine: "mcode",
+            museOptions: options
+        )
+        XCTAssertNil(otherClient.requestPayload(prompt: "hello")["museOptions"])
+    }
+
     func testSessionLoadFailurePreservesLoginAndConflictReasons() throws {
         for message in [
             "Log in to Muse before opening a session.",
@@ -245,7 +305,7 @@ final class AcpSessionTests: XCTestCase {
         {"engines":[
           {"id":"muse","label":"Muse Code","available":true,
            "models":[{"id":"muse-wonder-1.0","label":"Muse Wonder 1.0","value":"muse-wonder-1.0","contextWindow":1007997}],
-           "effortLevels":["none","high"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
+           "effortLevels":["none","high","max"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
           {"id":"mcode","label":"MiniMax Code","available":false,"models":[],"effortLevels":[],"effortConfigId":"thinkingEffort","modelConfigId":"model"}
         ]}
         """
@@ -256,15 +316,54 @@ final class AcpSessionTests: XCTestCase {
 
         let muse = try XCTUnwrap(catalog.descriptor("muse"))
         XCTAssertTrue(muse.supportsThreads)
-        XCTAssertEqual(muse.models.map(\.id), ["muse-wonder-1.0"])
-        XCTAssertEqual(muse.models[0].contextSummary, "1.0M")
-        XCTAssertEqual(catalog.model(engineId: "muse", modelId: "muse-wonder-1.0")?.displayLabel, "Muse Wonder 1.0")
-        XCTAssertNil(catalog.model(engineId: "muse", modelId: "unknown"))
-        XCTAssertEqual(muse.effortLevels, ["none", "high"])
+        let contributorIDs = [
+            "muse-spark-1.3-contributor",
+            "muse-wonder-1.0-contributor",
+            "muse-wonder-full-1.0-contributor",
+        ]
+        XCTAssertEqual(muse.models.map(\.id), contributorIDs)
+        XCTAssertEqual(muse.models.map(\.value), contributorIDs)
+        XCTAssertEqual(muse.models.map(\.displayLabel), [
+            "Muse Spark 1.3 Contributor",
+            "Muse Wonder 1.0 Contributor",
+            "Muse Wonder Full 1.0 Contributor",
+        ])
+        XCTAssertNil(catalog.model(engineId: "muse", modelId: "muse-wonder-1.0"))
+        XCTAssertNotNil(catalog.model(engineId: "muse", modelId: "muse-wonder-1.0-contributor"))
+        XCTAssertEqual(muse.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
+        XCTAssertEqual(muse.effortConfigId, "reasoningEffort")
+
+        let emptyCatalogJSON = #"{"engines":[{"id":"muse","label":"Muse Code","available":true,"models":[],"effortLevels":[],"effortConfigId":"reasoningEffort","modelConfigId":"model"}]}"#
+        let emptyMuse = try XCTUnwrap(JSONDecoder().decode(EngineCatalog.self, from: Data(emptyCatalogJSON.utf8)).descriptor("muse"))
+        XCTAssertEqual(emptyMuse.models.map(\.id), contributorIDs)
+        XCTAssertEqual(emptyMuse.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
 
         let mcode = try XCTUnwrap(catalog.descriptor("mcode"))
         XCTAssertFalse(mcode.available)
         XCTAssertTrue(mcode.supportsThreads)
+    }
+
+    func testEngineCatalogPreservesMetadataForExactMuseContributorModels() throws {
+        let json = """
+        {"engines":[
+          {"id":"muse","label":"Muse Code","available":true,
+           "models":[
+             {"id":"muse-spark-1.3-contributor","label":"Old label","value":"muse-model:[\\"meta\\",\\"tbh\\",\\"muse-spark-1.3-contributor\\"]","contextWindow":1007997,"images":true},
+             {"id":"muse-wonder-1.0","label":"Muse Wonder 1.0","value":"muse-wonder-1.0","contextWindow":999999}
+           ],
+           "effortLevels":["max"],"effortConfigId":"reasoningEffort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        let muse = try XCTUnwrap(catalog.descriptor("muse"))
+        let spark = try XCTUnwrap(muse.models.first { $0.id == "muse-spark-1.3-contributor" })
+        XCTAssertEqual(spark.label, "Muse Spark 1.3 Contributor")
+        XCTAssertEqual(spark.value, "muse-spark-1.3-contributor")
+        XCTAssertEqual(spark.contextWindow, 1_007_997)
+        XCTAssertEqual(spark.images, true)
+        XCTAssertNil(muse.models.first { $0.id == "muse-wonder-1.0" })
+        XCTAssertEqual(muse.models.map(\.id).count, 3)
+        XCTAssertEqual(muse.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
     }
 
     func testEngineCatalogReadsThePublishedThreadCapability() throws {
@@ -296,19 +395,32 @@ final class AcpSessionTests: XCTestCase {
 
         XCTAssertEqual(
             ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: nil).map(\.id),
-            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor", "provider/muse-spark-1.3-contributor"]
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
         )
         XCTAssertEqual(
             ModelVisibilityPreferences.visibleModels(all: models, engineID: "minimax", hostKey: "host-a", preferencesJSON: nil),
             models
         )
-        XCTAssertEqual(models.map(\.value), ["wire-spark", "wire-spark-contributor", "wire-wonder-contributor", "wire-wonder-full-contributor", "wire-qualified"])
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: nil).map(\.value),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: [], engineID: "muse", hostKey: "empty-host", preferencesJSON: nil).map(\.id),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+        let legacyPreferences = #"{"hosts":{"old-host":{"muse":["muse-wonder-1.0","provider/muse-spark-1.3-contributor"]}}}"#
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: [models[0]], engineID: "muse", hostKey: "old-host", preferencesJSON: legacyPreferences).map(\.id),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
     }
 
     func testModelVisibilityPreferencesAreIsolatedAndCanPersistAnEmptySelection() {
         let models = [
             EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
             EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
         ]
         var preferences: String? = nil
         for model in models {
@@ -332,6 +444,7 @@ final class AcpSessionTests: XCTestCase {
         let currentModels = [
             EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
             EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
         ]
         var preferences = ModelVisibilityPreferences.settingVisible(
             true,
@@ -352,11 +465,11 @@ final class AcpSessionTests: XCTestCase {
 
         XCTAssertEqual(
             ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences),
-            Set(["muse-wonder-1.0-contributor", "muse-future-contributor"])
+            Set(["muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor", "muse-future-contributor"])
         )
         XCTAssertEqual(
             ModelVisibilityPreferences.visibleModels(all: currentModels, engineID: "muse", hostKey: "host-a", preferencesJSON: preferences).map(\.id),
-            ["muse-wonder-1.0-contributor"]
+            ["muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
         )
     }
 
@@ -364,6 +477,7 @@ final class AcpSessionTests: XCTestCase {
         let models = [
             EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
             EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
         ]
         var preferences: String? = nil
         preferences = ModelVisibilityPreferences.settingVisible(
@@ -400,7 +514,7 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences))
         XCTAssertEqual(
             ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-b", preferencesJSON: preferences),
-            Set(["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor"])
+            Set(["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"])
         )
         XCTAssertEqual(
             ModelVisibilityPreferences.selectedModelIDs(engineID: "minimax", hostKey: "host-a", preferencesJSON: preferences),

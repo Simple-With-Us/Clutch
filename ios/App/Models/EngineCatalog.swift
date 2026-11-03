@@ -71,8 +71,8 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         self.label = label
         self.available = available
         self.supportsThreads = supportsThreads
-        self.models = models
-        self.effortLevels = effortLevels
+        self.models = id == "muse" ? MuseModelCatalogPolicy.normalizedModels(models) : models
+        self.effortLevels = id == "muse" ? MuseModelCatalogPolicy.effortLevels : effortLevels
         self.effortConfigId = effortConfigId
         self.modelConfigId = modelConfigId
         self.note = note
@@ -98,8 +98,10 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         // An older sidecar does not publish the capability.  Every engine
         // Clutch can run lists its threads, so absent means yes.
         supportsThreads = try container.decodeIfPresent(Bool.self, forKey: .supportsThreads) ?? true
-        models = try container.decode([EngineModel].self, forKey: .models)
-        effortLevels = try container.decode([String].self, forKey: .effortLevels)
+        let decodedModels = try container.decode([EngineModel].self, forKey: .models)
+        models = id == "muse" ? MuseModelCatalogPolicy.normalizedModels(decodedModels) : decodedModels
+        let decodedEffortLevels = try container.decode([String].self, forKey: .effortLevels)
+        effortLevels = id == "muse" ? MuseModelCatalogPolicy.effortLevels : decodedEffortLevels
         effortConfigId = try container.decode(String.self, forKey: .effortConfigId)
         modelConfigId = try container.decode(String.self, forKey: .modelConfigId)
         note = try container.decodeIfPresent(String.self, forKey: .note)
@@ -159,6 +161,91 @@ public struct EngineModel: Decodable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// Native Muse choices stay aligned with the contributor models published by updated hosts.
+private enum MuseModelCatalogPolicy {
+    static let effortLevels = ["minimal", "low", "medium", "high", "xhigh"]
+
+    private static let models = [
+        EngineModel(id: "muse-spark-1.3-contributor", label: "Muse Spark 1.3 Contributor", value: "muse-spark-1.3-contributor"),
+        EngineModel(id: "muse-wonder-1.0-contributor", label: "Muse Wonder 1.0 Contributor", value: "muse-wonder-1.0-contributor"),
+        EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Muse Wonder Full 1.0 Contributor", value: "muse-wonder-full-1.0-contributor"),
+    ]
+
+    static let modelIDs = Set(models.map(\.id))
+
+    /// Fill missing choices and retain only exact matches' descriptive metadata.
+    /// Wire values are always the approved bare model IDs.
+    static func normalizedModels(_ advertised: [EngineModel]) -> [EngineModel] {
+        models.map { supported in
+            let metadata = advertised.first { $0.id == supported.id }
+            return EngineModel(
+                id: supported.id,
+                label: supported.label,
+                value: supported.id,
+                contextWindow: metadata?.contextWindow,
+                images: metadata?.images
+            )
+        }
+    }
+}
+
+/// Per-turn Muse behavior selected in the native app.
+public struct MuseLaunchOptions: Codable, Equatable, Sendable {
+    public var yolo: Bool
+    public var contributorMode: Bool
+
+    public static let defaults = MuseLaunchOptions(yolo: true, contributorMode: true)
+
+    public init(yolo: Bool, contributorMode: Bool) {
+        self.yolo = yolo
+        self.contributorMode = contributorMode
+    }
+}
+
+/// Per-host Muse defaults stored on this device, separate from host-managed settings.
+public enum MuseLaunchPreferences {
+    public static let storageKey = "museLaunchPreferences"
+
+    private struct Store: Codable {
+        var hosts: [String: MuseLaunchOptions] = [:]
+    }
+
+    public static func options(hostKey: String, preferencesJSON: String?) -> MuseLaunchOptions {
+        guard let preferencesJSON,
+              let data = preferencesJSON.data(using: .utf8),
+              let store = try? JSONDecoder().decode(Store.self, from: data) else {
+            return .defaults
+        }
+        return store.hosts[hostKey] ?? .defaults
+    }
+
+    public static func options(for host: ClutchHost, defaults: UserDefaults = .standard) -> MuseLaunchOptions {
+        options(hostKey: host.id.uuidString, preferencesJSON: defaults.string(forKey: storageKey))
+    }
+
+    public static func setting(
+        _ options: MuseLaunchOptions,
+        hostKey: String,
+        preferencesJSON: String?
+    ) -> String {
+        var store: Store
+        if let preferencesJSON,
+           let data = preferencesJSON.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(Store.self, from: data) {
+            store = decoded
+        } else {
+            store = Store()
+        }
+        store.hosts[hostKey] = options
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(store), let json = String(data: data, encoding: .utf8) else {
+            return preferencesJSON ?? "{}"
+        }
+        return json
+    }
+}
+
 /// Pure visibility policy for model pickers
 /// Preferences are JSON for per-host persistence in native settings; filtering never modifies engine availability
 public enum ModelVisibilityPreferences {
@@ -186,9 +273,18 @@ public enum ModelVisibilityPreferences {
         hostKey: String,
         preferencesJSON: String?
     ) -> [EngineModel] {
-        let selected = selectedModelIDs(engineID: engineID, hostKey: hostKey, preferencesJSON: preferencesJSON)
-            ?? defaultModelIDs(all: all, engineID: engineID)
-        return all.filter { selected.contains($0.id) }
+        let candidates = engineID == "muse" ? MuseModelCatalogPolicy.normalizedModels(all) : all
+        let stored = selectedModelIDs(engineID: engineID, hostKey: hostKey, preferencesJSON: preferencesJSON)
+        let selected: Set<String>
+        if engineID == "muse", let stored, !stored.isEmpty {
+            let exactSelection = stored.intersection(MuseModelCatalogPolicy.modelIDs)
+            // Ignore legacy base/qualified selections so older saved filters
+            // do not strand the picker with no supported model choices.
+            selected = exactSelection.isEmpty ? defaultModelIDs(all: candidates, engineID: engineID) : exactSelection
+        } else {
+            selected = stored ?? defaultModelIDs(all: candidates, engineID: engineID)
+        }
+        return candidates.filter { selected.contains($0.id) }
     }
 
     /// Change one model's visibility and return JSON while retaining unavailable stored IDs
@@ -242,7 +338,7 @@ public enum ModelVisibilityPreferences {
 
     private static func defaultModelIDs(all: [EngineModel], engineID: String) -> Set<String> {
         guard engineID == "muse" else { return Set(all.map(\.id)) }
-        return Set(all.lazy.map(\.id).filter { $0.hasSuffix("-contributor") })
+        return MuseModelCatalogPolicy.modelIDs
     }
 
     private static func decode(_ json: String?) -> Store? {

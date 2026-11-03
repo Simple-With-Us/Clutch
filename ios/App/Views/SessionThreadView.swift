@@ -190,6 +190,7 @@ final class SessionThreadModel {
             engine: engine,
             cwd: cwd,
             effort: effort,
+            museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil,
             images: attachments
         )
         attachments = []

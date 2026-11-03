@@ -36,6 +36,8 @@ public struct ChatSessionClient {
     /// Reasoning effort for this turn.  The sidecar maps it onto whatever
     /// the engine calls its effort option.
     public var effort: String?
+    /// Muse-only approval and contributor defaults for this turn.
+    public var museOptions: MuseLaunchOptions?
     /// Images attached to this turn, the way the web canvas attaches files.
     public var images: [ChatAttachment]
 
@@ -47,6 +49,7 @@ public struct ChatSessionClient {
         engine: String? = nil,
         cwd: String? = nil,
         effort: String? = nil,
+        museOptions: MuseLaunchOptions? = nil,
         images: [ChatAttachment] = []
     ) {
         self.host = host
@@ -56,6 +59,7 @@ public struct ChatSessionClient {
         self.engine = engine
         self.cwd = cwd
         self.effort = effort
+        self.museOptions = museOptions
         self.images = images
     }
 
@@ -81,29 +85,7 @@ public struct ChatSessionClient {
                     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req.timeoutInterval = 600
-                    var body: [String: Any] = [
-                        "prompt": prompt,
-                        "model": model,
-                        "relay": ["receiver": relayReceiverUid, "receiverType": "user"],
-                        // The sidecar holds a permission request until the
-                        // answer comes back, so the engine asks this client
-                        // rather than answering for itself.
-                        "permissions": "ask",
-                    ]
-                    if let sessionId { body["sessionId"] = sessionId }
-                    if let engine { body["engine"] = engine }
-                    if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
-                    if let effort, !effort.isEmpty { body["effort"] = effort }
-                    if !images.isEmpty {
-                        body["images"] = images.map { image in
-                            [
-                                "mimeType": image.mimeType,
-                                "data": image.data,
-                                "name": image.name,
-                            ]
-                        }
-                    }
-                    req.httpBody = try JSONSerialization.data(withJSONObject: body)
+                    req.httpBody = try JSONSerialization.data(withJSONObject: requestPayload(prompt: prompt))
                     let (bytes, resp) = try await URLSession.shared.bytes(for: req)
                     guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
                         throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
@@ -129,6 +111,39 @@ public struct ChatSessionClient {
                 producer.cancel()
             }
         }
+    }
+
+    func requestPayload(prompt: String) -> [String: Any] {
+        let requestedModel = engine == "muse" && sessionId == nil && model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "muse-spark-1.3-contributor" : model
+        var body: [String: Any] = [
+            "prompt": prompt,
+            "model": requestedModel,
+            "relay": ["receiver": relayReceiverUid, "receiverType": "user"],
+            // The sidecar holds a permission request until the answer comes back, so the
+            // engine asks this client rather than answering for itself.
+            "permissions": "ask",
+        ]
+        if let sessionId { body["sessionId"] = sessionId }
+        if let engine { body["engine"] = engine }
+        if let cwd, !cwd.isEmpty { body["cwd"] = cwd }
+        if let effort, !effort.isEmpty { body["effort"] = effort }
+        if engine == "muse", let museOptions {
+            body["museOptions"] = [
+                "yolo": museOptions.yolo,
+                "contributorMode": museOptions.contributorMode,
+            ]
+        }
+        if !images.isEmpty {
+            body["images"] = images.map { image in
+                [
+                    "mimeType": image.mimeType,
+                    "data": image.data,
+                    "name": image.name,
+                ]
+            }
+        }
+        return body
     }
 
     /// Stop one in-flight turn without dropping the stream first

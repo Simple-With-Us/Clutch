@@ -285,6 +285,12 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
                 "CFBundleIdentifier": helper_bundle_id,
                 "CFBundleExecutable": helper_executable,
             }))
+            # Valid fixtures stay private even under a group-writable umask.
+            for directory in (app, app / "Contents", app / "Contents" / "Helpers",
+                              helper_app, helper_app / "Contents", executable.parent):
+                directory.chmod(0o700)
+            (app / "Contents" / "Info.plist").chmod(0o600)
+            (helper_app / "Contents" / "Info.plist").chmod(0o600)
             if scenario == "bundle-writable":
                 helper_app.chmod(0o777)
             verified: list[str] = []

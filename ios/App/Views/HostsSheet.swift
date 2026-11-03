@@ -7,6 +7,7 @@ struct HostsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
     @AppStorage(MacBusySendMode.storageKey) private var busySendModeRawValue = MacBusySendMode.defaultMode.rawValue
+    @AppStorage(MuseLaunchPreferences.storageKey) private var museLaunchPreferencesJSON = ""
     @State private var isAddingHost = false
 
     private var busySendMode: MacBusySendMode {
@@ -25,6 +26,15 @@ struct HostsSheet: View {
                             HostRow(host: host, isActive: host.id == store.activeHost?.id)
                         }
                         .buttonStyle(.plain)
+                        #if os(macOS)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                store.remove(host)
+                            } label: {
+                                Label("Forget Host", systemImage: "trash")
+                            }
+                        }
+                        #else
                         .swipeActions {
                             Button(role: .destructive) {
                                 store.remove(host)
@@ -32,6 +42,7 @@ struct HostsSheet: View {
                                 Label("Forget", systemImage: "trash")
                             }
                         }
+                        #endif
                     }
                     Button {
                         isAddingHost = true
@@ -42,9 +53,11 @@ struct HostsSheet: View {
                     Text("Hosts")
                 } footer: {
                     Text(Copy.gap(
-                        "Swipe a host to forget it and sign this device out.",
-                        "To pair, run \(Copy.pairCommand) in Terminal on the Mac."
+                        "Forget a host to sign this device out.",
+                        "To pair, run \(Copy.pairCommand) in Terminal on the Mac or server host."
                     ))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 Section("Appearance") {
@@ -66,30 +79,72 @@ struct HostsSheet: View {
                     Text(busySendMode.explanation)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Text(Copy.gap(
                         "This sets the default action while a turn is running.",
                         "Choose another action for an individual message from the composer menu."
                     ))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 #endif
+
+                if let host = store.activeHost {
+                    Section("Muse Code") {
+                        Toggle(isOn: museOptionsBinding(host: host, keyPath: \.yolo)) {
+                            Text("YOLO: Allow Changes Without Asking")
+                        }
+                        Text(Copy.gap(
+                            "Muse can make changes and run commands without pausing for approval.",
+                            "The host sandbox is disabled for that turn."
+                        ))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Toggle(isOn: museOptionsBinding(host: host, keyPath: \.contributorMode)) {
+                            Text("Contributor Mode")
+                        }
+                        Text("Muse uses contributor mode for new and resumed threads.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(Copy.gap(
+                            "Changes apply to your next Muse turn.",
+                            "Finish other Muse turns before changing these settings."
+                        ))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
 
                 InfisicalSettingsSection(host: store.activeHost)
 
                 Section("About") {
                     LabeledContent("Version", value: "\(Bundle.main.shortVersion) (\(Bundle.main.buildNumber))")
                     Text(Copy.gap(
-                        "Clutch shows the clutch web UI running on your Mac.",
-                        "Models, sessions, and tools come from that Mac, so DeepSeek and MiniMax work exactly as they do on the desktop."
+                        "Clutch shows the clutch web UI running on your Mac or server host.",
+                        "Models, sessions, and tools come from that host, so DeepSeek and MiniMax work as they do there."
                     ))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .navigationTitle("Hosts and Settings")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #else
+            .formStyle(.grouped)
+            .frame(minWidth: 560, idealWidth: 680, maxWidth: 820, minHeight: 480, idealHeight: 680)
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -106,6 +161,33 @@ struct HostsSheet: View {
                 .navigationTitle("Add Host")
             }
         }
+    }
+
+    private func museOptionsBinding(
+        host: ClutchHost,
+        keyPath: WritableKeyPath<MuseLaunchOptions, Bool>
+    ) -> Binding<Bool> {
+        let hostKey = host.id.uuidString
+        return Binding(
+            get: {
+                MuseLaunchPreferences.options(
+                    hostKey: hostKey,
+                    preferencesJSON: museLaunchPreferencesJSON
+                )[keyPath: keyPath]
+            },
+            set: { enabled in
+                var options = MuseLaunchPreferences.options(
+                    hostKey: hostKey,
+                    preferencesJSON: museLaunchPreferencesJSON
+                )
+                options[keyPath: keyPath] = enabled
+                museLaunchPreferencesJSON = MuseLaunchPreferences.setting(
+                    options,
+                    hostKey: hostKey,
+                    preferencesJSON: museLaunchPreferencesJSON
+                )
+            }
+        )
     }
 }
 
