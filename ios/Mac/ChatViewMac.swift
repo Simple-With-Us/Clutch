@@ -1630,7 +1630,7 @@ public struct ChatView: View {
     }
 
     private func refreshThread() async {
-        guard let host = activeHost, phase == .ready else { return }
+        guard let host = activeHost, phase == .ready, !sending else { return }
         let generation = turnGeneration
         let requestedEngine = engine
         if isWorkspace {
