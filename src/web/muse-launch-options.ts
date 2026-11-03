@@ -45,7 +45,7 @@ export function contributorDefaultModel(currentModel?: string): string {
 }
 
 export class MuseSettingsError extends Error {
-  constructor(reason: "busy" | "mode" | "model" | "effort" | "restart" | "native") {
+  constructor(reason: "busy" | "mode" | "model" | "effort" | "restart" | "native" | "compaction" | "auto-compact") {
     super({
       busy: "Finish other Muse turns before changing YOLO or Contributor Mode.",
       mode: "This Muse connection could not apply the selected approval mode.",
@@ -53,6 +53,8 @@ export class MuseSettingsError extends Error {
       effort: "Muse could not select the requested effort.\u00A0 No prompt was sent.",
       restart: "Muse could not restart with the selected settings.\u00A0 Try again after its current work finishes.",
       native: "These settings require native Muse ACP.\u00A0 Choose the native backend or update Muse Code.",
+      compaction: "Muse has not advertised context compaction for this thread.",
+      "auto-compact": "Muse could not compact this thread.\u00A0 Your message was not sent.",
     }[reason]);
   }
 }
