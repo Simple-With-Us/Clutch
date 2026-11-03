@@ -47,6 +47,12 @@ export interface SessionUsage {
   outputTokensPerSecond?: number;
 }
 
+/** Model identity reported by the engine, independent of token accounting. */
+export interface SessionModelMetadata {
+  provider?: string;
+  model?: string;
+}
+
 /** How far back to scan for the newest records.  A session log is append-only,
  *  so the tail always holds the latest usage; `request/context` is only written
  *  near the start of a session, so it gets a whole-file fallback. */
@@ -138,6 +144,45 @@ function contextFrom(obj: Record<string, unknown>): SessionUsage | null {
   if (model !== undefined) out.model = model;
   if (contextWindow !== undefined) out.contextWindow = contextWindow;
   return out;
+}
+
+function modelMetadataFromContext(obj: Record<string, unknown>): SessionModelMetadata | null {
+  const parsed = RequestContextRecordSchema.safeParse(obj);
+  if (!parsed.success) return null;
+  const provider = parsed.data.data?.provider?.trim();
+  const model = parsed.data.data?.model?.trim();
+  if (!provider && !model) return null;
+  return {
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
+function latestRequestContext(text: string): Record<string, unknown> | null {
+  const lines = text.split("\n");
+  const tailStart = Math.max(0, lines.length - TAIL_LINES);
+  for (let i = lines.length - 1; i >= tailStart; i -= 1) {
+    const line = lines[i] ?? "";
+    if (!line.includes("request/context")) continue;
+    const obj = parseJson(line);
+    if (obj && modelMetadataFromContext(obj)) return obj;
+  }
+
+  // `request/context` is normally written near the start of a long session.
+  // Scan the remaining file once without requiring any usage record.
+  for (let i = tailStart - 1; i >= 0; i -= 1) {
+    const line = lines[i] ?? "";
+    if (!line.includes("request/context")) continue;
+    const obj = parseJson(line);
+    if (obj && modelMetadataFromContext(obj)) return obj;
+  }
+  return null;
+}
+
+/** Read only the exact model/provider identity from `request/context`. */
+export function extractSessionModelMetadataFromLogText(text: string): SessionModelMetadata | null {
+  const context = latestRequestContext(text);
+  return context ? modelMetadataFromContext(context) : null;
 }
 
 /** Pull the accounting record out of one `assistant/message` line. */
@@ -270,6 +315,7 @@ interface CacheEntry {
   mtimeMs: number;
   size: number;
   value: SessionUsage | null;
+  metadata: SessionModelMetadata | null;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -283,6 +329,26 @@ export function clearUsageCache(): void {
  * absent or unreadable.  Never throws, and never estimates.
  */
 export function readSessionUsage(dshHome: string, sessionId: string): SessionUsage | null {
+  return readSessionLogData(dshHome, sessionId)?.value ?? null;
+}
+
+/** Read model/provider identity without requiring token usage counters. */
+export function readSessionModelMetadata(dshHome: string, sessionId: string): SessionModelMetadata | null {
+  return readSessionLogData(dshHome, sessionId)?.metadata ?? null;
+}
+
+/** Attach exact file-reported identity to a bounded listing page. */
+export function attachSessionModelMetadata<T extends { sessionId: string; provider?: string; model?: string }>(
+  sessions: readonly T[],
+  dshHome: string,
+): Array<T & SessionModelMetadata> {
+  return sessions.map((session) => ({
+    ...readSessionModelMetadata(dshHome, session.sessionId),
+    ...session,
+  }));
+}
+
+function readSessionLogData(dshHome: string, sessionId: string): CacheEntry | null {
   if (!sessionId || !zstdAvailable()) return null;
   const logPath = sessionLogPath(dshHome, sessionId);
   if (!logPath) return null;
@@ -298,17 +364,23 @@ export function readSessionUsage(dshHome: string, sessionId: string): SessionUsa
   }
 
   const hit = cache.get(logPath);
-  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.value;
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit;
 
   let value: SessionUsage | null = null;
+  let metadata: SessionModelMetadata | null = null;
   try {
     const text = inflate(readFileSync(logPath));
-    if (text !== null) value = extractUsageFromLogText(text);
+    if (text !== null) {
+      value = extractUsageFromLogText(text);
+      metadata = extractSessionModelMetadataFromLogText(text);
+    }
   } catch {
     value = null;
+    metadata = null;
   }
-  cache.set(logPath, { mtimeMs, size, value });
-  return value;
+  const entry = { mtimeMs, size, value, metadata };
+  cache.set(logPath, entry);
+  return entry;
 }
 
 /** Attach the measured rate from the previous read to a fresh reading. */

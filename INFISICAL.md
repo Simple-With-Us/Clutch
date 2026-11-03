@@ -62,6 +62,7 @@ Secrets (placeholders below — Jay fills real values in the Infisical UI; nothi
 | `IOS_CERT_PASSWORD` | secret | — | Password for `IOS_CERT_P12_BASE64`. |
 | `MAC_CERT_P12_BASE64` | secret | — | Optional Developer ID Application identity for signed `Clutch.app` CI builds. |
 | `MAC_CERT_PASSWORD` | secret | — | Password for `MAC_CERT_P12_BASE64`. |
+| `CLUTCH_TELEMETRY_AUTHORIZATION` | secret | — | Authorization header for Clutch's registered hub producer; never a user or another producer's bearer |
 
 Env config:
 
@@ -76,6 +77,7 @@ Env config:
 | `CLUTCH_TAILNET_HOST` | config | — | Override for the detected Tailscale MagicDNS name |
 | `CLUTCH_TAILNET_IPV4` | config | — | Optional Tailscale IPv4 trusted for /api |
 | `CLUTCH_TRUSTED_HOSTS` | config | — | Extra comma-separated trusted Host values for /api |
+| `CLUTCH_TELEMETRY_ENDPOINT` | config | — | Registered telemetry hub OTLP traces URL; restart the sidecar after changes |
 | `COMETCHAT_APP_ID` | config | — | CometChat App ID (native chat coordinates) |
 | `COMETCHAT_REGION` | config | — | CometChat region (us, eu, or in) |
 | `COMETCHAT_AGENT_UID` | config | `clutch-agent` | Agent user uid the relay speaks on behalf of |

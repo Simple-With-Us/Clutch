@@ -89,6 +89,8 @@ export const CLUTCH_SETTINGS_SCHEMA: ClutchSettingDef[] = [
   { key: "CLUTCH_TAILNET_IPV4", kind: "config", defaultValue: "", description: "Optional Tailscale IPv4 to trust for /api" },
   { key: "CLUTCH_TRUSTED_HOSTS", kind: "config", defaultValue: "", description: "Extra comma-separated trusted Host values for /api" },
   { key: "CLUTCH_SETTINGS_REFRESH_MS", kind: "knob", defaultValue: "300000", description: "Background settings refresh interval (ms)" },
+  { key: "CLUTCH_TELEMETRY_ENDPOINT", kind: "config", defaultValue: "", description: "Authenticated telemetry hub OTLP traces URL (restart the sidecar after changing)" },
+  { key: "CLUTCH_TELEMETRY_AUTHORIZATION", kind: "secret", defaultValue: "", description: "Clutch producer Authorization header for the telemetry hub (restart the sidecar after changing)" },
   { key: "COMETCHAT_APP_ID", kind: "config", defaultValue: "", description: "CometChat App ID (native chat coordinates)" },
   { key: "COMETCHAT_REGION", kind: "config", defaultValue: "", description: "CometChat region (us, eu, or in)" },
   { key: "COMETCHAT_AUTH_KEY", kind: "secret", defaultValue: "", description: "CometChat Auth Key served to the paired phone (dev-grade; server-minted tokens are the follow-up)" },

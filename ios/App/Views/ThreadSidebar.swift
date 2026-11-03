@@ -50,6 +50,8 @@ struct ThreadSidebar: View {
     var onSelect: (AcpSessionInfo) -> Void
     var onNew: () -> Void
     var onRefresh: () -> Void
+    /// Retry the failed thread action; defaults to refreshing the list.
+    var onRetry: (() -> Void)? = nil
     /// Context-menu actions the host handles.  nil leaves those items out.
     var onAction: ((ThreadSidebarAction, AcpSessionInfo) -> Void)? = nil
     /// Whether archived threads are listed (marked, restorable) or hidden.
@@ -106,6 +108,14 @@ struct ThreadSidebar: View {
     @State private var hoveredId: String?
 
     var body: some View {
+        let ordered = AcpSessionInfo.newestFirst(sessions)
+        let filtered = ThreadSidebarGrouping.filtered(ordered, query: query, projects: projects)
+        let visibleGroups = ThreadSidebarGrouping.groups(
+            ordered: filtered,
+            projects: projects,
+            pinned: pinnedIds
+        )
+
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 header
@@ -123,7 +133,7 @@ struct ThreadSidebar: View {
                             .help(errorText)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
-                        Button("Retry", action: onRefresh)
+                        Button("Retry", action: onRetry ?? onRefresh)
                             .font(.system(size: 11, weight: .semibold))
                     }
                     .padding(.horizontal, 10)
@@ -132,12 +142,12 @@ struct ThreadSidebar: View {
                     Divider()
                 }
 
-                if ordered.isEmpty && loading {
+                if sessions.isEmpty && loading {
                     ProgressView("Loading Threads…")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if ordered.isEmpty {
+                } else if sessions.isEmpty {
                     emptyState
                 } else if visibleGroups.isEmpty {
                     VStack(spacing: 8) {
@@ -240,8 +250,8 @@ struct ThreadSidebar: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if !ordered.isEmpty {
-                Text("\(ordered.count)")
+            if !sessions.isEmpty {
+                Text("\(sessions.count)")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, 5)
@@ -339,7 +349,7 @@ struct ThreadSidebar: View {
 
     @ViewBuilder
     private var footer: some View {
-        if let selected = ordered.first(where: { $0.sessionId == selectedId }), let cwd = selected.cwd, !cwd.isEmpty {
+        if let selected = sessions.first(where: { $0.sessionId == selectedId }), let cwd = selected.cwd, !cwd.isEmpty {
             Divider()
             HStack(spacing: 5) {
                 Image(systemName: "folder")
@@ -364,8 +374,9 @@ struct ThreadSidebar: View {
         ThreadSidebarRow(
             session: session,
             isSelected: session.sessionId == selectedId,
+            isHovered: hoveredId == session.sessionId,
             isLoading: loadingId == session.sessionId,
-            isDisabled: loadingId != nil && loadingId != session.sessionId,
+            isDisabled: false,
             projects: projects,
             showsTooltip: false,
             onSelect: onSelect,
@@ -377,25 +388,9 @@ struct ThreadSidebar: View {
         .onHover { inside in
             hoveredId = inside ? session.sessionId : (hoveredId == session.sessionId ? nil : hoveredId)
         }
-        .popover(isPresented: Binding(
-            get: { hoveredId == session.sessionId },
-            set: { if !$0 && hoveredId == session.sessionId { hoveredId = nil } }
-        ), arrowEdge: .trailing) {
-            ThreadDetailsCard(session: session, projects: projects)
-        }
         #endif
     }
 
-    private var ordered: [AcpSessionInfo] {
-        AcpSessionInfo.newestFirst(sessions)
-    }
-
-    /// Newest first, filtered by the search field, then bucketed by date.  A
-    /// blank query matches everything, so clearing the field always restores
-    /// the full list.
-    private var visibleGroups: [AcpSessionInfo.Group] {
-        AcpSessionInfo.grouped(AcpSessionInfo.filtered(ordered, query: query), pinned: pinnedIds)
-    }
 }
 
 /// One thread row, shared by the macOS rail and the iOS/iPad sidebar list so
@@ -406,6 +401,7 @@ struct ThreadSidebar: View {
 struct ThreadSidebarRow: View {
     let session: AcpSessionInfo
     var isSelected: Bool
+    var isHovered: Bool = false
     var isLoading: Bool
     var isDisabled: Bool
     var projects: [SessionsClient.Project] = []
@@ -420,6 +416,8 @@ struct ThreadSidebarRow: View {
     /// those items are left out there instead of shown and silently ignored.
     var onAction: ((ThreadSidebarAction, AcpSessionInfo) -> Void)? = nil
 
+    @State private var showingDetails = false
+
     var body: some View {
         Button {
             onSelect(session)
@@ -433,53 +431,63 @@ struct ThreadSidebarRow: View {
                                 .foregroundStyle(.secondary)
                         }
                         Text(session.displayTitle)
-                            .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                            .font(.system(size: 12, weight: isSelected || isLoading ? .semibold : .regular))
                             .lineLimit(1)
                     }
-                    HStack(spacing: 4) {
-                        if let cwd = session.cwd, !cwd.isEmpty {
-                            Image(systemName: "folder")
-                                .font(.system(size: 8))
+                    if isLoading {
+                        Text("Opening…")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tint)
+                            .accessibilityHidden(true)
+                    } else {
+                        HStack(spacing: 4) {
+                            if let cwd = session.cwd, !cwd.isEmpty {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.tertiary)
+                                Text((cwd as NSString).lastPathComponent)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            if session.cwd?.isEmpty == false, session.updated != nil {
+                                Text("·")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if let when = session.updated {
+                                Text(when, style: .relative)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        // The one usage fact cheap enough to show inline on every
+                        // row.  Absent rather than estimated when the engine has not
+                        // reported a window.
+                        if let occupancy = session.usage?.occupancyLabel {
+                            Text(occupancy)
+                                .font(.system(size: 9, design: .monospaced))
                                 .foregroundStyle(.tertiary)
-                            Text((cwd as NSString).lastPathComponent)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
-                        if session.cwd?.isEmpty == false, session.updated != nil {
-                            Text("·")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
-                        }
-                        if let when = session.updated {
-                            Text(when, style: .relative)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    // The one usage fact cheap enough to show inline on every
-                    // row.  Absent rather than estimated when the engine has not
-                    // reported a window.
-                    if let occupancy = session.usage?.occupancyLabel {
-                        Text(occupancy)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
                     }
                 }
                 if isLoading {
                     ProgressView()
                         .controlSize(.small)
-                        .scaleEffect(0.7)
-                        .frame(width: 12, height: 12)
+                        .frame(width: 14, height: 14)
+                        .accessibilityHidden(true)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
+            .frame(minHeight: 44)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                isSelected ? Color.accentColor.opacity(0.18) : Color.clear,
+                isSelected || isLoading
+                    ? Color.accentColor.opacity(0.18)
+                    : isHovered ? Color.primary.opacity(0.06) : Color.clear,
                 in: RoundedRectangle(cornerRadius: 6)
             )
             .contentShape(Rectangle())
@@ -487,13 +495,17 @@ struct ThreadSidebarRow: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         // VoiceOver needs the thread named, not just its working directory.
-        .accessibilityLabel("Thread, \(session.displayTitle)")
+        .accessibilityLabel(isLoading ? "Opening Thread, \(session.displayTitle)" : "Thread, \(session.displayTitle)")
+        .accessibilityValue(isLoading ? "Opening" : isSelected ? "Selected" : "")
         #if os(macOS)
         // The row shows only the folder's last component, so the tooltip
-        // carries the full path.  The Mac rail turns it off because its hover
-        // card already shows the folder, and both at once would stack.
+        // carries the full path.  The Mac rail shows that path in Thread Details.
         .help(showsTooltip ? (session.cwd ?? session.sessionId) : "")
+        .accessibilityAction(named: Text("Show Thread Details")) { showingDetails = true }
         .contextMenu { menu }
+        .popover(isPresented: $showingDetails, arrowEdge: .trailing) {
+            ThreadDetailsCard(session: session, projects: projects)
+        }
         #endif
     }
 
@@ -501,6 +513,7 @@ struct ThreadSidebarRow: View {
     @ViewBuilder
     private var menu: some View {
         Button("Open Thread") { onSelect(session) }
+        Button("Show Thread Details") { showingDetails = true }
 
         if let onTogglePin {
             Button(isPinned ? "Unpin Thread" : "Pin Thread") { onTogglePin(session) }
@@ -586,8 +599,8 @@ struct ThreadDetailsCard: View {
 
             detail("Session ID", session.sessionId, monospaced: true)
             detail("Folder", session.cwd ?? "Not reported", monospaced: true)
-            detail("Model", session.usage?.model ?? "Not reported")
-            detail("Provider", session.usage?.provider ?? "Not reported")
+            detail("Model", session.model ?? session.usage?.model ?? "Not reported")
+            detail("Provider", session.provider ?? session.usage?.provider ?? "Not reported")
 
             if let usage = session.usage {
                 Divider()
@@ -649,19 +662,105 @@ extension AcpSessionInfo {
     /// their relative order too, so the list never reshuffles between reloads
     /// of the same data.
     public static func newestFirst(_ sessions: [AcpSessionInfo]) -> [AcpSessionInfo] {
-        sessions.enumerated()
+        let dated = sessions.enumerated().map { entry in
+            (index: entry.offset, session: entry.element, date: entry.element.updated)
+        }
+        return dated
             .sorted { lhs, rhs in
-                switch (lhs.element.updated, rhs.element.updated) {
+                switch (lhs.date, rhs.date) {
                 case let (l?, r?):
-                    return l == r ? lhs.offset < rhs.offset : l > r
+                    return l == r ? lhs.index < rhs.index : l > r
                 case (_?, nil):
                     return true
                 case (nil, _?):
                     return false
                 case (nil, nil):
-                    return lhs.offset < rhs.offset
+                    return lhs.index < rhs.index
                 }
             }
-            .map { $0.element }
+            .map(\.session)
+    }
+}
+
+struct ThreadSidebarGroup: Identifiable, Equatable {
+    var id: String
+    var title: String
+    var sessions: [AcpSessionInfo]
+}
+
+enum ThreadSidebarGrouping {
+    static func filtered(
+        _ sessions: [AcpSessionInfo],
+        query: String,
+        projects: [SessionsClient.Project]
+    ) -> [AcpSessionInfo] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return sessions }
+
+        let matchingSessions = Set(AcpSessionInfo.filtered(sessions, query: needle).map(\.sessionId))
+        let matchingProjectIds = Set(
+            projects
+                .filter { $0.name.lowercased().contains(needle) }
+                .map(\.id)
+        )
+        return sessions.filter { session in
+            matchingSessions.contains(session.sessionId)
+                || session.projectId.map(matchingProjectIds.contains) == true
+        }
+    }
+
+    static func groups(
+        ordered sessions: [AcpSessionInfo],
+        projects: [SessionsClient.Project],
+        pinned: Set<String>,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> [ThreadSidebarGroup] {
+        var seen = Set<String>()
+        let uniqueSessions = sessions.filter { seen.insert($0.sessionId).inserted }
+        var remaining = uniqueSessions.filter { !pinned.contains($0.sessionId) }
+        var groups: [ThreadSidebarGroup] = []
+
+        let pinnedRows = uniqueSessions.filter { pinned.contains($0.sessionId) }
+        if !pinnedRows.isEmpty {
+            groups.append(ThreadSidebarGroup(id: "pinned", title: "Pinned", sessions: pinnedRows))
+        }
+
+        let sortedProjects = projects.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        for project in sortedProjects {
+            let projectRows = remaining.filter { $0.projectId == project.id }
+            guard !projectRows.isEmpty else { continue }
+            let title = project.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            groups.append(ThreadSidebarGroup(
+                id: "project:\(project.id)",
+                title: title.isEmpty ? "Unnamed Project" : title,
+                sessions: projectRows
+            ))
+            let projectSessionIds = Set(projectRows.map(\.sessionId))
+            remaining.removeAll { projectSessionIds.contains($0.sessionId) }
+        }
+
+        let otherProjectRows = remaining.filter { $0.projectId != nil }
+        if !otherProjectRows.isEmpty {
+            groups.append(ThreadSidebarGroup(
+                id: "other-projects",
+                title: "Other Projects",
+                sessions: otherProjectRows
+            ))
+            let otherSessionIds = Set(otherProjectRows.map(\.sessionId))
+            remaining.removeAll { otherSessionIds.contains($0.sessionId) }
+        }
+
+        let unassigned = remaining.filter { $0.projectId == nil }
+        for dateGroup in AcpSessionInfo.grouped(unassigned, now: now, calendar: calendar) {
+            groups.append(ThreadSidebarGroup(
+                id: "date:\(dateGroup.title)",
+                title: dateGroup.title,
+                sessions: dateGroup.sessions
+            ))
+        }
+        return groups
     }
 }

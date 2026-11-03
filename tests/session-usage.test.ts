@@ -7,6 +7,7 @@ import {
   clearUsageCache,
   contextUsedPercent,
   extractUsageFromLogText,
+  extractSessionModelMetadataFromLogText,
   outputTokensPerSecond,
   readSessionUsage,
   sessionLogPath,
@@ -118,6 +119,48 @@ describe("extractUsageFromLogText", () => {
     expect(usage?.model).toBe("MiniMax-M3");
     expect(usage?.provider).toBeUndefined();
     expect(usage?.contextWindow).toBe(1000);
+  });
+});
+
+describe("extractSessionModelMetadataFromLogText", () => {
+  it("reports request context identity without token accounting fields", () => {
+    const text = line({
+      type: "request/context",
+      seq: 1,
+      time: 1,
+      data: { provider: "meta", model: "muse-wonder-1.0" },
+    });
+
+    expect(extractUsageFromLogText(text)).not.toBeNull();
+    expect(extractSessionModelMetadataFromLogText(text)).toEqual({
+      provider: "meta",
+      model: "muse-wonder-1.0",
+    });
+  });
+
+  it("keeps only exact reported identity and does not infer missing values", () => {
+    expect(extractSessionModelMetadataFromLogText(line({
+      type: "request/context",
+      data: { provider: "  ", contextWindow: 1_000_000 },
+    }))).toBeNull();
+    expect(extractSessionModelMetadataFromLogText(line({
+      type: "request/context",
+      data: { model: "muse-spark-1.3" },
+    }))).toEqual({ model: "muse-spark-1.3" });
+    expect(extractSessionModelMetadataFromLogText(line({ type: "user/message", data: {} }))).toBeNull();
+  });
+
+  it("uses the newest reported request context, including beyond the tail window", () => {
+    const parts: string[] = [contextLine("meta", "muse-wonder-1.0", 1000)];
+    for (let i = 0; i < 5000; i += 1) {
+      parts.push(line({ type: "tool/result", seq: i + 10, time: i + 10, data: { pad: "x".repeat(20) } }));
+    }
+    parts.push(line({ type: "request/context", data: { provider: "meta", model: "muse-spark-1.3" } }));
+
+    expect(extractSessionModelMetadataFromLogText(parts.join("\n"))).toEqual({
+      provider: "meta",
+      model: "muse-spark-1.3",
+    });
   });
 });
 

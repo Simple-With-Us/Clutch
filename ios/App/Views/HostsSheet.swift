@@ -6,7 +6,12 @@ struct HostsSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
+    @AppStorage(MacBusySendMode.storageKey) private var busySendModeRawValue = MacBusySendMode.defaultMode.rawValue
     @State private var isAddingHost = false
+
+    private var busySendMode: MacBusySendMode {
+        MacBusySendMode(rawValue: busySendModeRawValue) ?? .queue
+    }
 
     var body: some View {
         NavigationStack {
@@ -50,6 +55,25 @@ struct HostsSheet: View {
                     }
                     .pickerStyle(.segmented)
                 }
+
+                #if os(macOS)
+                Section("Messages While Working") {
+                    Picker("Default Action", selection: $busySendModeRawValue) {
+                        Text("Queue").tag(MacBusySendMode.queue.rawValue)
+                        Text("Steer").tag(MacBusySendMode.steer.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(busySendMode.explanation)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(Copy.gap(
+                        "This sets the default action while a turn is running.",
+                        "Choose another action for an individual message from the composer menu."
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+                #endif
 
                 InfisicalSettingsSection(host: store.activeHost)
 

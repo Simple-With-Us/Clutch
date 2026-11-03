@@ -108,7 +108,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     { id: "model", options: [{ name: "muse-" + phase, value: "wire-" + phase }] },
     { id: "reasoningEffort", options: [{ value: phase === "new" ? "high" : "low" }] },
   ];
-  const result = method === "initialize" ? {} : { sessionId: "user-session", configOptions };
+  const result = method === "initialize" ? { authMethods: [
+    { id: "valid-login", name: 42, description: null }, { id: 42, name: "Invalid id" },
+  ] } : { sessionId: "user-session", configOptions };
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
 });
 `);
@@ -130,6 +132,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       expect((await muse()).effortLevels).toEqual([]);
       expect(existsSync(marker)).toBe(false);
       await bridge.initialize();
+      expect(bridge.authMethods()).toEqual([{ id: "valid-login" }]);
       await bridge.newSession(dir);
       expect((await muse()).models).toEqual([{ id: "muse-new", label: "muse-new", value: "wire-new" }]);
       expect((await muse()).effortLevels).toEqual(["high"]);
