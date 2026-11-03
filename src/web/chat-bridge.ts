@@ -56,7 +56,7 @@ import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
-import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
+import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { attachMuseErrorDiagnostics, museErrorDiagnostics } from "./muse-error-diagnostics.ts";
 import { createTurnDiagnostics, type TurnDiagnosticHandle, type TurnOutcome } from "./turn-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
@@ -960,6 +960,7 @@ export class Bridge implements MuseAuthBridge {
   private retiringChild: ChildProcess | null = null;
   private sessionModes = new Map<string, z.infer<typeof SessionOptionsResultSchema>["modes"]>();
   private baseLauncher: Launcher;
+  private baseEnv: NodeJS.ProcessEnv;
 
   constructor(
     readonly engine: Engine,
@@ -967,18 +968,21 @@ export class Bridge implements MuseAuthBridge {
     private launcher: Launcher = LAUNCHERS[engine],
   ) {
     this.baseLauncher = { command: launcher.command, args: [...launcher.args] };
+    this.baseEnv = { ...env };
   }
 
   /** Reconfigure only after the caller has checked that no other Muse turn is active. */
-  matchesMuseLaunchOptions(options: MuseLaunchOptions): boolean {
-    return this.museLaunchOptions !== null && sameMuseLaunchOptions(this.museLaunchOptions, options);
+  matchesMuseLaunchOptions(options: MuseLaunchOptions | null): boolean {
+    return this.museLaunchOptions === null || options === null
+      ? this.museLaunchOptions === options
+      : sameMuseLaunchOptions(this.museLaunchOptions, options);
   }
 
-  configureMuseLaunch(options: MuseLaunchOptions): Promise<boolean> {
+  configureMuseLaunch(options: MuseLaunchOptions | null): Promise<boolean> {
     if (this.engine !== "muse") return Promise.resolve(false);
-    if (this.env.MUSE_CODE_ACP_BACKEND === "adapter") return Promise.reject(new MuseSettingsError("native"));
+    if (options && this.baseEnv.MUSE_CODE_ACP_BACKEND === "adapter") return Promise.reject(new MuseSettingsError("native"));
     if (this.reconfiguration) return Promise.reject(new MuseSettingsError("busy"));
-    if (this.museLaunchOptions && sameMuseLaunchOptions(this.museLaunchOptions, options)) return Promise.resolve(false);
+    if (this.matchesMuseLaunchOptions(options)) return Promise.resolve(false);
     if (this.pending.size > 0) return Promise.reject(new MuseSettingsError("busy"));
     const configure = async (): Promise<boolean> => {
       const child = this.child;
@@ -995,9 +999,9 @@ export class Bridge implements MuseAuthBridge {
           this.retiringChild = null;
         }
       }
-      this.launcher = { command: this.baseLauncher.command, args: [...this.baseLauncher.args, ...museLaunchArguments(options)] };
-      this.env = { ...this.env, MUSE_CODE_ACP_REQUIRE_NATIVE: "1" };
-      this.museLaunchOptions = { ...options };
+      this.launcher = { command: this.baseLauncher.command, args: [...this.baseLauncher.args, ...(options ? museLaunchArguments(options) : [])] };
+      this.env = options ? { ...this.baseEnv, MUSE_CODE_ACP_REQUIRE_NATIVE: "1" } : { ...this.baseEnv };
+      this.museLaunchOptions = options ? { ...options } : null;
       this.sessionModes.clear();
       this.sessionModelMetadata.clear();
       return true;
@@ -1019,6 +1023,10 @@ export class Bridge implements MuseAuthBridge {
     } catch {
       throw new MuseSettingsError("mode");
     }
+  }
+
+  hasMuseApprovalModes(sessionId: string): boolean {
+    return this.sessionModes.has(sessionId);
   }
 
   /** Options from the latest successful user session/new or session/load. */
@@ -2884,12 +2892,12 @@ async function main(): Promise<void> {
           }
         }
         const bridge = bridgeFor(engine);
-        if (engine === "muse" && museOptions) {
+        if (engine === "muse") {
           if ([...sessions.values()].some((other) => other !== active && other.engine === "muse" && other.busy)) {
             // An unchanged policy can share the host; a different policy must not interrupt another turn.
-            if (!bridge.matchesMuseLaunchOptions(museOptions)) throw new MuseSettingsError("busy");
+            if (!bridge.matchesMuseLaunchOptions(museOptions ?? null)) throw new MuseSettingsError("busy");
           }
-          if (await bridge.configureMuseLaunch(museOptions)) {
+          if (await bridge.configureMuseLaunch(museOptions ?? null)) {
             for (const other of sessions.values()) if (other.engine === "muse") other.bridgeSessionId = "";
           }
         }
@@ -2916,10 +2924,13 @@ async function main(): Promise<void> {
         }
         if (engine === "muse" && museOptions && active.bridgeSessionId) {
           await bridge.applyMuseApprovalMode(active.bridgeSessionId, museOptions.yolo);
-          if (!active.model && museOptions.contributorMode) active.model = contributorDefaultModel(active.modelMetadata?.model);
+          if (!active.model) active.model = contributorDefaultModel(active.modelMetadata?.model);
+        } else if (engine === "muse" && active.bridgeSessionId && bridge.hasMuseApprovalModes(active.bridgeSessionId)) {
+          // Legacy clients did not opt into YOLO for this turn.
+          await bridge.applyMuseApprovalMode(active.bridgeSessionId, false);
         }
         if (engine === "muse" && active.effort === "max" &&
-            (active.model ?? active.modelMetadata?.model)?.endsWith("-contributor")) {
+            museContributorModelId(active.model ?? active.modelMetadata?.model)) {
           throw new MuseSettingsError("effort");
         }
         // The model's and the effort's choices land before the turn, so the
