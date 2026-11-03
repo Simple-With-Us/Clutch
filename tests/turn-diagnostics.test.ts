@@ -25,6 +25,22 @@ afterEach(async () => {
 });
 
 describe("turn diagnostics", () => {
+  it("keeps recovered step failures in local events without marking a successful span as failed", async () => {
+    const directory = await makeDirectory();
+    const diagnostics = createTurnDiagnostics({ directory });
+    const turn = diagnostics.start({ engine: "muse" });
+    turn.record("steer", { outcome: "error", errorCategory: "timeout", errorCode: -32603 });
+    turn.finish("success");
+    await diagnostics.flush();
+    const span = JSON.parse((await readFile(join(directory, "turn-diagnostics.outbox.jsonl"), "utf8")).trim()) as Record<string, unknown>;
+    expect(span.outcome).toBe("success");
+    expect(span).not.toHaveProperty("errorCategory");
+    expect(span).not.toHaveProperty("errorCode");
+    const rows = (await readFile(join(directory, "turn-diagnostics.jsonl"), "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows.find((row) => row.kind === "steer")).toMatchObject({ errorCode: -32603, errorCategory: "timeout" });
+    expect(rows.at(-1)).not.toHaveProperty("errorCode");
+  });
+
   it("coalesces streamed progress while retaining every reported character count", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-11-03T10:00:00Z"));

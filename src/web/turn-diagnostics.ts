@@ -633,7 +633,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
           const terminalCategory = clean.errorCategory ?? errorCategory;
           const terminalCode = clean.errorCode ?? errorCode;
           writeEvent("terminal", {
-            ...clean, outcome: safeOutcome, durationMs,
+            ...(clean.phase ? { phase: clean.phase } : {}), outcome: safeOutcome, durationMs,
             ...(safeOutcome === "error" && terminalCategory ? { errorCategory: terminalCategory } : {}),
             ...(safeOutcome === "error" && terminalCode !== undefined ? { errorCode: terminalCode } : {}),
           });
@@ -643,8 +643,8 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
             outcome: safeOutcome,
             ...(model ? { model } : {}), ...(provider ? { provider } : {}),
             ...(sessionId ? { sessionId } : {}),
-            ...(errorCategory ? { errorCategory } : clean.errorCategory ? { errorCategory: clean.errorCategory } : {}),
-            ...(errorCode !== undefined ? { errorCode } : clean.errorCode !== undefined ? { errorCode: clean.errorCode } : {}),
+            ...(safeOutcome === "error" && terminalCategory ? { errorCategory: terminalCategory } : {}),
+            ...(safeOutcome === "error" && terminalCode !== undefined ? { errorCode: terminalCode } : {}),
             ...(toolStatus ? { toolStatus } : {}),
             ...(toolName ? { toolName } : {}),
             ...(toolType ? { toolType } : {}),
