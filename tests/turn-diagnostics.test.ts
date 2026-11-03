@@ -251,6 +251,157 @@ describe("turn diagnostics", () => {
     expect(body).not.toContain("private args");
   });
 
+  it("exports reported engine context without creating billable token usage", async () => {
+    const directory = await makeDirectory();
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => acceptedResponse(init));
+    const diagnostics = createTurnDiagnostics({ directory, endpoint: "https://telemetry.invalid/v1/traces",
+      authorization: "Bearer caller-supplied", fetch: fetcher });
+    const turn = diagnostics.start({ engine: "muse" });
+    turn.record("context", { basis: "engine-context", totalTokens: 125, contextWindow: 100, prompt: "private prompt" });
+    turn.finish("success");
+    await diagnostics.flush();
+    const body = String(fetcher.mock.calls[0]?.[1]?.body);
+    expect(body).toContain('"key":"clutch.context.basis","value":{"stringValue":"engine-context"}');
+    expect(body).toContain('"key":"context.tokens","value":{"intValue":"125"}');
+    expect(body).toContain('"key":"context.utilization_pct","value":{"intValue":"125"}');
+    expect(body).not.toContain("gen_ai.usage.");
+    expect(body).not.toContain("private prompt");
+    expect(await diagnostics.status()).toMatchObject({ pending: 0 });
+  });
+
+  it("records session snapshots as nonbillable custom metrics and preserves measured zero", async () => {
+    const directory = await makeDirectory();
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => acceptedResponse(init));
+    const diagnostics = createTurnDiagnostics({
+      directory,
+      endpoint: "https://telemetry.invalid/v1/traces",
+      authorization: "Bearer caller-supplied",
+      fetch: fetcher,
+    });
+    const turn = diagnostics.start({ engine: "muse", sessionId: "7ef4d9e2-c220-4abc-9e12-9a1ac93d2310" });
+    turn.record("metrics", {
+      snapshotBasis: "session-snapshot",
+      totalsComplete: false,
+      recordedInputTokens: 0,
+      recordedOutputTokens: 17,
+      cachedTokens: 0,
+      responseTokensPerSecond: 2.5,
+      completionDurationMs: 1200,
+      exactPerTurn: true,
+      inputTokens: 999,
+      outputTokens: 999,
+      prompt: "private prompt text",
+      rawUsage: { secret: "private payload" },
+    });
+    turn.finish("success");
+    await diagnostics.flush();
+
+    const rows = (await readFile(join(directory, "turn-diagnostics.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const metrics = rows.find((row) => row.kind === "metrics");
+    expect(metrics).toMatchObject({
+      snapshotBasis: "session-snapshot",
+      totalsComplete: false,
+      recordedInputTokens: 0,
+      recordedOutputTokens: 17,
+      cachedTokens: 0,
+      responseTokensPerSecond: 2.5,
+      completionDurationMs: 1200,
+    });
+    expect(metrics).not.toHaveProperty("exactPerTurn");
+    expect(metrics).not.toHaveProperty("inputTokens");
+    expect(JSON.stringify(rows)).not.toContain("private prompt text");
+    expect(JSON.stringify(rows)).not.toContain("private payload");
+
+    const spans = fetcher.mock.calls.flatMap((call) => {
+      const body = JSON.parse(String(call[1]?.body)) as {
+        resourceSpans: Array<{ scopeSpans: Array<{ spans: Array<{ name: string; attributes: Array<{ key: string; value: Record<string, unknown> }> }> }> }>;
+      };
+      return body.resourceSpans.flatMap((resource) => resource.scopeSpans.flatMap((scope) => scope.spans));
+    });
+    expect(spans).toHaveLength(2);
+    const snapshotSpan = spans.find((span) => span.name === "session.snapshot");
+    expect(snapshotSpan).toBeDefined();
+    const attrs = snapshotSpan?.attributes ?? [];
+    const values = new Map(attrs.map(({ key, value }) => [key, value]));
+    expect(values.get("clutch.metrics.basis")).toEqual({ stringValue: "session-snapshot" });
+    expect(values.get("clutch.metrics.totals_complete")).toEqual({ boolValue: false });
+    expect(values.get("clutch.session.input_tokens")).toEqual({ intValue: "0" });
+    expect(values.get("clutch.session.output_tokens")).toEqual({ intValue: "17" });
+    expect(values.get("clutch.session.cached_tokens")).toEqual({ intValue: "0" });
+    expect(values.get("clutch.response.tokens_per_second")).toEqual({ doubleValue: 2.5 });
+    expect(values.get("clutch.response.duration_ms")).toEqual({ intValue: "1200" });
+    expect(attrs.some(({ key }) => key.startsWith("gen_ai."))).toBe(false);
+    expect(attrs.some(({ key }) => key.startsWith("gen_ai.usage."))).toBe(false);
+    expect(JSON.stringify(attrs)).not.toContain("exactPerTurn");
+    expect(JSON.stringify(attrs)).not.toContain("private prompt text");
+  });
+
+  it("drops malformed snapshot fields and refuses records without the session-snapshot basis", async () => {
+    const directory = await makeDirectory();
+    const diagnostics = createTurnDiagnostics({ directory });
+    const turn = diagnostics.start({ engine: "muse" });
+    turn.record("metrics", { snapshotBasis: "latest-response", totalsComplete: true, recordedInputTokens: 5 });
+    turn.record("metrics", {
+      snapshotBasis: "session-snapshot",
+      totalsComplete: true,
+      recordedInputTokens: -1,
+      recordedOutputTokens: 1_000_000_001,
+      cachedTokens: 2,
+      responseTokensPerSecond: Number.POSITIVE_INFINITY,
+      completionDurationMs: -10,
+      summary: "do not store this text",
+      error: "do not store this error",
+    });
+    turn.finish("success");
+    await diagnostics.flush();
+
+    const rows = (await readFile(join(directory, "turn-diagnostics.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const metrics = rows.filter((row) => row.kind === "metrics");
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0]).toMatchObject({ snapshotBasis: "session-snapshot", totalsComplete: true, cachedTokens: 2 });
+    expect(metrics[0]).not.toHaveProperty("recordedInputTokens");
+    expect(metrics[0]).not.toHaveProperty("recordedOutputTokens");
+    expect(metrics[0]).not.toHaveProperty("responseTokensPerSecond");
+    expect(metrics[0]).not.toHaveProperty("completionDurationMs");
+    expect(JSON.stringify(rows)).not.toContain("do not store");
+  });
+
+  it("records only allowlisted compaction status, never compaction identity or content", async () => {
+    const directory = await makeDirectory();
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => acceptedResponse(init));
+    const diagnostics = createTurnDiagnostics({
+      directory,
+      endpoint: "https://telemetry.invalid/v1/traces",
+      authorization: "Bearer caller-supplied",
+      fetch: fetcher,
+    });
+    const turn = diagnostics.start({ engine: "muse" });
+    turn.record("compaction", {
+      status: "completed",
+      compactionId: "private-compaction-id",
+      summary: [{ type: "text", text: "private compacted summary" }],
+      error: "private compaction error",
+      command: "/compact",
+      prompt: "private prompt",
+    });
+    turn.record("compaction", { status: "unexpected secret status" });
+    turn.finish("success");
+    await diagnostics.flush();
+
+    const rows = (await readFile(join(directory, "turn-diagnostics.jsonl"), "utf8"))
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows.filter((row) => row.kind === "compaction").map((row) => row.compactionStatus)).toEqual(["completed", "unknown"]);
+    const body = String(fetcher.mock.calls[0]?.[1]?.body);
+    expect(body).toContain('"key":"clutch.compaction.status","value":{"stringValue":"unknown"}');
+    expect(body).not.toContain("private-compaction-id");
+    expect(body).not.toContain("private compacted summary");
+    expect(body).not.toContain("private compaction error");
+    expect(body).not.toContain("/compact");
+    expect(body).not.toContain("private prompt");
+  });
+
   it("reports bounded pending state and backs off failed transport without retrying each event", async () => {
     const directory = await makeDirectory();
     const fetcher = vi.fn(async () => { throw new Error("private network error"); });

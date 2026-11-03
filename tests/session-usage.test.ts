@@ -202,6 +202,11 @@ describe("outputTokensPerSecond", () => {
 });
 
 describe("contextUsedPercent", () => {
+  it("uses explicit engine occupancy without treating cumulative totals as context", () => {
+    expect(contextUsedPercent({ basis: "session-totals", totalTokens: 999_999, contextWindow: 100 })).toBeUndefined();
+    expect(contextUsedPercent({ basis: "session-totals", totalTokens: 999_999, contextUsedTokens: 0, contextWindow: 100 })).toBe(0);
+    expect(contextUsedPercent({ basis: "session-totals", totalTokens: 999_999, contextUsedTokens: 125, contextWindow: 100 })).toBe(125);
+  });
   it("divides occupancy by the window the engine reported", () => {
     expect(contextUsedPercent({ totalTokens: 610_000, contextWindow: 1_000_000 })).toBeCloseTo(61);
     expect(contextUsedPercent({ totalTokens: 262_144, contextWindow: 262_144 })).toBeCloseTo(100);
