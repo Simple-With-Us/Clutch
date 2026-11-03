@@ -43,6 +43,35 @@ describe("per-host service-token bootstrap", () => {
     expect(readInfisicalCredentials({ CLUTCH_HOME: home })).toBeUndefined();
   });
 
+  it("rejects config that fails the strict credential-file schema", () => {
+    for (const invalid of [
+      null,
+      [],
+      { projectId: PROJECT },
+      { projectId: 42, serviceToken: READ },
+      { projectId: PROJECT, serviceToken: READ, clientSecret: "legacy" },
+    ]) {
+      writeRaw(JSON.stringify(invalid));
+      expect(readInfisicalCredentials({ CLUTCH_HOME: home })).toBeUndefined();
+    }
+  });
+
+  it("retains valid read access and clears malformed optional write tokens", () => {
+    for (const writeServiceToken of [42, "not-a-service-token", "st.invalid token"]) {
+      writeRaw(JSON.stringify({ projectId: PROJECT, serviceToken: READ, writeServiceToken }));
+      expect(readInfisicalCredentials({ CLUTCH_HOME: home })).toEqual({
+        projectId: PROJECT,
+        readToken: READ,
+        writeToken: "",
+      });
+      expect(resolveInfisicalCredentials({ projectId: PROJECT }, { CLUTCH_HOME: home })).toEqual({
+        projectId: PROJECT,
+        readToken: READ,
+        writeToken: "",
+      });
+    }
+  });
+
   it("refuses group/world-readable files and symlinks, and accepts private files", () => {
     writeRaw(JSON.stringify({ projectId: PROJECT, serviceToken: READ }), 0o644);
     expect(readInfisicalCredentials({ CLUTCH_HOME: home })).toBeUndefined();

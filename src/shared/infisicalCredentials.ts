@@ -12,6 +12,7 @@
 import { chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { z } from "zod";
 
 export interface InfisicalCredentials {
   projectId: string;
@@ -21,6 +22,14 @@ export interface InfisicalCredentials {
 
 const CREDENTIALS_FILE_NAME = "infisical.json";
 const LOG_PREFIX = "[infisical-credentials]";
+const ServiceTokenSchema = z.string().trim().refine(isInfisicalServiceToken);
+const CredentialsFileSchema = z.object({
+  projectId: z.string().optional(),
+  serviceToken: ServiceTokenSchema,
+  // The write token is an independent capability. A malformed optional value
+  // must disable writes without discarding a valid read token.
+  writeServiceToken: ServiceTokenSchema.optional().catch(undefined),
+}).strict();
 
 export interface CredentialsEnv {
   CLUTCH_HOME?: string;
@@ -50,16 +59,13 @@ function parseCredentials(raw: string): InfisicalCredentials | undefined {
   } catch {
     return undefined;
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-  const candidate = parsed as Record<string, unknown>;
-  const read = (key: string): string => typeof candidate[key] === "string" ? (candidate[key] as string).trim() : "";
+  const result = CredentialsFileSchema.safeParse(parsed);
+  if (!result.success) return undefined;
   const credentials = {
-    projectId: read("projectId"),
-    readToken: read("serviceToken"),
-    writeToken: read("writeServiceToken"),
+    projectId: result.data.projectId?.trim() ?? "",
+    readToken: result.data.serviceToken,
+    writeToken: result.data.writeServiceToken ?? "",
   };
-  if (!isInfisicalServiceToken(credentials.readToken)) return undefined;
-  if (credentials.writeToken && !isInfisicalServiceToken(credentials.writeToken)) return undefined;
   return credentials;
 }
 
