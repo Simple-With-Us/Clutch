@@ -132,8 +132,8 @@ public struct SessionsClient {
             sessionId: payload.sessionId,
             cwd: payload.cwd,
             title: payload.title,
-            model: payload.model,
             provider: payload.provider,
+            model: payload.model,
             usage: payload.usage
         )
     }
@@ -145,9 +145,10 @@ public struct SessionsClient {
         let model = nonempty(details.model) ?? nonempty(details.usage?.model)
             ?? nonempty(summary.model) ?? nonempty(summary.usage?.model)
         var usage = details.usage ?? summary.usage
-        if usage != nil {
-            usage?.provider = nonempty(usage?.provider) ?? provider
-            usage?.model = nonempty(usage?.model) ?? model
+        if var usageValue = usage {
+            usageValue.provider = nonempty(usageValue.provider) ?? provider
+            usageValue.model = nonempty(usageValue.model) ?? model
+            usage = usageValue
         }
         return AcpSessionInfo(
             sessionId: summary.sessionId,
