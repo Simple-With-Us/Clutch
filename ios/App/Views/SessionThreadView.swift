@@ -114,7 +114,7 @@ final class SessionThreadModel {
     /// default would silently switch it.
     func loadCatalog() async {
         guard catalog == nil else { return }
-        catalog = try? await EngineCatalogClient(host: host).fetch()
+        catalog = try? await EngineCatalogClient(host: host).fetch(engine: engine)
     }
 
     func load() async {

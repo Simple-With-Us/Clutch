@@ -375,13 +375,15 @@ public struct ChatView: View {
     /// The catalog's first row is only what the picker shows by default; it
     /// is not sent with a turn unless the owner picked it, because a
     /// resumed thread keeps the model and effort it was created with.
-    private func loadCatalog(expectedGeneration: UUID? = nil) async {
+    private func loadCatalog(expectedGeneration: UUID? = nil, for requestedEngine: ChatEngine? = nil) async {
         guard let host = activeHost else { return }
-        let loaded = try? await EngineCatalogClient(host: host).fetch()
+        let targetEngine = requestedEngine ?? engine
+        let loaded = try? await EngineCatalogClient(host: host).fetch(engine: targetEngine.sidecarId)
         guard activeHost?.id == host.id,
+              engine == targetEngine,
               expectedGeneration == nil || turnGeneration == expectedGeneration else { return }
-        catalog = loaded
         guard let loaded else { return }
+        catalog = loaded
         // A choice that the new host does not offer is dropped rather than
         // sent and refused.
         let descriptor = loaded.descriptor(engine.sidecarId)
@@ -587,6 +589,9 @@ public struct ChatView: View {
         }
         .onChange(of: activeHost?.id) { _, _ in
             cancelSessionLoad()
+            catalog = nil
+            selectedModel = nil
+            selectedEffort = nil
             // A different host means a different engine catalog and a
             // different thread list; both are re-read by prepare(), and the
             // stale list goes first so the rail never shows another
@@ -2045,24 +2050,29 @@ public struct ChatView: View {
         pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
         // The catalog can take a while on a cold server, so the thread list
         // and the health check do not wait for it.
-        async let catalogTask = loadCatalog(expectedGeneration: generation)
         await checkSidecar()
         guard turnGeneration == generation, activeHost?.id == host.id else { return }
-        // The engine the owner picked wins, so a relaunch returns to the
-        // thread the owner was working in instead of an empty tab.  Each
-        // surface keeps its own engine: the agent chat's choice never
-        // overwrites the workspace's.
-        if let preferred = preferredEngine {
-            engine = preferred
-        } else if let saved = isWorkspace ? MacEngineStore.load() : MacAgentEngineStore.load() {
-            engine = saved
+        // Select a known window or restored-thread engine before requesting
+        // its catalog, so an unrelated cold engine probe cannot delay it.
+        // An explicitly supplied engine still has first priority.
+        let requestEngine = isWorkspace && !didConsumeInitialThreadRequest
+            ? initialThreadRequest.flatMap { ChatEngine(rawValue: $0.engineID) }
+            : nil
+        let restoredEngine = isWorkspace
+            ? MacMcodeStore.load(for: host).flatMap { ChatEngine(rawValue: $0.engine ?? "mcode") }
+            : nil
+        let storedEngine = isWorkspace ? MacEngineStore.load() : MacAgentEngineStore.load()
+        if let target = preferredEngine ?? requestEngine ?? restoredEngine ?? storedEngine {
+            engine = target
         }
+        async let catalogTask = loadCatalog(expectedGeneration: generation, for: engine)
         _ = await catalogTask
         guard turnGeneration == generation, activeHost?.id == host.id else { return }
         // The host's catalog decides which engines this Mac can offer: a
         // server with Muse Code but no MiniMax Code shows Muse Code only.
         if !offeredEngines.contains(where: { $0 == engine }), let first = offeredEngines.first {
             engine = first
+            await loadCatalog(expectedGeneration: generation, for: first)
         }
         if isWorkspace {
             if let request = initialThreadRequest {
@@ -2073,6 +2083,7 @@ public struct ChatView: View {
                 didConsumeInitialThreadRequest = true
                 if let requestedEngine = ChatEngine(rawValue: request.engineID), offeredEngines.contains(requestedEngine) {
                     engine = requestedEngine
+                    await loadCatalog(expectedGeneration: generation, for: requestedEngine)
                 }
                 codeCwd = request.cwd
                 phase = .ready
@@ -2091,6 +2102,7 @@ public struct ChatView: View {
                 let savedEngine = ChatEngine(rawValue: saved.engine ?? "mcode") ?? .mcode
                 if offeredEngines.contains(savedEngine) {
                     engine = savedEngine
+                    await loadCatalog(expectedGeneration: generation, for: savedEngine)
                     codeCwd = saved.cwd
                     phase = .ready
                     await loadPreview(AcpSessionInfo(

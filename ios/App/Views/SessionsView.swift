@@ -89,6 +89,7 @@ public struct SessionsView: View {
     @State private var searchText = ""
     @State private var pinnedIds: Set<String> = []
     @State private var catalog: EngineCatalog?
+    @State private var catalogRequestGeneration = 0
     /// True until the catalog has landed.
     ///
     /// A host that serves no catalog still answers the thread list, so a
@@ -108,6 +109,8 @@ public struct SessionsView: View {
             detail
         }
         .task(id: host.id) {
+            catalogRequestGeneration += 1
+            catalog = nil
             // A different server means a different thread list, and the model
             // holds the host it was built for, so it is rebuilt rather than
             // reused: otherwise the list keeps showing the previous host's
@@ -120,10 +123,9 @@ public struct SessionsView: View {
             // wait on the list.
             model.engine = engine
             isSettling = true
-            async let catalogTask = EngineCatalogClient(host: host).fetch()
+            async let catalogTask = refreshCatalog(for: engine)
             await model.load()
-            catalog = try? await catalogTask
-            isSettling = false
+            await catalogTask
             // The catalog says which engines this host runs, so the list
             // follows it: an engine that is not installed here cannot list
             // its threads.  The catalog stays authoritative whenever one is
@@ -142,6 +144,7 @@ public struct SessionsView: View {
             if let wanted, wanted != engine {
                 engine = wanted
                 model.engine = wanted
+                await refreshCatalog(for: wanted)
                 await model.refresh()
             }
         }
@@ -298,7 +301,24 @@ public struct SessionsView: View {
         engine = id
         model.engine = id
         selectedId = nil
-        Task { await model.reloadForEngine() }
+        Task {
+            async let catalogTask = refreshCatalog(for: id)
+            await model.reloadForEngine()
+            await catalogTask
+        }
+    }
+
+    @MainActor
+    private func refreshCatalog(for requestedEngine: String) async {
+        catalogRequestGeneration += 1
+        let ticket = catalogRequestGeneration
+        let requestedHost = host
+        let loaded = try? await EngineCatalogClient(host: requestedHost).fetch(engine: requestedEngine)
+        guard ticket == catalogRequestGeneration,
+              requestedHost.id == host.id,
+              engine == requestedEngine else { return }
+        if let loaded { catalog = loaded }
+        isSettling = false
     }
 
     /// The engines on this host whose threads can be listed.

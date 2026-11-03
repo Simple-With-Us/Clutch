@@ -1954,13 +1954,14 @@ async function main(): Promise<void> {
   }
 
   /** The catalog for this host, with the real launchers wired in. */
-  async function catalog(): Promise<EngineCatalog> {
+  async function catalog(selectedEngine?: Engine): Promise<EngineCatalog> {
     const availability = await Promise.all(ENGINE_ORDER.map(async (engine) => [engine, await engineAvailable(engine)] as const));
     return engineCatalog({
       launchers: LAUNCHERS,
       available: Object.fromEntries(availability) as Record<Engine, boolean>,
       probeCwd: process.env.HOME ?? "/tmp",
       readMuseSessionOptions: () => bridges.get("muse")?.catalogOptions() ?? null,
+      probeScope: selectedEngine === undefined ? "full" : selectedEngine === "mcode" ? "mcode" : "passive",
     });
   }
 
@@ -2124,7 +2125,12 @@ async function main(): Promise<void> {
     // model picker reads this instead of shipping a list that goes stale.
     if (req.method === "GET" && url.pathname === "/clutch/v1/engines") {
       try {
-        const value = await catalog();
+        const requestedEngine = url.searchParams.get("engine");
+        if (requestedEngine !== null && !isEngine(requestedEngine)) {
+          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "unknown engine" }));
+          return;
+        }
+        const value = await catalog(requestedEngine ?? undefined);
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify(value));
       } catch (err) {
         log(`engine catalog failed message=${(err as Error).message.slice(0, 120)}`);
@@ -2492,7 +2498,7 @@ async function main(): Promise<void> {
         } else if (session.model || session.effort) {
           // A resumed thread keeps the model it was created with unless the
           // client asks for another one, so the choices land after the load.
-          await applySessionChoices(bridge, session, await catalog());
+          await applySessionChoices(bridge, session, await catalog(session.engine));
         }
         session.busy = false;
         session.stream = null;
@@ -3030,7 +3036,7 @@ async function main(): Promise<void> {
             try {
               const provider = await viaHost((client) => hostProviderFor(client, engine), true);
               if (provider) {
-                const catalogValue = await catalog();
+                const catalogValue = await catalog(engine);
                 const wanted = session.model
                   ? resolveModelValue(catalogValue, engine, session.model)
                   : null;
@@ -3117,7 +3123,7 @@ async function main(): Promise<void> {
         // The model's and the effort's choices land before the turn, so the
         // first prompt of a new session already runs on the picked model.
         if (active.model || active.effort) {
-          const applied = await applySessionChoices(bridge, active, await catalog());
+          const applied = await applySessionChoices(bridge, active, await catalog(active.engine));
           log(`chat choices session=${chatId} model=${applied.modelApplied} effort=${applied.effortApplied}`);
           if (engine === "muse" && active.model && !applied.modelApplied) throw new MuseSettingsError("model");
           if (engine === "muse" && active.effort && !applied.effortApplied) throw new MuseSettingsError("effort");
