@@ -382,8 +382,8 @@ public struct ChatView: View {
         guard activeHost?.id == host.id,
               engine == targetEngine,
               expectedGeneration == nil || turnGeneration == expectedGeneration else { return }
-        catalog = loaded
         guard let loaded else { return }
+        catalog = loaded
         // A choice that the new host does not offer is dropped rather than
         // sent and refused.
         let descriptor = loaded.descriptor(engine.sidecarId)
@@ -589,6 +589,9 @@ public struct ChatView: View {
         }
         .onChange(of: activeHost?.id) { _, _ in
             cancelSessionLoad()
+            catalog = nil
+            selectedModel = nil
+            selectedEffort = nil
             // A different host means a different engine catalog and a
             // different thread list; both are re-read by prepare(), and the
             // stale list goes first so the rail never shows another
