@@ -23,6 +23,13 @@ case "$BACKEND" in
   *) die "MUSE_CODE_ACP_BACKEND must be auto, native, or adapter" ;;
 esac
 
+# Host launch settings are native ACP options; the compatibility adapter must
+# never accept a turn after silently discarding them.
+REQUIRE_NATIVE="${MUSE_CODE_ACP_REQUIRE_NATIVE:-0}"
+if [ "$REQUIRE_NATIVE" = "1" ] && [ "$BACKEND" = "adapter" ]; then
+  die "YOLO and Contributor Mode settings require native Muse ACP"
+fi
+
 # 1. The adapter.  An explicit MUSE_CODE_ACP_BIN wins, then PATH, then the
 #    usual global-install prefixes (a GUI app's PATH is often thinner than an
 #    interactive shell's).
@@ -154,7 +161,7 @@ if [ "$BACKEND" != "adapter" ]; then
     export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
     exec "$MUSE_HOST" acp "$@"
   fi
-  if [ "$BACKEND" = "native" ]; then
+  if [ "$BACKEND" = "native" ] || [ "$REQUIRE_NATIVE" = "1" ]; then
     die "native ACP is unavailable — update Muse Code, set MUSE_EXPERIMENTAL_ACP=on, or use MUSE_CODE_ACP_BACKEND=adapter"
   fi
 fi
