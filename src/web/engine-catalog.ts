@@ -181,12 +181,34 @@ interface MuseCatalogRow {
   reasoning_effort_variants?: unknown;
 }
 
+const MUSE_CONTRIBUTOR_MODEL_IDS = new Set([
+  "muse-spark-1.3-contributor",
+  "muse-wonder-1.0-contributor",
+  "muse-wonder-full-1.0-contributor",
+]);
+
+const MUSE_MODEL_LABELS: Record<string, string> = {
+  "muse-spark-1.3": "Muse Spark 1.3",
+  "muse-spark-1.3-contributor": "Muse Spark 1.3 Contributor",
+  "muse-wonder-1.0": "Muse Wonder 1.0",
+  "muse-wonder-1.0-contributor": "Muse Wonder 1.0 Contributor",
+  "muse-wonder-full-1.0": "Muse Wonder Full 1.0",
+  "muse-wonder-full-1.0-contributor": "Muse Wonder Full 1.0 Contributor",
+};
+
+function museModelLabel(id: string, providerLabel: unknown): string {
+  const knownLabel = MUSE_MODEL_LABELS[id];
+  if (knownLabel) return knownLabel;
+  if (typeof providerLabel === "string" && providerLabel.length > 0 && providerLabel !== id) return providerLabel;
+  return id.replace(/^muse-/, "Muse ").split("-").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
 /**
  * The Muse models published in the local provider catalog.
  *
  * `~/.local/share/muse/model-catalog/*.json` is written by the Muse CLI from
- * the provider's own catalog.  Hidden rows are skipped: they are not offered
- * to an account.
+ * the provider's own catalog.  Hidden rows are skipped except for the
+ * explicitly supported contributor variants.
  */
 export function readMuseProviderCatalog(home: string = homedir()): EngineModel[] {
   const dir = join(home, ".local", "share", "muse", "model-catalog");
@@ -210,8 +232,8 @@ export function readMuseProviderCatalog(home: string = homedir()): EngineModel[]
       if (!isRecord(row)) continue;
       const id = typeof row.model_id === "string" ? row.model_id : "";
       if (!id) continue;
-      if (row.visibility === "hidden") continue;
-      const label = typeof row.display_label === "string" && row.display_label.length > 0 ? row.display_label : id;
+      if (row.visibility === "hidden" && !MUSE_CONTRIBUTOR_MODEL_IDS.has(id)) continue;
+      const label = museModelLabel(id, row.display_label);
       const model: EngineModel = { id, label, value: id };
       // The provider-qualified form is the other spelling of the same model.
       // Which one the adapter accepts depends on its backend and on the

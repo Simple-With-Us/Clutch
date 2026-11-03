@@ -8,6 +8,7 @@ import { appendFileSync } from "node:fs";
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 let pendingPermission = null;
+let pendingSteeringPrompt = null;
 let sessionCounter = 0;
 
 // The stub records what the sidecar did to it, so a test can see the engine's
@@ -73,10 +74,14 @@ rl.on("line", (line) => {
     return;
   }
   if (method === "initialize") {
+    record({ event: "initialize", clientCapabilities: params?.clientCapabilities });
     send({
       jsonrpc: "2.0",
       id,
-      result: { agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } } },
+      result: {
+        agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } },
+        _meta: { "muse/steering": { version: 1, method: "_muse/steer" } },
+      },
     });
   } else if (method === "session/list") {
     send({
@@ -89,7 +94,14 @@ rl.on("line", (line) => {
   } else if (method === "session/new") {
     // A second turn needs its own session id, or the sidecar cannot tell the
     // two turns apart when it routes a permission request to its owner.
-    send({ jsonrpc: "2.0", id, result: { sessionId: `stub-session-${sessionCounter += 1}` } });
+    const sessionId = params?.cwd === "/tmp/engine-collision"
+      ? "shared-engine-session"
+      : `stub-session-${sessionCounter += 1}`;
+    record({ event: "session-new", sessionId });
+    send({ jsonrpc: "2.0", id, result: {
+      sessionId,
+      configOptions: [{ id: "model", currentValue: "muse-model:%5B%22meta%22%2C%22tbh%22%2C%22muse-wonder-1.0%22%5D" }],
+    } });
   } else if (method === "session/load") {
     const sessionId = params?.sessionId ?? "mcode-existing-1";
     for (const [sessionUpdate, text] of [
@@ -98,7 +110,9 @@ rl.on("line", (line) => {
     ]) {
       send({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate, content: { text } } } });
     }
-    send({ jsonrpc: "2.0", id, result: {} });
+    send({ jsonrpc: "2.0", id, result: {
+      configOptions: [{ id: "model", currentValue: "muse-model:%5B%22meta%22%2C%22tbh%22%2C%22muse-wonder-1.0%22%5D" }],
+    } });
   } else if (method === "session/prompt") {
     const sessionId = params?.sessionId ?? "stub-session-1";
     const promptText = Array.isArray(params?.prompt)
@@ -110,6 +124,20 @@ rl.on("line", (line) => {
     }
     if (promptText.includes("after-transient") && sessionId !== "mcode-existing-1") {
       send({ jsonrpc: "2.0", id, error: { message: "loaded thread was detached" } });
+      return;
+    }
+    record({ event: "prompt", sessionId, promptText });
+    if (promptText.includes("steer-wait") || promptText.includes("steer-error")) {
+      pendingSteeringPrompt = { id, sessionId };
+      record({ event: "active-turn", sessionId, turnId: "stub-turn-1" });
+      send({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId,
+          update: { sessionUpdate: "session_info_update", _meta: { "muse/activeTurnId": "stub-turn-1" } },
+        },
+      });
       return;
     }
     if (Array.isArray(params?.prompt)) {
@@ -131,7 +159,27 @@ rl.on("line", (line) => {
       finishPrompt({ id, sessionId });
     }
   } else if (method === "session/cancel") {
+    if (pendingSteeringPrompt?.sessionId === params?.sessionId) {
+      send({ jsonrpc: "2.0", id: pendingSteeringPrompt.id, result: { stopReason: "cancelled" } });
+      pendingSteeringPrompt = null;
+    }
     send({ jsonrpc: "2.0", id, result: {} });
+  } else if (method === "_muse/steer") {
+    record({ event: "steer", params });
+    const steeringText = Array.isArray(params?.prompt) ? params.prompt.map((part) => part?.text ?? "").join("") : "";
+    if (steeringText === "trigger-error") {
+      send({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32000, message: "muse_session=credential-like-secret prompt=private-test-prompt" },
+      });
+      return;
+    }
+    send({ jsonrpc: "2.0", id, result: { status: "accepted", turnId: params?.expectedTurnId } });
+    if (pendingSteeringPrompt) {
+      finishPrompt(pendingSteeringPrompt);
+      pendingSteeringPrompt = null;
+    }
   } else if (typeof id === "number") {
     send({ jsonrpc: "2.0", id, error: { message: `unknown method ${method}` } });
   }

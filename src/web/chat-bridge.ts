@@ -54,7 +54,9 @@ import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
-import { readSessionUsage, withRate, type SessionUsage } from "./session-usage.ts";
+import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
+import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
+import { museErrorDiagnostics } from "./muse-error-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
 import {
   loadSessionMeta,
@@ -508,6 +510,8 @@ interface AcpSessionInfo {
   updatedAt?: string;
   /** Real engine accounting, present only when the log could be read. */
   usage?: SessionUsage;
+  provider?: string;
+  model?: string;
   /** Clutch-side Project assignment and archive state. */
   projectId?: string;
   archived?: boolean;
@@ -547,6 +551,13 @@ class BridgeProcessError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "BridgeProcessError";
+  }
+}
+
+class MuseSteeringError extends Error {
+  constructor(readonly reason: "unsupported" | "idle" | "stale" | "inactive", readonly code?: number) {
+    super(`Muse steering ${reason}`);
+    this.name = "MuseSteeringError";
   }
 }
 
@@ -902,7 +913,11 @@ export class Bridge implements MuseAuthBridge {
   private onUrlElicitation: ((elicitation: MuseUrlElicitation) => boolean) | null = null;
   private onElicitationComplete: ((elicitationId: string) => void) | null = null;
   private offeredAuthMethods: Array<{ id: string; name?: string; description?: string }> = [];
+  private steeringMethod: string | null = null;
+  private activeTurnIds = new Map<string, string>();
   private advertisedConfigOptions: unknown[] | null = null;
+  private advertisedModelMetadata: SessionModelMetadata | null = null;
+  private sessionModelMetadata = new Map<string, SessionModelMetadata>();
   private pendingPermissions = new Map<
     string,
     { bridgeRequestId: number | string; options: PermissionOption[] }
@@ -920,9 +935,25 @@ export class Bridge implements MuseAuthBridge {
     return this.advertisedConfigOptions;
   }
 
-  private rememberSessionOptions(result: unknown): void {
+  modelMetadata(sessionId: string): SessionModelMetadata | null {
+    const metadata = this.sessionModelMetadata.get(sessionId);
+    return metadata ? { ...metadata } : null;
+  }
+
+  steeringSupported(): boolean {
+    return this.engine === "muse" && this.steeringMethod === "_muse/steer";
+  }
+
+  private rememberSessionOptions(result: unknown, sessionId?: string): void {
     const parsed = SessionOptionsResultSchema.safeParse(result);
     this.advertisedConfigOptions = parsed.success ? parsed.data.configOptions ?? [] : [];
+    this.advertisedModelMetadata = this.engine === "muse"
+      ? modelMetadataFromMuseConfigOptions(this.advertisedConfigOptions)
+      : null;
+    if (sessionId && parsed.success && Array.isArray(parsed.data.configOptions)) {
+      if (this.advertisedModelMetadata) this.sessionModelMetadata.set(sessionId, { ...this.advertisedModelMetadata });
+      else this.sessionModelMetadata.delete(sessionId);
+    }
   }
 
   setUpdateHandler(fn: (u: AcpUpdate) => void): void {
@@ -1017,6 +1048,9 @@ export class Bridge implements MuseAuthBridge {
     this.initialized = null;
     this.offeredAuthMethods = [];
     this.advertisedConfigOptions = null;
+    this.advertisedModelMetadata = null;
+    this.steeringMethod = null;
+    this.activeTurnIds.clear();
     // Drop any partial line left by a mid-line crash; the next spawn starts
     // fresh instead of framing new stdout onto the old fragment.
     this.buffer = "";
@@ -1064,6 +1098,16 @@ export class Bridge implements MuseAuthBridge {
         continue;
       }
       if (msg.method === "session/update") {
+        const params = msg.params as { sessionId?: unknown; update?: { sessionUpdate?: unknown; _meta?: unknown } } | undefined;
+        if (this.engine === "muse" && typeof params?.sessionId === "string" &&
+            params.update?.sessionUpdate === "session_info_update") {
+          const meta = params.update._meta;
+          if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+            const turnId = (meta as Record<string, unknown>)["muse/activeTurnId"];
+            if (typeof turnId === "string" && turnId.length > 0) this.activeTurnIds.set(params.sessionId, turnId);
+            else if (turnId === null) this.activeTurnIds.delete(params.sessionId);
+          }
+        }
         const update = normalizeSessionUpdate(msg.params);
         if (update) this.onUpdate?.(update);
         continue;
@@ -1142,12 +1186,25 @@ export class Bridge implements MuseAuthBridge {
         protocolVersion: 1,
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
-          ...(this.engine === "muse" ? { elicitation: { url: {} } } : {}),
+          ...(this.engine === "muse" ? {
+            elicitation: { url: {} },
+            _meta: { "muse/steering": 1 },
+          } : {}),
         },
       });
       const tracked = initialization.then((result) => {
         if (this.engine === "muse" && result && typeof result === "object" && !Array.isArray(result)) {
-          const raw = (result as Record<string, unknown>).authMethods;
+          const response = result as Record<string, unknown>;
+          const meta = response._meta && typeof response._meta === "object" && !Array.isArray(response._meta)
+            ? response._meta as Record<string, unknown>
+            : {};
+          const steering = meta["muse/steering"];
+          this.steeringMethod = steering && typeof steering === "object" && !Array.isArray(steering) &&
+            (steering as Record<string, unknown>).version === 1 &&
+            (steering as Record<string, unknown>).method === "_muse/steer"
+            ? "_muse/steer"
+            : null;
+          const raw = response.authMethods;
           this.offeredAuthMethods = Array.isArray(raw)
             ? raw.flatMap((item) => {
                 if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -1193,7 +1250,7 @@ export class Bridge implements MuseAuthBridge {
     if (typeof result?.sessionId !== "string" || result.sessionId.length === 0) {
       throw new Error("bridge returned no sessionId");
     }
-    this.rememberSessionOptions(result);
+    this.rememberSessionOptions(result, result.sessionId);
     return result.sessionId;
   }
 
@@ -1208,7 +1265,9 @@ export class Bridge implements MuseAuthBridge {
    */
   async setConfigOption(sessionId: string, configId: string, value: string): Promise<boolean> {
     try {
-      await this.send("session/set_config_option", { sessionId, configId, value });
+      const result = await this.send("session/set_config_option", { sessionId, configId, value });
+      const parsed = SessionOptionsResultSchema.safeParse(result);
+      if (parsed.success && Array.isArray(parsed.data.configOptions)) this.rememberSessionOptions(result, sessionId);
       return true;
     } catch {
       return false;
@@ -1234,6 +1293,8 @@ export class Bridge implements MuseAuthBridge {
           ...(typeof row.cwd === "string" ? { cwd: row.cwd } : {}),
           ...(typeof row.title === "string" ? { title: row.title } : {}),
           ...(typeof row.updatedAt === "string" ? { updatedAt: row.updatedAt } : {}),
+          ...(typeof row.provider === "string" ? { provider: row.provider } : {}),
+          ...(typeof row.model === "string" ? { model: row.model } : {}),
         });
         if (sessions.length >= cap) break;
       }
@@ -1246,7 +1307,7 @@ export class Bridge implements MuseAuthBridge {
 
   async loadSession(sessionId: string, cwd: string): Promise<unknown> {
     const result = await this.send("session/load", { sessionId, cwd, mcpServers: [] });
-    this.rememberSessionOptions(result);
+    this.rememberSessionOptions(result, sessionId);
     return result;
   }
 
@@ -1263,6 +1324,7 @@ export class Bridge implements MuseAuthBridge {
     images: PromptImage[] = [],
     cwd: string = process.env.HOME ?? "/tmp",
   ): Promise<{ stopReason: string }> {
+    this.activeTurnIds.delete(sessionId);
     // ACP agents take content blocks; the dsh bridges take a plain string.
     // Muse Code rejects a bare string ("Invalid params"), so the code
     // engines get the block form every time.
@@ -1286,6 +1348,35 @@ export class Bridge implements MuseAuthBridge {
   cancel(sessionId: string): void {
     this.send("session/cancel", { sessionId }).catch(() => undefined);
   }
+
+  async steer(sessionId: string, text: string): Promise<void> {
+    if (this.engine !== "muse" || this.steeringMethod !== "_muse/steer") {
+      throw new MuseSteeringError("unsupported");
+    }
+    if (!this.child || !this.initialized) throw new MuseSteeringError("inactive");
+    const expectedTurnId = this.activeTurnIds.get(sessionId);
+    if (!expectedTurnId) throw new MuseSteeringError("idle");
+    let result: unknown;
+    try {
+      result = await this.send(this.steeringMethod, {
+        sessionId,
+        expectedTurnId,
+        prompt: [{ type: "text", text }],
+      });
+    } catch (error) {
+      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+      if (code === -32600) throw new MuseSteeringError("stale", code);
+      throw error;
+    }
+    if (!result || typeof result !== "object" || Array.isArray(result) ||
+        (result as Record<string, unknown>).status !== "accepted") {
+      throw new Error("Muse did not accept the steering request");
+    }
+  }
+
+  clearActiveTurn(sessionId: string): void {
+    this.activeTurnIds.delete(sessionId);
+  }
 }
 
 interface ChatSession {
@@ -1297,6 +1388,8 @@ interface ChatSession {
   stream: ((u: AcpUpdate) => void) | null;
   /** The model this session runs, as the client asked for it. */
   model?: string;
+  /** The provider and model the backend reports for this remote thread. */
+  modelMetadata?: SessionModelMetadata;
   /** The reasoning effort this session runs, as the client asked for it. */
   effort?: string;
   /** The permission requests this turn is waiting on. */
@@ -1453,6 +1546,13 @@ async function main(): Promise<void> {
 
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
+  const knownModelMetadata = new Map<string, SessionModelMetadata>();
+  const modelMetadataKey = (engine: Engine, remoteSessionId: string): string => `${engine}\u0000${remoteSessionId}`;
+  const rememberModelMetadata = (engine: Engine, remoteSessionId: string, metadata: SessionModelMetadata | null): void => {
+    if (!metadata || (!metadata.provider && !metadata.model)) return;
+    const key = modelMetadataKey(engine, remoteSessionId);
+    knownModelMetadata.set(key, { ...knownModelMetadata.get(key), ...metadata });
+  };
   let museAuth: MuseAuthController | null = null;
   // The operator's permission posture wins, so the sidecar does not force
   // one over the top of it: `danger-full-access` (the default) means the
@@ -1476,7 +1576,7 @@ async function main(): Promise<void> {
       const created = new Bridge(engine, bridgeEnv);
       b = created;
       b.setUpdateHandler((u) => {
-        const target = [...sessions.values()].find((s) => s.bridgeSessionId === u.sessionId && s.busy);
+        const target = [...sessions.values()].find((s) => s.engine === engine && s.bridgeSessionId === u.sessionId && s.busy);
         target?.stream?.(u);
       });
       b.setProcessFailureHandler(() => {
@@ -1491,7 +1591,7 @@ async function main(): Promise<void> {
       // sidecar has always answered them.
       b.setPermissionHandler((request) => {
         const target = [...sessions.values()].find(
-          (s) => s.bridgeSessionId === request.sessionId && s.busy,
+          (s) => s.engine === engine && s.bridgeSessionId === request.sessionId && s.busy,
         );
         if (target?.permission) {
           // The turn owns the request from here on, so an answer is only
@@ -1741,6 +1841,11 @@ async function main(): Promise<void> {
       );
       if (!effortApplied) log(`effort refused session=${session.bridgeSessionId} engine=${session.engine}`);
     }
+    const reported = bridge.modelMetadata(session.bridgeSessionId);
+    if (reported) {
+      session.modelMetadata = { ...session.modelMetadata, ...reported };
+      rememberModelMetadata(session.engine, session.bridgeSessionId, session.modelMetadata);
+    }
     return { modelApplied, effortApplied };
   }
 
@@ -1967,6 +2072,55 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/clutch/v1/chat/steer") {
+      let body: { sessionId?: unknown; text?: unknown };
+      try {
+        body = await readJsonBody(req) as typeof body;
+      } catch {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+        return;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
+        return;
+      }
+      const chatId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+      const text = typeof body.text === "string" ? body.text.trim() : "";
+      if (!chatId || !text || text.length > 4000) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "sessionId and text are required; text must be 4000 characters or fewer" }));
+        return;
+      }
+      const session = sessions.get(chatId);
+      if (!session || session.engine !== "muse" || !session.bridgeSessionId) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "no active Muse session" }));
+        return;
+      }
+      if (!session.busy) {
+        res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ error: "Muse session is not processing a turn" }));
+        return;
+      }
+      try {
+        await bridgeFor("muse").steer(session.bridgeSessionId, text);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ outcome: "injected" }));
+      } catch (error) {
+        const diagnostic = museErrorDiagnostics(error);
+        log(`chat steer error session=${chatId} engine=muse code=${diagnostic.code ?? "none"} category=${diagnostic.category}`);
+        if (error instanceof MuseSteeringError) {
+          const failures = {
+            unsupported: { status: 501, error: "Muse steering is not supported by this host." },
+            idle: { status: 409, error: "Muse has no active turn to steer." },
+            stale: { status: 409, error: "The active Muse turn changed before steering was accepted.\u00A0 Queue this message instead." },
+            inactive: { status: 409, error: "The Muse bridge is no longer active.\u00A0 Retry after the turn ends." },
+          } as const;
+          const failure = failures[error.reason];
+          res.writeHead(failure.status, { "content-type": "application/json" }).end(JSON.stringify({ error: failure.error }));
+        } else {
+          res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: safeMuseBridgeError(error) }));
+        }
+      }
+      return;
+    }
+
     // Clutch-owned settings surface (machine identity + managed key
     // write-through), consumed by the native Hosts and Settings sheet.
     if (await handleQuotasRequest(req, res, url.pathname, token)) return;
@@ -1994,7 +2148,14 @@ async function main(): Promise<void> {
         // Reading usage means a synchronous zstd log read per session, so cap
         // how many rows get enriched in one request; rows past the cap simply
         // report no usage (the UI already renders "not reported").
-        const sessions = attachUsage(page.slice(0, USAGE_ENRICH_CAP)).concat(page.slice(USAGE_ENRICH_CAP));
+        const modelPage = isDshHostedEngine(listEngine)
+          ? attachSessionModelMetadata(page.slice(0, USAGE_ENRICH_CAP), DSH_HOME).concat(page.slice(USAGE_ENRICH_CAP))
+          : page;
+        const withKnownMetadata = modelPage.map((row) => ({
+          ...knownModelMetadata.get(modelMetadataKey(listEngine, row.sessionId)),
+          ...row,
+        }));
+        const sessions = attachUsage(withKnownMetadata.slice(0, USAGE_ENRICH_CAP)).concat(withKnownMetadata.slice(USAGE_ENRICH_CAP));
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions }));
       } catch (err) {
         if (listEngine === "muse") log("muse list failed");
@@ -2052,6 +2213,11 @@ async function main(): Promise<void> {
         // Every engine registers the thread's working directory with its
         // bridge here, so the next turn runs where the thread was started.
         await bridge.loadSession(body.sessionId, cwd);
+        const loadedModelMetadata = isDshHostedEngine(loadEngine)
+          ? attachSessionModelMetadata([{ sessionId: body.sessionId }], DSH_HOME)[0]
+          : bridge.modelMetadata(body.sessionId);
+        if (loadedModelMetadata) session.modelMetadata = loadedModelMetadata;
+        rememberModelMetadata(loadEngine, body.sessionId, loadedModelMetadata ?? null);
         if (isDshHostedEngine(loadEngine)) {
           // The host owns this thread's log, so its history is read there.
           // The next turn still goes through the ACP bridge, which resumes
@@ -2070,7 +2236,14 @@ async function main(): Promise<void> {
         session.busy = false;
         session.stream = null;
         res.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({ sessionId: chatId, remoteSessionId: body.sessionId, cwd, history: sliceThreadHistory(compactToolHistory(history), historyLimit) }),
+          JSON.stringify({
+            sessionId: chatId,
+            remoteSessionId: body.sessionId,
+            cwd,
+            ...(session.modelMetadata?.model ? { model: session.modelMetadata.model } : {}),
+            ...(session.modelMetadata?.provider ? { provider: session.modelMetadata.provider } : {}),
+            history: sliceThreadHistory(compactToolHistory(history), historyLimit),
+          }),
         );
       } catch (err) {
         sessions.delete(chatId);
@@ -2354,6 +2527,7 @@ async function main(): Promise<void> {
         connection: "keep-alive",
       });
       sseSend(res, "start", { sessionId: chatId, engine });
+      if (engine !== "muse") sseSend(res, "capabilities", { supportsSteering: false });
       log(`chat start session=${chatId} engine=${engine} promptChars=${prompt.length}`);
 
       const active = session;
@@ -2441,6 +2615,7 @@ async function main(): Promise<void> {
         stopUsage();
         active.busy = false;
         active.stream = null;
+        if (active.bridgeSessionId) bridges.get(engine)?.clearActiveTurn(active.bridgeSessionId);
         active.permission = null;
         // A turn that ended cannot answer a permission request any more, so
         // the pending ones are let go rather than left waiting: the engine is
@@ -2585,6 +2760,7 @@ async function main(): Promise<void> {
         }
         const bridge = bridgeFor(engine);
         await bridge.initialize();
+        if (engine === "muse") sseSend(res, "capabilities", { supportsSteering: bridge.steeringSupported() });
         // This turn answers its own questions, the way a bridge always has.
         active.answerPermission = (requestId, optionId) =>
           bridge.answerPermission(requestId, optionId);
@@ -2599,6 +2775,9 @@ async function main(): Promise<void> {
             active.bridgeSessionId = await bridge.newSession(cwd);
             if (CODE_ENGINES.includes(engine)) active.resumeSessionId = active.bridgeSessionId;
           }
+          const currentModelMetadata = bridge.modelMetadata(active.bridgeSessionId);
+          if (currentModelMetadata) active.modelMetadata = { ...active.modelMetadata, ...currentModelMetadata };
+          rememberModelMetadata(engine, active.bridgeSessionId, active.modelMetadata ?? null);
           log(`chat session=${chatId} bridgeSession=${active.bridgeSessionId} cwdChars=${cwd.length}`);
         }
         // The model's and the effort's choices land before the turn, so the
@@ -2632,8 +2811,10 @@ async function main(): Promise<void> {
         }
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId, remoteSessionId: remoteId() });
       } catch (err) {
-        if (engine === "muse") log(`chat error session=${chatId} engine=muse`);
-        else log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
+        if (engine === "muse") {
+          const diagnostic = museErrorDiagnostics(err);
+          log(`chat error session=${chatId} engine=muse code=${diagnostic.code ?? "none"} category=${diagnostic.category}`);
+        } else log(`chat error session=${chatId} message=${(err as Error).message.slice(0, 120)}`);
         // Only process loss invalidates the child-local session state.  ACP
         // application errors (rate limits, provider failures) leave the native
         // thread attached.  A direct mcode session is reloaded after a respawn.

@@ -124,6 +124,44 @@ describe("readMuseProviderCatalog", () => {
   it("reads nothing when the catalog directory is absent", () => {
     expect(readMuseProviderCatalog("/nonexistent/home")).toEqual([]);
   });
+
+  it("includes only the supported hidden contributor models with friendly labels and exact wire fallbacks", () => {
+    const home = mkdtempSync(join(tmpdir(), "clutch-muse-provider-catalog-"));
+    const directory = join(home, ".local", "share", "muse", "model-catalog");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "catalog.json"), JSON.stringify({ rows: [
+      { model_id: "muse-wonder-full-1.0", display_label: "muse-wonder-full-1.0", provider_id: "meta", profile_id: "tbh", visibility: "visible" },
+      { model_id: "muse-wonder-1.0", display_label: "muse-wonder-1.0", provider_id: "meta", profile_id: "tbh", visibility: "visible" },
+      { model_id: "muse-spark-1.3", display_label: "muse-spark-1.3", provider_id: "meta", profile_id: "tbh", visibility: "visible" },
+      { model_id: "muse-spark-1.3-contributor", display_label: "muse-spark-1.3-contributor", provider_id: "meta", profile_id: "tbh", visibility: "hidden" },
+      { model_id: "muse-wonder-1.0-contributor", display_label: "muse-wonder-1.0-contributor", provider_id: "meta", profile_id: "tbh", visibility: "hidden" },
+      { model_id: "muse-wonder-full-1.0-contributor", display_label: "muse-wonder-1.0-contributor", provider_id: "meta", profile_id: "tbh", visibility: "hidden" },
+      { model_id: "muse-image-1.0", display_label: "Muse Image", visibility: "hidden" },
+    ] }));
+
+    try {
+      const models = readMuseProviderCatalog(home);
+      expect(models.map(({ id, label }) => [id, label])).toEqual([
+        ["muse-wonder-full-1.0", "Muse Wonder Full 1.0"],
+        ["muse-wonder-1.0", "Muse Wonder 1.0"],
+        ["muse-spark-1.3", "Muse Spark 1.3"],
+        ["muse-spark-1.3-contributor", "Muse Spark 1.3 Contributor"],
+        ["muse-wonder-1.0-contributor", "Muse Wonder 1.0 Contributor"],
+        ["muse-wonder-full-1.0-contributor", "Muse Wonder Full 1.0 Contributor"],
+      ]);
+      expect(models.map(({ value }) => value)).toEqual(models.map(({ id }) => id));
+      expect(models.map(({ altValue }) => altValue)).toEqual([
+        'muse-model:["meta","tbh","muse-wonder-full-1.0"]',
+        'muse-model:["meta","tbh","muse-wonder-1.0"]',
+        'muse-model:["meta","tbh","muse-spark-1.3"]',
+        'muse-model:["meta","tbh","muse-spark-1.3-contributor"]',
+        'muse-model:["meta","tbh","muse-wonder-1.0-contributor"]',
+        'muse-model:["meta","tbh","muse-wonder-full-1.0-contributor"]',
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildEngineCatalog", () => {
