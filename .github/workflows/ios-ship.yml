@@ -169,8 +169,8 @@ jobs:
         env:
           INFISICAL_PROJECT_ID: 077fd6f3-9f9b-438e-9b6f-5c69076cf36c
           INFISICAL_ASC_PROJECT_ID: 8dae6d03-8f12-48b2-adf3-e5c1b881c8c5
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_CLUTCH_CI_READ_TOKEN }}
+          INFISICAL_ASC_TOKEN: ${{ secrets.INFISICAL_CLUTCH_ASC_READ_TOKEN }}
         run: |
           npm install zod@4.4.3 --no-save --no-audit --no-fund
           node scripts/ios-signing-fetch.mjs
@@ -179,7 +179,7 @@ jobs:
         if: steps.gate.outputs.should_ship == '1'
         run: |
           if [ -z "${APPLE_API_KEY_ID:-}" ]; then
-            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Check Fleet-OPS prod /asc, Clutch prod /, and the CI machine identity read access to both.  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
+            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Check Fleet-OPS prod /asc and Clutch prod / service-token read access.  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
             exit 1
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"

@@ -1,6 +1,6 @@
 name: Infisical secrets
 description: >-
-  Fetch named secrets from Infisical (universal-auth), mask them, and export
+  Fetch named secrets from Infisical using a scoped service token, mask them, and export
   them into $GITHUB_ENV -- falling back to a same-named GH_FALLBACK_<NAME>
   step env var and warning (or failing, for a name listed in `required`)
   when a name stays empty everywhere.  Wraps scripts/infisical-fetch.mjs (Node + zod) instead of the Infisical CLI: the CLI's only
@@ -38,11 +38,8 @@ inputs:
     description: Infisical secret path.
     required: false
     default: /
-  client-id:
-    description: Universal-auth machine identity client id.
-    required: true
-  client-secret:
-    description: Universal-auth machine identity client secret.
+  token:
+    description: Scoped read-only Infisical service token for this project and path.
     required: true
   site-url:
     description: Infisical site URL.
@@ -70,7 +67,6 @@ runs:
         INFISICAL_PROJECT_ID: ${{ inputs.project-id }}
         INFISICAL_ENVIRONMENT: ${{ inputs.environment }}
         INFISICAL_SECRET_PATH: ${{ inputs.secret-path }}
-        INFISICAL_CLIENT_ID: ${{ inputs.client-id }}
-        INFISICAL_CLIENT_SECRET: ${{ inputs.client-secret }}
+        INFISICAL_TOKEN: ${{ inputs.token }}
         INFISICAL_SITE_URL: ${{ inputs.site-url }}
       run: node "$GITHUB_ACTION_PATH/../../../scripts/infisical-fetch.mjs"

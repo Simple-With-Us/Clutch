@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { maskValue, run, writeGithubEnvValue } from "./infisical-fetch.mjs";
+import { listSecretsRaw, maskValue, run, writeGithubEnvValue } from "./infisical-fetch.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(ROOT, "scripts", "infisical-fetch.mjs");
@@ -25,19 +25,14 @@ function tempGithubEnv() {
   return { dir, path: join(dir, "github_env") };
 }
 
-/** A stub fetch standing in for Infisical: login always succeeds, the list
- * call returns exactly the fixture secrets given. Neither ever touches the
+/** A stub fetch standing in for Infisical: the list call returns exactly the fixture secrets given. Neither ever touches the
  * network. */
 function stubFetch(vaultSecrets) {
-  return async (url) => {
+  return async (url, options) => {
     const u = String(url);
-    if (u.includes("/api/v1/auth/universal-auth/login")) {
-      return {
-        ok: true,
-        json: async () => ({ accessToken: "test-token", expiresIn: 3600 }),
-      };
-    }
+    assert.equal(options.redirect, "error");
     if (u.includes("/api/v3/secrets/raw")) {
+      assert.match(options.headers.authorization, /^Bearer st\./);
       return {
         ok: true,
         json: async () => ({
@@ -48,6 +43,26 @@ function stubFetch(vaultSecrets) {
     throw new Error(`stubFetch: unexpected URL ${u}`);
   };
 }
+
+test("service-token fetch validates the origin and disables redirects", async () => {
+  let called = false;
+  const fetchImpl = async (_url, options) => {
+    called = true;
+    assert.equal(options.redirect, "error");
+    return { ok: true, json: async () => ({ secrets: [] }) };
+  };
+  await assert.rejects(
+    listSecretsRaw({ siteUrl: "http://secrets.example", token: "st.fixture-read-token-value-123456789", projectId: "p", environment: "prod", secretPath: "/", fetchImpl }),
+    /must use HTTPS/,
+  );
+  await assert.rejects(
+    listSecretsRaw({ siteUrl: "https://user:password@secrets.example", token: "st.fixture-read-token-value-123456789", projectId: "p", environment: "prod", secretPath: "/", fetchImpl }),
+    /without credentials/,
+  );
+  assert.equal(called, false);
+  await listSecretsRaw({ siteUrl: "http://127.0.0.1:4318", token: "st.fixture-read-token-value-123456789", projectId: "p", environment: "prod", secretPath: "/", fetchImpl });
+  assert.equal(called, true);
+});
 
 function collectLines() {
   const lines = [];
@@ -62,8 +77,7 @@ test("a name present in the vault is masked and written to GITHUB_ENV", async ()
       env: {
         INFISICAL_NAMES: "FOO",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({ FOO: SENTINEL_PRESENT }),
@@ -94,8 +108,7 @@ test("a name missing from the vault falls back to GH_FALLBACK_<NAME>", async () 
       env: {
         INFISICAL_NAMES: "BAR",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
         GH_FALLBACK_BAR: SENTINEL_FALLBACK,
         GITHUB_ENV: path,
       },
@@ -120,8 +133,7 @@ test("a name missing from both the vault and the fallback warns and is absent", 
       env: {
         INFISICAL_NAMES: "BAZ",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({}),
@@ -156,8 +168,7 @@ test("a missing required name rejects instead of silently continuing", async () 
             INFISICAL_NAMES: "QUX",
             INFISICAL_REQUIRED: "QUX",
             INFISICAL_PROJECT_ID: "proj",
-            INFISICAL_CLIENT_ID: "id",
-            INFISICAL_CLIENT_SECRET: "secret",
+            INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
             GITHUB_ENV: path,
           },
           fetchImpl: stubFetch({}),
@@ -181,8 +192,7 @@ test("every line in a mixed run is either an add-mask carrier or a warning, neve
       env: {
         INFISICAL_NAMES: "FOO BAZ",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({ FOO: SENTINEL_PRESENT }),
@@ -232,8 +242,7 @@ test("every line of a multi-line value gets its own ::add-mask:: and is never pr
       env: {
         INFISICAL_NAMES: "MAC_CERT_P12_BASE64",
         INFISICAL_PROJECT_ID: "proj",
-        INFISICAL_CLIENT_ID: "id",
-        INFISICAL_CLIENT_SECRET: "secret",
+        INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
         GITHUB_ENV: path,
       },
       fetchImpl: stubFetch({ MAC_CERT_P12_BASE64: SENTINEL_MULTILINE }),
