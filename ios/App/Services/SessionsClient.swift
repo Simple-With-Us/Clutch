@@ -96,6 +96,81 @@ public struct SessionsClient {
         return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
     }
 
+    /// Load one Muse session's metadata and usage without acquiring the ACP session.
+    public func details(sessionId: String, cwd: String?) async throws -> AcpSessionInfo {
+        var comps = try base()
+        comps.path = "/clutch/v1/sessions/details"
+        comps.queryItems = [
+            URLQueryItem(name: "engine", value: "muse"),
+            URLQueryItem(name: "sessionId", value: sessionId),
+        ]
+        if let cwd, !cwd.isEmpty {
+            comps.queryItems?.append(URLQueryItem(name: "cwd", value: cwd))
+        }
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url, timeout: 15))
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else { throw ChatClientError.http(status) }
+        return try Self.decodeDetailsResponse(data, expectedSessionId: sessionId)
+    }
+
+    static func decodeDetailsResponse(_ data: Data, expectedSessionId: String) throws -> AcpSessionInfo {
+        struct Payload: Decodable {
+            var readOnly: Bool
+            var sessionId: String
+            var cwd: String?
+            var title: String?
+            var model: String?
+            var provider: String?
+            var usage: AcpSessionUsage?
+        }
+        let payload = try JSONDecoder().decode(Payload.self, from: data)
+        guard payload.readOnly, payload.sessionId == expectedSessionId else {
+            throw SessionDetailsResponseError.invalidResponse
+        }
+        return AcpSessionInfo(
+            sessionId: payload.sessionId,
+            cwd: payload.cwd,
+            title: payload.title,
+            model: payload.model,
+            provider: payload.provider,
+            usage: payload.usage
+        )
+    }
+
+    static func mergeDetails(_ details: AcpSessionInfo, into summary: AcpSessionInfo) -> AcpSessionInfo? {
+        guard details.sessionId == summary.sessionId else { return nil }
+        let provider = nonempty(details.provider) ?? nonempty(details.usage?.provider)
+            ?? nonempty(summary.provider) ?? nonempty(summary.usage?.provider)
+        let model = nonempty(details.model) ?? nonempty(details.usage?.model)
+            ?? nonempty(summary.model) ?? nonempty(summary.usage?.model)
+        var usage = details.usage ?? summary.usage
+        if usage != nil {
+            usage?.provider = nonempty(usage?.provider) ?? provider
+            usage?.model = nonempty(usage?.model) ?? model
+        }
+        return AcpSessionInfo(
+            sessionId: summary.sessionId,
+            cwd: nonempty(details.cwd) ?? summary.cwd,
+            title: nonempty(details.title) ?? summary.title,
+            updatedAt: summary.updatedAt,
+            provider: provider,
+            model: model,
+            usage: usage,
+            projectId: summary.projectId,
+            archived: summary.archived
+        )
+    }
+
+    private static func nonempty(_ value: String?) -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return value
+    }
+
+    private enum SessionDetailsResponseError: Error {
+        case invalidResponse
+    }
+
     /// Read a transcript without acquiring the engine session or sending a prompt.
     public func preview(sessionId: String, cwd: String? = nil, engine: String = "mcode", limit: Int = 200) async throws -> PreviewSession {
         var comps = try base()

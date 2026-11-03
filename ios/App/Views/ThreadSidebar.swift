@@ -51,6 +51,7 @@ struct ThreadSidebar: View {
     /// Projects offered in the row's context menu.  Empty means the menu shows
     /// only the create-project affordance.
     var projects: [SessionsClient.Project] = []
+    var onLoadDetails: ((AcpSessionInfo) async throws -> AcpSessionInfo)? = nil
     var onSelect: (AcpSessionInfo) -> Void
     var onNew: () -> Void
     /// Open a fresh workspace in another Mac window.  Unused on iOS.
@@ -486,6 +487,7 @@ struct ThreadSidebar: View {
             isLoading: loadingId == session.sessionId,
             isDisabled: false,
             projects: projects,
+            onLoadDetails: onLoadDetails,
             showsTooltip: false,
             onSelect: onSelect,
             isPinned: pinnedIds.contains(session.sessionId),
@@ -513,6 +515,7 @@ struct ThreadSidebarRow: View {
     var isLoading: Bool
     var isDisabled: Bool
     var projects: [SessionsClient.Project] = []
+    var onLoadDetails: ((AcpSessionInfo) async throws -> AcpSessionInfo)? = nil
     /// Show the full folder as a macOS tooltip.  Off where a hover card
     /// already shows it.
     var showsTooltip: Bool = true
@@ -613,7 +616,7 @@ struct ThreadSidebarRow: View {
         .accessibilityAction(named: Text("Show Thread Details")) { showingDetails = true }
         .contextMenu { menu }
         .popover(isPresented: $showingDetails, arrowEdge: .trailing) {
-            ThreadDetailsCard(session: session, projects: projects)
+            ThreadDetailsCard(session: session, projects: projects, onLoadDetails: onLoadDetails)
         }
         #endif
     }
@@ -700,21 +703,28 @@ struct ThreadSidebarRow: View {
 struct ThreadDetailsCard: View {
     let session: AcpSessionInfo
     var projects: [SessionsClient.Project] = []
+    var onLoadDetails: ((AcpSessionInfo) async throws -> AcpSessionInfo)? = nil
+
+    @State private var detailedSession: AcpSessionInfo?
+    @State private var isLoadingDetails = false
+    @State private var detailsLoadFailed = false
+
+    private var displayedSession: AcpSessionInfo { detailedSession ?? session }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(session.displayTitle)
+            Text(displayedSession.displayTitle)
                 .font(.system(size: 12, weight: .semibold))
                 .lineLimit(2)
 
             Divider()
 
-            detail("Session ID", session.sessionId, monospaced: true)
-            detail("Folder", session.cwd ?? "Not reported", monospaced: true)
-            detail("Model", session.model ?? session.usage?.model ?? "Not reported")
-            detail("Provider", session.provider ?? session.usage?.provider ?? "Not reported")
+            detail("Session ID", displayedSession.sessionId, monospaced: true)
+            detail("Folder", displayedSession.cwd ?? "Not reported", monospaced: true)
+            detail("Model", displayedSession.model ?? displayedSession.usage?.model ?? "Not reported")
+            detail("Provider", displayedSession.provider ?? displayedSession.usage?.provider ?? "Not reported")
 
-            if let usage = session.usage {
+            if let usage = displayedSession.usage {
                 Divider()
                 if let basis = usage.basis {
                     detail("Usage Basis", basis == "session-totals" ? "Session Totals" : basis == "latest-response" ? "Latest Response" : basis)
@@ -741,18 +751,53 @@ struct ThreadDetailsCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if let projectId = session.projectId,
+            if isLoadingDetails {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading detailed metrics…")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+            } else if detailsLoadFailed {
+                Text("Details could not be refreshed.\u{00A0} Close and reopen to retry.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let projectId = displayedSession.projectId,
                let name = projects.first(where: { $0.id == projectId })?.name {
                 Divider()
                 detail("Project", name)
             }
 
-            if session.archived == true {
+            if displayedSession.archived == true {
                 detail("Archived", "Yes")
             }
         }
         .padding(10)
         .frame(width: 260, alignment: .leading)
+        .task(id: session.sessionId) {
+            guard let onLoadDetails else { return }
+            detailedSession = nil
+            detailsLoadFailed = false
+            isLoadingDetails = true
+            defer {
+                if !Task.isCancelled { isLoadingDetails = false }
+            }
+            do {
+                let details = try await onLoadDetails(session)
+                guard !Task.isCancelled else { return }
+                guard let merged = SessionsClient.mergeDetails(details, into: session) else {
+                    detailsLoadFailed = true
+                    return
+                }
+                detailedSession = merged
+            } catch {
+                guard !Task.isCancelled else { return }
+                detailsLoadFailed = true
+            }
+        }
     }
 
     private func detail(_ label: String, _ value: String, monospaced: Bool = false) -> some View {
@@ -786,6 +831,18 @@ struct ThreadDetailsCard: View {
 }
 
 enum ThreadMetricPresentation {
+    static func usageStripRateLabel(engineID: String, usage: AcpSessionUsage?) -> String? {
+        guard let usage else { return nil }
+        if let rate = usage.responseTokensPerSecond, rate.isFinite, rate >= 0 {
+            return String(format: "Response %.1f tok/s", rate)
+        }
+        guard engineID == "mcode",
+              let rate = usage.outputTokensPerSecond,
+              rate.isFinite,
+              rate >= 0 else { return nil }
+        return String(format: "Interval %.1f tok/s", rate)
+    }
+
     static func contextOccupancyLabel(_ usage: AcpSessionUsage) -> String? {
         // `totalTokens == 0` is a placeholder when context is unreported; an explicit context count may be a real zero.
         guard usage.contextUsedTokens != nil || usage.totalTokens > 0 else { return nil }
