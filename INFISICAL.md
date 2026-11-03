@@ -13,29 +13,27 @@ Clutch's Infisical project is **`Clutch`** (ID `077fd6f3-9f9b-438e-9b6f-5c69076c
 
 ## The runtime contract
 
-1. **Load at startup.**  Every Clutch entry point (`src/web/*.ts`, `scripts/sync-profiles.ts`) calls `await initClutchSettings()` before reading any managed setting.  With universal-auth credentials present it loads the full settings set from the Clutch Infisical project into an in-memory cache.  Without credentials it seeds the cache from `process.env` with a loud stderr warning (local dev / offline fallback — never silent).
+1. **Load at startup.**  Every Clutch entry point (`src/web/*.ts`, `scripts/sync-profiles.ts`) calls `await initClutchSettings()` before reading any managed setting.  With a scoped service token present it loads the full settings set from the Clutch Infisical project into an in-memory cache.  Without credentials it seeds the cache from `process.env` with a loud stderr warning (local dev / offline fallback — never silent).
 2. **Never fetch per-request.**  `get()` / `getAll()` / `has()` read memory (or explicit env) only — zero network calls, safe in hot paths.  A per-request call to Infisical is the one forbidden pattern.
-3. **Backfill, don't rewrite reads.**  After a successful Infisical load, managed keys that are NOT already set in `process.env` are backfilled from the cache; explicitly-set env vars always win (local override).  This is the delivery mechanism: ACP driver env params, Python bridges, and spawned child processes inherit Infisical values through the environment with zero code churn.  The bash launcher layer (`scripts/lib/clutch-env.sh`) gets the same backfill from `scripts/lib/clutch-infisical-env.sh` (curl + python3, never fails the boot).
+3. **Backfill, don't rewrite reads.**  After a successful Infisical load, managed keys that are NOT already set in `process.env` are backfilled from the cache; explicitly-set env vars always win (local override).  This is the delivery mechanism: ACP driver env params, Python bridges, and spawned child processes inherit Infisical values through the environment with zero code churn.  The bash launcher layer (`scripts/lib/clutch-env.sh`) gets the same backfill from `scripts/lib/clutch-infisical-env.sh` (Python helper, never fails the boot).
 4. **Background refresh.**  The long-running web server refreshes on an interval (`CLUTCH_SETTINGS_REFRESH_MS`, default 5 minutes, itself tunable via Infisical) and on `SIGHUP`.  Refresh failures log loudly but keep serving the last-known-good cache — settings staleness is safer than an outage.
-5. **Write-through on admin save.**  `clutch-settings set KEY VALUE` (and `ClutchSettings.set()`) writes to Infisical FIRST, then updates the cache and `process.env`.  If the Infisical write fails, the save fails — the cache and Infisical never diverge silently.  In env-seed mode (no credentials) `set()` refuses loudly.
+5. **Write-through on admin save.**  `clutch-settings set KEY VALUE` (and `ClutchSettings.set()`) writes to Infisical FIRST, then updates the cache and `process.env`.  If the Infisical write fails, the save fails — the cache and Infisical never diverge silently.  Writes require a separate scoped write service token; a read token is never used for writes.  In env-seed mode (no credentials) `set()` refuses loudly.
 
-## Machine identity — the one thing NOT in Infisical
+## Per-host service-token bootstrap
 
-Infisical cannot hold the credentials that authenticate access to itself.  Storing the key to the store inside the store is circular: you would need the credential before you could fetch the credential.  So exactly three values live on the machine, in one owner-only file:
+Clutch never logs in with Universal Auth or another machine identity.  Each use case receives a scoped Infisical service token through the approved service-token registry.  Keep the read token and optional write token separate, and never use the read token for writes.
 
-**`$CLUTCH_HOME/infisical.json`** (default `~/.clutch/infisical.json`), mode `600`:
+**`$CLUTCH_HOME/infisical.json`** (default `~/.clutch/infisical.json`) is mode `600` inside a mode `700` directory:
 
 | Field | Meaning |
 |---|---|
-| `projectId` | Infisical project (workspace) ID.  Defaults to the canonical Clutch project when absent. |
-| `clientId` | Universal-auth machine identity client ID. |
-| `clientSecret` | Universal-auth machine identity client secret.  Never rendered, never returned over an API, never logged. |
+| `projectId` | Infisical project (workspace) ID.  Defaults to the canonical Clutch project when absent. |
+| `serviceToken` | Scoped read-only service token for the Clutch project. |
+| `writeServiceToken` | Optional separate scoped write service token. |
 
-Precedence is the same rule as every managed key: an explicitly-set `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` / `INFISICAL_PROJECT_ID` in the environment always wins over the file, so CI and one-off shells can override without editing anything.
+Explicit `INFISICAL_PROJECT_ID`, `INFISICAL_TOKEN`, and `INFISICAL_WRITE_TOKEN` environment values override their file fields.  The Node credential loader and bash launcher read this file without printing token values.  Missing or malformed credentials degrade to env-seed mode; writes fail closed without the separate write token.  Credential writes use an atomic temporary file and mode `600`.
 
-Both layers read it — `src/shared/infisicalIdentity.ts` for Node, and `_clutch_infisical_identity()` in `scripts/lib/clutch-infisical-env.sh` for the bash launchers, which run before Node starts.  A missing, unreadable, or malformed file is not an error: it degrades to the existing env-seed behaviour and never blocks a restart.  Writes are atomic (temp file plus rename) at mode `600`, and a loosened mode produces a loud warning.
-
-**Editing it.**  The native **Hosts and Settings** sheet ("Infisical" section, on both iOS and macOS) reads and writes it over `GET`/`PUT /clutch/v1/infisical` on the chat sidecar, and also exposes a managed-setting write-through field backed by `ClutchSettings.set()`.  The Clutch web Settings dialog cannot be used: it is upstream `dsh` code (see "Consuming the client").  **Saving new credentials requires a Clutch restart** — the running process already holds the old client, and the API refuses a request that would both change the identity and write a setting under it.  The CLI remains a first-class surface too: `clutch-settings set KEY VALUE`.
+**Editing it.**  The native **Hosts and Settings** sheet ("Infisical" section, on both iOS and macOS) reads and writes credentials over `GET`/`PUT /clutch/v1/infisical` on the chat sidecar, and also exposes a managed-setting write-through field backed by `ClutchSettings.set()`.  The Clutch web Settings dialog cannot be used: it is upstream `dsh` code (see "Consuming the client").  **Saving new credentials requires a Clutch restart** — the running process already holds its current tokens, and the API refuses a request that would both change credentials and write a setting.  The CLI remains a first-class surface too: `clutch-settings set KEY VALUE`.
 
 ## Admin gating
 
@@ -126,7 +124,7 @@ await settings.refresh();               // on-demand (SIGHUP wired in start-web.
 settings.stop();                        // on shutdown
 ```
 
-Auth: universal auth.  Credentials come from `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET`, resolved by environment first and then by `$CLUTCH_HOME/infisical.json` (see "Machine identity" above).  Never in code.
+Auth: scoped service tokens.  Reads use `INFISICAL_TOKEN`; writes use the separate `INFISICAL_WRITE_TOKEN`.  The runtime resolves environment values first, then `$CLUTCH_HOME/infisical.json` (see "Per-host service-token bootstrap" above).  Never use Universal Auth or machine identity login.
 
 ### Why Clutch settings cannot be added to the web Settings dialog
 
@@ -137,7 +135,7 @@ Upstream does expose a supported seam — a `settings.section` runtime slot that
 ## Rotation notes
 
 - To rotate a value, an admin edits the key in the Infisical UI (or runs `clutch-settings set`) — running instances pick it up on the next background refresh (≤ 5 minutes) or immediately via `clutch-settings reload` / `SIGHUP`.
-- Rotating the universal-auth client secret itself: update `INFISICAL_CLIENT_SECRET` in the machine's secret store, then restart instances.
+- Rotating a service token: replace the relevant scoped token through the approved registry and bootstrap route, then restart instances.
 - If a refresh fails, instances log loudly (`[clutch-settings] ...`) and keep serving last-known-good values; fix Infisical-side access and the next interval recovers automatically.
 
 ### GitHub-hosted iOS signing sources
@@ -147,10 +145,8 @@ Upstream does expose a supported seam — a `settings.section` runtime slot that
 - Clutch (`077fd6f3-9f9b-438e-9b6f-5c69076cf36c`), `/`: `IOS_CERT_P12_BASE64`, `IOS_CERT_PASSWORD`.
 
 The shared key is mapped to `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, and
-`APPLE_API_KEY_P8_BASE64` for the existing signing preparation script. No Apple
-key is copied into Clutch. The CI machine identity must have read access to both
-sources. Repository Actions secrets must provide `INFISICAL_CLIENT_ID` and
-`INFISICAL_CLIENT_SECRET` (the `INFISICAL_UNIVERSAL_AUTH_*` aliases also work).
+`APPLE_API_KEY_P8_BASE64` for the existing signing preparation script.  No Apple
+key is copied into Clutch.  CI uses purpose-specific read-token bindings separate from the Mac runtime tokens: `INFISICAL_CLUTCH_CI_READ_TOKEN` for Clutch prod `/` in both workflows, and `INFISICAL_CLUTCH_ASC_READ_TOKEN` for Fleet-OPS prod `/asc` in `ios-ship.yml`.
 Project IDs are non-secret workflow constants rather than encrypted bindings.
 
 Missing CI inputs, authentication/list errors, or missing signing entries fail
