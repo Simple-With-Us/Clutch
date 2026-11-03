@@ -16,6 +16,10 @@ private final class AcpSessionDateParser: @unchecked Sendable {
     func date(from value: String?) -> Date? {
         guard let value, !value.isEmpty else { return nil }
         let key = value as NSString
+        // NSCache supports concurrent access, so the common hit path need not
+        // wait behind a formatter parse for another timestamp.
+        if let cached = cache.object(forKey: key) { return cached as Date }
+
         lock.lock()
         defer { lock.unlock() }
         if let cached = cache.object(forKey: key) { return cached as Date }

@@ -24,12 +24,26 @@ struct ChatTurnBuffer: Equatable {
 
     mutating func updateTool(id: String, name: String, status: String) {
         guard !finished else { return }
-        let key = id.isEmpty ? name : id
-        if let index = tools.firstIndex(where: { $0.id == key }) {
+        if !id.isEmpty, let index = tools.firstIndex(where: { $0.id == id }) {
             tools[index].status = status
             if !name.isEmpty { tools[index].name = name }
         } else {
-            tools.append(Tool(id: key, name: name.isEmpty ? "Tool Call" : name, status: status))
+            let toolId = id.isEmpty ? "unidentified-\(UUID().uuidString)" : id
+            tools.append(Tool(id: toolId, name: name.isEmpty ? "Tool Call" : name, status: status))
+        }
+    }
+
+    /// Find an update target only among tool rows appended during this turn.
+    /// ACP ids may be reused across turns, and a prior turn's row must remain
+    /// immutable when a new stream reports the same id.
+    static func latestToolIndex(
+        in history: [AcpHistoryEntry],
+        matching id: String,
+        from turnStartIndex: Int
+    ) -> Int? {
+        guard !id.isEmpty, turnStartIndex >= history.startIndex, turnStartIndex <= history.endIndex else { return nil }
+        return history[turnStartIndex...].lastIndex {
+            $0.isTool && $0.toolCallId == id
         }
     }
 

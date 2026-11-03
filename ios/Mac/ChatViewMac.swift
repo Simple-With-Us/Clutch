@@ -1667,6 +1667,7 @@ public struct ChatView: View {
             localPrompts.append(LocalPrompt(text: prompt, at: Date()))
             MacChatStore.savePrompts(localPrompts)
         }
+        let currentTurnHistoryStartIndex = codeLoaded.count
         let client = ChatSessionClient(
             host: host,
             model: queued?.model ?? selectedModel ?? "",
@@ -1699,7 +1700,11 @@ public struct ChatView: View {
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
                     case .tool(let id, let name, let status):
-                        if !id.isEmpty, let index = codeLoaded.lastIndex(where: { $0.isTool && $0.toolCallId == id }) {
+                        if let index = ChatTurnBuffer.latestToolIndex(
+                            in: codeLoaded,
+                            matching: id,
+                            from: currentTurnHistoryStartIndex
+                        ) {
                             codeLoaded[index].toolStatus = status
                             if !name.isEmpty { codeLoaded[index].text = name }
                         } else {

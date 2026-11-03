@@ -901,6 +901,31 @@ const SessionOptionsResultSchema = z.object({
   configOptions: z.array(z.unknown()).optional(),
 }).loose();
 
+const BridgeErrorSchema = z.object({ message: z.unknown().optional(), code: z.unknown().optional() });
+const BridgeMessageSchema = z.object({
+  id: z.union([z.number(), z.string()]).optional(),
+  method: z.string().optional(),
+  params: z.record(z.string(), z.unknown()).optional(),
+  result: z.unknown().optional(),
+  error: BridgeErrorSchema.optional(),
+});
+const BridgeSessionUpdateParamsSchema = z.object({
+  sessionId: z.string().min(1),
+  update: z.object({
+    sessionUpdate: z.string(),
+    _meta: z.record(z.string(), z.unknown()).optional(),
+  }).loose(),
+}).loose();
+const BridgeInitializationSchema = z.object({
+  _meta: z.record(z.string(), z.unknown()).optional(),
+  authMethods: z.array(z.unknown()).optional(),
+});
+const BridgeAuthMethodSchema = z.object({ id: z.string().min(1), name: z.string().optional(), description: z.string().optional() });
+const MuseSteeringCapabilitySchema = z.object({ version: z.literal(1), method: z.literal("_muse/steer") });
+const MuseSteeringResultSchema = z.object({ status: z.literal("accepted") });
+const BridgePromptResultSchema = z.object({ stopReason: z.string().optional().default("endTurn") });
+const MuseSteerBodySchema = z.object({ sessionId: z.string().trim().min(1), text: z.string().trim().min(1).max(4000) });
+
 /** Minimal JSON-RPC client over a bridge launcher's stdio. */
 export class Bridge implements MuseAuthBridge {
   private child: ChildProcess | null = null;
@@ -1066,12 +1091,15 @@ export class Bridge implements MuseAuthBridge {
       const line = this.buffer.slice(0, nl).trim();
       this.buffer = this.buffer.slice(nl + 1);
       if (!line) continue;
-      let msg: { id?: number | string; method?: string; params?: Record<string, unknown>; result?: unknown; error?: { message?: unknown; code?: unknown } };
+      let raw: unknown;
       try {
-        msg = JSON.parse(line) as typeof msg;
+        raw = JSON.parse(line);
       } catch {
         continue;
       }
+      const parsedMessage = BridgeMessageSchema.safeParse(raw);
+      if (!parsedMessage.success) continue;
+      const msg = parsedMessage.data;
       if (msg.method === "elicitation/create" && msg.id !== undefined) {
         const params = msg.params ?? {};
         const elicitation: MuseUrlElicitation = {
@@ -1098,12 +1126,14 @@ export class Bridge implements MuseAuthBridge {
         continue;
       }
       if (msg.method === "session/update") {
-        const params = msg.params as { sessionId?: unknown; update?: { sessionUpdate?: unknown; _meta?: unknown } } | undefined;
+        const parsedParams = BridgeSessionUpdateParamsSchema.safeParse(msg.params);
+        if (!parsedParams.success) continue;
+        const params = parsedParams.data;
         if (this.engine === "muse" && typeof params?.sessionId === "string" &&
             params.update?.sessionUpdate === "session_info_update") {
           const meta = params.update._meta;
-          if (meta && typeof meta === "object" && !Array.isArray(meta)) {
-            const turnId = (meta as Record<string, unknown>)["muse/activeTurnId"];
+          if (meta) {
+            const turnId = meta["muse/activeTurnId"];
             if (typeof turnId === "string" && turnId.length > 0) this.activeTurnIds.set(params.sessionId, turnId);
             else if (turnId === null) this.activeTurnIds.delete(params.sessionId);
           }
@@ -1193,23 +1223,19 @@ export class Bridge implements MuseAuthBridge {
         },
       });
       const tracked = initialization.then((result) => {
-        if (this.engine === "muse" && result && typeof result === "object" && !Array.isArray(result)) {
-          const response = result as Record<string, unknown>;
-          const meta = response._meta && typeof response._meta === "object" && !Array.isArray(response._meta)
-            ? response._meta as Record<string, unknown>
-            : {};
-          const steering = meta["muse/steering"];
-          this.steeringMethod = steering && typeof steering === "object" && !Array.isArray(steering) &&
-            (steering as Record<string, unknown>).version === 1 &&
-            (steering as Record<string, unknown>).method === "_muse/steer"
+        const parsedInitialization = BridgeInitializationSchema.safeParse(result);
+        if (this.engine === "muse" && parsedInitialization.success) {
+          const response = parsedInitialization.data;
+          const steering = MuseSteeringCapabilitySchema.safeParse(response._meta?.["muse/steering"]);
+          this.steeringMethod = steering.success
             ? "_muse/steer"
             : null;
           const raw = response.authMethods;
           this.offeredAuthMethods = Array.isArray(raw)
             ? raw.flatMap((item) => {
-                if (!item || typeof item !== "object" || Array.isArray(item)) return [];
-                const row = item as Record<string, unknown>;
-                if (typeof row.id !== "string" || !row.id) return [];
+                const parsedMethod = BridgeAuthMethodSchema.safeParse(item);
+                if (!parsedMethod.success) return [];
+                const row = parsedMethod.data;
                 return [{
                   id: row.id,
                   ...(typeof row.name === "string" ? { name: row.name.slice(0, 200) } : {}),
@@ -1342,7 +1368,7 @@ export class Bridge implements MuseAuthBridge {
       // does not exist would lose the attachment entirely.
       prompt = await prepareAttachedPrompt(attachmentRoot(), sessionId, text, images);
     }
-    return this.send("session/prompt", { sessionId, prompt }) as Promise<{ stopReason: string }>;
+    return BridgePromptResultSchema.parse(await this.send("session/prompt", { sessionId, prompt }));
   }
 
   cancel(sessionId: string): void {
@@ -1364,12 +1390,12 @@ export class Bridge implements MuseAuthBridge {
         prompt: [{ type: "text", text }],
       });
     } catch (error) {
-      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+      const parsedError = BridgeErrorSchema.safeParse(error);
+      const code = parsedError.success ? parsedError.data.code : undefined;
       if (code === -32600) throw new MuseSteeringError("stale", code);
       throw error;
     }
-    if (!result || typeof result !== "object" || Array.isArray(result) ||
-        (result as Record<string, unknown>).status !== "accepted") {
+    if (!MuseSteeringResultSchema.safeParse(result).success) {
       throw new Error("Muse did not accept the steering request");
     }
   }
@@ -2080,16 +2106,12 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
         return;
       }
-      if (!body || typeof body !== "object" || Array.isArray(body)) {
-        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "JSON body must be an object" }));
-        return;
-      }
-      const chatId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-      const text = typeof body.text === "string" ? body.text.trim() : "";
-      if (!chatId || !text || text.length > 4000) {
+      const parsedBody = MuseSteerBodySchema.safeParse(body);
+      if (!parsedBody.success) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "sessionId and text are required; text must be 4000 characters or fewer" }));
         return;
       }
+      const { sessionId: chatId, text } = parsedBody.data;
       const session = sessions.get(chatId);
       if (!session || session.engine !== "muse" || !session.bridgeSessionId) {
         res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "no active Muse session" }));

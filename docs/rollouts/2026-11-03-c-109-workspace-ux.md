@@ -29,6 +29,8 @@ The isolated Mac benchmark sorted 100 synthetic threads ten times.  Original co
 - Initial native macOS build passed in an isolated lane without launching or replacing the active app.
 - Final repository gates: TypeScript typecheck, 843 Vitest tests passed with three skipped, and 25 Node tests passed, including the same-session-ID cross-engine regression.
 - The expanded native Mac build and the isolated Swift partial-output/steering regression executable passed.
+- Review fixes reset a fresh empty queue's stale pause, keep tool IDs within the current turn, preserve unidentified tool events, and let cache hits bypass the formatter lock.
+- ACP envelopes, steering metadata, and prompt results now use Zod validation; a malformed-frame regression verifies the turn and server remain available.
 
 ## Observability And Limits
 

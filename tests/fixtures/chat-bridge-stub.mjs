@@ -127,6 +127,12 @@ rl.on("line", (line) => {
       return;
     }
     record({ event: "prompt", sessionId, promptText });
+    if (promptText.includes("malformed-events")) {
+      send(null);
+      send([]);
+      send({ method: "session/update", params: { sessionId, update: null } });
+      send({ method: "session/update", params: { sessionId, update: { sessionUpdate: "session_info_update", _meta: [] } } });
+    }
     if (promptText.includes("steer-wait") || promptText.includes("steer-error")) {
       pendingSteeringPrompt = { id, sessionId };
       record({ event: "active-turn", sessionId, turnId: "stub-turn-1" });

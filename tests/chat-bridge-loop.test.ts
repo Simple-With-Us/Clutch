@@ -186,6 +186,15 @@ async function postChat(body: unknown): Promise<{ status: number; text: string }
 }
 
 describe("chat sidecar full loop", () => {
+  it("ignores malformed engine frames and keeps the turn and server available", async () => {
+    const result = await postChat({ prompt: "malformed-events", engine: "mcode", cwd: "/tmp" });
+    expect(result.status).toBe(200);
+    expect(result.text).toContain("stub-answer");
+    expect(result.text).toContain('"stopReason":"endTurn"');
+    const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
+    expect(health.status).toBe(200);
+  });
+
   it("negotiates Muse steering and injects into the existing active turn", async () => {
     const initialLog = stubLog();
     const initialSessions = initialLog.filter((entry) => entry.event === "session-new").length;
