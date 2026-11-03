@@ -37,25 +37,20 @@ node_modules/.bin/tsx src/web/pair-ios.ts --server
 
 The installer writes `/etc/systemd/system/clutch-chat-bridge.service` from `scripts/systemd/clutch-chat-bridge.service`, enables it, and starts it.  The unit runs `scripts/chat-bridge.sh` from the checkout it was installed from, so re-run the installer after moving the checkout.
 
-The pairing command saves the pairing link to `$CLUTCH_HOME/server-pairing-link.txt` (mode 600) on a headless server instead of printing it — the link contains the sidecar token, so treat the file like a credential.  `--print` prints it when you really mean to.  Copy the file's contents into Clutch on the phone or Mac (Paste Pairing Link, or the Mac's Add Host flow); the app stores it as a MiniMax Code server host and opens on its threads.
+The pairing command saves the pairing link to `$CLUTCH_HOME/server-pairing-link.txt` (mode 600) on a headless server.  Import it through Paste Pairing Link or the Mac's Add Host flow.  The link contains the sidecar token: do not print it, post it or place it in command arguments.  A bare host URL does not pair native chat.  See [Native Session Workspace](native-session-workspace.md) for previewing and resuming Muse threads.
 
 To check the host the way a phone sees it:
 
-```bash
-curl -H "Authorization: Bearer $(cat ~/.clutch/chat-token)" \
-  https://<magicdns>:3181/clutch/v1/health
-curl -H "Authorization: Bearer $(cat ~/.clutch/chat-token)" \
-  "https://<magicdns>:3181/clutch/v1/sessions?engine=mcode&limit=5"
-```
+Use an authorized host-side diagnostic client that reads the service user's private chat-token file into memory, sends the Bearer header and returns only allowlisted health or session-list metadata.  Check `/clutch/v1/health` and `/clutch/v1/sessions?engine=mcode&limit=5` through the paired host origin.  Do not put the token in curl arguments or shell tracing.
 
 The health answer reports `mcode.available`, which is false when MiniMax Code is missing or not signed in on the server.  The apps surface that in the chat header instead of failing the first send.
 
 ## The Live Hetzner Host
 
-- Unit: `clutch-chat-bridge.service`, running as root from the fleet checkout, always-on with `Restart=on-failure`.  It is the only Clutch process on that box; there is no clutch web there.
+- Unit: `clutch-chat-bridge.service`.  Verify its current service user, process directory and listeners before operating it; the original root-user setup is historical.
 - Reachable at `https://jay-server.boa-roygbiv.ts.net:3181` on the tailnet only (`tailscale serve`, set up by `scripts/chat-bridge.sh` on every start).
-- Engines on that box: MiniMax Code (`mcode acp`) and Muse Code (native `muse acp` when supported, with the community `@bex-co/muse-code-acp` adapter installed at `/usr/local/bin/muse-code-acp` as the compatibility fallback).  The catalog route reports both, with Muse's models read from the Muse provider catalog — Muse Wonder (`muse-wonder-1.0`) among them.
-- Pairing link: `/root/.clutch/server-pairing-link.txt` on the server (owner-only).  Re-mint it any time with the pairing command above; the token survives sidecar restarts, so existing pairings keep working.
+- Engines include MiniMax Code and Muse Code.  Updated native Muse clients and sidecars offer only the three exact contributor model IDs documented in [Muse Contributor Models And Launch Options](muse-contributor-options.md).
+- Pairing link: `$CLUTCH_HOME/server-pairing-link.txt` for the actual service user.  On the verified November 3 installation that user is `jay`, with Clutch home `/home/jay/.clutch`.  Preserve the existing link and token when they already pass authenticated health and session-list checks.
 - Updating: pull the checkout, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  Re-run the installer if the checkout moved, because the unit points at it.
 
 ### Muse Code On A Server

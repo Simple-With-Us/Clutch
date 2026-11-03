@@ -8,6 +8,7 @@ struct HostsSheet: View {
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
     @AppStorage(MacBusySendMode.storageKey) private var busySendModeRawValue = MacBusySendMode.defaultMode.rawValue
     @AppStorage(MuseLaunchPreferences.storageKey) private var museLaunchPreferencesJSON = ""
+    @AppStorage(MuseContextPreferences.storageKey) private var museContextPreferencesJSON = ""
     @State private var isAddingHost = false
 
     private var busySendMode: MacBusySendMode {
@@ -122,6 +123,28 @@ struct HostsSheet: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Toggle(isOn: contextPolicyBinding(host: host, keyPath: \.autoCompact)) {
+                            Text("Compact Early Automatically")
+                        }
+                        HStack(spacing: 12) {
+                            Text("Threshold")
+                                .foregroundStyle(.secondary)
+                            Slider(value: contextThresholdBinding(host: host), in: 50...95, step: 1)
+                                .accessibilityLabel("Automatic Compaction Threshold")
+                            Text("\(contextPolicy(host: host).thresholdPercent)%")
+                                .monospacedDigit()
+                                .frame(width: 42, alignment: .trailing)
+                        }
+                        .disabled(!contextPolicy(host: host).autoCompact)
+                        Text(Copy.gap(
+                            "Clutch asks Muse to compact before your next message when reported context reaches this threshold.",
+                            "Muse's own automatic compaction remains managed by Muse."
+                        ))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
 
@@ -185,6 +208,48 @@ struct HostsSheet: View {
                     options,
                     hostKey: hostKey,
                     preferencesJSON: museLaunchPreferencesJSON
+                )
+            }
+        )
+    }
+
+    private func contextPolicy(host: ClutchHost) -> MuseContextPolicy {
+        MuseContextPreferences.policy(
+            hostKey: host.id.uuidString,
+            preferencesJSON: museContextPreferencesJSON
+        )
+    }
+
+    private func contextPolicyBinding(
+        host: ClutchHost,
+        keyPath: WritableKeyPath<MuseContextPolicy, Bool>
+    ) -> Binding<Bool> {
+        let hostKey = host.id.uuidString
+        return Binding(
+            get: { contextPolicy(host: host)[keyPath: keyPath] },
+            set: { enabled in
+                var policy = contextPolicy(host: host)
+                policy[keyPath: keyPath] = enabled
+                museContextPreferencesJSON = MuseContextPreferences.setting(
+                    policy,
+                    hostKey: hostKey,
+                    preferencesJSON: museContextPreferencesJSON
+                )
+            }
+        )
+    }
+
+    private func contextThresholdBinding(host: ClutchHost) -> Binding<Double> {
+        let hostKey = host.id.uuidString
+        return Binding(
+            get: { Double(contextPolicy(host: host).thresholdPercent) },
+            set: { value in
+                var policy = contextPolicy(host: host)
+                policy.thresholdPercent = MuseContextPolicy.clampedThreshold(Int(value.rounded()))
+                museContextPreferencesJSON = MuseContextPreferences.setting(
+                    policy,
+                    hostKey: hostKey,
+                    preferencesJSON: museContextPreferencesJSON
                 )
             }
         )

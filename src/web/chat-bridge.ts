@@ -57,6 +57,11 @@ import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
+import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
+import { mapWithConcurrency } from "./bounded-map.ts";
+import { museSessionUsage, withMuseContext } from "./muse-session-metrics.ts";
+import { normalizeSessionFolder, sessionIsInFolder } from "./session-folder-scope.ts";
+import { ContextPolicySchema, compactAvailabilityFromUpdate, contextUsageFromUpdate, shouldCompactEarly, type ContextPolicy, type ContextUsage } from "./muse-context.ts";
 import { attachMuseErrorDiagnostics, museErrorDiagnostics } from "./muse-error-diagnostics.ts";
 import { createTurnDiagnostics, type TurnDiagnosticHandle, type TurnOutcome } from "./turn-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
@@ -542,6 +547,7 @@ export function applySessionMeta(
     if (entry?.archived && !includeArchived) continue;
     out.push({
       ...session,
+      ...(entry?.title ? { title: entry.title } : {}),
       ...(entry?.projectId ? { projectId: entry.projectId } : {}),
       ...(entry?.archived ? { archived: true } : {}),
     });
@@ -961,6 +967,9 @@ export class Bridge implements MuseAuthBridge {
   private sessionModes = new Map<string, z.infer<typeof SessionOptionsResultSchema>["modes"]>();
   private baseLauncher: Launcher;
   private baseEnv: NodeJS.ProcessEnv;
+  private museContexts = new Map<string, ContextUsage & { revision: number }>();
+  private museCompactCommands = new Map<string, boolean>();
+  private lastCompactedRevision = new Map<string, number>();
 
   constructor(
     readonly engine: Engine,
@@ -1027,6 +1036,26 @@ export class Bridge implements MuseAuthBridge {
 
   hasMuseApprovalModes(sessionId: string): boolean {
     return this.sessionModes.has(sessionId);
+  }
+
+  contextControls(sessionId: string): { supportsCompaction: boolean; contextUsedTokens?: number; contextWindow?: number } {
+    const context = this.museContexts.get(sessionId);
+    return {
+      supportsCompaction: this.museCompactCommands.get(sessionId) === true,
+      ...(context ? { contextUsedTokens: context.used, contextWindow: context.size } : {}),
+    };
+  }
+
+  takeEarlyCompaction(sessionId: string, policy: ContextPolicy): boolean {
+    const context = this.museContexts.get(sessionId);
+    const should = shouldCompactEarly({
+      policy, context,
+      compactAvailable: this.museCompactCommands.get(sessionId) ?? null,
+      currentRevision: context?.revision ?? null,
+      lastCompactedRevision: this.lastCompactedRevision.get(sessionId) ?? null,
+    });
+    if (should && context) this.lastCompactedRevision.set(sessionId, context.revision);
+    return should;
   }
 
   /** Options from the latest successful user session/new or session/load. */
@@ -1153,6 +1182,9 @@ export class Bridge implements MuseAuthBridge {
     this.activeTurnIds.clear();
     this.sessionModes.clear();
     this.sessionModelMetadata.clear();
+    this.museContexts.clear();
+    this.museCompactCommands.clear();
+    this.lastCompactedRevision.clear();
     // Drop any partial line left by a mid-line crash; the next spawn starts
     // fresh instead of framing new stdout onto the old fragment.
     this.buffer = "";
@@ -1206,6 +1238,19 @@ export class Bridge implements MuseAuthBridge {
         const parsedParams = BridgeSessionUpdateParamsSchema.safeParse(msg.params);
         if (!parsedParams.success) continue;
         const params = parsedParams.data;
+        if (this.engine === "muse" && typeof params.sessionId === "string") {
+          const context = contextUsageFromUpdate(params.update);
+          if (context) {
+            const previous = this.museContexts.get(params.sessionId);
+            this.museContexts.set(params.sessionId, {
+              ...context,
+              revision: previous && previous.used === context.used && previous.size === context.size
+                ? previous.revision : (previous?.revision ?? 0) + 1,
+            });
+          }
+          const compact = compactAvailabilityFromUpdate(params.update);
+          if (compact !== null) this.museCompactCommands.set(params.sessionId, compact);
+        }
         if (this.engine === "muse" && typeof params?.sessionId === "string" &&
             params.update?.sessionUpdate === "session_info_update") {
           const meta = params.update._meta;
@@ -1369,10 +1414,16 @@ export class Bridge implements MuseAuthBridge {
    * the caller keeps the session as it was and reports the refusal.
    */
   async setConfigOption(sessionId: string, configId: string, value: string): Promise<boolean> {
+    const previousModel = this.sessionModelMetadata.get(sessionId)?.model;
     try {
       const result = await this.send("session/set_config_option", { sessionId, configId, value });
       const parsed = SessionOptionsResultSchema.safeParse(result);
       if (parsed.success && Array.isArray(parsed.data.configOptions)) this.rememberSessionOptions(result, sessionId);
+      if (this.engine === "muse" && configId === "model" &&
+          previousModel !== (museContributorModelId(value) ?? value)) {
+        this.museContexts.delete(sessionId);
+        this.lastCompactedRevision.delete(sessionId);
+      }
       return true;
     } catch {
       return false;
@@ -1380,10 +1431,10 @@ export class Bridge implements MuseAuthBridge {
   }
 
   async listSessions(cwd?: string, limit: number = 100): Promise<AcpSessionInfo[]> {
-    const cap = Math.min(Math.max(Math.trunc(limit) || 100, 1), 500);
+    const cap = Math.min(Math.max(Math.trunc(limit) || 100, 1), 5_000);
     const sessions: AcpSessionInfo[] = [];
     let cursor: string | undefined;
-    for (let page = 0; page < 20; page += 1) {
+    for (let page = 0; page < 100; page += 1) {
       const result = (await this.send("session/list", {
         ...(cwd ? { cwd } : {}),
         ...(cursor ? { cursor } : {}),
@@ -1539,9 +1590,10 @@ const SessionMetaPatchSchema = z
       .nullable()
       .optional(),
     archived: z.boolean({ error: "archived must be a boolean" }).optional(),
+    title: z.string().max(512).nullable().optional(),
   })
   .strict()
-  .refine((v) => v.projectId !== undefined || v.archived !== undefined, { message: "nothing to update" });
+  .refine((v) => v.projectId !== undefined || v.archived !== undefined || v.title !== undefined, { message: "nothing to update" });
 
 /** Most sessions enriched with log-derived usage per list request. */
 const USAGE_ENRICH_CAP = 50;
@@ -2249,18 +2301,23 @@ async function main(): Promise<void> {
       }
       const listEngine = requestedEngine;
       const requestedCwd = url.searchParams.get("cwd")?.trim() || undefined;
-      const limit = parseLimitParam(url.searchParams.get("limit"), 50, 200);
+      const folderScope = url.searchParams.get("scope") ?? "exact";
+      if (!["exact", "tree"].includes(folderScope) || (requestedCwd && !normalizeSessionFolder(requestedCwd))) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid folder scope" }));
+        return;
+      }
+      const limit = parseLimitParam(url.searchParams.get("limit"), 100, 1_000);
       try {
         const includeArchived = url.searchParams.get("archived") === "include";
         // Archived threads are dropped after listing, so over-fetch candidates
         // (capped well past the page size) to keep `limit` visible rows when
         // possible, then trim back to the requested page size after filtering.
-        const fetchLimit = includeArchived ? limit : Math.max(limit, 500);
-        const listed = await listSessionsFor(listEngine, requestedCwd, fetchLimit);
-        const page = applySessionMeta(listed, loadSessionMeta(SESSION_META_FILE), includeArchived).slice(0, limit);
-        // Reading usage means a synchronous zstd log read per session, so cap
-        // how many rows get enriched in one request; rows past the cap simply
-        // report no usage (the UI already renders "not reported").
+        const fetchLimit = requestedCwd && folderScope === "tree" ? 5_000 : includeArchived ? limit : Math.max(limit, 500);
+        const listed = await listSessionsFor(listEngine, folderScope === "tree" ? undefined : requestedCwd, fetchLimit);
+        const scoped = requestedCwd ? listed.filter((row) => sessionIsInFolder(row.cwd, requestedCwd, folderScope === "tree")) : listed;
+        const visible = applySessionMeta(scoped, loadSessionMeta(SESSION_META_FILE), includeArchived);
+        const page = visible.slice(0, limit);
+        // Bound list I/O; details for an individual Muse row are read on demand.
         const modelPage = isDshHostedEngine(listEngine)
           ? attachSessionModelMetadata(page.slice(0, USAGE_ENRICH_CAP), DSH_HOME).concat(page.slice(USAGE_ENRICH_CAP))
           : page;
@@ -2268,14 +2325,100 @@ async function main(): Promise<void> {
           ...knownModelMetadata.get(modelMetadataKey(listEngine, row.sessionId)),
           ...row,
         }));
-        const sessions = attachUsage(withKnownMetadata.slice(0, USAGE_ENRICH_CAP)).concat(withKnownMetadata.slice(USAGE_ENRICH_CAP));
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions }));
+        const sessions = listEngine === "muse"
+          ? await mapWithConcurrency(withKnownMetadata.slice(0, USAGE_ENRICH_CAP), 4, async (row) => {
+            const log = await readMuseSessionSummary(row.sessionId);
+            if (!log) return row;
+            const usage = museSessionUsage(log);
+            return {
+              ...row,
+              ...(log.modelId ? { model: log.modelId } : {}),
+              ...(log.providerId ? { provider: log.providerId } : {}),
+              ...(usage ? { usage } : {}),
+            };
+          }).then((enriched) => enriched.concat(withKnownMetadata.slice(USAGE_ENRICH_CAP)))
+          : attachUsage(withKnownMetadata.slice(0, USAGE_ENRICH_CAP)).concat(withKnownMetadata.slice(USAGE_ENRICH_CAP));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions, hasMore: visible.length > limit || listed.length >= fetchLimit }));
       } catch (err) {
         if (listEngine === "muse") log("muse list failed");
         else log(`${listEngine} list failed message=${(err as Error).message.slice(0, 120)}`);
         res.writeHead(502, { "content-type": "application/json" }).end(
           JSON.stringify({ error: listEngine === "muse" ? safeMuseBridgeError(err) : (err as Error).message.slice(0, 300) }),
         );
+      }
+      return;
+    }
+
+    // Details read one bounded log summary and never acquire an ACP session.
+    if (req.method === "GET" && url.pathname === "/clutch/v1/sessions/details") {
+      const engine = url.searchParams.get("engine");
+      const id = url.searchParams.get("sessionId");
+      if (engine !== "muse" || !id || id.length > 200) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "Muse engine and sessionId are required" }));
+        return;
+      }
+      try {
+        const summary = await readMuseSessionSummary(id);
+        if (!summary) {
+          res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Recorded details are unavailable for this thread." }));
+          return;
+        }
+        const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
+        const usage = museSessionUsage(summary);
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
+          readOnly: true, sessionId: id,
+          cwd: summary.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
+          title: entry?.title ?? summary.name, model: summary.modelId, provider: summary.providerId,
+          ...(usage ? { usage } : {}),
+        }));
+      } catch {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: "Recorded thread details could not be read." }));
+      }
+      return;
+    }
+
+    // Preview never calls session/load or creates a sidecar chat session.
+    if (req.method === "GET" && url.pathname === "/clutch/v1/sessions/preview") {
+      const engine = url.searchParams.get("engine");
+      const id = url.searchParams.get("sessionId");
+      if (!isEngine(engine) || !id || id.length > 200) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "engine and sessionId are required" }));
+        return;
+      }
+      const limit = parseLimitParam(url.searchParams.get("limit"), 200, 1_000);
+      const running = [...sessions.values()].some((s) => s.engine === engine && s.resumeSessionId === id && s.busy);
+      try {
+        if (engine === "muse") {
+          const log = await readMuseSessionLog(id);
+          if (!log) {
+            res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "A read-only preview is unavailable for this thread.\u00A0 Choose Resume Thread to open it with Muse." }));
+            return;
+          }
+          const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
+          const usage = museSessionUsage(log);
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+            readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
+            title: entry?.title ?? log.name, model: log.modelId, provider: log.providerId,
+            history: sliceThreadHistory(compactToolHistory(log.transcript), limit),
+            ...(usage ? { usage } : {}), running, truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
+          }));
+          return;
+        }
+        if (isDshHostedEngine(engine)) {
+          const history = await hostClient.run((client) => loadDshHostHistory(client, { sessionId: id, limit }));
+          const metadata = attachSessionModelMetadata([{ sessionId: id }], DSH_HOME)[0];
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+            readOnly: true, remoteSessionId: id, cwd: url.searchParams.get("cwd") ?? undefined,
+            title: loadSessionMeta(SESSION_META_FILE).sessions[id]?.title,
+            model: metadata?.model, provider: metadata?.provider,
+            history: sliceThreadHistory(compactToolHistory(history), limit),
+            usage: readSessionUsage(DSH_HOME, id) ?? undefined, running, truncated: false,
+          }));
+          return;
+        }
+        res.writeHead(501, { "content-type": "application/json" }).end(JSON.stringify({ error: "This engine does not provide a read-only preview.\u00A0 Choose Resume Thread to open it." }));
+      } catch {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: "The thread preview could not be read.\u00A0 Resume it when you are ready to continue." }));
       }
       return;
     }
@@ -2297,6 +2440,11 @@ async function main(): Promise<void> {
       }
       const body = parsedLoad.data;
       const loadEngine = body.engine;
+      if ([...sessions.values()].some((session) => session.engine === loadEngine &&
+          session.resumeSessionId === body.sessionId && session.busy)) {
+        res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ error: "This thread is running in Clutch.\u00A0 Preview it or wait for its current turn to finish." }));
+        return;
+      }
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
       const historyLimit =
         typeof body.limit === "number" || typeof body.limit === "string"
@@ -2355,6 +2503,7 @@ async function main(): Promise<void> {
             cwd,
             ...(session.modelMetadata?.model ? { model: session.modelMetadata.model } : {}),
             ...(session.modelMetadata?.provider ? { provider: session.modelMetadata.provider } : {}),
+            ...(loadEngine === "muse" ? { contextControls: bridge.contextControls(body.sessionId) } : {}),
             history: sliceThreadHistory(compactToolHistory(history), historyLimit),
           }),
         );
@@ -2366,6 +2515,18 @@ async function main(): Promise<void> {
           JSON.stringify({ error: loadEngine === "muse" ? safeMuseBridgeError(err) : (err as Error).message.slice(0, 300) }),
         );
       }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/clutch/v1/sessions/context") {
+      const id = url.searchParams.get("sessionId");
+      const session = id ? sessions.get(id) : undefined;
+      if (!session || session.engine !== "muse" || !session.bridgeSessionId) {
+        res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Resume a Muse thread to view its context controls." }));
+        return;
+      }
+      const controls = bridges.get("muse")?.contextControls(session.bridgeSessionId) ?? { supportsCompaction: false };
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(controls));
       return;
     }
 
@@ -2423,7 +2584,8 @@ async function main(): Promise<void> {
         return;
       }
       const meta = loadSessionMeta(SESSION_META_FILE);
-      const patch: { projectId?: string | null; archived?: boolean } = {};
+      const patch: { projectId?: string | null; archived?: boolean; title?: string | null } = {};
+      if (parsed.data.title !== undefined) patch.title = parsed.data.title;
       if (parsed.data.projectId !== undefined) {
         if (parsed.data.projectId === null || parsed.data.projectId === "") {
           patch.projectId = null;
@@ -2576,6 +2738,7 @@ async function main(): Promise<void> {
         images?: unknown;
         permissions?: unknown;
         museOptions?: unknown;
+        contextPolicy?: unknown;
       };
       try {
         body = (await readJsonBody(req)) as typeof body;
@@ -2614,6 +2777,12 @@ async function main(): Promise<void> {
         return;
       }
       const museOptions = parsedMuseOptions?.success ? parsedMuseOptions.data : undefined;
+      const parsedContextPolicy = body.contextPolicy === undefined ? null : ContextPolicySchema.safeParse(body.contextPolicy);
+      if (parsedContextPolicy && (!parsedContextPolicy.success || engine !== "muse")) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid context policy" }));
+        return;
+      }
+      const contextPolicy = parsedContextPolicy?.success ? parsedContextPolicy.data : undefined;
       // Images attached to the turn, the way the web canvas attaches files.
       const images = parsePromptImages(body.images);
 
@@ -2636,6 +2805,11 @@ async function main(): Promise<void> {
       }
       if (session.busy) {
         res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ error: "session busy", sessionId: chatId }));
+        return;
+      }
+      if (session.resumeSessionId && [...sessions.values()].some((other) => other !== session &&
+          other.engine === engine && other.resumeSessionId === session.resumeSessionId && other.busy)) {
+        res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({ error: "This thread is already running in another Clutch window.", sessionId: chatId }));
         return;
       }
       if (requestedModel) session.model = requestedModel;
@@ -2731,6 +2905,7 @@ async function main(): Promise<void> {
       // Nothing here estimates:  if the log has no usage yet, no event fires.
       let usageTimer: ReturnType<typeof setInterval> | null = null;
       let lastUsage: SessionUsage | null = null;
+      let compactionInProgress = false;
       const stopUsage = (): void => {
         if (usageTimer) clearInterval(usageTimer);
         usageTimer = null;
@@ -2740,7 +2915,11 @@ async function main(): Promise<void> {
         settled = true;
         const parsedTerminal = z.object({ stopReason: z.string().optional() }).safeParse(data);
         const reason = parsedTerminal.success ? parsedTerminal.data.stopReason : undefined;
-        const outcome: TurnOutcome = event === "error" ? "error" : reason === "cancelled" ? "cancelled" : reason === "endTurn" ? "success" : "unknown";
+        if (compactionInProgress) {
+          turnDiagnostics.record("compaction", { status: reason === "cancelled" ? "cancelled" : event === "error" ? "failed" : "unknown" });
+          compactionInProgress = false;
+        }
+        const outcome: TurnOutcome = event === "error" ? "error" : reason === "cancelled" ? "cancelled" : reason === "endTurn" || reason === "end_turn" ? "success" : "unknown";
         turnDiagnostics.finish(outcome);
         log(`chat diagnostic id=${turnDiagnostics.turnId} outcome=${outcome}`);
         delete active.diagnostics;
@@ -2943,6 +3122,7 @@ async function main(): Promise<void> {
           if (engine === "muse" && active.model && !applied.modelApplied) throw new MuseSettingsError("model");
           if (engine === "muse" && active.effort && !applied.effortApplied) throw new MuseSettingsError("effort");
         }
+        if (settled) return;
         turnDiagnostics.record("metadata", { ...active.modelMetadata, sessionId: remoteId() });
         if (engine === "mcode" && active.bridgeSessionId) {
           const sessionIdForUsage = active.bridgeSessionId;
@@ -2958,7 +3138,92 @@ async function main(): Promise<void> {
           }, 1500);
           usageTimer.unref?.();
         }
+        let publishMuseState: ((fresh?: boolean) => Promise<void>) | null = null;
+        if (engine === "muse" && active.bridgeSessionId) {
+          const nativeId = active.bridgeSessionId;
+          let reading: Promise<void> | null = null;
+          let lastState = "";
+          publishMuseState = async (fresh = false): Promise<void> => {
+            if (reading) {
+              await reading;
+              if (!fresh) return;
+            }
+            if (settled) return;
+            const sample = (async (): Promise<void> => {
+              try {
+              const log = await readMuseSessionLog(nativeId);
+              if (settled) return;
+              const controls = bridge.contextControls(nativeId);
+              const usage = withMuseContext(log ? museSessionUsage(log) : null, controls);
+              const state = JSON.stringify({ controls, usage });
+              if (state === lastState) return;
+              lastState = state;
+              sseSend(res, "context_controls", controls);
+              if (usage) {
+                sseSend(res, "usage", { sessionId: nativeId, usage });
+                // Snapshots are observations, never fresh per-call billing events.
+                turnDiagnostics.record("metrics", {
+                  snapshotBasis: "session-snapshot", totalsComplete: usage.totalsComplete === true,
+                  ...(usage.inputTokensReported !== false ? { recordedInputTokens: usage.inputTokens } : {}),
+                  ...(usage.outputTokensReported !== false ? { recordedOutputTokens: usage.outputTokens } : {}),
+                  cachedTokens: usage.cachedTokens,
+                  responseTokensPerSecond: usage.responseTokensPerSecond,
+                  completionDurationMs: usage.completionDurationMs,
+                });
+              }
+              if (controls.contextUsedTokens !== undefined && controls.contextWindow !== undefined) {
+                turnDiagnostics.record("context", {
+                  basis: "engine-context", totalTokens: controls.contextUsedTokens, contextWindow: controls.contextWindow,
+                });
+              }
+            } catch {
+              log("muse metrics read failed");
+              }
+            })();
+            reading = sample;
+            try { await sample; } finally { if (reading === sample) reading = null; }
+          };
+          await publishMuseState();
+          if (settled) return;
+          usageTimer = setInterval(() => { void publishMuseState?.(); }, 2_500);
+          usageTimer.unref?.();
+          if (prompt.trim() === "/compact" && !bridge.contextControls(nativeId).supportsCompaction) {
+            throw new MuseSettingsError("compaction");
+          }
+          if (prompt.trim() === "/compact") {
+            compactionInProgress = true;
+            turnDiagnostics.record("compaction", { status: "in_progress" });
+          }
+          if (prompt.trim() !== "/compact" && contextPolicy && bridge.takeEarlyCompaction(nativeId, contextPolicy)) {
+            compactionInProgress = true;
+            turnDiagnostics.record("compaction", { status: "in_progress" });
+            sseSend(res, "thought", { text: "Compacting context before sending your message…" });
+            try {
+              const compacted = await bridge.prompt(nativeId, "/compact", [], active.cwd);
+              if (settled) return;
+              if (!["endTurn", "end_turn"].includes(compacted.stopReason)) {
+                turnDiagnostics.record("compaction", { status: compacted.stopReason === "cancelled" ? "cancelled" : "failed" });
+                compactionInProgress = false;
+                throw new MuseSettingsError("auto-compact");
+              }
+              turnDiagnostics.record("compaction", { status: "completed" });
+              compactionInProgress = false;
+              sseSend(res, "message", { text: "\n\n" });
+              await publishMuseState(true);
+            } catch {
+              if (compactionInProgress) turnDiagnostics.record("compaction", { status: "failed" });
+              compactionInProgress = false;
+              throw new MuseSettingsError("auto-compact");
+            }
+          }
+        }
+        if (settled) return;
         const result = await bridge.prompt(active.bridgeSessionId, prompt, images, active.cwd);
+        if (engine === "muse" && prompt.trim() === "/compact") {
+          turnDiagnostics.record("compaction", { status: ["endTurn", "end_turn"].includes(result.stopReason) ? "completed" : result.stopReason === "cancelled" ? "cancelled" : "failed" });
+          compactionInProgress = false;
+        }
+        await publishMuseState?.(true);
         log(`chat end session=${chatId} stopReason=${result.stopReason}`);
         if (sink) {
           try {
@@ -2970,6 +3235,8 @@ async function main(): Promise<void> {
         }
         finish("done", { stopReason: result.stopReason ?? "endTurn", sessionId: chatId, remoteSessionId: remoteId() });
       } catch (err) {
+        if (compactionInProgress) turnDiagnostics.record("compaction", { status: settled ? "cancelled" : "failed" });
+        compactionInProgress = false;
         const turnError = museErrorDiagnostics(err);
         turnDiagnostics.record("progress", { phase: "finalizing", outcome: "error", errorCategory: turnError.category, errorCode: turnError.code });
         if (engine === "muse") {

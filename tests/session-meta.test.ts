@@ -72,6 +72,15 @@ describe("normalizeProjectName", () => {
 });
 
 describe("upsertSession", () => {
+  it("persists a display title and restores the engine title when cleared", () => {
+    const data = empty();
+    upsertSession(data, "session-a", { title: "  New\n\tTitle ", projectId: "prj_1" });
+    const parsed = parseSessionMeta(JSON.stringify(data));
+    expect(applySessionMeta([{ sessionId: "session-a", title: "Engine Title" }], parsed, false)[0]?.title).toBe("New Title");
+    upsertSession(parsed, "session-a", { title: null });
+    expect(applySessionMeta([{ sessionId: "session-a", title: "Engine Title" }], parsed, false)[0]?.title).toBe("Engine Title");
+    expect(parsed.sessions["session-a"]?.projectId).toBe("prj_1");
+  });
   it("assigns and clears a project", () => {
     const data = empty();
     upsertSession(data, "session-a", { projectId: "prj_1" });

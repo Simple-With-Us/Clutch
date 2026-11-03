@@ -191,6 +191,7 @@ final class SessionThreadModel {
             cwd: cwd,
             effort: effort,
             museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil,
+            contextPolicy: engine == "muse" ? MuseContextPreferences.policy(for: host) : nil,
             images: attachments
         )
         attachments = []
@@ -224,6 +225,8 @@ final class SessionThreadModel {
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                     case .usage:
                         break // live usage strip is Mac-only
+                    case .contextControls:
+                        break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         sendError = message
                         pendingPermissions.removeAll()

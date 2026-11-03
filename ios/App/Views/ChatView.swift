@@ -265,6 +265,8 @@ public struct ChatView: View {
                         }
                     case .usage:
                         break // live usage strip is Mac-only
+                    case .contextControls:
+                        break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         sending = false
                         thoughtLine = nil

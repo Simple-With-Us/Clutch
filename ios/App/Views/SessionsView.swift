@@ -565,7 +565,8 @@ final class NewThreadModel {
             sessionId: nil,
             relayReceiverUid: "",
             engine: engine,
-            museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil
+            museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil,
+            contextPolicy: engine == "muse" ? MuseContextPreferences.policy(for: host) : nil
         )
         Task {
             var text = ""
@@ -592,6 +593,8 @@ final class NewThreadModel {
                         pendingPermissions.removeAll()
                     case .usage:
                         break // live usage strip is Mac-only
+                    case .contextControls:
+                        break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         errorText = message
                         pendingPermissions.removeAll()

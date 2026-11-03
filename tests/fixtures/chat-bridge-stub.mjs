@@ -3,7 +3,7 @@
 // Speaks just enough JSON-RPC over stdio: initialize, session/list,
 // session/new/load, session/prompt, and session/cancel.
 import readline from "node:readline";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -84,11 +84,15 @@ rl.on("line", (line) => {
       },
     });
   } else if (method === "session/list") {
+    let sessions = [{ sessionId: "mcode-existing-1", title: "Existing MiniMax thread", cwd: "/tmp/project", updatedAt: "2026-10-13T10:00:00Z" }];
+    if (process.env.CHAT_BRIDGE_STUB_SESSIONS_FILE) {
+      try { sessions = JSON.parse(readFileSync(process.env.CHAT_BRIDGE_STUB_SESSIONS_FILE, "utf8")); } catch { /* default fixture rows */ }
+    }
     send({
       jsonrpc: "2.0",
       id,
       result: {
-        sessions: [{ sessionId: "mcode-existing-1", title: "Existing MiniMax thread", cwd: "/tmp/project", updatedAt: "2026-10-13T10:00:00Z" }],
+        sessions,
       },
     });
   } else if (method === "session/new") {

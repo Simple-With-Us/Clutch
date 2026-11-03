@@ -119,10 +119,18 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
 /// a character count, because a `characters / 4` figure is wrong often enough
 /// to mislead a user deciding whether to start a fresh thread.
 public struct AcpSessionUsage: Decodable, Equatable, Sendable {
+    public var basis: String?
+    public var totalsComplete: Bool?
+    public var inputTokensReported: Bool?
+    public var outputTokensReported: Bool?
+    public var cachedTokens: Int?
+    public var responseTokensPerSecond: Double?
+    public var completionDurationMs: Double?
     public var provider: String?
     public var model: String?
     /// The model's total context window, as the engine reported it.
     public var contextWindow: Int?
+    public var contextUsedTokens: Int?
     public var inputTokens: Int
     public var outputTokens: Int
     /// Context occupancy:  the engine reports input + cacheRead + output here.
@@ -139,7 +147,15 @@ public struct AcpSessionUsage: Decodable, Equatable, Sendable {
         outputTokens: Int = 0,
         totalTokens: Int = 0,
         cacheReadTokens: Int? = nil,
-        outputTokensPerSecond: Double? = nil
+        outputTokensPerSecond: Double? = nil,
+        basis: String? = nil,
+        totalsComplete: Bool? = nil,
+        inputTokensReported: Bool? = nil,
+        outputTokensReported: Bool? = nil,
+        cachedTokens: Int? = nil,
+        responseTokensPerSecond: Double? = nil,
+        completionDurationMs: Double? = nil,
+        contextUsedTokens: Int? = nil
     ) {
         self.provider = provider
         self.model = model
@@ -149,13 +165,22 @@ public struct AcpSessionUsage: Decodable, Equatable, Sendable {
         self.totalTokens = totalTokens
         self.cacheReadTokens = cacheReadTokens
         self.outputTokensPerSecond = outputTokensPerSecond
+        self.basis = basis
+        self.totalsComplete = totalsComplete
+        self.inputTokensReported = inputTokensReported
+        self.outputTokensReported = outputTokensReported
+        self.cachedTokens = cachedTokens
+        self.responseTokensPerSecond = responseTokensPerSecond
+        self.completionDurationMs = completionDurationMs
+        self.contextUsedTokens = contextUsedTokens
     }
 
     /// Occupancy as a percentage of the window, or nil when either half is
     /// unknown.  A zero or missing window yields nil rather than infinity.
     public var contextUsedPercent: Double? {
+        guard contextUsedTokens != nil || basis != "session-totals" else { return nil }
         guard let contextWindow, contextWindow > 0 else { return nil }
-        return (Double(totalTokens) / Double(contextWindow)) * 100
+        return (Double(contextUsedTokens ?? totalTokens) / Double(contextWindow)) * 100
     }
 
     /// `152.1k`, `1.04M`, or the raw number under a thousand.
@@ -167,12 +192,13 @@ public struct AcpSessionUsage: Decodable, Equatable, Sendable {
 
     /// `61% · 610k / 1M`, or nil when the engine reported neither half.
     public var occupancyLabel: String? {
+        guard contextUsedTokens != nil || basis != "session-totals" else { return nil }
         guard contextWindow != nil || totalTokens > 0 else { return nil }
         guard let percent = contextUsedPercent, let contextWindow else { return nil }
         return String(
             format: "%.0f%% · %@ / %@",
             percent,
-            Self.compact(totalTokens),
+            Self.compact(contextUsedTokens ?? totalTokens),
             Self.compact(contextWindow)
         )
     }

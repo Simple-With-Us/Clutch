@@ -1,7 +1,11 @@
 import SwiftUI
 
 struct RootView: View {
+    #if os(macOS)
+    @State private var store = HostStore()
+    #else
     @State private var store = HostStore.shared
+    #endif
     @State private var selectedTab: Int = 0
 
     var body: some View {
