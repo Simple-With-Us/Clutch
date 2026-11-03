@@ -57,6 +57,24 @@ final class ChatTurnBufferTests: XCTestCase {
         XCTAssertEqual(tools.map(\.name), ["Read File", "Read File", "Tool Call"])
     }
 
+    func testTenThousandUncorrelatedToolsStayBoundedAndCountOverflow() {
+        var turn = ChatTurnBuffer()
+        for index in 0..<10_000 {
+            turn.updateTool(id: "", name: index.isMultiple(of: 2) ? "Read File" : "", status: "status-\(index)")
+        }
+
+        XCTAssertEqual(turn.tools.count, 129)
+        XCTAssertEqual(Set(turn.tools.prefix(128).map(\.id)).count, 128)
+        XCTAssertEqual(turn.tools.prefix(128).map(\.name).filter { $0 == "Tool Call" }.count, 64)
+        XCTAssertEqual(turn.tools.last?.name, "Additional Tool Updates (9872)")
+        XCTAssertEqual(turn.tools.last?.status, "status-9999")
+
+        _ = turn.drain()
+        turn.updateTool(id: "", name: "After Drain", status: "running")
+        XCTAssertEqual(turn.tools.count, 1)
+        XCTAssertEqual(turn.tools[0].name, "After Drain")
+    }
+
     func testToolUpdatesCannotMatchRowsFromEarlierTurns() {
         let priorTurn = [
             AcpHistoryEntry(sessionId: "s", kind: "tool_call", text: "Earlier call", toolCallId: "reused"),

@@ -920,7 +920,7 @@ const BridgeInitializationSchema = z.object({
   _meta: z.record(z.string(), z.unknown()).optional(),
   authMethods: z.array(z.unknown()).optional(),
 });
-const BridgeAuthMethodSchema = z.object({ id: z.string().min(1), name: z.string().optional(), description: z.string().optional() });
+const BridgeAuthMethodSchema = z.object({ id: z.string().min(1), name: z.string().optional().catch(undefined), description: z.string().optional().catch(undefined) });
 const MuseSteeringCapabilitySchema = z.object({ version: z.literal(1), method: z.literal("_muse/steer") });
 const MuseSteeringResultSchema = z.object({ status: z.literal("accepted") });
 const BridgePromptResultSchema = z.object({ stopReason: z.string().optional().default("endTurn") });
