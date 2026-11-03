@@ -223,6 +223,25 @@ it("previews and renames a Muse thread without acquiring an ACP session", async 
   expect(stubLog()).toEqual(before);
 });
 
+it("keeps the selected folder when preview metadata omits its workspace root", async () => {
+  const before = stubLog();
+  const original = readFileSync(museLogFile, "utf8");
+  const withoutRoot = original.split("\n").filter(Boolean).map((line) => {
+    const entry = JSON.parse(line);
+    if (entry.payload_type === "runtime.session.metadata") delete entry.payload.record.workspace_root;
+    return JSON.stringify(entry);
+  }).join("\n");
+  try {
+    writeFileSync(museLogFile, withoutRoot);
+    const preview = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${PREVIEW_ID}&cwd=/tmp/kept-project`, { headers: chatHeaders() });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({ cwd: "/tmp/kept-project", readOnly: true });
+    expect(stubLog()).toEqual(before);
+  } finally {
+    writeFileSync(museLogFile, original);
+  }
+});
+
 it("filters folder trees by path segment while retaining the all-folder view", async () => {
   const root = `http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`;
   const all = await fetch(root, { headers: chatHeaders() });

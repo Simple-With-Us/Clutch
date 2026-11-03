@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { Bridge } from "../src/web/chat-bridge.ts";
-import { MuseSettingsError, museContributorModelId, museLaunchArguments } from "../src/web/muse-launch-options.ts";
+import { MuseSettingsError, isMuseContributorModel, museContributorModelId, museLaunchArguments } from "../src/web/muse-launch-options.ts";
 
 function fixture(dir: string, modes = ["onRequest", "allowAll"]): string {
   const script = join(dir, "muse-acp-fixture.mjs");
@@ -42,12 +42,24 @@ async function stopBridge(bridge: Bridge, sessionId = "fixture-session"): Promis
 }
 
 describe("Muse launch options", () => {
+  it("blocks max for contributor IDs beyond the picker allowlist in every wire spelling", () => {
+    const id = "muse-future-1.0-contributor";
+    expect(museContributorModelId(id)).toBeNull();
+    expect(isMuseContributorModel(id)).toBe(true);
+    expect(isMuseContributorModel(`muse-model:${JSON.stringify([4, null, id])}`)).toBe(true);
+    expect(isMuseContributorModel(`muse-model:${encodeURIComponent(JSON.stringify([null, "profile", id]))}`)).toBe(true);
+    expect(isMuseContributorModel('muse-model:["provider-contributor",null,"muse-spark-1.3"]')).toBe(false);
+    expect(isMuseContributorModel("muse-spark-1.3")).toBe(false);
+    expect(isMuseContributorModel('muse-model:[null,"muse-future-contributor"]')).toBe(false);
+  });
   it("recognizes only exact contributor models in either supported ACP spelling", () => {
     for (const id of ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]) {
       expect(museContributorModelId(id)).toBe(id);
       expect(museContributorModelId(`muse-model:${JSON.stringify(["meta", "tbh", id])}`)).toBe(id);
       expect(museContributorModelId(`muse-model:${encodeURIComponent(JSON.stringify(["meta", "tbh", id]))}`)).toBe(id);
       expect(museContributorModelId(`muse-model:${JSON.stringify([null, null, id])}`)).toBe(id);
+      expect(museContributorModelId(`muse-model:${JSON.stringify([7, 42, id])}`)).toBe(id);
+      expect(museContributorModelId(`muse-model:${JSON.stringify([{ opaque: 1 }, ["profile"], id])}`)).toBe(id);
     }
     for (const value of ["muse-spark-1.3", "other-contributor", "muse-model:not-json", 'muse-model:["muse-spark-1.3-contributor"]']) {
       expect(museContributorModelId(value)).toBeNull();

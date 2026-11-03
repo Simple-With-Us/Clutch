@@ -420,14 +420,28 @@ async function isSafeSessionPath(root: string, sessionId: string, path: string):
   return canonical === path && isInside(root, canonical);
 }
 
-async function readBounded(path: string, size: number, maxBytes: number): Promise<string> {
+function sameFileIdentity(left: { dev: number; ino: number }, right: { dev: number; ino: number }): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function readBounded(
+  path: string,
+  size: number,
+  maxBytes: number,
+  identity: { dev: number; ino: number },
+  validatePath: () => Promise<boolean>,
+): Promise<string | null> {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const actual = await handle.stat();
-    if (!actual.isFile() || actual.size !== size) return "";
+    if (!actual.isFile() || actual.size !== size || !sameFileIdentity(actual, identity)) return null;
+    if (!await validatePath()) return null;
+    const current = await lstat(path).catch(() => null);
+    if (!current?.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) return null;
     if (size <= maxBytes) {
       const whole = Buffer.alloc(size);
       const read = await handle.read(whole, 0, size, 0);
+      if (read.bytesRead !== size) return null;
       return whole.subarray(0, read.bytesRead).toString("utf8");
     }
     const headSize = Math.min(HEAD_BYTES, Math.max(1, maxBytes - 1));
@@ -455,14 +469,17 @@ export async function readMuseSessionLog(
   const path = await findMuseSessionLog(sessionId, sessionsRoot);
   if (!path) return null;
   try {
+    const root = await realpath(sessionsRoot);
+    if (!isInside(root, path) || !await isSafeSessionPath(root, sessionId, path)) return null;
     const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || !isInside(await realpath(sessionsRoot), path)) return null;
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
     const maxBytes = Math.max(1, Math.min(options.maxBytes ?? MAX_LOG_BYTES, MAX_LOG_BYTES));
     const maxLines = Math.max(1, Math.min(options.maxLines ?? MAX_LINES, MAX_LINES));
-    const cacheKey = `${path}\u0000${maxBytes}:${maxLines}:${options.includeTranscript === false ? "summary" : "full"}`;
+    const cacheKey = `${path}\u0000${stat.dev}:${stat.ino}:${maxBytes}:${maxLines}:${options.includeTranscript === false ? "summary" : "full"}`;
     const cached = cache.get(cacheKey);
     if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) return structuredClone(cached.result);
-    const contents = await readBounded(path, stat.size, maxBytes);
+    const contents = await readBounded(path, stat.size, maxBytes, stat, () => isSafeSessionPath(root, sessionId, path));
+    if (contents === null) return null;
     const parsed = parseMuseSessionLog(contents, sessionId, {
       maxBytes,
       maxLines,
@@ -488,11 +505,13 @@ export async function readMuseSessionSummary(
   const path = await findMuseSessionLog(sessionId, sessionsRoot);
   if (!path) return null;
   try {
+    const root = await realpath(sessionsRoot);
+    if (!isInside(root, path) || !await isSafeSessionPath(root, sessionId, path)) return null;
     const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || !isInside(await realpath(sessionsRoot), path)) return null;
-    const cacheKey = `${path}\u0000summary`;
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const cacheKey = `${path}\u0000${stat.dev}:${stat.ino}:summary`;
     const cached = summaryCache.get(cacheKey);
-    if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size && await isSafeSessionPath(await realpath(sessionsRoot), sessionId, path)) {
+    if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       return structuredClone(cached.result);
     }
     const summary = await readMuseSessionLog(sessionId, {
