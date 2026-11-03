@@ -129,10 +129,13 @@ export function resolveInfisicalCredentials(
   env: CredentialsEnv = process.env,
 ): InfisicalCredentials {
   const file = readInfisicalCredentials(env);
-  const readToken = trimmed(env.INFISICAL_TOKEN) || trimmed(file?.readToken);
+  const environmentReadToken = trimmed(env.INFISICAL_TOKEN);
+  const readToken = environmentReadToken || trimmed(file?.readToken);
   const writeToken = trimmed(env.INFISICAL_WRITE_TOKEN) || trimmed(file?.writeToken);
   return {
-    projectId: trimmed(env.INFISICAL_PROJECT_ID) || trimmed(file?.projectId) || defaults.projectId,
+    projectId: trimmed(env.INFISICAL_PROJECT_ID) ||
+      (environmentReadToken ? "" : trimmed(file?.projectId)) ||
+      defaults.projectId,
     readToken,
     writeToken,
   };

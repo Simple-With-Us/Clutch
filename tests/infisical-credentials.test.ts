@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,6 +107,13 @@ describe("per-host service-token bootstrap", () => {
 
   it("prefers explicit environment tokens and never includes token values in summaries", () => {
     writeInfisicalCredentials({ projectId: "file-project", readToken: READ, writeToken: WRITE }, { CLUTCH_HOME: home });
+    const explicitReadToken = `st.${randomBytes(24).toString("hex")}`;
+    const envOnlyReadToken = { CLUTCH_HOME: home, INFISICAL_TOKEN: explicitReadToken };
+    expect(resolveInfisicalCredentials({ projectId: PROJECT }, envOnlyReadToken)).toEqual({
+      projectId: PROJECT,
+      readToken: explicitReadToken,
+      writeToken: WRITE,
+    });
     const env = { CLUTCH_HOME: home, INFISICAL_PROJECT_ID: "env-project", INFISICAL_TOKEN: "st.env-read-token-value-123456789" };
     const resolved = resolveInfisicalCredentials({ projectId: PROJECT }, env);
     expect(resolved).toEqual({ projectId: "env-project", readToken: env.INFISICAL_TOKEN, writeToken: WRITE });

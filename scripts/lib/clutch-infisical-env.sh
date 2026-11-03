@@ -85,7 +85,7 @@ exports = []
 for value, name in ((read_token, "INFISICAL_TOKEN"), (write_token, "INFISICAL_WRITE_TOKEN")):
     if value and not os.environ.get(name) and valid(value):
         exports.append("export " + shlex.quote(name) + "=" + shlex.quote(value) + "\n")
-if project_id and not os.environ.get("INFISICAL_PROJECT_ID"):
+if project_id and not os.environ.get("INFISICAL_PROJECT_ID") and not os.environ.get("INFISICAL_TOKEN"):
     exports.append("export INFISICAL_PROJECT_ID=" + shlex.quote(project_id) + "\n")
 with open(os.environ["CLUTCH_INFISICAL_CREDENTIALS_OUTPUT"], "w", encoding="utf-8") as output:
     output.writelines(exports)

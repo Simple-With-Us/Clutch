@@ -348,6 +348,53 @@ describe("infisicalSettings", () => {
     }
   });
 
+  it("accepts the wrapped metadata response and rejects malformed or contradictory wrappers", async () => {
+    const wrapped = makeScenario();
+    const flatMetadata = { ...wrapped.state.readMetadata };
+    wrapped.state.readMetadata = { serviceTokenData: flatMetadata };
+    const settings = wrapped.makeSettings();
+    await settings.init();
+    expect(settings.get("FEATURE_FLAG")).toBe("true");
+    settings.stop();
+
+    const matchingRedundantMetadata = makeScenario();
+    matchingRedundantMetadata.state.readMetadata = {
+      ...flatMetadata,
+      serviceTokenData: flatMetadata,
+    };
+    const matchingSettings = matchingRedundantMetadata.makeSettings();
+    await matchingSettings.init();
+    expect(matchingSettings.get("FEATURE_FLAG")).toBe("true");
+    matchingSettings.stop();
+
+    const invalidWrappers: Array<Record<string, unknown>> = [
+      { serviceTokenData: null },
+      { serviceTokenData: { ...flatMetadata, scopes: [{ secretPath: "/other", environment: TEST_ENV }] } },
+      { serviceTokenData: flatMetadata, projectId: "other-project" },
+      { serviceTokenData: flatMetadata, permissions: ["write"] },
+      {
+        ...flatMetadata,
+        serviceTokenData: { ...flatMetadata, projectId: "other-project" },
+      },
+      {
+        ...flatMetadata,
+        serviceTokenData: { ...flatMetadata, scopes: [{ secretPath: "/other", environment: TEST_ENV }] },
+      },
+      {
+        ...flatMetadata,
+        serviceTokenData: { ...flatMetadata, permissions: ["write"] },
+      },
+    ];
+    for (const metadata of invalidWrappers) {
+      const scenario = makeScenario();
+      scenario.state.readMetadata = metadata;
+      const rejected = scenario.makeSettings();
+      await expect(rejected.init()).rejects.toThrow(/read service token scope verification failed/);
+      expect(scenario.calls.some((call) => call.url.includes("/api/v3/secrets/raw?"))).toBe(false);
+      rejected.stop();
+    }
+  });
+
   it("keeps the read cache usable when an optional write token is rejected", async () => {
     const scenario = makeScenario();
     scenario.state.writeMetadata.permissions = ["read", "write"];

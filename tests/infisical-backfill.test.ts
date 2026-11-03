@@ -259,8 +259,8 @@ describe("clutch-infisical-env backfill", () => {
     }
   });
 
-  it("keeps partial explicit environment credentials while using file credentials only in the backfill child", async () => {
-    metadataFixture = { ...VALID_METADATA, projectId: "fixture-file-project", workspace: "fixture-file-project" };
+  it("does not pair an explicit read token with a saved file project", async () => {
+    metadataFixture = VALID_METADATA;
     const home = mkdtempSync(join(tmpdir(), "clutch-partial-env-token-"));
     writeFileSync(join(home, "infisical.json"), `${JSON.stringify({
       projectId: "fixture-file-project",
@@ -279,7 +279,30 @@ describe("clutch-infisical-env backfill", () => {
       expect(stdout).toContain("PROJECT_SET=\n");
       expect(stdout).not.toContain(FILE_WRITE_TOKEN);
       expect(seenAuthorization).toBe(expectedAuthorization(EXPLICIT_READ_TOKEN));
-      expect(seenWorkspaceId).toBe("fixture-file-project");
+      expect(seenWorkspaceId).toBe(PROJECT);
+    } finally {
+      metadataFixture = VALID_METADATA;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an explicit project override with an explicit read token", async () => {
+    const explicitProject = "fixture-explicit-project";
+    metadataFixture = { ...VALID_METADATA, projectId: explicitProject, workspace: explicitProject };
+    const home = mkdtempSync(join(tmpdir(), "clutch-explicit-project-"));
+    writeFileSync(join(home, "infisical.json"), `${JSON.stringify({
+      projectId: "fixture-file-project",
+      serviceToken: FILE_READ_TOKEN,
+    })}\n`, { mode: 0o600 });
+    try {
+      await runBackfill({
+        CLUTCH_HOME: home,
+        INFISICAL_TOKEN: EXPLICIT_READ_TOKEN,
+        INFISICAL_WRITE_TOKEN: "",
+        INFISICAL_PROJECT_ID: explicitProject,
+      });
+      expect(seenAuthorization).toBe(expectedAuthorization(EXPLICIT_READ_TOKEN));
+      expect(seenWorkspaceId).toBe(explicitProject);
     } finally {
       metadataFixture = VALID_METADATA;
       rmSync(home, { recursive: true, force: true });

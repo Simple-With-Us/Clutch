@@ -110,9 +110,20 @@ const ServiceTokenMetadataSchema = z.object({
   }).strict()),
 }).passthrough();
 
-const ServiceTokenMetadataResponseSchema = ServiceTokenMetadataSchema.refine(
-  (data) => !("serviceTokenData" in data),
-);
+const ServiceTokenMetadataResponseSchema = z.union([
+  ServiceTokenMetadataSchema.refine((data) => !("serviceTokenData" in data)),
+  z.object({ serviceTokenData: ServiceTokenMetadataSchema }).passthrough().superRefine((response, context) => {
+    for (const key of ["projectId", "workspace", "expiresAt", "permissions", "scopes"] as const) {
+      if (key in response && JSON.stringify(response[key]) !== JSON.stringify(response.serviceTokenData[key])) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "outer and wrapped service-token metadata conflict",
+        });
+      }
+    }
+  }),
+]);
 
 const SERVICE_TOKEN_PREFIX = "st.";
 const MIN_SERVICE_TOKEN_LENGTH = 20;
@@ -345,7 +356,10 @@ class InfisicalSettingsClient implements InfisicalSettings {
     if (!parsed.success) {
       throw new Error("metadata does not match the configured project and exact scope");
     }
-    const metadata = parsed.data;
+    const metadata: z.infer<typeof ServiceTokenMetadataSchema> =
+      "serviceTokenData" in parsed.data
+        ? ServiceTokenMetadataSchema.parse(parsed.data.serviceTokenData)
+        : parsed.data;
     if (
       metadata.projectId !== this.projectId ||
       (metadata.workspace !== undefined && metadata.workspace !== this.projectId) ||
