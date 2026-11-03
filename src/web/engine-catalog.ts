@@ -93,11 +93,17 @@ interface CacheEntry {
   museProviderModels: EngineModel[];
 }
 
-let cache: CacheEntry | null = null;
+export type CatalogProbeScope = "full" | "mcode" | "passive";
+
+const cache = new Map<CatalogProbeScope, CacheEntry>();
+const inflight = new Map<CatalogProbeScope, Promise<CacheEntry>>();
+let cacheGeneration = 0;
 
 /** Drop the cached catalog; the next read refreshes its sources. */
 export function resetEngineCatalogCache(): void {
-  cache = null;
+  cacheGeneration += 1;
+  cache.clear();
+  inflight.clear();
 }
 
 /** The dsh-side model lists, kept in step with the repo's tracked catalog. */
@@ -494,6 +500,8 @@ export interface CatalogSources {
   readMuseCatalog?: () => EngineModel[];
   /** Reads advertised options from an existing warm Muse bridge without starting it. */
   readMuseSessionOptions?: () => unknown;
+  /** Limits the ACP probe work to the caller's selection. Omitted means legacy full catalog. */
+  probeScope?: CatalogProbeScope;
 }
 
 function museDescriptor(sources: CatalogSources, provider: EngineModel[]): EngineDescriptor {
@@ -534,7 +542,7 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
 async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEntry, "at">> {
   const engines: EngineDescriptor[] = [];
 
-  const probeTargets: Engine[] = ["mcode"];
+  const probeTargets: Engine[] = scopeFor(sources) === "passive" ? [] : ["mcode"];
   const probes = new Map<Engine, ProbeResult>();
   await Promise.all(
     probeTargets.map(async (engine) => {
@@ -587,24 +595,33 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
 
 /** The catalog, cached for a few minutes. */
 export async function engineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
+  const scope = scopeFor(sources);
   const now = Date.now();
-  if (cache && now - cache.at < CATALOG_TTL_MS) return withCurrentMuse(cache, sources);
+  const cached = cache.get(scope);
+  if (cached && now - cached.at < CATALOG_TTL_MS) return withCurrentMuse(cached, sources);
   // Concurrent readers share one build and one provider-catalog read.
-  if (!inflight) {
-    inflight = buildCatalogEntry(sources)
+  let pending = inflight.get(scope);
+  if (!pending) {
+    const generation = cacheGeneration;
+    let building: Promise<CacheEntry>;
+    building = buildCatalogEntry(sources)
       .then((entry) => {
-        cache = { at: Date.now(), ...entry };
-        return cache;
+        const completed = { at: Date.now(), ...entry };
+        if (generation === cacheGeneration) cache.set(scope, completed);
+        return completed;
       })
       .finally(() => {
-        inflight = null;
+        if (inflight.get(scope) === building) inflight.delete(scope);
       });
+    inflight.set(scope, building);
+    pending = building;
   }
-  return withCurrentMuse(await inflight, sources);
+  return withCurrentMuse(await pending, sources);
 }
 
-/** The probe currently running, so a second reader waits for it. */
-let inflight: Promise<CacheEntry> | null = null;
+function scopeFor(sources: CatalogSources): CatalogProbeScope {
+  return sources.probeScope ?? "full";
+}
 
 /**
  * The value to send for a requested model.

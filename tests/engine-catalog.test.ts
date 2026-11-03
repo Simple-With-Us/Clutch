@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execPath } from "node:process";
 import { join } from "node:path";
 
 import {
@@ -403,6 +404,77 @@ describe("buildEngineCatalog", () => {
 });
 
 describe("engineCatalog provider caching", () => {
+  it("keeps Muse passive while a cold mcode probe is pending, and isolates full and scoped caches", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-catalog-scopes-"));
+    const stub = join(dir, "slow-mcode.mjs");
+    const marker = join(dir, "mcode-started");
+    const count = join(dir, "mcode-count");
+    const release = join(dir, "release-mcode-probe");
+    writeFileSync(stub, `#!/usr/bin/env node
+import readline from "node:readline";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { agentCapabilities: { loadSession: true, sessionCapabilities: { list: {} } } } }) + "\\n");
+  } else if (message.id === 2) {
+    appendFileSync(${JSON.stringify(count)}, "probe\\n");
+    writeFileSync(${JSON.stringify(marker)}, "started");
+    const releaseProbe = setInterval(() => {
+      if (!existsSync(${JSON.stringify(release)})) return;
+      clearInterval(releaseProbe);
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { sessionId: "probe", configOptions: [
+        { id: "model", options: [{ name: "M3.1", value: "m:minimax:MiniMax-M3.1:v:" }] },
+        { id: "thinkingEffort", options: [{ value: "high" }] },
+      ] } }) + "\\n");
+    }, 10);
+  } else if (message.id === 3) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 3, result: {} }) + "\\n");
+  }
+});
+`);
+    const sources = {
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: execPath, args: [stub] }, muse: { command: "/never-start-muse", args: [] },
+      },
+      available: { deepseek: false, minimax: false, mcode: true, muse: true },
+      probeCwd: dir,
+    };
+    let mcodeRequest: Promise<EngineCatalog> | undefined;
+    try {
+      let mcodeSettled = false;
+      mcodeRequest = engineCatalog({ ...sources, probeScope: "mcode" }).finally(() => { mcodeSettled = true; });
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(marker) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(existsSync(marker)).toBe(true);
+
+      const passive = await engineCatalog({ ...sources, probeScope: "passive" });
+      const muse = passive.engines.find((engine) => engine.id === "muse")!;
+      expect(muse.models.map((model) => model.id).sort()).toEqual([
+        "muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor",
+      ].sort());
+      expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+      expect(mcodeSettled).toBe(false);
+      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
+
+      writeFileSync(release, "continue");
+      const probed = await mcodeRequest;
+      expect(probed.engines.find((engine) => engine.id === "mcode")?.models.map((model) => model.value))
+        .toEqual(["m:minimax:MiniMax-M3.1:v:"]);
+      const full = await engineCatalog(sources);
+      expect(full.engines.find((engine) => engine.id === "mcode")?.models.map((model) => model.value))
+        .toEqual(["m:minimax:MiniMax-M3.1:v:"]);
+      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(2);
+    } finally {
+      writeFileSync(release, "continue");
+      await mcodeRequest?.catch(() => undefined);
+      resetEngineCatalogCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reads provider data once per cache build while session options stay fresh across sequential and concurrent requests", async () => {
     let clock = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
