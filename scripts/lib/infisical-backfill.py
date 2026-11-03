@@ -7,6 +7,7 @@ import os
 import shlex
 import stat
 import sys
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -41,6 +42,54 @@ def validated_site(site: str) -> str:
     raise ValueError("Infisical URL must use HTTPS")
 
 
+def service_token_matches(data: object, project: str, environment: str, secret_path: str, permission: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if "serviceTokenData" in data and not isinstance(data["serviceTokenData"], dict):
+        return False
+    metadata = data["serviceTokenData"] if "serviceTokenData" in data else data
+    if not isinstance(metadata, dict):
+        return False
+    if metadata.get("projectId") != project:
+        return False
+    if "workspace" in metadata and metadata.get("workspace") != project:
+        return False
+    expires_at = metadata.get("expiresAt")
+    if expires_at is not None:
+        if not isinstance(expires_at, str):
+            return False
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if expiry.tzinfo is None or expiry <= datetime.now(timezone.utc):
+            return False
+    permissions = metadata.get("permissions")
+    scopes = metadata.get("scopes")
+    if permissions != [permission] or not isinstance(scopes, list) or len(scopes) != 1:
+        return False
+    scope = scopes[0]
+    return (
+        isinstance(scope, dict)
+        and set(scope) == {"secretPath", "environment"}
+        and scope.get("secretPath") == secret_path
+        and scope.get("environment") == environment
+    )
+
+
+def verify_service_token(site: str, token: str, project: str, environment: str, secret_path: str, permission: str) -> bool:
+    request = Request(
+        f"{site}/api/v2/service-token",
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    try:
+        with build_opener(NoRedirectHandler).open(request, timeout=20) as response:
+            metadata = json.load(response)
+    except Exception:
+        return False
+    return service_token_matches(metadata, project, environment, secret_path, permission)
+
+
 def main() -> int:
     token = os.environ.get("INFISICAL_TOKEN", "").strip()
     project = (os.environ.get("INFISICAL_PROJECT_ID") or os.environ.get("CLUTCH_INFISICAL_PROJECT_ID") or "").strip()
@@ -69,7 +118,18 @@ def main() -> int:
         print("clutch-infisical-env: private output file is unavailable — keeping process environment", file=sys.stderr)
         return 0
 
-    query = urlencode({"workspaceId": project, "environment": "prod", "secretPath": "/"})
+    if not verify_service_token(site, token, project, "prod", "/", "read"):
+        print("clutch-infisical-env: service token scope verification failed — keeping process environment", file=sys.stderr)
+        return 0
+
+    query = urlencode({
+        "workspaceId": project,
+        "environment": "prod",
+        "secretPath": "/",
+        "recursive": "false",
+        "include_imports": "false",
+        "expandSecretReferences": "false",
+    })
     request = Request(
         f"{site}/api/v3/secrets/raw?{query}",
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},

@@ -34,6 +34,7 @@ interface Scenario {
   serverSecrets: Array<{ secretKey: string; secretValue: string }>;
   calls: string[];
   failList: boolean;
+  metadataEnvironment: string;
 }
 
 function makeScenario(): Scenario {
@@ -41,6 +42,7 @@ function makeScenario(): Scenario {
   const scenario: Scenario = {
     calls,
     failList: false,
+    metadataEnvironment: "prod",
     serverSecrets: [
       { secretKey: "CLUTCH_WEB_PORT", secretValue: "3199" },
       { secretKey: "MINIMAX_API_KEY", secretValue: "test-key-value" },
@@ -49,6 +51,17 @@ function makeScenario(): Scenario {
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       calls.push(`${method} ${url}`);
+      if (url.endsWith("/api/v2/service-token") && method === "GET") {
+        const authorization = (init?.headers as Record<string, string>)?.Authorization;
+        const permission = authorization === `Bearer ${READ_TOKEN}` ? "read" : authorization === `Bearer ${WRITE_TOKEN}` ? "write" : undefined;
+        if (!permission) return jsonResponse({}, 401);
+        return jsonResponse({
+          projectId: "077fd6f3-9f9b-438e-9b6f-5c69076cf36c",
+          workspace: "077fd6f3-9f9b-438e-9b6f-5c69076cf36c",
+          scopes: [{ secretPath: "/", environment: scenario.metadataEnvironment }],
+          permissions: [permission],
+        });
+      }
       if (url.includes("/api/v3/secrets/raw?") && method === "GET") {
         return scenario.failList ? jsonResponse({ message: "unauthorized" }, 401) : jsonResponse({ secrets: scenario.serverSecrets });
       }
@@ -324,6 +337,7 @@ describe("clutchSettings", () => {
 
   it("vendored client is the fleet reference implementation", async () => {
     const scenario = makeScenario();
+    scenario.metadataEnvironment = "dev";
     const client = createInfisicalSettings({
       projectId: "077fd6f3-9f9b-438e-9b6f-5c69076cf36c",
       environment: "dev",

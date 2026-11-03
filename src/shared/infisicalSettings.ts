@@ -5,8 +5,8 @@
 // This module is the fleet-wide reference implementation of the Infisical
 // sole-source-of-truth pattern (see INFISICAL.md at the repo root).  It is a
 // generic client: TypeScript apps import it, point it at their own Infisical
-// project, and get the canonical cache/refresh/write-through contract with
-// zero new runtime dependencies (global `fetch` only).
+// project, and get the canonical cache/refresh/write-through contract.  It
+// uses the repository's existing Zod dependency for untrusted API responses.
 //
 // Contract summary:
 //   - init()     loads every secret for the project+environment into an
@@ -32,6 +32,7 @@
 // See the Infisical section in AGENTS.md.
 
 import { isIP } from "node:net";
+import { z } from "zod";
 
 export interface InfisicalSettingsOptions {
   /** Infisical project ID (the workspaceId), e.g. "6a953a29-8397-4a9d-a5a5-7d1b61e4a5e7". */
@@ -91,14 +92,27 @@ const DEFAULT_INFISICAL_URL = "https://app.infisical.com";
 const DEFAULT_SECRET_PATH = "/";
 const LOG_PREFIX = "[infisical-settings]";
 
-interface RawSecret {
-  secretKey: string;
-  secretValue: string;
-}
+const RawSecretsResponseSchema = z.object({
+  secrets: z.array(z.object({
+    secretKey: z.string().min(1),
+    secretValue: z.string().optional(),
+  }).passthrough()),
+}).passthrough();
 
-interface RawSecretsResponse {
-  secrets: RawSecret[];
-}
+const ServiceTokenMetadataSchema = z.object({
+  projectId: z.string().min(1),
+  workspace: z.string().optional(),
+  expiresAt: z.string().nullable().optional(),
+  permissions: z.array(z.string()),
+  scopes: z.array(z.object({
+    secretPath: z.string(),
+    environment: z.string(),
+  }).strict()),
+}).passthrough();
+
+const ServiceTokenMetadataResponseSchema = ServiceTokenMetadataSchema.refine(
+  (data) => !("serviceTokenData" in data),
+);
 
 const SERVICE_TOKEN_PREFIX = "st.";
 const MIN_SERVICE_TOKEN_LENGTH = 20;
@@ -218,6 +232,7 @@ class InfisicalSettingsClient implements InfisicalSettings {
   }
 
   async init(): Promise<void> {
+    await this.verifyReadToken();
     await this.loadIntoCache();
     this.initialized = true;
     if (this.refreshIntervalMs > 0) {
@@ -261,12 +276,14 @@ class InfisicalSettingsClient implements InfisicalSettings {
   async set(key: string, value: string): Promise<void> {
     this.assertInitialized();
     // Write-through: Infisical FIRST, cache only after the write succeeds.
+    await this.verifyWriteToken(key);
     await this.persistSecret(key, value);
     this.cache.set(key, value);
   }
 
   async refresh(): Promise<void> {
     this.assertInitialized();
+    await this.verifyReadToken();
     await this.loadIntoCache();
   }
 
@@ -303,12 +320,73 @@ class InfisicalSettingsClient implements InfisicalSettings {
     return { Authorization: `Bearer ${token}` };
   }
 
+  private async verifyServiceToken(
+    token: string,
+    permission: "read" | "write",
+  ): Promise<void> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.infisicalUrl}/api/v2/service-token`, {
+        headers: this.authHeaders(token),
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      throw new Error("metadata request failed");
+    }
+    if (!response.ok) throw new Error(`metadata endpoint returned HTTP ${response.status}`);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error("metadata response was invalid");
+    }
+    const parsed = ServiceTokenMetadataResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new Error("metadata does not match the configured project and exact scope");
+    }
+    const metadata = parsed.data;
+    if (
+      metadata.projectId !== this.projectId ||
+      (metadata.workspace !== undefined && metadata.workspace !== this.projectId) ||
+      metadata.permissions.length !== 1 || metadata.permissions[0] !== permission ||
+      (metadata.expiresAt !== undefined && metadata.expiresAt !== null &&
+        (!Number.isFinite(Date.parse(metadata.expiresAt)) || Date.parse(metadata.expiresAt) <= Date.now())) ||
+      metadata.scopes.length !== 1 ||
+      metadata.scopes[0]?.secretPath !== DEFAULT_SECRET_PATH ||
+      metadata.scopes[0]?.environment !== this.environment
+    ) throw new Error("metadata does not match the configured project and exact scope");
+  }
+
+  private async verifyReadToken(): Promise<void> {
+    try {
+      await this.verifyServiceToken(this.readToken, "read");
+    } catch {
+      throw new InfisicalLoadError("read service token scope verification failed");
+    }
+  }
+
+  private async verifyWriteToken(key: string): Promise<void> {
+    const writeToken = this.writeToken;
+    if (!writeToken) {
+      throw new InfisicalWriteError(key, "a separate scoped INFISICAL_WRITE_TOKEN is required for writes");
+    }
+    try {
+      await this.verifyServiceToken(writeToken, "write");
+    } catch {
+      throw new InfisicalWriteError(key, "write service token scope verification failed");
+    }
+  }
+
   /** GET the full raw secret set and swap it into the cache.  Throws on failure. */
   private async loadIntoCache(): Promise<void> {
     const params = new URLSearchParams({
       workspaceId: this.projectId,
       environment: this.environment,
       secretPath: DEFAULT_SECRET_PATH,
+      recursive: "false",
+      include_imports: "false",
+      expandSecretReferences: "false",
     });
     const url = `${this.infisicalUrl}/api/v3/secrets/raw?${params.toString()}`;
     const response = await this.getWithServiceToken(url);
@@ -317,7 +395,12 @@ class InfisicalSettingsClient implements InfisicalSettings {
         `GET ${this.describeSecretsEndpoint()} returned HTTP ${response.status}`,
       );
     }
-    const data = (await response.json()) as RawSecretsResponse;
+    let data: z.infer<typeof RawSecretsResponseSchema>;
+    try {
+      data = RawSecretsResponseSchema.parse(await response.json());
+    } catch {
+      throw new InfisicalLoadError("Infisical secrets response was invalid");
+    }
     const next = new Map<string, string>();
     for (const secret of data.secrets ?? []) {
       if (secret.secretKey !== undefined) {

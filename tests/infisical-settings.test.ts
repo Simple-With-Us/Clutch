@@ -42,6 +42,18 @@ function makeScenario() {
     listSecretsOk: true,
     patchStatus: 200,
     postStatus: 200,
+    readMetadata: {
+      projectId: TEST_PROJECT_ID,
+      workspace: TEST_PROJECT_ID,
+      scopes: [{ secretPath: "/", environment: TEST_ENV }],
+      permissions: ["read"],
+    } as Record<string, unknown>,
+    writeMetadata: {
+      projectId: TEST_PROJECT_ID,
+      workspace: TEST_PROJECT_ID,
+      scopes: [{ secretPath: "/", environment: TEST_ENV }],
+      permissions: ["write"],
+    } as Record<string, unknown>,
     /** Current server-side truth for the secrets list endpoint. */
     serverSecrets: [
       { secretKey: "FEATURE_FLAG", secretValue: "true" },
@@ -54,6 +66,13 @@ function makeScenario() {
     const method = (init?.method ?? "GET").toUpperCase();
     counter += 1;
     calls.push({ url, method, order: counter, redirect: init?.redirect });
+
+    if (url.endsWith("/api/v2/service-token") && method === "GET") {
+      const authorization = (init?.headers as Record<string, string>)?.Authorization;
+      if (authorization === `Bearer ${READ_TOKEN}`) return jsonResponse({ ...state.readMetadata });
+      if (authorization === `Bearer ${WRITE_TOKEN}`) return jsonResponse({ ...state.writeMetadata });
+      return jsonResponse({}, 401);
+    }
 
     if (url.includes("/api/v3/secrets/raw?") && method === "GET") {
       if ((init?.headers as Record<string, string>)?.Authorization !== `Bearer ${READ_TOKEN}`) return jsonResponse({}, 401);
@@ -123,7 +142,13 @@ describe("infisicalSettings", () => {
     expect(() => settings.getRequired("MISSING")).toThrow(/MISSING/);
     expect(calls.every((c) => !c.url.includes("/auth/"))).toBe(true);
     expect(calls.every((c) => c.redirect === "error")).toBe(true);
-    expect(calls.some((c) => c.method === "GET" && c.url.includes("/api/v3/secrets/raw?"))).toBe(true);
+    expect(calls.filter((c) => c.url.endsWith("/api/v2/service-token"))).toHaveLength(1);
+    const listCall = calls.find((c) => c.method === "GET" && c.url.includes("/api/v3/secrets/raw?"));
+    expect(listCall).toBeDefined();
+    const query = new URL(listCall!.url).searchParams;
+    expect(query.get("recursive")).toBe("false");
+    expect(query.get("include_imports")).toBe("false");
+    expect(query.get("expandSecretReferences")).toBe("false");
   });
 
   it("runtime reads make zero fetch calls after init", async () => {
@@ -296,6 +321,68 @@ describe("infisicalSettings", () => {
     state.listSecretsOk = false;
     const settings = makeSettings();
     await expect(settings.init()).rejects.toThrow();
+    settings.stop();
+  });
+
+  it("fails closed unless the read token metadata matches one exact project, environment, folder, and permission", async () => {
+    const invalidMetadata: Array<Record<string, unknown>> = [
+      { projectId: "other-project", workspace: "other-project", scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, workspace: "other-project", scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, workspace: null, scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, serviceTokenData: null, scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, expiresAt: "2000-01-01T00:00:00.000Z", scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, expiresAt: "not-a-date", scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, scopes: [{ secretPath: "/other", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, scopes: [{ secretPath: "/**", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, scopes: [{ secretPath: "/", environment: TEST_ENV }, { secretPath: "/extra", environment: TEST_ENV }], permissions: ["read"] },
+      { projectId: TEST_PROJECT_ID, scopes: [{ secretPath: "/", environment: TEST_ENV }], permissions: ["read", "write"] },
+    ];
+    for (const metadata of invalidMetadata) {
+      const scenario = makeScenario();
+      scenario.state.readMetadata = metadata;
+      const settings = scenario.makeSettings();
+      await expect(settings.init()).rejects.toThrow(/read service token scope verification failed/);
+      expect(scenario.calls.some((call) => call.url.includes("/api/v3/secrets/raw?"))).toBe(false);
+      settings.stop();
+    }
+  });
+
+  it("keeps the read cache usable when an optional write token is rejected", async () => {
+    const scenario = makeScenario();
+    scenario.state.writeMetadata.permissions = ["read", "write"];
+    const invalidStartup = scenario.makeSettings();
+    await invalidStartup.init();
+    expect(invalidStartup.get("FEATURE_FLAG")).toBe("true");
+    expect(scenario.calls.filter((call) => call.url.endsWith("/api/v2/service-token"))).toHaveLength(1);
+    await expect(invalidStartup.set("FEATURE_FLAG", "false")).rejects.toThrow(/write service token scope verification failed/);
+    expect(invalidStartup.get("FEATURE_FLAG")).toBe("true");
+    expect(scenario.calls.some((call) => call.method === "PATCH" || call.method === "POST")).toBe(false);
+    invalidStartup.stop();
+
+    const valid = makeScenario();
+    const settings = valid.makeSettings();
+    await settings.init();
+    valid.calls.length = 0;
+    valid.state.writeMetadata.permissions = ["read"];
+    await expect(settings.set("FEATURE_FLAG", "false")).rejects.toThrow(/write service token scope verification failed/);
+    expect(valid.calls.some((call) => call.method === "PATCH" || call.method === "POST")).toBe(false);
+    expect(settings.get("FEATURE_FLAG")).toBe("true");
+    settings.stop();
+  });
+
+  it("validates raw secret responses and does not expose malformed values in errors", async () => {
+    const scenario = makeScenario();
+    const malformedFetch: FetchMock = async (input, init) => {
+      if (String(input).includes("/api/v3/secrets/raw?")) {
+        return jsonResponse({ secrets: [{ secretKey: 42, secretValue: "fixture-secret-value" }] });
+      }
+      return scenario.fetchMock(input, init);
+    };
+    const settings = scenario.makeSettings({ fetchImpl: malformedFetch as typeof fetch });
+    const error = await settings.init().then(() => new Error("init unexpectedly succeeded"), (reason: unknown) => reason as Error);
+    expect(error.message).toMatch(/Infisical secrets response was invalid/);
+    expect(error.message).not.toContain("fixture-secret-value");
     settings.stop();
   });
 

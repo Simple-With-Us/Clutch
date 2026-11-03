@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { listSecretsRaw, maskValue, run, writeGithubEnvValue } from "./infisical-fetch.mjs";
+import { InfisicalTokenScopeError, listSecretsRaw, maskValue, run, writeGithubEnvValue } from "./infisical-fetch.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(ROOT, "scripts", "infisical-fetch.mjs");
@@ -31,6 +31,18 @@ function stubFetch(vaultSecrets) {
   return async (url, options) => {
     const u = String(url);
     assert.equal(options.redirect, "error");
+    if (u.endsWith("/api/v2/service-token")) {
+      assert.match(options.headers.authorization, /^Bearer st\./);
+      return {
+        ok: true,
+        json: async () => ({
+          projectId: "proj",
+          workspace: "proj",
+          scopes: [{ secretPath: "/", environment: "prod" }],
+          permissions: ["read"],
+        }),
+      };
+    }
     if (u.includes("/api/v3/secrets/raw")) {
       assert.match(options.headers.authorization, /^Bearer st\./);
       return {
@@ -49,7 +61,10 @@ test("service-token fetch validates the origin and disables redirects", async ()
   const fetchImpl = async (_url, options) => {
     called = true;
     assert.equal(options.redirect, "error");
-    return { ok: true, json: async () => ({ secrets: [] }) };
+    const path = new URL(_url).pathname;
+    return path.endsWith("/api/v2/service-token")
+      ? { ok: true, json: async () => ({ projectId: "p", workspace: "p", scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read"] }) }
+      : { ok: true, json: async () => ({ secrets: [] }) };
   };
   await assert.rejects(
     listSecretsRaw({ siteUrl: "http://secrets.example", token: "st.fixture-read-token-value-123456789", projectId: "p", environment: "prod", secretPath: "/", fetchImpl }),
@@ -62,6 +77,63 @@ test("service-token fetch validates the origin and disables redirects", async ()
   assert.equal(called, false);
   await listSecretsRaw({ siteUrl: "http://127.0.0.1:4318", token: "st.fixture-read-token-value-123456789", projectId: "p", environment: "prod", secretPath: "/", fetchImpl });
   assert.equal(called, true);
+});
+
+test("metadata mismatch blocks secret fetch and GitHub fallback", async () => {
+  const invalidMetadata = [
+    { projectId: "other", scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read"] },
+    { projectId: "proj", scopes: [{ secretPath: "/extra", environment: "prod" }], permissions: ["read"] },
+    { projectId: "proj", scopes: [{ secretPath: "/", environment: "dev" }], permissions: ["read"] },
+    { projectId: "proj", scopes: [{ secretPath: "/", environment: "prod" }, { secretPath: "/x", environment: "prod" }], permissions: ["read"] },
+    { projectId: "proj", scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read", "write"] },
+    { projectId: "proj", expiresAt: "2000-01-01T00:00:00.000Z", scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read"] },
+    { projectId: "proj", expiresAt: "not-a-date", scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read"] },
+  ];
+  for (const metadata of invalidMetadata) {
+    let rawRequestCount = 0;
+    const fetchImpl = async (url, options) => {
+      assert.equal(options.redirect, "error");
+      if (String(url).endsWith("/api/v2/service-token")) return { ok: true, json: async () => metadata };
+      rawRequestCount += 1;
+      return { ok: true, json: async () => ({ secrets: [{ secretKey: "FOO", secretValue: SENTINEL_PRESENT }] }) };
+    };
+    await assert.rejects(
+      listSecretsRaw({ siteUrl: "https://app.infisical.com", token: "st.fixture-read-token-value-123456789", projectId: "proj", environment: "prod", secretPath: "/", fetchImpl }),
+      InfisicalTokenScopeError,
+    );
+    assert.equal(rawRequestCount, 0);
+  }
+
+  const { dir, path } = tempGithubEnv();
+  try {
+    const lines = [];
+    let rawRequestCount = 0;
+    const fetchImpl = async (url, options) => {
+      assert.equal(options.redirect, "error");
+      if (String(url).endsWith("/api/v2/service-token")) {
+        return { ok: true, json: async () => ({ projectId: "other", scopes: [{ secretPath: "/", environment: "prod" }], permissions: ["read"] }) };
+      }
+      rawRequestCount += 1;
+      return { ok: true, json: async () => ({ secrets: [] }) };
+    };
+    await assert.rejects(run({
+      env: {
+        INFISICAL_NAMES: "FOO",
+        INFISICAL_REQUIRED: "",
+        INFISICAL_PROJECT_ID: "proj",
+        INFISICAL_TOKEN: "st.fixture-read-token-value-123456789",
+        GH_FALLBACK_FOO: SENTINEL_FALLBACK,
+        GITHUB_ENV: path,
+      },
+      fetchImpl,
+      log: (line) => lines.push(line),
+    }), InfisicalTokenScopeError);
+    assert.equal(rawRequestCount, 0);
+    assert.ok(!lines.some((line) => line.includes(SENTINEL_FALLBACK)));
+    assert.ok(!existsSync(path) || !readFileSync(path, "utf8").includes(SENTINEL_FALLBACK));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function collectLines() {

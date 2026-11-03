@@ -30,6 +30,31 @@ const SecretsResponseSchema = z
   })
   .passthrough();
 
+const ServiceTokenScopeSchema = z.object({
+  secretPath: z.string(),
+  environment: z.string(),
+}).strict();
+
+const ServiceTokenMetadataSchema = z.object({
+  projectId: z.string().min(1),
+  workspace: z.string().optional(),
+  expiresAt: z.string().nullable().optional(),
+  scopes: z.array(ServiceTokenScopeSchema),
+  permissions: z.array(z.string()),
+}).passthrough();
+
+const ServiceTokenMetadataResponseSchema = z.union([
+  ServiceTokenMetadataSchema,
+  z.object({ serviceTokenData: ServiceTokenMetadataSchema }).passthrough(),
+]);
+
+export class InfisicalTokenScopeError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "InfisicalTokenScopeError";
+  }
+}
+
 function splitNames(raw) {
   return String(raw ?? "")
     .split(/[\s,]+/)
@@ -70,10 +95,12 @@ function validatedSiteUrl(raw) {
  * scoped service token to be able to read the referenced folder too. */
 export async function listSecretsRaw({ siteUrl, token, projectId, environment, secretPath, fetchImpl = fetch, timeoutMs = 30_000 }) {
   const safeSiteUrl = validatedSiteUrl(siteUrl);
+  await verifyServiceTokenScope({ safeSiteUrl, token, projectId, environment, secretPath, fetchImpl, timeoutMs });
   const qs = new URLSearchParams({
     workspaceId: projectId,
     environment,
     secretPath,
+    recursive: "false",
     viewSecretValue: "true",
     expandSecretReferences: "true",
     include_imports: "false",
@@ -93,6 +120,46 @@ export async function listSecretsRaw({ siteUrl, token, projectId, environment, s
     values.set(s.secretKey, s.secretValue);
   }
   return values;
+}
+
+export async function verifyServiceTokenScope({ safeSiteUrl, token, projectId, environment, secretPath, fetchImpl = fetch, timeoutMs = 15_000 }) {
+  let response;
+  try {
+    response = await fetchImpl(`${safeSiteUrl}/api/v2/service-token`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "error",
+    });
+  } catch {
+    throw new InfisicalTokenScopeError("Infisical service-token metadata request failed");
+  }
+  if (!response.ok) {
+    throw new InfisicalTokenScopeError(`Infisical service-token metadata returned HTTP ${response.status}`);
+  }
+
+  let responseBody;
+  try {
+    responseBody = await response.json();
+  } catch {
+    throw new InfisicalTokenScopeError("Infisical service-token metadata response was invalid");
+  }
+  const parsed = ServiceTokenMetadataResponseSchema.safeParse(responseBody);
+  if (!parsed.success) {
+    throw new InfisicalTokenScopeError("Infisical service-token metadata did not match the required scope contract");
+  }
+  const metadata = "serviceTokenData" in parsed.data ? parsed.data.serviceTokenData : parsed.data;
+  const valid = metadata.projectId === projectId &&
+    (metadata.workspace === undefined || metadata.workspace === projectId) &&
+    (metadata.expiresAt === undefined || metadata.expiresAt === null ||
+      (Number.isFinite(Date.parse(metadata.expiresAt)) && Date.parse(metadata.expiresAt) > Date.now())) &&
+    metadata.permissions.length === 1 && metadata.permissions[0] === "read" &&
+    metadata.scopes.length === 1 &&
+    metadata.scopes[0]?.environment === environment &&
+    metadata.scopes[0]?.secretPath === secretPath;
+  if (!valid) {
+    throw new InfisicalTokenScopeError("Infisical service-token metadata does not match the requested project and exact read scope");
+  }
 }
 
 /** Registers each LINE of the value as its own mask, and never the joined
@@ -155,6 +222,7 @@ async function resolveVaultValues({ siteUrl, projectId, token, environment, secr
   try {
     return await listSecretsRaw({ siteUrl, token, projectId, environment, secretPath, fetchImpl });
   } catch (err) {
+    if (err instanceof InfisicalTokenScopeError) throw err;
     // Never interpolate the raw error body -- Infisical error payloads have
     // echoed request fields on some 4xx responses in the past, and none of
     // that belongs in a public Actions log.

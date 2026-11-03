@@ -17,6 +17,18 @@ const RESOLVED = "sentinel-resolved-value-5d1a";
 function stubFetch(vaultSecrets, listUrls = []) {
   return async (url, options) => {
     const u = String(url);
+    assert.equal(options.redirect, "error");
+    if (u.endsWith("/api/v2/service-token")) {
+      return {
+        ok: true,
+        json: async () => ({
+          projectId: "proj",
+          workspace: "proj",
+          scopes: [{ secretPath: "/", environment: "prod" }],
+          permissions: ["read"],
+        }),
+      };
+    }
     if (u.includes("/api/v3/secrets/raw")) {
       assert.match(options.headers.authorization, /^Bearer st\./);
       listUrls.push(u);
@@ -47,6 +59,8 @@ test("the secrets list asks Infisical to expand secret references", async () => 
     await run({ env: baseEnv(join(dir, "env"), "FOO"), fetchImpl: stubFetch({ FOO: RESOLVED }, listUrls), log: () => {} });
     assert.equal(listUrls.length, 1);
     assert.equal(new URL(listUrls[0]).searchParams.get("expandSecretReferences"), "true");
+    assert.equal(new URL(listUrls[0]).searchParams.get("recursive"), "false");
+    assert.equal(new URL(listUrls[0]).searchParams.get("include_imports"), "false");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
