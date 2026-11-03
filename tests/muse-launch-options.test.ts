@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { Bridge } from "../src/web/chat-bridge.ts";
-import { MuseSettingsError, museLaunchArguments } from "../src/web/muse-launch-options.ts";
+import { MuseSettingsError, museContributorModelId, museLaunchArguments } from "../src/web/muse-launch-options.ts";
 
 function fixture(dir: string, modes = ["onRequest", "allowAll"]): string {
   const script = join(dir, "muse-acp-fixture.mjs");
@@ -13,6 +13,7 @@ function fixture(dir: string, modes = ["onRequest", "allowAll"]): string {
   writeFileSync(script, `import readline from "node:readline";
 import { appendFileSync } from "node:fs";
 appendFileSync(${JSON.stringify(starts)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+appendFileSync(${JSON.stringify(join(dir, "environments.jsonl"))}, JSON.stringify({ requireNative: process.env.MUSE_CODE_ACP_REQUIRE_NATIVE ?? null }) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const { id, method, params } = JSON.parse(line);
   appendFileSync(${JSON.stringify(methods)}, method + "\\n");
@@ -41,6 +42,17 @@ async function stopBridge(bridge: Bridge, sessionId = "fixture-session"): Promis
 }
 
 describe("Muse launch options", () => {
+  it("recognizes only exact contributor models in either supported ACP spelling", () => {
+    for (const id of ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]) {
+      expect(museContributorModelId(id)).toBe(id);
+      expect(museContributorModelId(`muse-model:${JSON.stringify(["meta", "tbh", id])}`)).toBe(id);
+      expect(museContributorModelId(`muse-model:${encodeURIComponent(JSON.stringify(["meta", "tbh", id]))}`)).toBe(id);
+      expect(museContributorModelId(`muse-model:${JSON.stringify([null, null, id])}`)).toBe(id);
+    }
+    for (const value of ["muse-spark-1.3", "other-contributor", "muse-model:not-json", 'muse-model:["muse-spark-1.3-contributor"]']) {
+      expect(museContributorModelId(value)).toBeNull();
+    }
+  });
   it("projects settings into launch flags", () => {
     expect(museLaunchArguments({ yolo: false, contributorMode: false })).toEqual(["--contributor-mode", "off"]);
     expect(museLaunchArguments({ yolo: false, contributorMode: true })).toEqual(["--contributor-mode", "on"]);
@@ -109,6 +121,32 @@ describe("Muse launch options", () => {
       await expect(bridge.configureMuseLaunch({ yolo: true, contributorMode: false })).rejects.toMatchObject({ message: expect.stringContaining("Finish other Muse turns") });
       bridge.cancel("hold");
       await expect(pending).rejects.toBeDefined();
+    } finally {
+      await stopBridge(bridge);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("restores the original launcher and environment for a later legacy turn", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clutch-muse-reset-"));
+    const env = { ...process.env };
+    delete env.MUSE_CODE_ACP_REQUIRE_NATIVE;
+    const bridge = new Bridge("muse", env, { command: process.execPath, args: [fixture(dir)] });
+    try {
+      await bridge.configureMuseLaunch({ yolo: true, contributorMode: true });
+      await bridge.initialize();
+      await bridge.newSession(dir);
+      await bridge.configureMuseLaunch(null);
+      await bridge.initialize();
+      expect(bridge.matchesMuseLaunchOptions(null)).toBe(true);
+      expect(readFileSync(join(dir, "starts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+        ["--contributor-mode", "on", "--disable-sandbox", "--trust-workspace"], [],
+      ]);
+      expect(readFileSync(join(dir, "environments.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line))).toEqual([
+        { requireNative: "1" }, { requireNative: null },
+      ]);
+      await bridge.newSession(dir);
+      await bridge.applyMuseApprovalMode("fixture-session", false);
     } finally {
       await stopBridge(bridge);
       rmSync(dir, { recursive: true, force: true });

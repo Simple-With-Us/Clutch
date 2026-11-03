@@ -31,6 +31,7 @@ import { join } from "node:path";
 
 import type { Engine } from "../shared/engine-types.ts";
 import { supportsThreads } from "../shared/engine-types.ts";
+import { museContributorModelId } from "./muse-launch-options.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
 export interface EngineModel {
@@ -472,23 +473,9 @@ function withKnownMuseContributors(provider: EngineModel[]): EngineModel[] {
   ];
 }
 
-function museContributorIdFromValue(value: string): string | null {
-  if (MUSE_CONTRIBUTOR_MODEL_IDS.has(value)) return value;
-  if (!value.startsWith("muse-model:")) return null;
-  try {
-    const tuple: unknown = JSON.parse(decodeURIComponent(value.slice("muse-model:".length)));
-    if (Array.isArray(tuple) && tuple.length === 3 && typeof tuple[2] === "string" && MUSE_CONTRIBUTOR_MODEL_IDS.has(tuple[2])) {
-      return tuple[2];
-    }
-  } catch {
-    // An unknown or malformed wire value is not a supported contributor ID.
-  }
-  return null;
-}
-
 function museContributorModelsFromConfigOptions(options: unknown): EngineModel[] {
   return modelsFromConfigOptions(options).flatMap((model) => {
-    const id = museContributorIdFromValue(model.value)
+    const id = museContributorModelId(model.value)
       ?? MUSE_CONTRIBUTOR_ID_BY_LABEL.get(model.id)
       ?? (MUSE_CONTRIBUTOR_MODEL_IDS.has(model.id) ? model.id : null);
     if (!id) return [];
