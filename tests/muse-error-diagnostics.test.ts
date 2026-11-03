@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { museErrorDiagnostics } from "../src/web/muse-error-diagnostics.ts";
+import { attachMuseErrorDiagnostics, museErrorDiagnostics } from "../src/web/muse-error-diagnostics.ts";
 
 describe("Muse error diagnostics", () => {
+  it("keeps a safe original category after the display error is sanitized", () => {
+    const displayed = new Error("Muse request failed (ACP code -32603).");
+    attachMuseErrorDiagnostics(displayed, { code: -32603, message: "Provider timed out with token=private-value" });
+    expect(museErrorDiagnostics(displayed)).toEqual({ code: -32603, category: "timeout" });
+    expect(JSON.stringify(displayed)).not.toContain("private-value");
+    expect(JSON.stringify(museErrorDiagnostics(displayed))).not.toContain("private-value");
+  });
+
   it("returns only a numeric code and an allowlisted category", () => {
     const input = {
       code: -32001,

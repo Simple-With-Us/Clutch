@@ -56,7 +56,7 @@ import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
-import { museErrorDiagnostics } from "./muse-error-diagnostics.ts";
+import { attachMuseErrorDiagnostics, museErrorDiagnostics } from "./muse-error-diagnostics.ts";
 import { createTurnDiagnostics, type TurnDiagnosticHandle, type TurnOutcome } from "./turn-diagnostics.ts";
 import { attachMuseAuthFailure, isMuseAuthAttemptId, MuseAuthController, type MuseAuthBridge, type MuseUrlElicitation } from "./muse-auth.ts";
 import {
@@ -1150,6 +1150,7 @@ export class Bridge implements MuseAuthBridge {
         if (msg.error) {
           if (this.engine === "muse") {
             const error = new Error(safeMuseBridgeError(msg.error));
+            attachMuseErrorDiagnostics(error, msg.error);
             attachMuseAuthFailure(error, msg.error);
             if (typeof msg.error.code === "number" && Number.isSafeInteger(msg.error.code)) {
               Object.assign(error, { code: msg.error.code });

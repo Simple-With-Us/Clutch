@@ -5,9 +5,18 @@ export interface MuseErrorDiagnostics {
   category: MuseErrorCategory;
 }
 
+const originalDiagnostics = new WeakMap<object, MuseErrorDiagnostics>();
+
+/** Retain classified metadata before a provider message is replaced with safe display copy. */
+export function attachMuseErrorDiagnostics(error: Error, rawError: unknown): void {
+  originalDiagnostics.set(error, museErrorDiagnostics(rawError));
+}
+
 /** Return only allowlisted diagnostic metadata; never include provider text or identifiers. */
 export function museErrorDiagnostics(error: unknown): MuseErrorDiagnostics {
   if (!error || typeof error !== "object") return { code: null, category: "internal" };
+  const original = originalDiagnostics.get(error);
+  if (original) return { ...original };
 
   const row = error as { message?: unknown; code?: unknown; name?: unknown };
   const code = typeof row.code === "number" && Number.isSafeInteger(row.code) ? row.code : null;

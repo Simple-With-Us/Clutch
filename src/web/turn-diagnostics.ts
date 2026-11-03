@@ -562,13 +562,20 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
       let toolStatus: string | undefined;
       let toolName: string | undefined;
       let toolType: string | undefined;
+      let pendingProgress: Partial<SafeEvent> | undefined;
+      let lastProgressWriteAtMs = 0;
       const writeEvent = (kind: SafeEvent["kind"], details: Partial<SafeEvent> = {}): void => {
         const row: SafeEvent = {
           at: new Date().toISOString(), turnId, traceId, kind, engine,
           ...(model ? { model } : {}), ...(provider ? { provider } : {}), ...(sessionId ? { sessionId } : {}), ...details,
         };
         enqueueWrite(`${JSON.stringify(row)}\n`);
-        void flush();
+      };
+      const flushProgress = (): void => {
+        if (!pendingProgress) return;
+        writeEvent("progress", pendingProgress);
+        pendingProgress = undefined;
+        lastProgressWriteAtMs = Date.now();
       };
       writeEvent("start");
       return {
@@ -576,6 +583,13 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
         record(kind, details) {
           if (terminal) return;
           const clean = safeDetail(kind, details);
+          if (kind === "progress" && clean.count !== undefined && !clean.errorCategory && clean.errorCode === undefined) {
+            if (pendingProgress && pendingProgress.phase !== clean.phase) flushProgress();
+            pendingProgress = { ...clean, count: (pendingProgress?.count ?? 0) + clean.count };
+            if (Date.now() - lastProgressWriteAtMs >= 1_000) flushProgress();
+            return;
+          }
+          flushProgress();
           if (kind === "metadata") {
             if (clean.model) model = clean.model;
             if (clean.provider) provider = clean.provider;
@@ -611,6 +625,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
         finish(outcome, details) {
           if (terminal) return false;
           terminal = true;
+          flushProgress();
           const safeOutcome = ALLOWED_OUTCOMES.has(outcome) ? outcome : "unknown";
           const clean = safeDetail("progress", details);
           const finished = new Date();
