@@ -94,9 +94,10 @@ interface CacheEntry {
 }
 
 export type CatalogProbeScope = "full" | "mcode" | "passive";
+type CatalogCacheScope = "probed" | "passive";
 
-const cache = new Map<CatalogProbeScope, CacheEntry>();
-const inflight = new Map<CatalogProbeScope, Promise<CacheEntry>>();
+const cache = new Map<CatalogCacheScope, CacheEntry>();
+const inflight = new Map<CatalogCacheScope, Promise<CacheEntry>>();
 let cacheGeneration = 0;
 
 /** Drop the cached catalog; the next read refreshes its sources. */
@@ -595,7 +596,8 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
 
 /** The catalog, cached for a few minutes. */
 export async function engineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
-  const scope = scopeFor(sources);
+  const probeScope = scopeFor(sources);
+  const scope: CatalogCacheScope = probeScope === "passive" ? "passive" : "probed";
   const now = Date.now();
   const cached = cache.get(scope);
   if (cached && now - cached.at < CATALOG_TTL_MS) return withCurrentMuse(cached, sources);

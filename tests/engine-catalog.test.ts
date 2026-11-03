@@ -404,7 +404,7 @@ describe("buildEngineCatalog", () => {
 });
 
 describe("engineCatalog provider caching", () => {
-  it("keeps Muse passive while a cold mcode probe is pending, and isolates full and scoped caches", async () => {
+  it("keeps Muse passive while a cold probe is pending and shares full with mcode scope", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clutch-catalog-scopes-"));
     const stub = join(dir, "slow-mcode.mjs");
     const marker = join(dir, "mcode-started");
@@ -443,12 +443,17 @@ lines.on("line", (line) => {
       probeCwd: dir,
     };
     let mcodeRequest: Promise<EngineCatalog> | undefined;
+    let fullRequest: Promise<EngineCatalog> | undefined;
     try {
       let mcodeSettled = false;
-      mcodeRequest = engineCatalog({ ...sources, probeScope: "mcode" }).finally(() => { mcodeSettled = true; });
+      let fullSettled = false;
+      const mcodeBuild = engineCatalog({ ...sources, probeScope: "mcode" }).finally(() => { mcodeSettled = true; });
+      mcodeRequest = mcodeBuild;
       const deadline = Date.now() + 2_000;
       while (!existsSync(marker) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
       expect(existsSync(marker)).toBe(true);
+      const fullBuild = engineCatalog(sources).finally(() => { fullSettled = true; });
+      fullRequest = fullBuild;
 
       const passive = await engineCatalog({ ...sources, probeScope: "passive" });
       const muse = passive.engines.find((engine) => engine.id === "muse")!;
@@ -457,19 +462,21 @@ lines.on("line", (line) => {
       ].sort());
       expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
       expect(mcodeSettled).toBe(false);
+      expect(fullSettled).toBe(false);
       expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
 
       writeFileSync(release, "continue");
-      const probed = await mcodeRequest;
+      const [probed, full] = await Promise.all([mcodeBuild, fullBuild]);
       expect(probed.engines.find((engine) => engine.id === "mcode")?.models.map((model) => model.value))
         .toEqual(["m:minimax:MiniMax-M3.1:v:"]);
-      const full = await engineCatalog(sources);
       expect(full.engines.find((engine) => engine.id === "mcode")?.models.map((model) => model.value))
         .toEqual(["m:minimax:MiniMax-M3.1:v:"]);
-      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(2);
+      expect((await engineCatalog({ ...sources, probeScope: "mcode" })).engines.find((engine) => engine.id === "mcode")?.models)
+        .toEqual(probed.engines.find((engine) => engine.id === "mcode")?.models);
+      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
     } finally {
       writeFileSync(release, "continue");
-      await mcodeRequest?.catch(() => undefined);
+      await Promise.allSettled([mcodeRequest, fullRequest].filter((request): request is Promise<EngineCatalog> => request !== undefined));
       resetEngineCatalogCache();
       rmSync(dir, { recursive: true, force: true });
     }
