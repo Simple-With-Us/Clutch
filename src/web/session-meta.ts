@@ -23,6 +23,8 @@ export interface ClutchProject {
 }
 
 export interface SessionMetaEntry {
+  /** Optional Clutch display title; the engine's original thread is untouched. */
+  title?: string;
   /** Project this session belongs to, or absent when unassigned. */
   projectId?: string;
   /** True when the user archived it.  Archiving is reversible. */
@@ -75,6 +77,8 @@ export function parseSessionMeta(raw: string): SessionMetaFile {
       if (typeof value !== "object" || value === null) continue;
       const entry: SessionMetaEntry = {};
       const s = value as Record<string, unknown>;
+      const title = normalizeSessionTitle(s.title);
+      if (title) entry.title = title;
       if (typeof s.projectId === "string" && s.projectId) entry.projectId = s.projectId;
       if (s.archived === true) entry.archived = true;
       if (typeof s.archivedAt === "string") entry.archivedAt = s.archivedAt;
@@ -124,13 +128,23 @@ export function normalizeProjectName(raw: unknown): string | null {
   return name.slice(0, 80);
 }
 
+export function normalizeSessionTitle(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  return raw.replace(/\s+/g, " ").trim().slice(0, 120) || null;
+}
+
 export function upsertSession(
   data: SessionMetaFile,
   sessionId: string,
-  patch: { projectId?: string | null; archived?: boolean },
+  patch: { projectId?: string | null; archived?: boolean; title?: string | null },
 ): SessionMetaEntry {
   const current = data.sessions[sessionId] ?? {};
   const next: SessionMetaEntry = { ...current };
+  if (patch.title !== undefined) {
+    const title = normalizeSessionTitle(patch.title);
+    if (title) next.title = title;
+    else delete next.title;
+  }
   if (patch.projectId !== undefined) {
     if (patch.projectId) next.projectId = patch.projectId;
     else delete next.projectId;

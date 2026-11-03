@@ -4,8 +4,9 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { z } from "zod";
 
-export type TurnDiagnosticKind = "metadata" | "progress" | "tool" | "plan" | "context" | "usage" | "steer" | "permission";
+export type TurnDiagnosticKind = "metadata" | "progress" | "tool" | "plan" | "context" | "usage" | "metrics" | "compaction" | "steer" | "permission";
 export type TurnOutcome = "success" | "error" | "cancelled" | "stopped" | "unknown";
+export type CompactionStatus = "in_progress" | "completed" | "failed" | "cancelled" | "unknown";
 
 export interface TurnDiagnosticsOptions {
   directory: string;
@@ -71,9 +72,31 @@ interface SafeEvent {
   cacheWriteTokens?: number;
   totalTokens?: number;
   exactPerTurn?: true;
-  contextBasis?: "latest-response";
+  contextBasis?: "latest-response" | "engine-context";
   contextWindow?: number;
   updatedAtMs?: number;
+  snapshotBasis?: "session-snapshot";
+  totalsComplete?: boolean;
+  recordedInputTokens?: number;
+  recordedOutputTokens?: number;
+  cachedTokens?: number;
+  responseTokensPerSecond?: number;
+  completionDurationMs?: number;
+  compactionStatus?: CompactionStatus;
+}
+
+export interface SessionSnapshotMetrics {
+  snapshotBasis: "session-snapshot";
+  totalsComplete: boolean;
+  recordedInputTokens?: number;
+  recordedOutputTokens?: number;
+  cachedTokens?: number;
+  responseTokensPerSecond?: number;
+  completionDurationMs?: number;
+}
+
+interface SnapshotMetrics extends Omit<SessionSnapshotMetrics, "snapshotBasis"> {
+  basis: "session-snapshot";
 }
 
 interface CompletedSpan {
@@ -94,6 +117,9 @@ interface CompletedSpan {
   toolName?: string;
   toolType?: string;
   context?: Pick<SafeEvent, "inputTokens" | "outputTokens" | "cacheReadTokens" | "totalTokens" | "contextWindow" | "updatedAtMs" | "contextBasis">;
+  snapshot?: SnapshotMetrics;
+  spanKind?: "session-snapshot";
+  compactionStatus?: CompactionStatus;
 }
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
@@ -120,8 +146,18 @@ const SafeCountsSchema = z.object({
 const SafeContextSchema = SafeCountsSchema.extend({
   contextWindow: z.number().int().nonnegative().max(1_000_000_000).optional(),
   updatedAtMs: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(),
-  contextBasis: z.literal("latest-response"),
+  contextBasis: z.enum(["latest-response", "engine-context"]),
 }).strict();
+const SnapshotMetricsSchema = z.object({
+  basis: z.literal("session-snapshot"),
+  totalsComplete: z.boolean(),
+  recordedInputTokens: z.number().int().nonnegative().max(1_000_000_000).optional(),
+  recordedOutputTokens: z.number().int().nonnegative().max(1_000_000_000).optional(),
+  cachedTokens: z.number().int().nonnegative().max(1_000_000_000).optional(),
+  responseTokensPerSecond: z.number().finite().nonnegative().max(1_000_000).optional(),
+  completionDurationMs: z.number().int().nonnegative().max(7 * 24 * 60 * 60 * 1000).optional(),
+}).strict();
+const CompactionStatusSchema = z.enum(["in_progress", "completed", "failed", "cancelled", "unknown"]);
 const CompletedSpanSchema = z.object({
   traceId: z.string().regex(/^[a-f0-9]{32}$/),
   spanId: z.string().regex(/^[a-f0-9]{16}$/),
@@ -140,6 +176,9 @@ const CompletedSpanSchema = z.object({
   toolName: SafeIdentifierSchema.optional(),
   toolType: z.enum(["function", "command", "mcp", "built-in", "unknown"]).optional(),
   context: SafeContextSchema.optional(),
+  snapshot: SnapshotMetricsSchema.optional(),
+  spanKind: z.literal("session-snapshot").optional(),
+  compactionStatus: CompactionStatusSchema.optional(),
 }).strict();
 const ReceiverAckSchema = z.object({
   ok: z.boolean().optional(),
@@ -174,6 +213,27 @@ function signedErrorCode(value: unknown): number | undefined {
 function safeDetail(kind: TurnDiagnosticKind, details: Record<string, unknown> | undefined): Partial<SafeEvent> {
   if (!details) return {};
   const out: Partial<SafeEvent> = {};
+  if (kind === "metrics") {
+    if (details.snapshotBasis !== "session-snapshot" || typeof details.totalsComplete !== "boolean") return {};
+    out.snapshotBasis = "session-snapshot";
+    out.totalsComplete = details.totalsComplete;
+    for (const key of ["recordedInputTokens", "recordedOutputTokens", "cachedTokens"] as const) {
+      const value = boundedInteger(details[key], 1_000_000_000);
+      if (value !== undefined) out[key] = value;
+    }
+    const responseTokensPerSecond = details.responseTokensPerSecond;
+    if (typeof responseTokensPerSecond === "number" && Number.isFinite(responseTokensPerSecond) && responseTokensPerSecond >= 0 && responseTokensPerSecond <= 1_000_000) {
+      out.responseTokensPerSecond = responseTokensPerSecond;
+    }
+    const completionDurationMs = boundedInteger(details.completionDurationMs, 7 * 24 * 60 * 60 * 1000);
+    if (completionDurationMs !== undefined) out.completionDurationMs = completionDurationMs;
+    return out;
+  }
+  if (kind === "compaction") {
+    const status = CompactionStatusSchema.safeParse(details.status);
+    out.compactionStatus = status.success ? status.data : "unknown";
+    return out;
+  }
   if (kind === "metadata") {
     const model = identifier(details.model);
     const provider = identifier(details.provider);
@@ -219,8 +279,8 @@ function safeDetail(kind: TurnDiagnosticKind, details: Record<string, unknown> |
       break;
     }
     case "context": {
-      if (details.basis !== "latest-response") break;
-      out.contextBasis = "latest-response";
+      if (details.basis !== "latest-response" && details.basis !== "engine-context") break;
+      out.contextBasis = details.basis;
       for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "totalTokens"] as const) {
         const value = boundedInteger(details[key], 1_000_000_000);
         if (value !== undefined) out[key] = value;
@@ -266,6 +326,29 @@ function allAcceptedAcknowledgement(value: unknown, expected: number): boolean {
 
 function makeOtlp(spans: CompletedSpan[]): unknown {
   const encodedSpans = spans.map((span) => {
+    if (span.spanKind === "session-snapshot") {
+      return {
+        traceId: span.traceId,
+        spanId: span.spanId,
+        name: "session.snapshot",
+        kind: 1,
+        startTimeUnixNano: span.startNs,
+        endTimeUnixNano: span.endNs,
+        attributes: attributes([
+          ["agent.platform", "clutch"],
+          ["clutch.engine.name", span.engine],
+          ["session.id", span.sessionId],
+          ["clutch.metrics.basis", span.snapshot?.basis],
+          ["clutch.metrics.totals_complete", span.snapshot?.totalsComplete],
+          ["clutch.session.input_tokens", span.snapshot?.recordedInputTokens],
+          ["clutch.session.output_tokens", span.snapshot?.recordedOutputTokens],
+          ["clutch.session.cached_tokens", span.snapshot?.cachedTokens],
+          ["clutch.response.tokens_per_second", span.snapshot?.responseTokensPerSecond],
+          ["clutch.response.duration_ms", span.snapshot?.completionDurationMs],
+        ]),
+        status: { code: 1 },
+      };
+    }
     const vendor = span.provider?.toLowerCase();
     const contextUtilization = span.context?.contextWindow && span.context.totalTokens !== undefined
       ? span.context.totalTokens / span.context.contextWindow * 100
@@ -289,7 +372,9 @@ function makeOtlp(spans: CompletedSpan[]): unknown {
       ["gen_ai.usage.cache_creation_input_tokens", span.usage?.cacheWriteTokens],
       ["context.tokens", span.context?.totalTokens],
       ["context.limit", span.context?.contextWindow],
+      ["clutch.context.basis", span.context?.contextBasis],
       ["context.utilization_pct", contextUtilization],
+      ["clutch.compaction.status", span.compactionStatus],
     ]);
     return {
       traceId: span.traceId,
@@ -557,6 +642,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
       let terminal = false;
       let usage: CompletedSpan["usage"];
       let context: CompletedSpan["context"];
+      let compactionStatus: CompactionStatus | undefined;
       let errorCategory: string | undefined;
       let errorCode: number | undefined;
       let toolStatus: string | undefined;
@@ -590,6 +676,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
             return;
           }
           flushProgress();
+          if (kind === "metrics" && !clean.snapshotBasis) return;
           if (kind === "metadata") {
             if (clean.model) model = clean.model;
             if (clean.provider) provider = clean.provider;
@@ -604,7 +691,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
               ...(clean.totalTokens !== undefined ? { totalTokens: clean.totalTokens } : {}),
             };
           }
-          if (kind === "context" && clean.contextBasis === "latest-response") {
+          if (kind === "context" && clean.contextBasis) {
             context = {
               ...(clean.inputTokens !== undefined ? { inputTokens: clean.inputTokens } : {}),
               ...(clean.outputTokens !== undefined ? { outputTokens: clean.outputTokens } : {}),
@@ -612,9 +699,34 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
               ...(clean.totalTokens !== undefined ? { totalTokens: clean.totalTokens } : {}),
               ...(clean.contextWindow !== undefined ? { contextWindow: clean.contextWindow } : {}),
               ...(clean.updatedAtMs !== undefined ? { updatedAtMs: clean.updatedAtMs } : {}),
-              contextBasis: "latest-response",
+              contextBasis: clean.contextBasis,
             };
           }
+          if (kind === "metrics" && clean.snapshotBasis === "session-snapshot" && clean.totalsComplete !== undefined) {
+            const snapshot: SnapshotMetrics = {
+              basis: "session-snapshot",
+              totalsComplete: clean.totalsComplete,
+              ...(clean.recordedInputTokens !== undefined ? { recordedInputTokens: clean.recordedInputTokens } : {}),
+              ...(clean.recordedOutputTokens !== undefined ? { recordedOutputTokens: clean.recordedOutputTokens } : {}),
+              ...(clean.cachedTokens !== undefined ? { cachedTokens: clean.cachedTokens } : {}),
+              ...(clean.responseTokensPerSecond !== undefined ? { responseTokensPerSecond: clean.responseTokensPerSecond } : {}),
+              ...(clean.completionDurationMs !== undefined ? { completionDurationMs: clean.completionDurationMs } : {}),
+            };
+            const now = new Date();
+            queueSpan({
+              traceId,
+              spanId: randomUUID().replaceAll("-", "").slice(0, 16),
+              startNs: timestampNs(now),
+              endNs: timestampNs(now),
+              durationMs: 0,
+              engine,
+              ...(sessionId ? { sessionId } : {}),
+              outcome: "success",
+              snapshot,
+              spanKind: "session-snapshot",
+            });
+          }
+          if (kind === "compaction" && clean.compactionStatus) compactionStatus = clean.compactionStatus;
           writeEvent(kind, clean);
           if (kind === "progress" && clean.phase === "finalizing") {
             errorCategory = clean.errorCategory;
@@ -655,6 +767,7 @@ export function createTurnDiagnostics(options: TurnDiagnosticsOptions): TurnDiag
             ...(toolType ? { toolType } : {}),
             ...(context ? { context } : {}),
             ...(usage ? { usage } : {}),
+            ...(compactionStatus ? { compactionStatus } : {}),
           };
           queueSpan(span);
           return true;

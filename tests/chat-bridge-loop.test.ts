@@ -10,7 +10,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +35,9 @@ let tokenFile = "";
 let metaFile = "";
 /** Where the stub records what the sidecar did to the engine. */
 let stubLogFile = "";
+let museDataRoot = "";
+const PREVIEW_ID = "01a11111-2222-7333-8444-555555555555";
+let museLogFile = "";
 const CHAT_TOKEN = `loop-test-token-${"x".repeat(48)}`;
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
@@ -103,6 +106,16 @@ beforeAll(async () => {
   ccPort = (ccServer.address() as { port: number }).port;
 
   const dir = mkdtempSync(join(tmpdir(), "chat-loop-"));
+  museDataRoot = join(dir, "data");
+  const sessionDir = join(museDataRoot, "muse", "sessions", "2026", "11", "01", PREVIEW_ID);
+  mkdirSync(sessionDir, { recursive: true });
+  museLogFile = join(sessionDir, "session.jsonl");
+  writeFileSync(museLogFile, [
+    { payload_type: "runtime.session.metadata", payload: { record: { model_id: "muse-wonder-1.0-contributor", provider_id: "meta", workspace_root: "/tmp/project" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "user_prompt_display", prompt: "Previewed question" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "assistant_message_committed", text: "Previewed answer" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "goal_usage_attribution", record: { usage_id: "reported-1", usage_family: "provider", quantity: { unit: "tokens", reported: true, input_tokens: 24, output_tokens: 12, cached_tokens: 8 } } } } },
+  ].map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n");
   tokenFile = join(dir, "chat-token");
   writeFileSync(tokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
   metaFile = join(dir, "session-meta.json");
@@ -117,6 +130,7 @@ beforeAll(async () => {
 function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    XDG_DATA_HOME: museDataRoot,
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
     CLUTCH_TELEMETRY_ENDPOINT: `http://127.0.0.1:${ccPort}/v1/traces`,
@@ -183,6 +197,43 @@ async function waitForStubTurn(beforeCount: number, timeoutMs = 20000): Promise<
 function chatHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${CHAT_TOKEN}`, "Content-Type": "application/json" };
 }
+
+it("previews and renames a Muse thread without acquiring an ACP session", async () => {
+  const before = stubLog();
+  const logBefore = readFileSync(museLogFile, "utf8");
+  const previewURL = `http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${PREVIEW_ID}`;
+  const preview = await fetch(previewURL, { headers: chatHeaders() });
+  expect(preview.status).toBe(200);
+  expect(await preview.json()).toMatchObject({
+    readOnly: true, remoteSessionId: PREVIEW_ID, running: false,
+    model: "muse-wonder-1.0-contributor", provider: "meta",
+    history: [{ text: "Previewed question" }, { text: "Previewed answer" }],
+    usage: { basis: "session-totals", totalsComplete: true, inputTokens: 24, outputTokens: 12, cachedTokens: 8, totalTokens: 0 },
+  });
+  const rename = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
+    method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: "  Named\nThread  " }),
+  });
+  expect(rename.status).toBe(200);
+  const renamed = await fetch(previewURL, { headers: chatHeaders() });
+  expect(await renamed.json()).toMatchObject({ title: "Named Thread" });
+  await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
+    method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: null }),
+  });
+  expect(readFileSync(museLogFile, "utf8")).toBe(logBefore);
+  expect(stubLog()).toEqual(before);
+});
+
+it("filters folder trees by path segment while retaining the all-folder view", async () => {
+  const root = `http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`;
+  const all = await fetch(root, { headers: chatHeaders() });
+  expect((await all.json()).sessions).toHaveLength(1);
+  const descendants = await fetch(`${root}&cwd=/tmp&scope=tree`, { headers: chatHeaders() });
+  expect((await descendants.json()).sessions).toHaveLength(1);
+  const siblingPrefix = await fetch(`${root}&cwd=/tmp/proj&scope=tree`, { headers: chatHeaders() });
+  expect((await siblingPrefix.json()).sessions).toEqual([]);
+  const exact = await fetch(`${root}&cwd=/tmp&scope=exact`, { headers: chatHeaders() });
+  expect((await exact.json()).sessions).toEqual([]);
+});
 
 async function postChat(body: unknown): Promise<{ status: number; text: string }> {
   const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
@@ -267,7 +318,7 @@ describe("chat sidecar full loop", () => {
       if (chunk.done) break;
       remainder += decoder.decode(chunk.value, { stream: true });
     }
-    expect(remainder).toContain('event: capabilities\ndata: {"supportsSteering":true}');
+    expect(seen + remainder).toContain('event: capabilities\ndata: {"supportsSteering":true}');
     const idle = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
       method: "POST",
       headers: chatHeaders(),
@@ -287,6 +338,109 @@ describe("chat sidecar full loop", () => {
     });
     expect(log.filter((entry) => entry.event === "session-new")).toHaveLength(initialSessions + 1);
     expect(log.filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait")).toHaveLength(initialPrompts + 1);
+  }, 60000);
+
+  it("rejects loading or replaying a busy Muse native thread while another thread can finish", async () => {
+    const seed = await postChat({ prompt: "create-resumable-thread", engine: "muse", cwd: "/tmp/busy-native-thread" });
+    expect(seed.status).toBe(200);
+    const seedDone = /event: done\ndata: (\{[^\n]*\})\n\n/.exec(seed.text);
+    const nativeId = seedDone ? (JSON.parse(seedDone[1]!) as { remoteSessionId?: string }).remoteSessionId : undefined;
+    expect(nativeId).toEqual(expect.any(String));
+    const loadLocalCopy = async (): Promise<string> => {
+      const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+        method: "POST",
+        headers: chatHeaders(),
+        body: JSON.stringify({ engine: "muse", sessionId: nativeId, cwd: "/tmp/busy-native-thread" }),
+      });
+      expect(loaded.status).toBe(200);
+      return (await loaded.json() as { sessionId: string }).sessionId;
+    };
+    const heldChatId = await loadLocalCopy();
+    const otherWindowChatId = await loadLocalCopy();
+    const activeTurnsBefore = stubLog().filter((entry) => entry.event === "active-turn").length;
+    const heldPromptsBefore = stubLog().filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait").length;
+    const held = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: heldChatId, prompt: "steer-wait", engine: "muse", cwd: "/tmp/busy-native-thread" }),
+    });
+    expect(held.status).toBe(200);
+    const heldReader = held.body?.getReader();
+    expect(heldReader).toBeDefined();
+    const decoder = new TextDecoder();
+    let heldSeen = "";
+    while (!hasCompleteEvent(heldSeen, "start")) {
+      const chunk = await heldReader!.read();
+      if (chunk.done) break;
+      heldSeen += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(heldSeen).toContain(`"sessionId":"${heldChatId}"`);
+    expect(await waitForStubTurn(activeTurnsBefore)).toBe(true);
+    expect(stubLog().filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait")[heldPromptsBefore]?.sessionId).toBe(nativeId);
+
+    const loadBusy = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "muse", sessionId: nativeId, cwd: "/tmp/busy-native-thread" }),
+    });
+    expect(loadBusy.status).toBe(409);
+
+    const replayBusy = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: otherWindowChatId, prompt: "another turn", engine: "muse", cwd: "/tmp/busy-native-thread" }),
+    });
+    expect(replayBusy.status).toBe(409);
+
+    const independent = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "muse", cwd: "/tmp/independent-native-thread", permissions: "ask" }),
+    });
+    expect(independent.status).toBe(200);
+    const independentReader = independent.body?.getReader();
+    expect(independentReader).toBeDefined();
+    let independentSeen = "";
+    while (!hasCompleteEvent(independentSeen, "permission")) {
+      const chunk = await independentReader!.read();
+      if (chunk.done) break;
+      independentSeen += decoder.decode(chunk.value, { stream: true });
+    }
+    const independentStart = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(independentSeen);
+    const independentChatId = independentStart ? (JSON.parse(independentStart[1]!) as { sessionId: string }).sessionId : "";
+    const permission = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(independentSeen);
+    const requestId = permission ? (JSON.parse(permission[1]!) as { requestId: string }).requestId : "";
+    expect(independentChatId).not.toBe(heldChatId);
+    expect(requestId).not.toBe("");
+    expect(stubLog().find((entry) => entry.event === "prompt" && entry.promptText === "say stub")?.sessionId).not.toBe(nativeId);
+    const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: independentChatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answered.status).toBe(200);
+    let independentRest = "";
+    while (!hasCompleteEvent(independentRest, "done")) {
+      const chunk = await independentReader!.read();
+      if (chunk.done) break;
+      independentRest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(independentSeen + independentRest).toContain("stub-answer");
+
+    const stillActive = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: heldChatId, text: "Finish the held turn" }),
+    });
+    expect(stillActive.status).toBe(200);
+    expect(await stillActive.json()).toEqual({ outcome: "injected" });
+    let heldRest = "";
+    while (!hasCompleteEvent(heldRest, "done")) {
+      const chunk = await heldReader!.read();
+      if (chunk.done) break;
+      heldRest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(heldRest).toMatch(/event: done[\s\S]*endTurn/);
   }, 60000);
 
   it("routes same-ID cross-engine updates and permissions to the owning session", async () => {

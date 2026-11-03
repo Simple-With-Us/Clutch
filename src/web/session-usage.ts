@@ -28,10 +28,16 @@ import { z } from "zod";
 /** One engine-reported accounting record.  Every field is optional because the
  *  engine omits what a given provider does not return. */
 export interface SessionUsage {
+  /** Session totals cannot be compared with a model context window. */
+  basis?: "latest-response" | "session-totals";
+  totalsComplete?: boolean;
+  inputTokensReported?: false;
   provider?: string;
   model?: string;
   /** The model's total context window, as the engine reported it. */
   contextWindow?: number;
+  /** Explicit ACP context occupancy, independent of cumulative provider counts. */
+  contextUsedTokens?: number;
   inputTokens: number;
   outputTokens: number;
   /** `false` when the record carried no real `outputTokens`, so the `0` above
@@ -40,6 +46,10 @@ export interface SessionUsage {
   /** Context occupancy in tokens: input + cacheRead + output. */
   totalTokens: number;
   cacheReadTokens?: number;
+  cachedTokens?: number;
+  /** Whole response rate includes provider and network latency. */
+  responseTokensPerSecond?: number;
+  completionDurationMs?: number;
   /** Engine event time of the usage record, in ms since the epoch. */
   updatedAtMs?: number;
   /** Output tokens per second, measured between two real engine records.
@@ -302,8 +312,10 @@ export function outputTokensPerSecond(current: SessionUsage, previous?: SessionU
  * half is unknown.  A context window of zero would make the division
  * meaningless, so it is refused rather than reported as infinite.
  */
-export function contextUsedPercent(usage: Pick<SessionUsage, "totalTokens" | "contextWindow">): number | undefined {
-  const { totalTokens, contextWindow } = usage;
+export function contextUsedPercent(usage: Pick<SessionUsage, "totalTokens" | "contextWindow" | "contextUsedTokens" | "basis">): number | undefined {
+  if (usage.basis === "session-totals" && usage.contextUsedTokens === undefined) return undefined;
+  const totalTokens = usage.contextUsedTokens ?? usage.totalTokens;
+  const { contextWindow } = usage;
   if (!Number.isFinite(totalTokens) || !Number.isFinite(contextWindow)) return undefined;
   if (!contextWindow || contextWindow <= 0) return undefined;
   return (totalTokens / contextWindow) * 100;
