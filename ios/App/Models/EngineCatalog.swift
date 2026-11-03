@@ -72,7 +72,7 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         self.available = available
         self.supportsThreads = supportsThreads
         self.models = id == "muse" ? MuseModelCatalogPolicy.normalizedModels(models) : models
-        self.effortLevels = id == "muse" ? MuseModelCatalogPolicy.effortLevels : effortLevels
+        self.effortLevels = EngineEffortCatalogPolicy.levels(engineID: id, advertised: effortLevels)
         self.effortConfigId = effortConfigId
         self.modelConfigId = modelConfigId
         self.note = note
@@ -101,7 +101,7 @@ public struct EngineDescriptor: Decodable, Equatable, Sendable, Identifiable {
         let decodedModels = try container.decode([EngineModel].self, forKey: .models)
         models = id == "muse" ? MuseModelCatalogPolicy.normalizedModels(decodedModels) : decodedModels
         let decodedEffortLevels = try container.decode([String].self, forKey: .effortLevels)
-        effortLevels = id == "muse" ? MuseModelCatalogPolicy.effortLevels : decodedEffortLevels
+        effortLevels = EngineEffortCatalogPolicy.levels(engineID: id, advertised: decodedEffortLevels)
         effortConfigId = try container.decode(String.self, forKey: .effortConfigId)
         modelConfigId = try container.decode(String.self, forKey: .modelConfigId)
         note = try container.decodeIfPresent(String.self, forKey: .note)
@@ -186,6 +186,17 @@ private enum MuseModelCatalogPolicy {
                 images: metadata?.images
             )
         }
+    }
+}
+
+/// Native effort menus use one canonical order, ending at `xhigh` for Muse contributors and adding `max` for other models while omitting `none` and `ultra`.
+private enum EngineEffortCatalogPolicy {
+    private static let contributorLevels = ["minimal", "low", "medium", "high", "xhigh"]
+    private static let standardLevels = contributorLevels + ["max"]
+
+    static func levels(engineID: String, advertised: [String]) -> [String] {
+        guard !advertised.isEmpty else { return [] }
+        return engineID == "muse" ? contributorLevels : standardLevels
     }
 }
 

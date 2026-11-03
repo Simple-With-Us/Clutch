@@ -22,6 +22,13 @@ struct ClutchApp: App {
             RootView()
                 .preferredColorScheme(colorScheme)
         }
+        #if os(macOS)
+        WindowGroup("Thread", for: MacThreadWindowRequest.self) { $request in
+            MacThreadWindow(request: $request)
+                .preferredColorScheme(colorScheme)
+        }
+        .defaultSize(width: 1040, height: 760)
+        #endif
     }
 
     private var colorScheme: ColorScheme? {

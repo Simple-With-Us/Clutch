@@ -16,6 +16,8 @@ public enum ChatStreamEvent: Equatable {
     case permission(AcpPermissionRequest)
     /// The engine's execution plan, as it last reported it.
     case plan([AcpPlanEntry])
+    /// Muse's advertised compaction command and live context occupancy.
+    case contextControls(MuseContextControls)
     case failed(String)
 }
 
@@ -38,6 +40,8 @@ public struct ChatSessionClient {
     public var effort: String?
     /// Muse-only approval and contributor defaults for this turn.
     public var museOptions: MuseLaunchOptions?
+    /// Muse-only early compaction preference for this turn.
+    public var contextPolicy: MuseContextPolicy?
     /// Images attached to this turn, the way the web canvas attaches files.
     public var images: [ChatAttachment]
 
@@ -50,6 +54,7 @@ public struct ChatSessionClient {
         cwd: String? = nil,
         effort: String? = nil,
         museOptions: MuseLaunchOptions? = nil,
+        contextPolicy: MuseContextPolicy? = nil,
         images: [ChatAttachment] = []
     ) {
         self.host = host
@@ -60,6 +65,7 @@ public struct ChatSessionClient {
         self.cwd = cwd
         self.effort = effort
         self.museOptions = museOptions
+        self.contextPolicy = contextPolicy
         self.images = images
     }
 
@@ -132,6 +138,12 @@ public struct ChatSessionClient {
             body["museOptions"] = [
                 "yolo": museOptions.yolo,
                 "contributorMode": museOptions.contributorMode,
+            ]
+        }
+        if engine == "muse", let contextPolicy {
+            body["contextPolicy"] = [
+                "autoCompact": contextPolicy.autoCompact,
+                "thresholdPercent": MuseContextPolicy.clampedThreshold(contextPolicy.thresholdPercent),
             ]
         }
         if !images.isEmpty {
@@ -283,6 +295,13 @@ public struct ChatSessionClient {
                 )
             }
             return .plan(plan)
+        case "context_controls":
+            guard let supported = json["supportsCompaction"] as? Bool else { return nil }
+            return .contextControls(MuseContextControls(
+                supportsCompaction: supported,
+                contextUsedTokens: json["contextUsedTokens"] as? Int,
+                contextWindow: json["contextWindow"] as? Int
+            ))
         case "error":
             return .failed((json["message"] as? String) ?? "unknown error")
         default:

@@ -4,6 +4,8 @@ The native Muse picker offers Spark 1.3 Contributor, Wonder 1.0 Contributor and 
 
 Muse effort choices are `minimal`, `low`, `medium`, `high` and `xhigh`.  Contributor turns cannot use `max`.  A refused model or effort stops the turn before its prompt is sent.
 
+The native effort menu excludes `none` and `ultra`.  Non-contributor engine menus place `max` after `xhigh`; engines without an effort setting keep the control hidden.
+
 Hosts And Settings stores YOLO and Contributor Mode preferences per host on this device.  Both initially default to on.  Contributor Mode controls Muse's launch flag independently of the contributor-only model picker.  Turning it off does not silently select a base model.  Queued messages retain the options selected when queued; later settings changes apply to later messages.
 
 Native `muse acp` accepts `--contributor-mode on|off`.  YOLO uses the host's `--disable-sandbox --trust-workspace` options plus an advertised per-session `allowAll` approval mode.  With YOLO off, the bridge selects an advertised `onRequest` mode.  It does not pass the interactive CLI's `--yolo` flag to the ACP host.

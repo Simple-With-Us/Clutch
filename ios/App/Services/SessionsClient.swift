@@ -74,7 +74,7 @@ public struct SessionsClient {
         }
     }
 
-    public func list(engine: String = "mcode", limit: Int = 100, includingArchived: Bool = false) async throws -> [AcpSessionInfo] {
+    public func list(engine: String = "mcode", limit: Int = 100, includingArchived: Bool = false, folder: String? = nil, includeDescendants: Bool = true) async throws -> [AcpSessionInfo] {
         var comps = try base()
         comps.path = "/clutch/v1/sessions"
         var items = [
@@ -82,6 +82,10 @@ public struct SessionsClient {
             URLQueryItem(name: "limit", value: String(limit)),
         ]
         if includingArchived { items.append(URLQueryItem(name: "archived", value: "include")) }
+        if let folder, !folder.isEmpty {
+            items.append(URLQueryItem(name: "cwd", value: folder))
+            items.append(URLQueryItem(name: "scope", value: includeDescendants ? "tree" : "exact"))
+        }
         comps.queryItems = items
         guard let url = comps.url else { throw ChatClientError.badHost }
         let (data, resp) = try await URLSession.shared.data(for: authorized(url))
@@ -90,6 +94,53 @@ public struct SessionsClient {
         }
         struct Payload: Decodable { var sessions: [AcpSessionInfo] }
         return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
+    }
+
+    /// Read a transcript without acquiring the engine session or sending a prompt.
+    public func preview(sessionId: String, cwd: String? = nil, engine: String = "mcode", limit: Int = 200) async throws -> PreviewSession {
+        var comps = try base()
+        comps.path = "/clutch/v1/sessions/preview"
+        comps.queryItems = [
+            URLQueryItem(name: "engine", value: engine),
+            URLQueryItem(name: "sessionId", value: sessionId),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        if let cwd { comps.queryItems?.append(URLQueryItem(name: "cwd", value: cwd)) }
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url))
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        guard status == 200 else {
+            struct Failure: Decodable { var error: String }
+            if let failure = try? JSONDecoder().decode(Failure.self, from: data) {
+                throw SessionLoadFailure(message: String(failure.error.prefix(2048)))
+            }
+            throw ChatClientError.http(status)
+        }
+        return try JSONDecoder().decode(PreviewSession.self, from: data)
+    }
+
+    public struct PreviewSession: Decodable, Equatable, Sendable {
+        public var remoteSessionId: String
+        public var cwd: String?
+        public var title: String?
+        public var model: String?
+        public var provider: String?
+        public var history: [AcpHistoryEntry]
+        public var usage: AcpSessionUsage?
+        public var running: Bool
+        public var truncated: Bool
+    }
+
+    public func contextControls(sessionId: String) async throws -> MuseContextControls {
+        var comps = try base()
+        comps.path = "/clutch/v1/sessions/context"
+        comps.queryItems = [URLQueryItem(name: "sessionId", value: sessionId)]
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url, timeout: 15))
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        return try JSONDecoder().decode(MuseContextControls.self, from: data)
     }
 
     // MARK: - Projects and archiving
@@ -112,13 +163,15 @@ public struct SessionsClient {
 
     /// A session's stored Project assignment and archive state.
     public struct SessionMetaEntry: Decodable, Equatable, Sendable {
+        public var title: String?
         public var projectId: String?
         public var archived: Bool?
         public var archivedAt: String?
-        public init(projectId: String? = nil, archived: Bool? = nil, archivedAt: String? = nil) {
+        public init(projectId: String? = nil, archived: Bool? = nil, archivedAt: String? = nil, title: String? = nil) {
             self.projectId = projectId
             self.archived = archived
             self.archivedAt = archivedAt
+            self.title = title
         }
     }
 
@@ -148,7 +201,8 @@ public struct SessionsClient {
     public func updateMeta(
         sessionId: String,
         projectId: String?? = nil,
-        archived: Bool? = nil
+        archived: Bool? = nil,
+        title: String?? = nil
     ) async throws -> SessionMeta {
         var comps = try base()
         comps.path = "/clutch/v1/session-meta"
@@ -161,6 +215,7 @@ public struct SessionsClient {
         var body: [String: Any] = ["sessionId": sessionId]
         if let projectId { body["projectId"] = projectId as Any? ?? NSNull() }
         if let archived { body["archived"] = archived }
+        if let title { body["title"] = title as Any? ?? NSNull() }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -235,6 +290,7 @@ public struct SessionsClient {
             var history: [AcpHistoryEntry]?
             var model: String?
             var provider: String?
+            var contextControls: MuseContextControls?
         }
         guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
             throw ChatClientError.http(200)
@@ -247,7 +303,8 @@ public struct SessionsClient {
             cwd: payload.cwd ?? cwd,
             history: payload.history ?? [],
             model: payload.model,
-            provider: payload.provider
+            provider: payload.provider,
+            contextControls: payload.contextControls
         )
     }
 
@@ -261,14 +318,16 @@ public struct SessionsClient {
         public var history: [AcpHistoryEntry]
         public var model: String?
         public var provider: String?
+        public var contextControls: MuseContextControls?
 
-        public init(chatId: String, remoteSessionId: String, cwd: String?, history: [AcpHistoryEntry], model: String? = nil, provider: String? = nil) {
+        public init(chatId: String, remoteSessionId: String, cwd: String?, history: [AcpHistoryEntry], model: String? = nil, provider: String? = nil, contextControls: MuseContextControls? = nil) {
             self.chatId = chatId
             self.remoteSessionId = remoteSessionId
             self.cwd = cwd
             self.history = history
             self.model = model
             self.provider = provider
+            self.contextControls = contextControls
         }
     }
 }
