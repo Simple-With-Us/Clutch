@@ -73,7 +73,7 @@ struct RootView: View {
                 }
                 .tag(0)
 
-            gated(ChatView(host: host, store: store), host: host)
+            gated(ChatView(activeHost: host, store: store), host: host)
                 .tabItem {
                     Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
                 }
