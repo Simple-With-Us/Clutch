@@ -108,7 +108,7 @@ public struct SessionsView: View {
         } detail: {
             detail
         }
-        .task(id: host.id) {
+        .task(id: host.pairingKey) {
             catalogRequestGeneration += 1
             catalog = nil
             // A different server means a different thread list, and the model

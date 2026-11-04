@@ -306,3 +306,18 @@ private struct HostRow: View {
         }
     }
 }
+
+/// The app's own version, read from its bundle.
+///
+/// The web view carried this with it when the canvas went; the settings
+/// sheet is the one surface that shows the version, so the helper lives
+/// here now.
+extension Bundle {
+    var shortVersion: String {
+        (object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0"
+    }
+
+    var buildNumber: String {
+        (object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "0"
+    }
+}

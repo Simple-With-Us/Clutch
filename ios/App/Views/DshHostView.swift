@@ -2,11 +2,12 @@ import SwiftUI
 
 /// The native surface of the dsh host.
 ///
-/// Clutch's web tab is the upstream `dsh web` browser UI inside a WebView.
-/// This tab is the other kind of client: it speaks the dsh host's own
-/// contract over HTTP and the WebSocket mux, with no WebView and no embedded
-/// JavaScript engine.  It is the same client core the iOS and macOS apps
-/// share, so a native app on either platform reaches the host the same way.
+/// `dsh web` serves the upstream browser UI, and the apps no longer open it:
+/// every surface they show is native.  This tab is the one client that
+/// speaks the dsh host's own contract over HTTP and the WebSocket mux, with
+/// no WebView and no embedded JavaScript engine.  It is the same client core
+/// the iOS and macOS apps share, so a native app on either platform reaches
+/// the host the same way.
 ///
 /// The view is deliberately plain: connect, call one endpoint, read the
 /// answer.  A native rendering of the host's own UI is the next slice, and it

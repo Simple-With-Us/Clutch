@@ -180,7 +180,7 @@ public struct ChatView: View {
             }
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
-            .task(id: activeHost?.id) {
+            .task(id: activeHost?.pairingKey) {
                 guard let host = activeHost else { return }
                 await manager.prepare(host: host)
             }

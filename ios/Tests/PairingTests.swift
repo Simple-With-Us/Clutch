@@ -145,9 +145,11 @@ final class HostStoreTests: XCTestCase {
         let defaults = freshDefaults()
         let store = HostStore(defaults: defaults)
         XCTAssertNil(store.activeHost)
-        let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one"))
+        let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
         XCTAssertEqual(store.activeHost?.id, host.id)
-        XCTAssertEqual(store.loadGeneration, 1)
+        // The surfaces key their loads by the pairing, so the key has to
+        // carry the token the sidecar will be asked with.
+        XCTAssertEqual(store.activeHost?.pairingKey, "\(host.id.uuidString)#chat-one")
 
         let reloaded = HostStore(defaults: defaults)
         XCTAssertEqual(reloaded.hosts.count, 1)
@@ -156,14 +158,15 @@ final class HostStoreTests: XCTestCase {
 
     func testRepairSameOriginRefreshesTokenInsteadOfDuplicating() {
         let store = HostStore(defaults: freshDefaults())
-        let first = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one"))
-        store.consumeLaunchToken(for: first.id)
-        XCTAssertNil(store.activeHost?.pendingLaunchToken)
-        store.pair(PairingPayload(name: "Other", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "two"))
+        let first = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
+        store.pair(PairingPayload(name: "Other", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "two", chatToken: "chat-two"))
         XCTAssertEqual(store.hosts.count, 1)
         XCTAssertEqual(store.activeHost?.pendingLaunchToken, "two")
         XCTAssertEqual(store.activeHost?.name, "Mac")
-        XCTAssertEqual(store.loadGeneration, 2)
+        XCTAssertEqual(store.activeHost?.chatToken, "chat-two")
+        // A re-pair hands the sidecar a new token, so the surfaces have to
+        // load again with it.
+        XCTAssertNotEqual(store.activeHost?.pairingKey, first.pairingKey)
     }
 
     func testRemoveActiveFallsBackToRemainingHost() {

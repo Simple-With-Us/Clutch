@@ -3,8 +3,11 @@ import Observation
 import WebKit
 
 /// The paired clutch web hosts and which one is showing.  Persisted in
-/// `UserDefaults`; launch tokens are dropped as soon as clutch web has
-/// exchanged them for its cookie (see `consumeLaunchToken`).
+/// `UserDefaults`.
+///
+/// The launch token is kept, not dropped: the dsh host client exchanges it
+/// for a signed cookie on every connect, and that cookie does not survive an
+/// app restart.
 @MainActor
 @Observable
 public final class HostStore {
@@ -15,8 +18,6 @@ public final class HostStore {
 
     public private(set) var hosts: [ClutchHost] = []
     public private(set) var activeHostID: UUID?
-    /// Bumped whenever the web view must reload (new pairing or Reload).
-    public private(set) var loadGeneration = 0
 
     @ObservationIgnored private let defaults: UserDefaults
 
@@ -42,14 +43,12 @@ public final class HostStore {
             if let port = payload.chatPort { hosts[index].chatPort = port }
             if let kind = payload.kind { hosts[index].kind = kind }
             activeHostID = hosts[index].id
-            loadGeneration += 1
             save()
             return hosts[index]
         }
         let host = ClutchHost(pairing: payload)
         hosts.append(host)
         activeHostID = host.id
-        loadGeneration += 1
         save()
         return host
     }
@@ -58,10 +57,6 @@ public final class HostStore {
         guard hosts.contains(where: { $0.id == host.id }) else { return }
         activeHostID = host.id
         save()
-    }
-
-    public func requestReload() {
-        loadGeneration += 1
     }
 
     public func rename(_ host: ClutchHost, to name: String) {
@@ -77,15 +72,6 @@ public final class HostStore {
         if activeHostID == host.id { activeHostID = hosts.first?.id }
         save()
         Self.clearWebsiteData(for: host)
-    }
-
-    /// Called once clutch web has served `/` after a token load: the cookie
-    /// now authenticates, so the one-time token is no longer stored.
-    public func consumeLaunchToken(for hostID: UUID) {
-        guard let index = hosts.firstIndex(where: { $0.id == hostID }),
-              hosts[index].pendingLaunchToken != nil else { return }
-        hosts[index].pendingLaunchToken = nil
-        save()
     }
 
     public func setStatus(_ status: HostStatus, for hostID: UUID) {
