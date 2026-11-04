@@ -2857,7 +2857,15 @@ async function main(): Promise<void> {
       active.stream = (u) => {
         if (u.kind === "tool_call" || u.kind === "tool_call_update") {
           turnDiagnostics.record("tool", { status: u.toolStatus ?? "running" });
-          sseSend(res, "tool", { id: u.toolCallId ?? "", name: u.text, status: u.toolStatus ?? "running" });
+          sseSend(res, "tool", {
+            id: u.toolCallId ?? "",
+            name: u.text,
+            status: u.toolStatus ?? "running",
+            // A tool that runs other tools is the parent of them, and the
+            // client shows the children hanging under it.
+            ...(u.parentToolCallId ? { parentId: u.parentToolCallId } : {}),
+            ...(u.toolInput ? { input: u.toolInput } : {}),
+          });
           return;
         }
         if (u.kind === "plan") {

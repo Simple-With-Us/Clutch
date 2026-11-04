@@ -137,6 +137,30 @@ function toolResultText(data: Record<string, unknown>): { text: string; failed: 
 }
 
 /**
+ * What a tool was asked to do, in one line.
+ *
+ * The engine writes the arguments of a call as a JSON string, and the
+ * arguments of a nested call as the object itself, so both are read here.
+ * A phone shows one line of it, so the string is shortened rather than
+ * wrapped: the name of the tool says which tool ran, and this says what it
+ * was asked.
+ */
+function toolInputText(raw: unknown): string {
+  let text = "";
+  if (typeof raw === "string") {
+    text = raw.trim();
+  } else if (raw !== undefined && raw !== null && typeof raw === "object") {
+    try {
+      text = JSON.stringify(raw);
+    } catch {
+      text = "";
+    }
+  }
+  if (!text) return "";
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
+
+/**
  * Translate one host event into the transcript vocabulary.
  *
  * Returns null for the events the clients do not render: turn and step
@@ -167,12 +191,50 @@ export function dshHostEventToUpdate(
     const callId = data["callId"];
     const name = data["name"];
     if (typeof callId !== "string" || typeof name !== "string") return null;
+    const input = toolInputText(data["arguments"]);
     return {
       sessionId,
       kind: "tool_call",
       text: name,
       toolCallId: callId,
       toolStatus: "running",
+      ...(input ? { toolInput: input } : {}),
+    };
+  }
+
+  // A tool that runs other tools: the dispatch events carry the call they
+  // ran under, and the client shows the children hanging under it.
+  if (type === "tool/ptc-dispatch-start") {
+    const parentCallId = data["parentCallId"];
+    const subCallId = data["subCallId"];
+    const name = data["name"];
+    if (typeof parentCallId !== "string" || typeof subCallId !== "string" || typeof name !== "string") {
+      return null;
+    }
+    const input = toolInputText(data["arguments"]);
+    return {
+      sessionId,
+      kind: "tool_call",
+      text: name,
+      toolCallId: subCallId,
+      parentToolCallId: parentCallId,
+      toolStatus: "running",
+      ...(input ? { toolInput: input } : {}),
+    };
+  }
+
+  if (type === "tool/ptc-dispatch") {
+    const subCallId = data["subCallId"];
+    if (typeof subCallId !== "string") return null;
+    const parentCallId = data["parentCallId"];
+    return {
+      sessionId,
+      kind: "tool_call_update",
+      // An empty title tells the client to keep the name it already shows.
+      text: "",
+      toolCallId: subCallId,
+      ...(typeof parentCallId === "string" ? { parentToolCallId: parentCallId } : {}),
+      toolStatus: data["isError"] === true ? "failed" : "completed",
     };
   }
 

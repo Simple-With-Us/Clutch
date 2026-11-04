@@ -9,7 +9,7 @@ public enum ChatStreamEvent: Equatable {
     case message(String)
     case thought(String)
     /// One tool call the agent ran, or a status update to one already shown.
-    case tool(id: String, name: String, status: String)
+    case tool(AcpToolCall)
     case done(stopReason: String, sessionId: String, remoteSessionId: String?)
     case usage(AcpSessionUsage)
     /// The engine is waiting for a permission request to be answered.
@@ -257,9 +257,15 @@ public struct ChatSessionClient {
             return .thought(text)
         case "tool":
             return .tool(
-                id: (json["id"] as? String) ?? "",
-                name: (json["name"] as? String) ?? "Tool call",
-                status: (json["status"] as? String) ?? "running"
+                AcpToolCall(
+                    id: (json["id"] as? String) ?? "",
+                    name: (json["name"] as? String) ?? "Tool call",
+                    status: (json["status"] as? String) ?? "running",
+                    // A tool that runs other tools is the parent of them, and
+                    // the client shows the children hanging under it.
+                    parentId: json["parentId"] as? String,
+                    input: json["input"] as? String
+                )
             )
         case "done":
             return .done(
