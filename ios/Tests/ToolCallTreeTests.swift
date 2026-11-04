@@ -80,4 +80,35 @@ final class ToolCallTreeTests: XCTestCase {
         XCTAssertEqual(buffer.tools[0].status, "completed")
         XCTAssertEqual(buffer.tools[0].parentId, "call-1")
     }
+
+    @MainActor
+    func testAReloadedThreadKeepsTheTree() {
+        // A reloaded thread is built from the history, not from the live
+        // events, so the relation and the input have to travel with the
+        // history too.  Without them the cards come back flat.
+        let history = [
+            AcpHistoryEntry(sessionId: "s", kind: "tool_call", text: "Bash", toolCallId: "call-1", toolStatus: "completed"),
+            AcpHistoryEntry(
+                sessionId: "s",
+                kind: "tool_call",
+                text: "Read",
+                toolCallId: "call-2",
+                toolStatus: "completed",
+                parentToolCallId: "call-1",
+                toolInput: "{\"path\":\"README.md\"}"
+            )
+        ]
+        let bubbles = SessionThreadModel.bubbles(from: history)
+        XCTAssertEqual(bubbles.count, 2)
+        XCTAssertEqual(bubbles[1].toolCallId, "call-2")
+        XCTAssertEqual(bubbles[1].toolParentId, "call-1")
+        XCTAssertEqual(bubbles[1].toolInput, "{\"path\":\"README.md\"}")
+
+        var parents: [String: String] = [:]
+        for bubble in bubbles {
+            guard let id = bubble.toolCallId, let parent = bubble.toolParentId else { continue }
+            parents[id] = parent
+        }
+        XCTAssertEqual(ToolCallDepth.depth(of: bubbles[1].toolCallId, parents: parents), 1)
+    }
 }

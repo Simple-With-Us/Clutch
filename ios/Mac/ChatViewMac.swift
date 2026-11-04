@@ -2512,7 +2512,17 @@ public struct ChatView: View {
             }
             codePending = []
             for tool in output.tools {
-                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
+                // The relation and the input travel with the call, so a turn
+                // that has finished still shows its tree.
+                codeLoaded.append(AcpHistoryEntry(
+                    sessionId: "local",
+                    kind: "tool_call",
+                    text: tool.name,
+                    toolCallId: tool.id,
+                    toolStatus: tool.status,
+                    parentToolCallId: tool.parentId,
+                    toolInput: tool.input
+                ))
             }
             if !output.text.isEmpty {
                 codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: output.text))

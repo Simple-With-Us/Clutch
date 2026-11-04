@@ -145,22 +145,7 @@ final class SessionThreadModel {
             // for; a reload without it fails every thread outside $HOME.
             cwd = loaded.cwd
             remoteSessionId = loaded.remoteSessionId
-            bubbles = loaded.history.compactMap { entry in
-                if entry.isTool {
-                    return ThreadBubbleItem(
-                        id: "tool-\(entry.toolCallId ?? entry.text)-\(entry.text.hashValue)",
-                        role: .tool,
-                        text: entry.text,
-                        toolStatus: entry.toolStatus ?? "completed"
-                    )
-                }
-                guard entry.isVisible else { return nil }
-                return ThreadBubbleItem(
-                    id: "\(entry.sessionId)-\(entry.kind)-\(entry.text.hashValue)",
-                    role: entry.isUser ? .user : .assistant,
-                    text: entry.text
-                )
-            }
+            bubbles = Self.bubbles(from: loaded.history)
             // The plan is a state, not a line of the transcript: the last
             // plan the thread carried is the one the engine last reported.
             // A reload that carries no plan keeps the one on screen: the
@@ -335,17 +320,51 @@ final class SessionThreadModel {
         return false
     }
 
+    /// The parents map: which call each tool call ran under.
+    ///
+    /// Built once for the whole transcript, because a row is asked for its
+    /// depth and a thread can carry hundreds of rows.
+    var toolParents: [String: String] {
+        var parents: [String: String] = [:]
+        for bubble in bubbles where bubble.role == .tool {
+            guard let id = bubble.toolCallId, let parent = bubble.toolParentId else { continue }
+            parents[id] = parent
+        }
+        return parents
+    }
+
+    /// The transcript as bubbles, from a loaded history.
+    ///
+    /// A tool card keeps the call it ran under and what it was asked, so a
+    /// reloaded thread shows the same tree the live turn did.
+    static func bubbles(from history: [AcpHistoryEntry]) -> [ThreadBubbleItem] {
+        history.compactMap { entry in
+            if entry.isTool {
+                return ThreadBubbleItem(
+                    id: "tool-\(entry.toolCallId ?? entry.text)-\(entry.text.hashValue)",
+                    role: .tool,
+                    text: entry.text,
+                    toolStatus: entry.toolStatus ?? "completed",
+                    toolParentId: entry.parentToolCallId,
+                    toolCallId: entry.toolCallId,
+                    toolInput: entry.toolInput
+                )
+            }
+            guard entry.isVisible else { return nil }
+            return ThreadBubbleItem(
+                id: "\(entry.sessionId)-\(entry.kind)-\(entry.text.hashValue)",
+                role: entry.isUser ? .user : .assistant,
+                text: entry.text
+            )
+        }
+    }
+
     /// How deep one bubble's call sits under the call that made it.
     ///
     /// A tool that runs other tools is the parent of them, and the children
     /// hang under it, the way the web canvas shows them.
-    func toolDepth(of bubble: ThreadBubbleItem) -> Int {
+    func toolDepth(of bubble: ThreadBubbleItem, parents: [String: String]) -> Int {
         guard bubble.role == .tool else { return 0 }
-        var parents: [String: String] = [:]
-        for other in bubbles where other.role == .tool {
-            guard let id = other.toolCallId, let parent = other.toolParentId else { continue }
-            parents[id] = parent
-        }
         return ToolCallDepth.depth(of: bubble.toolCallId, parents: parents)
     }
 
@@ -576,6 +595,7 @@ public struct SessionThreadView: View {
                 Button("Try Again") { Task { await model.load() } }
             }
         case .ready:
+            let parents = model.toolParents
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -583,7 +603,7 @@ public struct SessionThreadView: View {
                             ThreadBubbleRow(
                                 bubble: bubble,
                                 isMatch: matchingIDs.contains(bubble.id),
-                                depth: model.toolDepth(of: bubble)
+                                depth: model.toolDepth(of: bubble, parents: parents)
                             )
                                 .id(bubble.id)
                         }
