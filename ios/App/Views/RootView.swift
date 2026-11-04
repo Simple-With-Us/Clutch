@@ -15,6 +15,7 @@ struct RootView: View {
     /// screen, which is what the web canvas used to draw for it.
     @State private var gate: HostGateState = .ready
     @State private var isShowingHosts = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -33,8 +34,24 @@ struct RootView: View {
                             selectedTab = 0
                         }
                     }
+                    // The statuses and the gate are read separately: the
+                    // probe of the web origin can take seconds, and the gate
+                    // must not wait for it.
+                    .task(id: host.pairingKey) {
+                        await store.refreshStatuses()
+                    }
                     .task(id: host.pairingKey) {
                         await checkGate(host)
+                    }
+                    .onChange(of: scenePhase) { _, phase in
+                        // The host may have come back while the app was in the
+                        // background, so the gate and the host statuses are
+                        // read again when it comes forward.
+                        guard phase == .active else { return }
+                        Task {
+                            await store.refreshStatuses()
+                            await checkGate(host)
+                        }
                     }
             } else {
                 PairView { payload in
@@ -127,6 +144,10 @@ struct RootView: View {
     /// unreachable and then came back, or was paired afresh, opens on its own.
     @MainActor
     private func checkGate(_ host: ClutchHost) async {
-        gate = await HostGate.check(host: host)
+        let state = await HostGate.check(host: host)
+        // A check that was cancelled, or that belongs to a host the owner has
+        // since left, must not answer for the host on screen.
+        guard !Task.isCancelled, store.activeHost?.id == host.id else { return }
+        gate = state
     }
 }

@@ -85,7 +85,7 @@ struct DshHostView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .task(id: host.id) {
+            .task(id: host.pairingKey) {
                 await connect()
             }
         }
