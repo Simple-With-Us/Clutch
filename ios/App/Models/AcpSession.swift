@@ -350,6 +350,34 @@ public struct AcpSessionInfo: Decodable, Equatable, Identifiable, Sendable {
 }
 
 /// One replayed update from `POST /clutch/v1/sessions/load`.
+/// One tool call the agent ran, or a status update to one already shown.
+///
+/// A tool that runs other tools is the parent of them, and the clients show
+/// that as a tree: the children hang under the call that made them.
+public struct AcpToolCall: Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var status: String
+    /// The call this one ran under, when a tool ran other tools.
+    public var parentId: String?
+    /// What the tool was asked to do, as the engine wrote it.
+    public var input: String?
+
+    public init(
+        id: String,
+        name: String,
+        status: String,
+        parentId: String? = nil,
+        input: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.status = status
+        self.parentId = parentId
+        self.input = input
+    }
+}
+
 public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     public var sessionId: String
     public var kind: String
@@ -357,6 +385,10 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     /// Present on tool-call entries (`tool_call`, `tool_call_update`).
     public var toolCallId: String?
     public var toolStatus: String?
+    /// The call this one ran under, when a tool ran other tools.
+    public var parentToolCallId: String?
+    /// What the tool was asked to do, as the engine wrote it.
+    public var toolInput: String?
     /// Present on a `plan` entry: the plan the engine last reported.
     public var plan: [AcpPlanEntry]?
 
@@ -366,6 +398,8 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
         text: String,
         toolCallId: String? = nil,
         toolStatus: String? = nil,
+        parentToolCallId: String? = nil,
+        toolInput: String? = nil,
         plan: [AcpPlanEntry]? = nil
     ) {
         self.sessionId = sessionId
@@ -373,6 +407,8 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
         self.text = text
         self.toolCallId = toolCallId
         self.toolStatus = toolStatus
+        self.parentToolCallId = parentToolCallId
+        self.toolInput = toolInput
         self.plan = plan
     }
 

@@ -145,6 +145,10 @@ public struct ChatView: View {
         var isThought: Bool = false
         /// Non-nil for tool-call rows: `running` / `completed` / `failed`.
         var toolStatus: String? = nil
+        /// How deep the call sits under the call that made it.
+        var toolDepth: Int = 0
+        /// What the tool was asked to do, as the engine wrote it.
+        var toolInput: String? = nil
     }
 
     @State private var phase: Phase = .loading
@@ -417,8 +421,17 @@ public struct ChatView: View {
         let bubbleRows = agentBubbles.map {
             Row(id: $0.id, text: $0.text, date: $0.date, fromAgent: $0.senderUid != deviceUid, isCard: $0.kind == "card")
         }
-        let toolRows = liveTools.map {
-            Row(id: "live-\($0.id)", text: $0.name, date: Date(), fromAgent: true, isCard: false, toolStatus: $0.status)
+        let toolRows = liveTools.map { tool in
+            Row(
+                id: "live-\(tool.id)",
+                text: tool.name,
+                date: Date(),
+                fromAgent: true,
+                isCard: false,
+                toolStatus: tool.status,
+                toolDepth: ToolCallDepth.depth(of: tool.id, parents: toolParents),
+                toolInput: tool.input
+            )
         }
         return (promptRows + bubbleRows).sorted { $0.date < $1.date } + toolRows
     }
@@ -426,6 +439,7 @@ public struct ChatView: View {
     /// MiniMax Code rows keep server order (replayed history is already
     /// chronological); in-flight prompts and the live bubble append after.
     private var codeRows: [Row] {
+        let parents = toolParents
         var out = codeLoaded.enumerated().map { index, entry in
             Row(
                 id: "code-\(index)-\(entry.text.hashValue)",
@@ -434,16 +448,44 @@ public struct ChatView: View {
                 fromAgent: entry.kind != "user_message_chunk",
                 isCard: false,
                 isThought: entry.kind == "agent_thought_chunk",
-                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil
+                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil,
+                toolDepth: entry.isTool ? ToolCallDepth.depth(of: entry.toolCallId, parents: parents) : 0,
+                toolInput: entry.toolInput
             )
         }
         out += codePending.map {
             Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
         }
-        out += liveTools.map {
-            Row(id: "live-\($0.id)", text: $0.name, date: Date(), fromAgent: true, isCard: false, toolStatus: $0.status)
+        out += liveTools.map { tool in
+            Row(
+                id: "live-\(tool.id)",
+                text: tool.name,
+                date: Date(),
+                fromAgent: true,
+                isCard: false,
+                toolStatus: tool.status,
+                toolDepth: ToolCallDepth.depth(of: tool.id, parents: parents),
+                toolInput: tool.input
+            )
         }
         return out
+    }
+
+    /// Which call each tool call ran under.
+    ///
+    /// A tool that runs other tools is the parent of them, and the clients
+    /// show that as a tree: the children hang under the call that made them.
+    private var toolParents: [String: String] {
+        var parents: [String: String] = [:]
+        for entry in codeLoaded where entry.isTool {
+            guard let id = entry.toolCallId, let parent = entry.parentToolCallId else { continue }
+            parents[id] = parent
+        }
+        for tool in liveTools {
+            guard let parent = tool.parentId else { continue }
+            parents[tool.id] = parent
+        }
+        return parents
     }
 
     public var body: some View {
@@ -2370,16 +2412,24 @@ public struct ChatView: View {
                         liveTurn.append(chunk)
                     case .thought(let text):
                         thoughtLine = String(text.prefix(220))
-                    case .tool(let id, let name, let status):
+                    case .tool(let call):
                         if let index = ChatTurnBuffer.latestToolIndex(
                             in: codeLoaded,
-                            matching: id,
+                            matching: call.id,
                             from: currentTurnHistoryStartIndex
                         ) {
-                            codeLoaded[index].toolStatus = status
-                            if !name.isEmpty { codeLoaded[index].text = name }
+                            codeLoaded[index].toolStatus = call.status
+                            if !call.name.isEmpty { codeLoaded[index].text = call.name }
+                            if let parent = call.parentId { codeLoaded[index].parentToolCallId = parent }
+                            if let input = call.input { codeLoaded[index].toolInput = input }
                         } else {
-                            liveTurn.updateTool(id: id, name: name, status: status)
+                            liveTurn.updateTool(
+                                id: call.id,
+                                name: call.name,
+                                status: call.status,
+                                parentId: call.parentId,
+                                input: call.input
+                            )
                         }
                     case .permission(let request):
                         // The engine is blocked on this request until the
@@ -2462,7 +2512,17 @@ public struct ChatView: View {
             }
             codePending = []
             for tool in output.tools {
-                codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "tool_call", text: tool.name, toolCallId: tool.id, toolStatus: tool.status))
+                // The relation and the input travel with the call, so a turn
+                // that has finished still shows its tree.
+                codeLoaded.append(AcpHistoryEntry(
+                    sessionId: "local",
+                    kind: "tool_call",
+                    text: tool.name,
+                    toolCallId: tool.id,
+                    toolStatus: tool.status,
+                    parentToolCallId: tool.parentId,
+                    toolInput: tool.input
+                ))
             }
             if !output.text.isEmpty {
                 codeLoaded.append(AcpHistoryEntry(sessionId: "local", kind: "agent_message_chunk", text: output.text))
@@ -2744,7 +2804,12 @@ struct MacChatRow: View {
 
     var body: some View {
         if let toolStatus = row.toolStatus {
-            ThreadToolCard(name: row.text, status: toolStatus)
+            ThreadToolCard(
+                name: row.text,
+                status: toolStatus,
+                depth: row.toolDepth,
+                input: row.toolInput
+            )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)

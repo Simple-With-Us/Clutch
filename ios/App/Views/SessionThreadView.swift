@@ -16,6 +16,12 @@ struct ThreadBubbleItem: Identifiable, Equatable {
     var text: String
     /// Tool status (`running` / `completed` / `failed`) for `.tool` bubbles.
     var toolStatus: String? = nil
+    /// The call this one ran under, when a tool ran other tools.
+    var toolParentId: String? = nil
+    /// The id of the call, for a `.tool` bubble.
+    var toolCallId: String? = nil
+    /// What the tool was asked to do, as the engine wrote it.
+    var toolInput: String? = nil
 }
 
 @MainActor
@@ -139,22 +145,7 @@ final class SessionThreadModel {
             // for; a reload without it fails every thread outside $HOME.
             cwd = loaded.cwd
             remoteSessionId = loaded.remoteSessionId
-            bubbles = loaded.history.compactMap { entry in
-                if entry.isTool {
-                    return ThreadBubbleItem(
-                        id: "tool-\(entry.toolCallId ?? entry.text)-\(entry.text.hashValue)",
-                        role: .tool,
-                        text: entry.text,
-                        toolStatus: entry.toolStatus ?? "completed"
-                    )
-                }
-                guard entry.isVisible else { return nil }
-                return ThreadBubbleItem(
-                    id: "\(entry.sessionId)-\(entry.kind)-\(entry.text.hashValue)",
-                    role: entry.isUser ? .user : .assistant,
-                    text: entry.text
-                )
-            }
+            bubbles = Self.bubbles(from: loaded.history)
             // The plan is a state, not a line of the transcript: the last
             // plan the thread carried is the one the engine last reported.
             // A reload that carries no plan keeps the one on screen: the
@@ -211,8 +202,14 @@ final class SessionThreadModel {
                         upsert(replyId, text: reply)
                     case .thought(let text):
                         thoughtLine = text
-                    case .tool(let id, let name, let status):
-                        upsertTool(id: id, name: name, status: status)
+                    case .tool(let call):
+                        upsertTool(
+                            id: call.id,
+                            name: call.name,
+                            status: call.status,
+                            parentId: call.parentId,
+                            input: call.input
+                        )
                     case .permission(let request):
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
@@ -288,13 +285,23 @@ final class SessionThreadModel {
 
     /// Tool updates rewrite the card minted for that call, so a long-running
     /// tool shows one card moving running → completed, not a pile of rows.
-    private func upsertTool(id: String, name: String, status: String) {
+    private func upsertTool(id: String, name: String, status: String, parentId: String?, input: String?) {
         let key = id.isEmpty ? "tool-\(name)" : "tool-\(id)"
         if let index = bubbles.firstIndex(where: { $0.id == key }) {
             bubbles[index].toolStatus = status
             if !name.isEmpty { bubbles[index].text = name }
+            if let parentId { bubbles[index].toolParentId = parentId }
+            if let input { bubbles[index].toolInput = input }
         } else {
-            bubbles.append(ThreadBubbleItem(id: key, role: .tool, text: name.isEmpty ? "Tool call" : name, toolStatus: status))
+            bubbles.append(ThreadBubbleItem(
+                id: key,
+                role: .tool,
+                text: name.isEmpty ? "Tool call" : name,
+                toolStatus: status,
+                toolParentId: parentId,
+                toolCallId: id.isEmpty ? nil : id,
+                toolInput: input
+            ))
         }
     }
 
@@ -311,6 +318,54 @@ final class SessionThreadModel {
     private var isFailed: Bool {
         if case .failed = phase { return true }
         return false
+    }
+
+    /// The parents map: which call each tool call ran under.
+    ///
+    /// Built once for the whole transcript, because a row is asked for its
+    /// depth and a thread can carry hundreds of rows.
+    var toolParents: [String: String] {
+        var parents: [String: String] = [:]
+        for bubble in bubbles where bubble.role == .tool {
+            guard let id = bubble.toolCallId, let parent = bubble.toolParentId else { continue }
+            parents[id] = parent
+        }
+        return parents
+    }
+
+    /// The transcript as bubbles, from a loaded history.
+    ///
+    /// A tool card keeps the call it ran under and what it was asked, so a
+    /// reloaded thread shows the same tree the live turn did.
+    static func bubbles(from history: [AcpHistoryEntry]) -> [ThreadBubbleItem] {
+        history.compactMap { entry in
+            if entry.isTool {
+                return ThreadBubbleItem(
+                    id: "tool-\(entry.toolCallId ?? entry.text)-\(entry.text.hashValue)",
+                    role: .tool,
+                    text: entry.text,
+                    toolStatus: entry.toolStatus ?? "completed",
+                    toolParentId: entry.parentToolCallId,
+                    toolCallId: entry.toolCallId,
+                    toolInput: entry.toolInput
+                )
+            }
+            guard entry.isVisible else { return nil }
+            return ThreadBubbleItem(
+                id: "\(entry.sessionId)-\(entry.kind)-\(entry.text.hashValue)",
+                role: entry.isUser ? .user : .assistant,
+                text: entry.text
+            )
+        }
+    }
+
+    /// How deep one bubble's call sits under the call that made it.
+    ///
+    /// A tool that runs other tools is the parent of them, and the children
+    /// hang under it, the way the web canvas shows them.
+    func toolDepth(of bubble: ThreadBubbleItem, parents: [String: String]) -> Int {
+        guard bubble.role == .tool else { return 0 }
+        return ToolCallDepth.depth(of: bubble.toolCallId, parents: parents)
     }
 
     /// The engine's owner-facing name, when the catalog has not loaded yet.
@@ -540,11 +595,16 @@ public struct SessionThreadView: View {
                 Button("Try Again") { Task { await model.load() } }
             }
         case .ready:
+            let parents = model.toolParents
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(model.bubbles) { bubble in
-                            ThreadBubbleRow(bubble: bubble, isMatch: matchingIDs.contains(bubble.id))
+                            ThreadBubbleRow(
+                                bubble: bubble,
+                                isMatch: matchingIDs.contains(bubble.id),
+                                depth: model.toolDepth(of: bubble, parents: parents)
+                            )
                                 .id(bubble.id)
                         }
                         if let thought = model.thoughtLine, !thought.isEmpty {
@@ -696,10 +756,17 @@ public struct SessionThreadView: View {
 struct ThreadBubbleRow: View {
     let bubble: ThreadBubbleItem
     var isMatch: Bool = false
+    /// How deep the call sits under the call that made it.
+    var depth: Int = 0
 
     var body: some View {
         if bubble.role == .tool {
-            ThreadToolCard(name: bubble.text, status: bubble.toolStatus ?? "completed")
+            ThreadToolCard(
+                name: bubble.text,
+                status: bubble.toolStatus ?? "completed",
+                depth: depth,
+                input: bubble.toolInput
+            )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)

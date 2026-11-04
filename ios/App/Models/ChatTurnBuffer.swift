@@ -8,6 +8,24 @@ struct ChatTurnBuffer: Equatable {
         var id: String
         var name: String
         var status: String
+        /// The call this one ran under, when a tool ran other tools.
+        var parentId: String?
+        /// What the tool was asked to do, as the engine wrote it.
+        var input: String?
+
+        init(
+            id: String,
+            name: String,
+            status: String,
+            parentId: String? = nil,
+            input: String? = nil
+        ) {
+            self.id = id
+            self.name = name
+            self.status = status
+            self.parentId = parentId
+            self.input = input
+        }
     }
 
     struct Snapshot: Equatable {
@@ -27,14 +45,28 @@ struct ChatTurnBuffer: Equatable {
         text += chunk
     }
 
-    mutating func updateTool(id: String, name: String, status: String) {
+    mutating func updateTool(
+        id: String,
+        name: String,
+        status: String,
+        parentId: String? = nil,
+        input: String? = nil
+    ) {
         guard !finished else { return }
         if !id.isEmpty {
             if let index = tools.firstIndex(where: { $0.id == id }) {
                 tools[index].status = status
                 if !name.isEmpty { tools[index].name = name }
+                if let parentId { tools[index].parentId = parentId }
+                if let input { tools[index].input = input }
             } else {
-                tools.append(Tool(id: id, name: name.isEmpty ? "Tool Call" : name, status: status))
+                tools.append(Tool(
+                    id: id,
+                    name: name.isEmpty ? "Tool Call" : name,
+                    status: status,
+                    parentId: parentId,
+                    input: input
+                ))
             }
             return
         }
@@ -44,7 +76,9 @@ struct ChatTurnBuffer: Equatable {
             tools.append(Tool(
                 id: "unidentified-\(UUID().uuidString)",
                 name: name.isEmpty ? "Tool Call" : name,
-                status: status
+                status: status,
+                parentId: parentId,
+                input: input
             ))
             return
         }

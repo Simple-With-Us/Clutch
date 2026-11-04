@@ -124,7 +124,73 @@ describe("dshHostEventToUpdate", () => {
       text: "Bash",
       toolCallId: "call-1",
       toolStatus: "running",
+      // The name says which tool ran; the input says what it was asked.
+      toolInput: '{"cmd":"ls"}',
     });
+  });
+
+  it("reads a tool that runs other tools as a call under the call that made it", () => {
+    const update = dshHostEventToUpdate("session-abc", {
+      type: "tool/ptc-dispatch-start",
+      data: {
+        turn: 1,
+        step: 1,
+        parentCallId: "call-1",
+        subCallId: "call-2",
+        name: "Read",
+        arguments: { path: "README.md" },
+      },
+    });
+    expect(update).toEqual({
+      sessionId: "session-abc",
+      kind: "tool_call",
+      text: "Read",
+      toolCallId: "call-2",
+      parentToolCallId: "call-1",
+      toolStatus: "running",
+      toolInput: '{"path":"README.md"}',
+    });
+  });
+
+  it("reads the end of a nested call as an update to it", () => {
+    const update = dshHostEventToUpdate("session-abc", {
+      type: "tool/ptc-dispatch",
+      data: {
+        turn: 1,
+        step: 1,
+        parentCallId: "call-1",
+        subCallId: "call-2",
+        name: "Read",
+        arguments: { path: "README.md" },
+        content: [],
+        isError: false,
+      },
+    });
+    expect(update?.kind).toBe("tool_call_update");
+    expect(update?.toolCallId).toBe("call-2");
+    expect(update?.parentToolCallId).toBe("call-1");
+    expect(update?.toolStatus).toBe("completed");
+  });
+
+  it("marks a nested call that failed as failed", () => {
+    const update = dshHostEventToUpdate("session-abc", {
+      type: "tool/ptc-dispatch",
+      data: {
+        parentCallId: "call-1",
+        subCallId: "call-2",
+        name: "Read",
+        arguments: {},
+        isError: true,
+      },
+    });
+    expect(update?.toolStatus).toBe("failed");
+  });
+
+  it("ignores a nested call that names no parent", () => {
+    expect(dshHostEventToUpdate("session-abc", {
+      type: "tool/ptc-dispatch-start",
+      data: { subCallId: "call-2", name: "Read", arguments: {} },
+    })).toBe(null);
   });
 
   it("reads a tool result as an update that completes the call", () => {
@@ -240,6 +306,36 @@ describe("dshHostHistoryUpdates", () => {
     const compacted = compactToolHistory(updates);
     expect(compacted).toHaveLength(1);
     expect(compacted[0]?.text).toBe("Bash");
+    expect(compacted[0]?.toolStatus).toBe("completed");
+  });
+
+  it("keeps the relation and the input when a call is collapsed into one row", () => {
+    const updates = dshHostHistoryUpdates("session-abc", [
+      {
+        type: "event",
+        event: {
+          type: "tool/ptc-dispatch-start",
+          data: {
+            parentCallId: "call-1",
+            subCallId: "call-2",
+            name: "Read",
+            arguments: { path: "README.md" },
+          },
+        },
+      },
+      {
+        type: "event",
+        event: {
+          type: "tool/ptc-dispatch",
+          data: { parentCallId: "call-1", subCallId: "call-2", name: "Read", arguments: {} },
+        },
+      },
+    ]);
+    const compacted = compactToolHistory(updates);
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0]?.toolCallId).toBe("call-2");
+    expect(compacted[0]?.parentToolCallId).toBe("call-1");
+    expect(compacted[0]?.toolInput).toBe('{"path":"README.md"}');
     expect(compacted[0]?.toolStatus).toBe("completed");
   });
 });

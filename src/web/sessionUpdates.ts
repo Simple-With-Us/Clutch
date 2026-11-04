@@ -41,6 +41,20 @@ export interface SessionUpdate {
   text: string;
   toolCallId?: string;
   toolStatus?: "running" | "completed" | "failed";
+  /**
+   * The call this one ran under.
+   *
+   * A tool that runs other tools is the parent of them, and the clients
+   * show that as a tree: the children hang under the call that made them.
+   */
+  parentToolCallId?: string;
+  /**
+   * What the tool was asked to do, as the engine wrote it.
+   *
+   * The name says which tool ran; this says what it was asked, which is the
+   * part a person reading the thread actually wants.
+   */
+  toolInput?: string;
   /** The plan entries, for a `plan` update.  An empty list means the plan is gone. */
   plan?: PlanEntry[];
 }
@@ -75,6 +89,12 @@ export function compactToolHistory(history: readonly SessionUpdate[]): SessionUp
           ...kept,
           text: kept.text || entry.text,
           toolStatus: entry.toolStatus ?? kept.toolStatus ?? "running",
+          // The relation and the input belong to the call, so a later update
+          // that does not carry them does not erase them.
+          ...(entry.parentToolCallId ?? kept.parentToolCallId
+            ? { parentToolCallId: entry.parentToolCallId ?? kept.parentToolCallId }
+            : {}),
+          ...(entry.toolInput ?? kept.toolInput ? { toolInput: entry.toolInput ?? kept.toolInput } : {}),
         };
         continue;
       }
