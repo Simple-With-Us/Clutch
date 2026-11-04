@@ -33,7 +33,7 @@ public enum HostStatus: String, Codable, Equatable {
 /// (dsh web plus the chat sidecar); a `codeServer` host runs only the chat
 /// sidecar in front of a code engine — `mcode` (MiniMax Code) or `muse`
 /// (Muse Code) — typically a Linux server.  Such a host has code threads but
-/// no web canvas and no dsh host contract.
+/// no dsh host contract.
 public enum HostKind: String, Codable, Equatable, Hashable, Sendable {
     case web
     case codeServer
@@ -56,11 +56,16 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     public var kind: HostKind
     /// `scheme://host[:port]` with no path.
     public var origin: URL
-    /// The launch token from the pairing link.  Cleared once clutch web has
-    /// exchanged it for its signed cookie, so it is never kept longer than needed.
+    /// The launch token from the pairing link.
+    ///
+    /// Kept for the life of the pairing: the dsh host client exchanges it
+    /// for a signed cookie on every connect, and that cookie does not
+    /// survive an app restart.  It lives in the keychain, not in the
+    /// preferences file.
     public var pendingLaunchToken: String?
     /// The chat-bridge auth token (`Bearer` on `/clutch/v1/chat`).  Long-lived
-    /// and refreshed on re-pair — unlike the launch token it is kept.
+    /// and refreshed on re-pair — unlike the launch token it is kept.  It
+    /// lives in the keychain, not in the preferences file.
     public var chatToken: String?
     /// The sidecar's port on the same host.  3181 is the shipped default.
     public var chatPort: Int
@@ -127,9 +132,18 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         self.init(name: pairing.name, origin: pairing.origin, kind: pairing.kind ?? .web, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
     }
 
-    /// True for a code server host: code-engine threads only, no web canvas
-    /// and no dsh host contract behind it.
+    /// True for a code server host: code-engine threads only, and no dsh host
+    /// contract behind it.
     public var isMiniMaxCodeOnly: Bool { kind == .codeServer }
+
+    /// The identity of a pairing, as the surfaces key their loads by.
+    ///
+    /// Re-pairing the same host replaces the tokens, and a surface that kept
+    /// the old ones would keep asking with a token the sidecar has already
+    /// dropped.  Both tokens are part of the key, so a re-pair loads again.
+    public var pairingKey: String {
+        "\(id.uuidString)#\(chatToken ?? "")#\(pendingLaunchToken ?? "")"
+    }
 
     /// The owner-facing label for the host kind.
     public var kindLabel: String {

@@ -7,73 +7,56 @@ struct RootView: View {
     @State private var store = HostStore.shared
     #endif
     @State private var selectedTab: Int = 0
+    /// How the active host stands with this device.
+    ///
+    /// The native apps ask the sidecar, not the web origin, so this is the
+    /// same gate the session list passes.  A host that needs pairing or
+    /// cannot be reached gets a card over the app instead of an empty
+    /// screen, which is what the web canvas used to draw for it.
+    @State private var gate: HostGateState = .ready
+    @State private var isShowingHosts = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
             if let host = store.activeHost {
-                TabView(selection: $selectedTab) {
-                    #if os(macOS)
-                    ChatView(activeHost: host, store: store, initialSurface: .workspace)
-                        .tabItem {
-                            Label("Workspace", systemImage: "terminal.fill")
-                        }
-                        .tag(0)
-
-                    if !host.isMiniMaxCodeOnly {
-                        ChatView(activeHost: host, store: store, initialSurface: .agent)
-                            .tabItem {
-                                Label("Agent Chat", systemImage: "bubble.left.and.bubble.right.fill")
-                            }
-                            .tag(1)
+                tabs(for: host)
+                    .sheet(isPresented: $isShowingHosts) {
+                        HostsSheet(store: store)
                     }
-                    #else
-                    SessionsView(host: host)
-                        .tabItem {
-                            Label("Workspace", systemImage: "terminal.fill")
-                        }
-                        .tag(0)
-
-                    ChatView(activeHost: host, store: store)
-                        .tabItem {
-                            Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
-                        }
-                        .tag(1)
-                    #endif
-
-                    if !host.isMiniMaxCodeOnly {
-                        ClutchScreen(host: host, store: store)
-                            .tabItem {
-                                Label("Web Canvas", systemImage: "macwindow")
-                            }
-                            .tag(2)
-
-                        DshHostView(host: host)
-                            .tabItem {
-                                Label("Host", systemImage: "server.rack")
-                            }
-                            .tag(3)
+                    .onAppear {
+                        // The tab set depends on the host, so the selection
+                        // is kept on a tab that exists.
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
                     }
-
-                    FleetRecallView()
-                        .tabItem {
-                            Label("Fleet Recall", systemImage: "sparkles.rectangle.stack.fill")
-                        }
-                        .tag(4)
-                }
-                .tint(.accentColor)
-                #if os(macOS)
-                .frame(minWidth: 760, minHeight: 560)
-                #endif
-                .onAppear {
-                    // A MiniMax Code server host has no agent chat or web
-                    // canvas; keep it on the coding workspace.
-                    if host.isMiniMaxCodeOnly, selectedTab == 1 { selectedTab = 0 }
-                }
-                .onChange(of: host.id) { _, _ in
-                    if host.isMiniMaxCodeOnly, [1, 2, 3].contains(selectedTab) {
-                        selectedTab = 0
+                    .onChange(of: host.id) { _, _ in
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
                     }
-                }
+                    .onChange(of: host.kind) { _, _ in
+                        // A re-pair on the same origin can turn a web host
+                        // into a code server without changing its id, so the
+                        // kind is watched as well as the id.
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
+                    }
+                    // The statuses and the gate are read separately: the
+                    // probe of the web origin can take seconds, and the gate
+                    // must not wait for it.
+                    .task(id: host.pairingKey) {
+                        await store.refreshStatuses()
+                    }
+                    .task(id: host.pairingKey) {
+                        await checkGate(host)
+                    }
+                    .onChange(of: scenePhase) { _, phase in
+                        // The host may have come back while the app was in the
+                        // background, so the gate and the host statuses are
+                        // read again when it comes forward.
+                        guard phase == .active else { return }
+                        Task {
+                            await store.refreshStatuses()
+                            await checkGate(host)
+                        }
+                    }
             } else {
                 PairView { payload in
                     store.pair(payload)
@@ -86,195 +69,97 @@ struct RootView: View {
             }
         }
     }
-}
-
-/// The main surface: clutch web for the active host, a slim native toolbar
-/// (host switcher, reload, hosts and settings), and native overlays for the
-/// pairing-expired and unreachable states.
-struct ClutchScreen: View {
-    let host: ClutchHost
-    let store: HostStore
-
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var webState: WebSurfaceState = .loading
-    @State private var isShowingHosts = false
-    @State private var isShowingSessions = false
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                ClutchWebView(
-                    host: host,
-                    loadKey: "\(host.id.uuidString)#\(store.loadGeneration)",
-                    state: $webState,
-                    onAuthenticated: { store.consumeLaunchToken(for: $0) }
-                )
-                .ignoresSafeArea(.container, edges: .bottom)
-                #if os(iOS)
-                .ignoresSafeArea(.keyboard)
-                #endif
-
-                overlay
-            }
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .topBarLeading) { hostMenu }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    toolbarButtons
-                }
-                #else
-                ToolbarItem(placement: .navigation) { hostMenu }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    toolbarButtons
-                }
-                #endif
-            }
-            .sheet(isPresented: $isShowingHosts) {
-                HostsSheet(store: store)
-            }
-            #if os(iOS)
-            .sheet(isPresented: $isShowingSessions) {
-                SessionsView(host: host)
-            }
-            #endif
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            if case .failed = webState { store.requestReload() }
-            Task { await store.refreshStatuses() }
-        }
-        .task(id: host.id) {
-            await store.refreshStatuses()
-        }
-    }
 
     @ViewBuilder
-    private var toolbarButtons: some View {
-        #if os(iOS)
-        // The Mac app already reaches MiniMax Code threads through its own
-        // sidebar; the phone had no way in without dropping to the web view.
-        Button {
-            isShowingSessions = true
-        } label: {
-            Image(systemName: "list.bullet.rectangle")
+    private func tabs(for host: ClutchHost) -> some View {
+        TabView(selection: $selectedTab) {
+            #if os(macOS)
+            gated(ChatView(activeHost: host, store: store, initialSurface: .workspace), host: host)
+                .tabItem {
+                    Label("Workspace", systemImage: "terminal.fill")
+                }
+                .tag(0)
+
+            if !host.isMiniMaxCodeOnly {
+                gated(ChatView(activeHost: host, store: store, initialSurface: .agent), host: host)
+                    .tabItem {
+                        Label("Agent Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                    }
+                    .tag(1)
+            }
+            #else
+            gated(SessionsView(host: host), host: host)
+                .tabItem {
+                    Label("Workspace", systemImage: "terminal.fill")
+                }
+                .tag(0)
+
+            gated(ChatView(activeHost: host, store: store), host: host)
+                .tabItem {
+                    Label("Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                }
+                .tag(1)
+            #endif
+
+            if !host.isMiniMaxCodeOnly {
+                DshHostView(host: host)
+                    .tabItem {
+                        Label("Host", systemImage: "server.rack")
+                    }
+                    .tag(2)
+            }
+
+            FleetRecallView()
+                .tabItem {
+                    Label("Fleet Recall", systemImage: "sparkles.rectangle.stack.fill")
+                }
+                .tag(3)
         }
-        .accessibilityLabel("Sessions")
+        .tint(.accentColor)
+        #if os(macOS)
+        .frame(minWidth: 760, minHeight: 560)
         #endif
-        Button {
-            store.requestReload()
-        } label: {
-            Image(systemName: "arrow.clockwise")
-        }
-        .accessibilityLabel("Reload")
-        Button {
-            isShowingHosts = true
-        } label: {
-            Image(systemName: "gearshape")
-        }
-        .accessibilityLabel("Hosts and Settings")
     }
 
-    private var hostMenu: some View {
-        // The canvas knows more than the probe does: a host can answer and
-        // still be asking for a fresh pairing code, and the picker must not
-        // say green in that case.
-        HostSwitcher(host: host, store: store, status: canvasStatus)
-    }
-
-    /// What the embedded canvas is doing, as a host state.
-    private var canvasStatus: HostStatus {
-        switch webState {
-        case .ready: return .online
-        case .loading: return host.status == .offline ? .notClutch : .unknown
-        case .needsPairing: return .notClutch
-        case .failed: return .offline
-        }
-    }
-
-    @ViewBuilder
-    private var overlay: some View {
-        switch webState {
-        case .loading:
-            ProgressView()
-                .controlSize(.large)
-                .padding(20)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-        case .ready:
-            EmptyView()
-        case .needsPairing:
-            StateCard(
-                symbol: "key.horizontal",
-                title: "Pair This Device",
-                message: Copy.gap(
-                    "\(host.name) needs a fresh pairing code.",
-                    "On the Mac, run \(Copy.pairCommand) and scan the code, or paste the link it copies."
+    /// Puts the gate card in place of a surface that needs the sidecar.
+    ///
+    /// The Host tab and Fleet Recall do not go through the sidecar, so they
+    /// stay reachable while it is down: the owner keeps the tabs that work
+    /// and gets a card, not a dead end, on the ones that do not.
+    ///
+    /// The card replaces the surface rather than covering it.  A surface
+    /// behind the card keeps asking a host that is down, so the owner would
+    /// watch the workspace and the chat time out at once, and the picker on
+    /// that surface would still say the host is online — the state the web
+    /// canvas got wrong.
+    @MainActor
+    private func gated<Content: View>(_ content: Content, host: ClutchHost) -> some View {
+        Group {
+            if gate.isReady {
+                content
+            } else {
+                HostGateView(
+                    host: host,
+                    store: store,
+                    state: gate,
+                    onRetry: { Task { await checkGate(host) } },
+                    onSwitchHost: { isShowingHosts = true },
+                    onPaired: { payload in store.pair(payload) }
                 )
-            ) {
-                PairingActions { payload in
-                    store.pair(payload)
-                }
-            }
-        case .failed(let reason):
-            StateCard(
-                symbol: "wifi.exclamationmark",
-                title: "Cannot Reach \(host.name)",
-                message: Copy.gap(
-                    "Make sure Tailscale is connected on this device and clutch is running on the Mac.",
-                    reason
-                )
-            ) {
-                VStack(spacing: 12) {
-                    Button {
-                        store.requestReload()
-                    } label: {
-                        Text("Try Again").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    Button {
-                        isShowingHosts = true
-                    } label: {
-                        Text("Switch Host").frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                }
             }
         }
     }
-}
 
-/// Full-screen native card covering the web view for non-ready states.
-struct StateCard<Actions: View>: View {
-    let symbol: String
-    let title: String
-    let message: String
-    @ViewBuilder let actions: () -> Actions
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Image(systemName: symbol)
-                    .font(.system(size: 44, weight: .regular))
-                    .foregroundStyle(.tint)
-                    .padding(.top, 48)
-                Text(title)
-                    .font(.title2.weight(.bold))
-                    .multilineTextAlignment(.center)
-                Text(message)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                actions()
-                    .padding(.top, 8)
-            }
-            .padding(.horizontal, 24)
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
-        }
-        .background(Color.clutchBackground)
+    /// Asks the sidecar whether it will talk to this device.
+    ///
+    /// The check runs again whenever the pairing changes, so a host that was
+    /// unreachable and then came back, or was paired afresh, opens on its own.
+    @MainActor
+    private func checkGate(_ host: ClutchHost) async {
+        let state = await HostGate.check(host: host)
+        // A check that was cancelled, or that belongs to a host the owner has
+        // since left, must not answer for the host on screen.
+        guard !Task.isCancelled, store.activeHost?.id == host.id else { return }
+        gate = state
     }
 }

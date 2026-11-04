@@ -17,9 +17,9 @@ import { join } from "node:path";
  * CLUTCH_DOCK_OVERWRITE_NATIVE=1.
  *
  * PR #180 corrected the discriminator from "no WebKit content" to "Xcode DT*
- * build keys present", because the native target itself compiles
- * Mac/WebViewMac.swift and would have tripped the old WebKit check.  Both
- * binaries now link WebKit, so the DT keys are the whole of the test.
+ * build keys present", because the native target itself linked WebKit and
+ * would have tripped the old WebKit check.  The DT keys are the whole of the
+ * test.
  */
 
 const SCRIPT = join(__dirname, "..", "scripts", "install-dock-app.sh");

@@ -142,7 +142,6 @@ targets:
           - Views/ChatView.swift
           - Views/AgentMessagesVC.swift
           - Views/PairingScannerSheet.swift
-          - Views/ClutchWebView.swift
           - Views/Components
       - path: Mac
       - path: Resources

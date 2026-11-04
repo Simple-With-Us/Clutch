@@ -598,7 +598,7 @@ public struct ChatView: View {
                 }
             }
         }
-        .task(id: activeHost?.id) {
+        .task(id: activeHost?.pairingKey) {
             await prepare()
         }
         .task(id: engine) {
