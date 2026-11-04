@@ -2,12 +2,16 @@ import Foundation
 import Observation
 import WebKit
 
-/// The paired clutch web hosts and which one is showing.  Persisted in
-/// `UserDefaults`.
+/// The paired clutch web hosts and which one is showing.
 ///
-/// The launch token is kept, not dropped: the dsh host client exchanges it
-/// for a signed cookie on every connect, and that cookie does not survive an
-/// app restart.
+/// The hosts are persisted in `UserDefaults`; the tokens are not.  A token can
+/// drive a coding session, and the preferences file is plain text that rides
+/// the device backup, so the tokens live in the keychain (`KeychainStore`)
+/// and only the host records sit in the preferences.
+///
+/// The launch token is kept for the life of the pairing, not dropped: the dsh
+/// host client exchanges it for a signed cookie on every connect, and that
+/// cookie does not survive an app restart.
 @MainActor
 @Observable
 public final class HostStore {
@@ -70,6 +74,10 @@ public final class HostStore {
     public func remove(_ host: ClutchHost) {
         hosts.removeAll(where: { $0.id == host.id })
         if activeHostID == host.id { activeHostID = hosts.first?.id }
+        // The credentials go with the host: a forgotten host must not leave a
+        // token behind in the keychain.
+        KeychainStore.delete(Self.chatAccount(for: host.id))
+        KeychainStore.delete(Self.launchAccount(for: host.id))
         save()
         Self.clearWebsiteData(for: host)
     }
@@ -93,6 +101,13 @@ public final class HostStore {
     #if DEBUG
     /// UI tests start from first run.  Must run before `shared` is created.
     static func resetPersistedHosts(defaults: UserDefaults = .standard) {
+        if let data = defaults.data(forKey: storageKey),
+           let decoded = try? JSONDecoder().decode([ClutchHost].self, from: data) {
+            for host in decoded {
+                KeychainStore.delete(chatAccount(for: host.id))
+                KeychainStore.delete(launchAccount(for: host.id))
+            }
+        }
         defaults.removeObject(forKey: storageKey)
         defaults.removeObject(forKey: activeKey)
     }
@@ -109,6 +124,7 @@ public final class HostStore {
         } else {
             activeHostID = hosts.first?.id
         }
+        attachCredentials()
         #if os(macOS)
         adoptLocalLaunchURL()
         backfillLocalChatToken()
@@ -163,11 +179,57 @@ public final class HostStore {
     #endif
 
     private func save() {
-        if let data = try? JSONEncoder().encode(hosts) {
+        // The archive carries the hosts without their tokens, and the tokens
+        // go to the keychain instead.
+        var stored = hosts
+        for index in stored.indices {
+            let chat = stored[index].chatToken
+            let launch = stored[index].pendingLaunchToken
+            stored[index].chatToken = nil
+            stored[index].pendingLaunchToken = nil
+            if let chat, KeychainStore.read(Self.chatAccount(for: stored[index].id)) != chat {
+                KeychainStore.write(chat, account: Self.chatAccount(for: stored[index].id))
+            }
+            if let launch, KeychainStore.read(Self.launchAccount(for: stored[index].id)) != launch {
+                KeychainStore.write(launch, account: Self.launchAccount(for: stored[index].id))
+            }
+        }
+        if let data = try? JSONEncoder().encode(stored) {
             defaults.set(data, forKey: Self.storageKey)
         }
         defaults.set(activeHostID?.uuidString, forKey: Self.activeKey)
     }
+
+    /// Puts the credentials back on the hosts.
+    ///
+    /// An archive written before the tokens moved to the keychain still
+    /// carries them, and they move across on the first load; a host that has
+    /// no token in the archive takes the one the keychain holds.
+    private func attachCredentials() {
+        var moved = false
+        for index in hosts.indices {
+            if let chat = hosts[index].chatToken {
+                KeychainStore.write(chat, account: Self.chatAccount(for: hosts[index].id))
+                moved = true
+            } else if let chat = KeychainStore.read(Self.chatAccount(for: hosts[index].id)) {
+                hosts[index].chatToken = chat
+            }
+            if let launch = hosts[index].pendingLaunchToken {
+                KeychainStore.write(launch, account: Self.launchAccount(for: hosts[index].id))
+                moved = true
+            } else if let launch = KeychainStore.read(Self.launchAccount(for: hosts[index].id)) {
+                hosts[index].pendingLaunchToken = launch
+            }
+        }
+        // The archive is rewritten without the tokens it carried.
+        if moved { save() }
+    }
+
+    /// The keychain account a host's chat token sits under.
+    static func chatAccount(for id: UUID) -> String { "host.\(id.uuidString).chat" }
+
+    /// The keychain account a host's launch token sits under.
+    static func launchAccount(for id: UUID) -> String { "host.\(id.uuidString).launch" }
 
     private static func clearWebsiteData(for host: ClutchHost) {
         guard let hostname = host.origin.host?.lowercased() else { return }

@@ -60,10 +60,12 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     ///
     /// Kept for the life of the pairing: the dsh host client exchanges it
     /// for a signed cookie on every connect, and that cookie does not
-    /// survive an app restart.
+    /// survive an app restart.  It lives in the keychain, not in the
+    /// preferences file.
     public var pendingLaunchToken: String?
     /// The chat-bridge auth token (`Bearer` on `/clutch/v1/chat`).  Long-lived
-    /// and refreshed on re-pair — unlike the launch token it is kept.
+    /// and refreshed on re-pair — unlike the launch token it is kept.  It
+    /// lives in the keychain, not in the preferences file.
     public var chatToken: String?
     /// The sidecar's port on the same host.  3181 is the shipped default.
     public var chatPort: Int
@@ -136,11 +138,11 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
 
     /// The identity of a pairing, as the surfaces key their loads by.
     ///
-    /// Re-pairing the same host replaces the token, and a surface that kept
-    /// the old one would keep asking with a token the sidecar has already
-    /// dropped.  The token is part of the key, so a re-pair loads again.
+    /// Re-pairing the same host replaces the tokens, and a surface that kept
+    /// the old ones would keep asking with a token the sidecar has already
+    /// dropped.  Both tokens are part of the key, so a re-pair loads again.
     public var pairingKey: String {
-        "\(id.uuidString)#\(chatToken ?? "")"
+        "\(id.uuidString)#\(chatToken ?? "")#\(pendingLaunchToken ?? "")"
     }
 
     /// The owner-facing label for the host kind.

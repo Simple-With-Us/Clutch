@@ -148,12 +148,36 @@ final class HostStoreTests: XCTestCase {
         let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
         XCTAssertEqual(store.activeHost?.id, host.id)
         // The surfaces key their loads by the pairing, so the key has to
-        // carry the token the sidecar will be asked with.
-        XCTAssertEqual(store.activeHost?.pairingKey, "\(host.id.uuidString)#chat-one")
+        // carry the tokens the sidecar and the host will be asked with.
+        XCTAssertEqual(store.activeHost?.pairingKey, "\(host.id.uuidString)#chat-one#one")
 
         let reloaded = HostStore(defaults: defaults)
         XCTAssertEqual(reloaded.hosts.count, 1)
         XCTAssertEqual(reloaded.activeHost?.pendingLaunchToken, "one")
+    }
+
+    func testTheTokensAreNotKeptInThePreferencesFile() {
+        // The preferences file rides the device backup, so a token that can
+        // drive a coding session stays out of it.
+        let defaults = freshDefaults()
+        let store = HostStore(defaults: defaults)
+        let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
+        let data = defaults.data(forKey: HostStore.storageKey)
+        XCTAssertNotNil(data)
+        let decoded = try? JSONDecoder().decode([ClutchHost].self, from: data ?? Data())
+        XCTAssertEqual(decoded?.count, 1)
+        XCTAssertNil(decoded?.first?.chatToken, "the chat token is in the preferences file")
+        XCTAssertNil(decoded?.first?.pendingLaunchToken, "the launch token is in the preferences file")
+        // The host itself is still there, and it still has its tokens.
+        XCTAssertEqual(store.activeHost?.id, host.id)
+        XCTAssertEqual(store.activeHost?.chatToken, "chat-one")
+    }
+
+    func testTheKeychainAccountsArePerHost() {
+        let id = UUID()
+        XCTAssertEqual(HostStore.chatAccount(for: id), "host.\(id.uuidString).chat")
+        XCTAssertEqual(HostStore.launchAccount(for: id), "host.\(id.uuidString).launch")
+        XCTAssertNotEqual(HostStore.chatAccount(for: id), HostStore.chatAccount(for: UUID()))
     }
 
     func testRepairSameOriginRefreshesTokenInsteadOfDuplicating() {
