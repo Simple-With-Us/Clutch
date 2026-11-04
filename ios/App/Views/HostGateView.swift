@@ -9,6 +9,7 @@ import SwiftUI
 /// canvas said to the owner is lost with it.
 struct HostGateView: View {
     let host: ClutchHost
+    let store: HostStore
     let state: HostGateState
     let onRetry: () -> Void
     let onSwitchHost: () -> Void
@@ -18,12 +19,26 @@ struct HostGateView: View {
         ZStack {
             Color.clutchBackground
                 .ignoresSafeArea()
-            StateCard(
-                symbol: symbol,
-                title: title,
-                message: message
-            ) {
-                actions
+            VStack(spacing: 0) {
+                // The picker stays on the card, the way the canvas kept it in
+                // its toolbar: the owner must be able to pick another server
+                // from here, and the dot must say what the gate knows rather
+                // than what the probe thinks.
+                HStack {
+                    HostSwitcher(host: host, store: store, compact: true, status: state.pickerStatus)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.clutchSecondaryBackground.opacity(0.6))
+
+                StateCard(
+                    symbol: symbol,
+                    title: title,
+                    message: message
+                ) {
+                    actions
+                }
             }
         }
     }

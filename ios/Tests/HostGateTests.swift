@@ -24,6 +24,15 @@ final class HostGateTests: XCTestCase {
         XCTAssertEqual(HostGate.classify(status: 503), .ready)
     }
 
+    func testThePickerFollowsTheGateRatherThanTheProbe() {
+        // The probe reads an auth wall as "online", so a host that is
+        // running but has dropped this device's token would say green.  The
+        // gate knows better, and the picker has to show it.
+        XCTAssertNil(HostGateState.ready.pickerStatus)
+        XCTAssertEqual(HostGateState.needsPairing.pickerStatus, .notClutch)
+        XCTAssertEqual(HostGateState.unreachable("no route to host").pickerStatus, .offline)
+    }
+
     func testHostWithoutATokenNeedsPairing() async {
         let host = ClutchHost(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, chatToken: nil)
         let state = await HostGate.check(host: host)

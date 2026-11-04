@@ -15,6 +15,22 @@ public enum HostGateState: Equatable, Sendable {
     case unreachable(String)
 
     public var isReady: Bool { self == .ready }
+
+    /// The host state the picker shows, when the gate knows better than the
+    /// probe does.
+    ///
+    /// The probe answers for the host's own web origin: a host that is
+    /// running but has dropped this device's token still answers with its
+    /// auth wall, which the probe reads as "online".  The gate asks the
+    /// sidecar instead, so it knows the difference, and a green dot beside a
+    /// "Pair This Device" card would be a lie.
+    public var pickerStatus: HostStatus? {
+        switch self {
+        case .ready: return nil
+        case .needsPairing: return .notClutch
+        case .unreachable: return .offline
+        }
+    }
 }
 
 /// The gate check, kept apart from the view so it can be tested on its own.

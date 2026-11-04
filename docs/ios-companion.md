@@ -28,9 +28,9 @@ The dsh host contract is an internal, versioned-with-the-package transport, so a
 
 The sidecar mints a chat token on its first boot and hands it out with the pairing link.  `clutch-pair-ios` prints `clutch://pair?url=https://<magicdns>:3180/?token=<t>&chat=<c>&chatPort=3181` and opens a QR code of it.  In the app, tap **Scan Pairing Code** or **Paste Pairing Link**.
 
-The chat token is what the app sends as `Bearer` on every `/clutch/v1` call, and it is kept in `$CLUTCH_HOME/chat-token` on the Mac, so a restart of the sidecar does not undo a pairing.  The launch token in the same link belongs to the web origin's cookie exchange, and the app no longer opens that origin, so it is dropped as soon as the sidecar confirms the pairing works.
+The chat token is what the app sends as `Bearer` on every `/clutch/v1` call, and it is kept in `$CLUTCH_HOME/chat-token` on the Mac, so a restart of the sidecar does not undo a pairing.  The launch token in the same link belongs to the web origin's cookie exchange, which only the Host tab still uses: it trades the token for a signed cookie on every connect, and that cookie does not survive an app restart, so the token is kept in the keychain for the life of the pairing.
 
-When the sidecar stops accepting the token the app shows **Pair This Device**, with the same pairing controls.  When the host cannot be reached at all it shows **Cannot Reach &lt;host&gt;**, with **Try Again** and **Switch Host**.  Both cards sit over the surfaces that need the sidecar, so the Host tab and Fleet Recall stay reachable while it is down.
+When the sidecar stops accepting the token the app shows **Pair This Device**, with the same pairing controls.  When the host cannot be reached at all it shows **Cannot Reach &lt;host&gt;**, with **Try Again** and **Switch Host**.  Both cards replace the surfaces that need the sidecar, so nothing keeps asking a host that is down, and the Host tab and Fleet Recall stay reachable while it is down.  The card keeps the host picker, and the dot on it follows the gate rather than the probe: a host that is running but has dropped this device's token reads orange, not green.
 
 For the Simulator on the same Mac: `clutch-pair-ios --simulator` opens the link against `http://127.0.0.1:3180` in the booted simulator.  `--print` prints the link (it contains the tokens).
 
@@ -53,11 +53,13 @@ ios/
 ├── Assets.xcassets             # full-bleed square 1024 icon, accent color
 ├── Resources/AppIcon.png       # in-app copy of the icon
 ├── Tests/PairingTests.swift    # pairing parser, host model, probe, store
+├── Tests/HostGateTests.swift   # the sidecar gate, and the state the picker shows
+├── Tests/HostTabsTests.swift   # the tabs a host can take away
 ├── UITests/ClutchLiveUITests.swift
 └── App/
     ├── ClutchApp.swift         # entry; light theme by default
     ├── Info.plist              # generated from project.yml
-    ├── Models/ClutchHost.swift
+    ├── Models/ClutchHost.swift, HostTabs.swift
     ├── Services/PairingLink.swift, HostProbe.swift, HostStore.swift, HostGate.swift
     └── Views/RootView.swift, HostGateView.swift, PairView.swift,
               HostsSheet.swift, PairingScannerSheet.swift
@@ -84,7 +86,7 @@ Never hand-edit `Clutch.xcodeproj`; change `project.yml` and regenerate.
 
 ## MiniMax Code Server Hosts
 
-A host does not have to be a Mac running clutch web.  A Linux server with MiniMax Code installed can pair as a MiniMax Code server host (`kind=mcode`): it runs only the chat sidecar, so the app gives it a Code tab and the Chat tab's MiniMax Code surface, and skips the dsh host tab it has nothing behind.  Its status probe reads the sidecar health route instead of the web auth wall, and the app's gate asks that same route before it shows a surface.  Setup, the systemd unit, and the live Hetzner host are in [`docs/minimax-code-server.md`](minimax-code-server.md); pairing is `clutch-pair-ios --server` on that machine.
+A host does not have to be a Mac running clutch web.  A Linux server with MiniMax Code installed can pair as a MiniMax Code server host (`kind=mcode`): it runs only the chat sidecar, so the app gives it a Code tab and the Chat tab's MiniMax Code surface, and skips the dsh host tab it has nothing behind.  The Mac also drops its Agent Chat tab for such a host, because that surface talks to the dsh host; the phone keeps its Chat tab, which is the surface a code server is for.  Its status probe reads the sidecar health route instead of the web auth wall, and the app's gate asks that same route before it shows a surface.  Setup, the systemd unit, and the live Hetzner host are in [`docs/minimax-code-server.md`](minimax-code-server.md); pairing is `clutch-pair-ios --server` on that machine.
 
 ## Known Limits
 

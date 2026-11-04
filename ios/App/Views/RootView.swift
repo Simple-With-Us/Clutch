@@ -25,14 +25,18 @@ struct RootView: View {
                         HostsSheet(store: store)
                     }
                     .onAppear {
-                        // A MiniMax Code server host has no agent chat and no
-                        // dsh host behind it; keep it on the coding workspace.
-                        if host.isMiniMaxCodeOnly, selectedTab == 1 { selectedTab = 0 }
+                        // The tab set depends on the host, so the selection
+                        // is kept on a tab that exists.
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
                     }
                     .onChange(of: host.id) { _, _ in
-                        if host.isMiniMaxCodeOnly, [1, 2].contains(selectedTab) {
-                            selectedTab = 0
-                        }
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
+                    }
+                    .onChange(of: host.kind) { _, _ in
+                        // A re-pair on the same origin can turn a web host
+                        // into a code server without changing its id, so the
+                        // kind is watched as well as the id.
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
                     }
                     // The statuses and the gate are read separately: the
                     // probe of the web origin can take seconds, and the gate
@@ -117,18 +121,26 @@ struct RootView: View {
         #endif
     }
 
-    /// Puts the gate card over a surface that needs the sidecar.
+    /// Puts the gate card in place of a surface that needs the sidecar.
     ///
     /// The Host tab and Fleet Recall do not go through the sidecar, so they
     /// stay reachable while it is down: the owner keeps the tabs that work
     /// and gets a card, not a dead end, on the ones that do not.
+    ///
+    /// The card replaces the surface rather than covering it.  A surface
+    /// behind the card keeps asking a host that is down, so the owner would
+    /// watch the workspace and the chat time out at once, and the picker on
+    /// that surface would still say the host is online — the state the web
+    /// canvas got wrong.
     @MainActor
     private func gated<Content: View>(_ content: Content, host: ClutchHost) -> some View {
-        ZStack {
-            content
-            if !gate.isReady {
+        Group {
+            if gate.isReady {
+                content
+            } else {
                 HostGateView(
                     host: host,
+                    store: store,
                     state: gate,
                     onRetry: { Task { await checkGate(host) } },
                     onSwitchHost: { isShowingHosts = true },
