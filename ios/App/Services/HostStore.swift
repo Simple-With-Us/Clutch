@@ -188,10 +188,16 @@ public final class HostStore {
             stored[index].chatToken = nil
             stored[index].pendingLaunchToken = nil
             if let chat, KeychainStore.read(Self.chatAccount(for: stored[index].id)) != chat {
-                KeychainStore.write(chat, account: Self.chatAccount(for: stored[index].id))
+                // A keychain that will not take the token does not get to
+                // lose it: the archive keeps a copy.
+                if !KeychainStore.write(chat, account: Self.chatAccount(for: stored[index].id)) {
+                    stored[index].chatToken = chat
+                }
             }
             if let launch, KeychainStore.read(Self.launchAccount(for: stored[index].id)) != launch {
-                KeychainStore.write(launch, account: Self.launchAccount(for: stored[index].id))
+                if !KeychainStore.write(launch, account: Self.launchAccount(for: stored[index].id)) {
+                    stored[index].pendingLaunchToken = launch
+                }
             }
         }
         if let data = try? JSONEncoder().encode(stored) {

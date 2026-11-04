@@ -29,8 +29,12 @@ enum KeychainStore {
     }
 
     /// Stores a credential, replacing what was there.
-    static func write(_ value: String, account: String) {
-        guard !value.isEmpty else { return }
+    ///
+    /// It answers whether the keychain took it, so a caller that cannot lose
+    /// the credential knows to keep a copy.
+    @discardableResult
+    static func write(_ value: String, account: String) -> Bool {
+        guard !value.isEmpty else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -41,8 +45,9 @@ enum KeychainStore {
         if status == errSecItemNotFound {
             var insert = query
             insert.merge(attributes) { current, _ in current }
-            SecItemAdd(insert as CFDictionary, nil)
+            return SecItemAdd(insert as CFDictionary, nil) == errSecSuccess
         }
+        return status == errSecSuccess
     }
 
     /// Forgets a credential.
