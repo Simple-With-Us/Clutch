@@ -23,6 +23,11 @@
  *
  * Muse catalog browsing never starts a process or creates a session.
  * Other engine catalogs are cached for a few minutes.
+ *
+ * The drop-in engine plugins (`engines/`, `$CLUTCH_HOME/engines`) reach the
+ * catalog too: a plugin that maps to an engine Clutch already runs may add
+ * models to it and say how to sign in, and a plugin that maps to no known
+ * engine is reported instead of becoming a phantom entry in the picker.
  */
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -30,7 +35,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Engine } from "../shared/engine-types.ts";
-import { supportsThreads } from "../shared/engine-types.ts";
+import { isDshHostedEngine, supportsThreads } from "../shared/engine-types.ts";
+import { loadEnginePlugins } from "../shared/engines/index.ts";
 import { museContributorModelId } from "./muse-launch-options.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
@@ -83,6 +89,126 @@ export interface EngineDescriptor {
 
 export interface EngineCatalog {
   engines: EngineDescriptor[];
+}
+
+/**
+ * Which engine a drop-in engine plugin contributes to.
+ *
+ * Why this exists: a plugin names itself after the product it drives
+ * ("muse-code"), while the sidecar's engine ids are the closed set in
+ * `src/shared/engine-types.ts` ("muse", "minimax").  The mapping is
+ * explicit, so a plugin can enrich an engine Clutch already runs without
+ * inventing a new one, and so a plugin that names no known engine is
+ * reported rather than quietly dropped.
+ */
+export const ENGINE_PLUGIN_ID_MAP: Readonly<Record<string, Engine>> = {
+  "muse-code": "muse",
+  minimax: "minimax",
+};
+
+/** What one plugin contributes to the engine it maps to. */
+export interface EnginePluginContribution {
+  /** The sidecar engine id this plugin contributes to. */
+  engine: Engine;
+  /** The plugin's own id. */
+  pluginId: string;
+  /** The file the plugin came from. */
+  file: string;
+  /** The name the plugin gives the engine. */
+  displayName: string;
+  /** The models the plugin declares, as catalog entries. */
+  models: EngineModel[];
+  /** The plugin's sign-in hint, used when the engine cannot run. */
+  loginNote?: string;
+}
+
+/** What the plugin registry found, and what it could not use. */
+export interface EnginePluginReport {
+  /** Plugins that loaded and map to an engine Clutch runs. */
+  contributions: EnginePluginContribution[];
+  /** Plugins that loaded but name no engine Clutch runs. */
+  unmapped: { id: string; file: string }[];
+  /** Plugin files that failed to load; each one contributes nothing. */
+  problems: { file: string; id?: string; problems: string[] }[];
+}
+
+/**
+ * Discover the drop-in engine plugins and say what each one contributes.
+ *
+ * Discovery never throws: a plugin file that does not load is reported and
+ * contributes nothing, so one broken drop-in cannot take the catalog down.
+ * A plugin whose id maps to no known engine is reported as unmapped rather
+ * than turned into a phantom engine the picker would offer.
+ */
+export async function loadEnginePluginReport(
+  options: { dirs?: readonly string[]; env?: Record<string, string | undefined> } = {},
+): Promise<EnginePluginReport> {
+  const { plugins, problems } = await loadEnginePlugins({
+    ...(options.dirs ? { dirs: options.dirs } : {}),
+    ...(options.env ? { env: options.env } : {}),
+  });
+  const contributions: EnginePluginContribution[] = [];
+  const unmapped: { id: string; file: string }[] = [];
+  for (const plugin of plugins) {
+    const engine = ENGINE_PLUGIN_ID_MAP[plugin.id];
+    if (!engine) {
+      unmapped.push({ id: plugin.id, file: plugin.file });
+      continue;
+    }
+    const support = plugin.support;
+    const contribution: EnginePluginContribution = {
+      engine,
+      pluginId: plugin.id,
+      file: plugin.file,
+      displayName: support.displayName,
+      models: support.models.options.map((option) => ({
+        id: option.id,
+        label: option.label,
+        value: option.id,
+        ...(option.contextWindow === undefined ? {} : { contextWindow: option.contextWindow }),
+        ...(option.images === undefined ? {} : { images: option.images }),
+      })),
+    };
+    if (support.loginNote !== undefined) contribution.loginNote = support.loginNote;
+    contributions.push(contribution);
+  }
+  return {
+    contributions,
+    unmapped,
+    problems: problems.map((problem) => ({
+      file: problem.file,
+      ...(problem.id === undefined ? {} : { id: problem.id }),
+      problems: [...problem.problems],
+    })),
+  };
+}
+
+/**
+ * The models a plugin may add to an engine's own catalog.
+ *
+ * The engine's own catalog wins for every model id it lists, so a plugin
+ * never overwrites what the engine or its provider published.  The dsh
+ * engines take no plugin models at all: their cordis profile owns the model
+ * list, and a plugin's curated list would offer models the profile does
+ * not declare.
+ */
+function pluginModelsFor(sources: CatalogSources, engine: Engine): EngineModel[] {
+  if (isDshHostedEngine(engine)) return [];
+  const contributions = sources.plugins?.contributions.filter((entry) => entry.engine === engine) ?? [];
+  return contributions.flatMap((entry) => entry.models);
+}
+
+/** The sign-in note a plugin offers for an engine. */
+function pluginLoginNote(sources: CatalogSources, engine: Engine): string | undefined {
+  return sources.plugins?.contributions.find((entry) => entry.engine === engine)?.loginNote;
+}
+
+/** Add the models a plugin knows and the engine does not, keeping the engine's own first. */
+function mergePluginModels(own: EngineModel[], contributed: EngineModel[]): EngineModel[] {
+  if (contributed.length === 0) return own;
+  const known = new Set(own.map((model) => model.id));
+  const extra = contributed.filter((model) => !known.has(model.id));
+  return extra.length === 0 ? own : [...own, ...extra];
 }
 
 const CATALOG_TTL_MS = 5 * 60 * 1000;
@@ -503,6 +629,21 @@ export interface CatalogSources {
   readMuseSessionOptions?: () => unknown;
   /** Limits ACP probe work to the selection, with legacy full discovery as the default. */
   probeScope?: CatalogProbeScope;
+  /**
+   * The drop-in engine plugins and what they contribute.
+   *
+   * The caller loads them (see {@link loadEnginePluginReport}) and hands the
+   * result in, so the catalog never touches the plugin registry itself.
+   */
+  plugins?: EnginePluginReport;
+  /**
+   * Why an engine cannot run here, in the owner's words.
+   *
+   * The sidecar knows this: a missing launcher, a missing interpreter or an
+   * unreachable credential.  It outranks any note the catalog would write
+   * itself, because it names the one thing the owner has to fix.
+   */
+  notes?: Partial<Record<Engine, string>>;
 }
 
 function museDescriptor(sources: CatalogSources, provider: EngineModel[]): EngineDescriptor {
@@ -511,19 +652,23 @@ function museDescriptor(sources: CatalogSources, provider: EngineModel[]): Engin
   const contributorProvider = provider.filter((model) => MUSE_CONTRIBUTOR_MODEL_IDS.has(model.id));
   const catalogModels = sources.available.muse ? withKnownMuseContributors(contributorProvider) : contributorProvider;
   const models = mergeMuseModels(advertised, catalogModels);
+  // The note is written from the engine's own catalog, so a plugin's static
+  // list never hides the fact that no session has been opened yet.
+  const note = sources.notes?.muse
+    ?? (!models.length ? "Start a Muse session to read its available models and effort choices."
+      : provider.length > 0 && advertised.length < models.length
+        ? "Includes models from the local Muse provider catalog."
+        : undefined);
   return {
     id: "muse",
     label: "Muse Code",
     available: sources.available.muse,
     supportsThreads: supportsThreads("muse"),
-    models,
+    models: sources.available.muse ? mergePluginModels(models, pluginModelsFor(sources, "muse")) : models,
     effortLevels: MUSE_CONTRIBUTOR_EFFORT_LEVELS,
     effortConfigId: EFFORT_CONFIG_IDS.muse!,
     modelConfigId: "model",
-    ...(!models.length ? { note: "Start a Muse session to read its available models and effort choices." }
-      : provider.length > 0 && advertised.length < models.length
-        ? { note: "Includes models from the local Muse provider catalog." }
-        : {}),
+    ...(note ? { note } : {}),
   };
 }
 
@@ -569,12 +714,15 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
     const probed = probes.get(engine);
     let models: EngineModel[] = DSH_MODELS[engine] ?? [];
     let effortLevels = EFFORT_LEVELS[engine] ?? [];
-    let note: string | undefined;
+    // The sidecar's own reason comes first: it names the one thing the owner
+    // has to fix.  A plugin's sign-in note is the fallback.
+    let note: string | undefined = sources.notes?.[engine]
+      ?? (available ? undefined : pluginLoginNote(sources, engine));
 
     if (engine === "mcode") {
       models = probed?.models ?? [];
       effortLevels = probed?.initialized ? probed.efforts : effortLevels;
-      if (!models.length) note = "MiniMax Code did not advertise a model catalog on this host.";
+      if (!note && !models.length) note = "MiniMax Code did not advertise a model catalog on this host.";
     }
 
     const descriptor: EngineDescriptor = {
@@ -582,7 +730,7 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
       label: engine === "mcode" ? "MiniMax Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
       available,
       supportsThreads: probed?.initialized ? probed.supportsThreads : supportsThreads(engine),
-      models,
+      models: mergePluginModels(models, pluginModelsFor(sources, engine)),
       effortLevels,
       effortConfigId: EFFORT_CONFIG_IDS[engine] ?? "reasoning_effort",
       modelConfigId: "model",

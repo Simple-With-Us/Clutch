@@ -34,7 +34,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -46,8 +46,15 @@ import { DshHostClientCache, isRefusedIdentity } from "./dshHostClientCache.ts";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
-import { engineCatalog, resolveModelAltValue, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
+import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
+import {
+  engineCatalog,
+  loadEnginePluginReport,
+  resolveModelAltValue,
+  resolveModelValue,
+  type EngineCatalog,
+  type EnginePluginReport,
+} from "./engine-catalog.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
 import { readTailnetStatus } from "./tailnet-status.ts";
 import { handleQuotasRequest } from "./quotas-route.ts";
@@ -176,8 +183,8 @@ function log(line: string): void {
 }
 
 /** Whether a bare command name resolves on PATH. */
-function commandOnPath(command: string): boolean {
-  const path = process.env.PATH ?? "";
+function commandOnPath(command: string, env: Record<string, string | undefined> = process.env): boolean {
+  const path = env.PATH ?? "";
   for (const dir of path.split(":")) {
     if (!dir) continue;
     if (existsSync(join(dir, command))) return true;
@@ -342,6 +349,217 @@ export async function museInstalled(
   const adapter = (adapterOverride && executableFile(adapterOverride) ? adapterOverride : undefined)
     || adapterPaths.find(executableFile);
   return Boolean(adapter);
+}
+
+/**
+ * What one engine needs before a turn can run.
+ *
+ * `available` in the catalog means exactly this: the launcher starts and the
+ * credential the engine needs is reachable.  A launcher file on disk is not
+ * enough — a bridge with no interpreter and an engine with no key both
+ * answer every turn with "bridge exited" or an auth error.
+ */
+export interface EngineAvailability {
+  /** True when a turn can actually run on this host. */
+  available: boolean;
+  /**
+   * One short sentence saying what is missing and where to put it.
+   *
+   * The owner reads this in the engine picker, so it names a place to put the
+   * credential and never a value.
+   */
+  note?: string;
+}
+
+/**
+ * The host facts the availability check reads.
+ *
+ * Every input is injectable, so the check can be exercised on any machine:
+ * the environment the launcher will run in, the launcher each engine uses,
+ * the dsh credential store the bridges read, and Clutch's own settings.
+ */
+export interface EngineAvailabilityContext {
+  /** The environment the launcher will run in. */
+  env?: Record<string, string | undefined>;
+  /** The launcher each engine uses. */
+  launchers?: Record<Engine, Launcher>;
+  /** The dsh credential store the bridges read. */
+  credentialFile?: string;
+  /** Clutch's own settings (Infisical-backed), when the sidecar has them. */
+  settings?: { get(key: string): string };
+}
+
+/**
+ * The dsh credential store the DeepSeek and MiniMax bridges read.
+ *
+ * `scripts/lib/clutch-env.sh` forces `DSH_HOME` to `$CLUTCH_HOME/dsh`, so
+ * this is the one file both bridges open when the environment carries no
+ * key.  Its presence is what makes the credential reachable on a host that
+ * keeps the key in a file rather than in an environment variable.
+ */
+function dshCredentialFile(env: Record<string, string | undefined>): string {
+  const clutchHome = env.CLUTCH_HOME ?? join(env.HOME ?? homedir(), ".clutch");
+  return join(clutchHome, "dsh", ".credentials.yaml");
+}
+
+/** A managed setting's value: Clutch's own settings first, then the environment. */
+function settingValue(
+  name: string,
+  env: Record<string, string | undefined>,
+  settings?: { get(key: string): string },
+): string {
+  const fromSettings = settings?.get(name)?.trim();
+  if (fromSettings) return fromSettings;
+  return (env[name] ?? "").trim();
+}
+
+/**
+ * The interpreter the dsh launchers will use.
+ *
+ * `scripts/dsh-acp.sh` and `scripts/minimax-acp.sh` look for `PYTHON`, then
+ * `/opt/homebrew/bin/python3`, then `python3` on PATH.  A host with none of
+ * them answers every turn with "bridge exited", which is why the interpreter
+ * is checked here and not left to the turn.
+ */
+function pythonInterpreter(env: Record<string, string | undefined>): string | null {
+  const named = (env.PYTHON ?? "").trim();
+  if (named && executableFile(named)) return named;
+  if (executableFile("/opt/homebrew/bin/python3")) return "/opt/homebrew/bin/python3";
+  for (const dir of (env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, "python3");
+    if (executableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Look for an OAuth credential file under a store, a few levels deep. */
+function findAuthFile(dir: string, depth: number): boolean {
+  if (depth > 4) return false;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  if (entries.some((entry) => entry.isFile() && entry.name === "auth.json")) return true;
+  return entries.some((entry) => entry.isDirectory() && findAuthFile(join(dir, entry.name), depth + 1));
+}
+
+/**
+ * Whether MiniMax Code has signed in.
+ *
+ * `mcode login` writes an OAuth credential under `~/.minimax/auth`; without
+ * it the CLI lists its threads but refuses every turn, which is the same
+ * lie the catalog must not tell.
+ */
+function mcodeSignedIn(env: Record<string, string | undefined>): boolean {
+  return findAuthFile(join(env.HOME ?? homedir(), ".minimax", "auth"), 0);
+}
+
+/**
+ * Whether Muse Code has a credential the sidecar can reach.
+ *
+ * Three routes count: an explicit `META_API_KEY`, the Muse CLI's own login
+ * file, and the provider catalog the CLI publishes from an authenticated
+ * account.  On macOS the login file only names the keychain entry, which is
+ * why the desktop helper exists; the file's presence is still the honest
+ * answer to "has this account signed in".
+ */
+function museSignedIn(
+  env: Record<string, string | undefined>,
+  settings?: { get(key: string): string },
+): boolean {
+  if (settingValue("META_API_KEY", env, settings)) return true;
+  const home = env.HOME ?? homedir();
+  if (existsSync(join(home, ".config", "muse", "auth.json"))) return true;
+  try {
+    return readdirSync(join(home, ".local", "share", "muse", "model-catalog"))
+      .some((name) => name.endsWith(".json"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an engine can actually run a turn here.
+ *
+ * Two things have to hold: the launcher has to start (the file is there and
+ * the interpreter it needs is there), and the credential the engine needs
+ * has to be reachable.  The check stays cheap on purpose — files and
+ * environment only, no process and no network — so the picker can ask for
+ * it on every request.
+ */
+export async function engineAvailability(
+  engine: Engine,
+  context: EngineAvailabilityContext = {},
+): Promise<EngineAvailability> {
+  const env = context.env ?? process.env;
+  const launchers = context.launchers ?? LAUNCHERS;
+  const settings = context.settings;
+  const launcher = launchers[engine];
+  const label = ENGINE_LABELS[engine];
+
+  // A launcher with a path is checked against the filesystem; a bare
+  // command name is checked against PATH, so a server without MiniMax
+  // Code does not claim to have it.
+  if (launcher.command.includes("/")) {
+    if (!existsSync(launcher.command)) {
+      return { available: false, note: `${label} is not installed on this host.` };
+    }
+  } else if (!commandOnPath(launcher.command, env)) {
+    return { available: false, note: `${label} is not installed on this host.` };
+  }
+
+  if (engine === "muse") {
+    if (!await museInstalled(env)) {
+      return { available: false, note: `${label} is not installed on this host.` };
+    }
+    if (!museSignedIn(env, settings)) {
+      return {
+        available: false,
+        note: `${label} needs a sign-in.\u00A0 Run muse login, or add META_API_KEY in Clutch settings.`,
+      };
+    }
+    return { available: true };
+  }
+
+  if (engine === "mcode") {
+    if (!mcodeSignedIn(env)) {
+      return {
+        available: false,
+        note: `${label} needs a sign-in.\u00A0 Run mcode login as the user this sidecar runs as.`,
+      };
+    }
+    return { available: true };
+  }
+
+  // The dsh engines: the bridge needs an interpreter, and the provider key
+  // has to be reachable from the environment or from the credential store
+  // the bridge reads.
+  if (!pythonInterpreter(env)) {
+    return { available: false, note: `${label} needs Python 3 to run its bridge.` };
+  }
+  const credentialFile = context.credentialFile ?? dshCredentialFile(env);
+  if (engine === "deepseek") {
+    if (!settingValue("DEEPSEEK_API_KEY", env, settings) && !existsSync(credentialFile)) {
+      return {
+        available: false,
+        note: `${label} needs an API key.\u00A0 Add DEEPSEEK_API_KEY in Clutch settings, or save it in ${credentialFile}.`,
+      };
+    }
+  }
+  if (engine === "minimax") {
+    const keyName = settingValue("CLUTCH_MINIMAX_API_KEY_NAME", env, settings) || "MINIMAX_API_KEY";
+    if (!settingValue(keyName, env, settings) && !settingValue("MINIMAX_API_KEY", env, settings) &&
+        !existsSync(credentialFile)) {
+      return {
+        available: false,
+        note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings, or save it in ${credentialFile}.`,
+      };
+    }
+  }
+  return { available: true };
 }
 
 /** Load the Bearer token, minting and persisting it (mode 600) on first boot. */
@@ -1695,6 +1913,18 @@ async function main(): Promise<void> {
   // is a separate process from start-web.ts, so it initializes its own
   // instance; this is what backs the native Infisical settings panel.
   const settings = await initClutchSettings();
+  // The drop-in engine plugins, read once at boot.  A plugin that maps to an
+  // engine Clutch runs contributes to the catalog; one that maps to no known
+  // engine is reported rather than turned into a phantom picker entry, and
+  // one that does not load contributes nothing.  A new drop-in needs a
+  // restart of the sidecar to show up.
+  const pluginReport: EnginePluginReport = await loadEnginePluginReport();
+  for (const unmapped of pluginReport.unmapped) {
+    log(`engine plugin "${unmapped.id}" names no engine Clutch runs — it is not in the picker`);
+  }
+  for (const problem of pluginReport.problems) {
+    log(`engine plugin ${problem.file} did not load — it contributes nothing`);
+  }
   const diagnostics = createTurnDiagnostics({
     directory: join(dirname(TOKEN_FILE), "diagnostics"),
     endpoint: settings.get("CLUTCH_TELEMETRY_ENDPOINT"),
@@ -1936,32 +2166,32 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Whether an engine's launcher and host binary are present here, so the
-   * catalog can say "not installed" instead of failing on the first turn.
+   * Whether an engine can actually run a turn here, and why not when it
+   * cannot.  The catalog says "not installed" for a missing launcher and
+   * names the missing credential for a key the engine never receives, so
+   * the picker never offers an engine whose every turn would fail.
    */
-  async function engineAvailable(engine: Engine): Promise<boolean> {
-    const launcher = LAUNCHERS[engine];
-    // A launcher with a path is checked against the filesystem; a bare
-    // command name is checked against PATH, so a server without MiniMax
-    // Code does not claim to have it.
-    if (launcher.command.includes("/")) {
-      if (!existsSync(launcher.command)) return false;
-    } else if (!commandOnPath(launcher.command)) {
-      return false;
-    }
-    if (engine === "muse") return museInstalled();
-    return true;
+  async function engineAvailable(engine: Engine): Promise<EngineAvailability> {
+    return engineAvailability(engine, { settings });
   }
 
   /** The catalog for this host, with the real launchers wired in. */
   async function catalog(selectedEngine?: Engine): Promise<EngineCatalog> {
-    const availability = await Promise.all(ENGINE_ORDER.map(async (engine) => [engine, await engineAvailable(engine)] as const));
+    const availability = await Promise.all(
+      ENGINE_ORDER.map(async (engine) => [engine, await engineAvailable(engine)] as const),
+    );
+    const notes: Partial<Record<Engine, string>> = {};
+    for (const [engine, value] of availability) {
+      if (value.note) notes[engine] = value.note;
+    }
     return engineCatalog({
       launchers: LAUNCHERS,
-      available: Object.fromEntries(availability) as Record<Engine, boolean>,
+      available: Object.fromEntries(availability.map(([engine, value]) => [engine, value.available])) as Record<Engine, boolean>,
+      notes,
       probeCwd: process.env.HOME ?? "/tmp",
       readMuseSessionOptions: () => bridges.get("muse")?.catalogOptions() ?? null,
       probeScope: selectedEngine === undefined ? "full" : selectedEngine === "mcode" ? "mcode" : "passive",
+      plugins: pluginReport,
     });
   }
 
@@ -2763,9 +2993,22 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "prompt is required" }));
         return;
       }
+      // An engine the sidecar does not know is a client mistake, not a
+      // fallback: routing it to DeepSeek would silently run the turn on
+      // another provider.  A request that names no engine keeps routing by
+      // its model id, exactly as before.
+      const namedEngine = typeof body.engine === "string" ? body.engine.trim() : "";
+      if (body.engine !== undefined && body.engine !== null && !isEngine(namedEngine)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+          error: "unknown engine",
+          engine: namedEngine.slice(0, 40),
+          knownEngines: ENGINE_ORDER,
+        }));
+        return;
+      }
       const engine = routeForModel(
         typeof body.model === "string" ? body.model : undefined,
-        typeof body.engine === "string" ? body.engine : undefined,
+        namedEngine || undefined,
       );
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
       // A client that can answer a permission request says so, and the
