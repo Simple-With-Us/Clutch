@@ -51,7 +51,99 @@ The health answer reports `mcode.available`, which is false when MiniMax Code is
 - Reachable at `https://jay-server.boa-roygbiv.ts.net:3181` on the tailnet only (`tailscale serve`, set up by `scripts/chat-bridge.sh` on every start).
 - Engines include MiniMax Code and Muse Code.  Updated native Muse clients and sidecars offer only the three exact contributor model IDs documented in [Muse Contributor Models And Launch Options](muse-contributor-options.md).
 - Pairing link: `$CLUTCH_HOME/server-pairing-link.txt` for the actual service user.  On the verified November 3 installation that user is `jay`, with Clutch home `/home/jay/.clutch`.  Preserve the existing link and token when they already pass authenticated health and session-list checks.
-- Updating: pull the checkout, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  Re-run the installer if the checkout moved, because the unit points at it.
+- Updating: the unit runs the checkout it was installed from, so pull it, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  The live host pins the unit to a release instead; see [Pinning The Sidecar To A Release](#pinning-the-sidecar-to-a-release).
+
+### Pinning The Sidecar To A Release
+
+The unit that `scripts/install-server-bridge.sh` writes runs the checkout it was installed from, so on a fresh host `git pull`, `npm ci` and `systemctl restart clutch-chat-bridge` are the whole update.  The live host does not run that way: a drop-in pins the unit to one merged commit, so pulling the checkout changes nothing that is running.
+
+The drop-in is `/etc/systemd/system/clutch-chat-bridge.service.d/20-clutch-release.conf`, and it overrides both the working directory and the command:
+
+```ini
+[Service]
+WorkingDirectory=/mnt/fleet-extra/apps/runtime/Clutch/releases/<sha>
+ExecStart=
+ExecStart=/mnt/fleet-extra/apps/runtime/Clutch/releases/<sha>/scripts/chat-bridge.sh
+```
+
+The roll is one script, because every step depends on the one before it and a half-finished roll leaves the unit on the wrong release.  It pins the remote tip, exports that commit, carries the dependencies over only when the lockfile did not move, writes the drop-in and restarts the unit:
+
+```bash
+set -euo pipefail
+
+REPO=/mnt/fleet-extra/Code/Clutch
+RELEASES=/mnt/fleet-extra/apps/runtime/Clutch/releases
+DROPIN_DIR=/etc/systemd/system/clutch-chat-bridge.service.d
+DROPIN=$DROPIN_DIR/20-clutch-release.conf
+
+git -C "$REPO" fetch origin main
+SHA=$(git -C "$REPO" rev-parse origin/main)
+NEW="$RELEASES/$SHA"
+
+# The release that is running now, when there is one:  it holds the
+# dependencies and it is where a failed roll goes back to.
+PREVIOUS=$(systemctl show -p WorkingDirectory --value clutch-chat-bridge.service)
+case "$PREVIOUS" in
+  "$RELEASES"/*) OLD_SHA=$(basename "$PREVIOUS") ;;
+  *) OLD_SHA="" ;;
+esac
+
+mkdir -p "$NEW"
+git -C "$REPO" archive "$SHA" | tar -x -C "$NEW"
+sudo chown -R jay:fleet "$NEW"
+
+# The dependencies come from the release that is already running, so a roll is
+# a copy and not a build.  A commit that moved the lockfile needs its own
+# install, because the old tree would not hold what the new code imports and
+# the unit would die at boot.
+if [ -n "$OLD_SHA" ] && git -C "$REPO" diff --quiet "$OLD_SHA" "$SHA" -- package-lock.json; then
+  cp -al "$RELEASES/$OLD_SHA/node_modules" "$NEW/node_modules"
+else
+  (cd "$NEW" && npm ci)
+fi
+
+# The drop-in is only written for a release that can actually run.
+test -x "$NEW/scripts/chat-bridge.sh"
+sudo mkdir -p "$DROPIN_DIR"
+sudo tee "$DROPIN" >/dev/null <<EOF
+[Service]
+WorkingDirectory=$NEW
+ExecStart=
+ExecStart=$NEW/scripts/chat-bridge.sh
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart clutch-chat-bridge.service
+```
+
+The last step is the one that says whether the roll worked.  Check the host the way a phone sees it, with an authorized host-side diagnostic client that reads the service user's chat token into memory and returns only allowlisted health or session-list metadata:  `/clutch/v1/health` and `/clutch/v1/sessions?engine=mcode&limit=5`.  A release that cannot boot crash-loops under `Restart=on-failure`, and the paired clients see a dead host with no signal, so this check is what tells a good roll from a bad one.
+
+When the check fails, roll back to the release that was running before.  Point the drop-in back at it and restart:
+
+```bash
+set -euo pipefail
+RELEASES=/mnt/fleet-extra/apps/runtime/Clutch/releases
+PREVIOUS="$RELEASES/<the-sha-the-roll-replaced>"
+sudo mkdir -p /etc/systemd/system/clutch-chat-bridge.service.d
+sudo tee /etc/systemd/system/clutch-chat-bridge.service.d/20-clutch-release.conf >/dev/null <<EOF
+[Service]
+WorkingDirectory=$PREVIOUS
+ExecStart=
+ExecStart=$PREVIOUS/scripts/chat-bridge.sh
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart clutch-chat-bridge.service
+```
+
+Deleting the drop-in is not a rollback.  It hands the unit back to the mutable checkout, which is the unpinned state this section exists to avoid.  Keep the previous release on disk until the roll has proved itself.
+
+The roll does not prune what it replaces, so the releases directory grows by one tree per roll and every tree carries a dependency tree of its own.  Keep the running release and the one before it, and remove the rest:
+
+```bash
+ls -1 /mnt/fleet-extra/apps/runtime/Clutch/releases
+sudo rm -rf /mnt/fleet-extra/apps/runtime/Clutch/releases/<sha-to-remove>
+```
+
+One trap is left in the export.  `git archive` keeps the executable bit on the tracked scripts, but a blanket `chmod` over the tree strips it and the unit then dies with status 203/EXEC.
 
 ### Muse Code On A Server
 
