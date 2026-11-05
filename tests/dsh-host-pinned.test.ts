@@ -101,18 +101,20 @@ function declaredString(source: string, name: string): string | null {
 }
 
 /**
- * The wire key one session descriptor takes its request object under.
+ * The wire keys one session descriptor takes its parameters under.
  *
  * The installed build's descriptors look like
  *
  *     { id: '…#session/list', namespace: 'session', method: 'list',
  *       parameters: [ { name: '_request', wire: '_request', source: 'json', … } ] }
  *
- * so the descriptor is found by its id and the wire key is read from the
- * parameter list.  A layout this reader does not recognise fails with a
- * message that says so, rather than passing on an empty answer.
+ * so the descriptor is found by its id and the wire keys are read from the
+ * parameter list.  An endpoint that declares no parameters at all has no
+ * wire key, and that is a contract of its own.  A layout this reader does not
+ * recognise fails with a message that says so, rather than passing on an
+ * empty answer.
  */
-function descriptorWireKey(source: string, method: string): string {
+function descriptorWireKeys(source: string, method: string): string[] {
   const blocks = source.split(/(?=\n\s*id: ')/);
   const block = blocks.find((part) => part.includes(`#session/${method}'`));
   if (!block) {
@@ -138,13 +140,13 @@ function descriptorWireKey(source: string, method: string): string {
   const result = block.indexOf("result:", parameters);
   const slice = block.slice(parameters, result < 0 ? undefined : result);
   const wires = [...slice.matchAll(/wire: '([^']*)'/g)].map((match) => match[1]);
-  if (wires.length !== 1) {
+  if (wires.length > 1) {
     throw new Error(
       `The installed dsh build's session/${method} descriptor declares ${wires.length} wire ` +
         "keys, where this test expects exactly one.",
     );
   }
-  return wires[0]!;
+  return wires;
 }
 
 describe("dsh host contract — pinned to the installed dsh build", () => {
@@ -272,7 +274,23 @@ describe("dsh host contract — pinned to the installed dsh build", () => {
       follow: "request",
     };
     for (const [method, wire] of Object.entries(expected)) {
-      expect(descriptorWireKey(source, method)).toBe(wire);
+      expect(descriptorWireKeys(source, method)).toEqual([wire]);
+    }
+  });
+
+  it("declares the model catalog as an endpoint that takes no parameters", () => {
+    // The catalog is the one endpoint the sidecar asks for without a
+    // business object: the host publishes its own providers and models, so
+    // the request carries nothing at all.  The gateway refuses an argument
+    // set that does not match the descriptor exactly, so a dsh bump that
+    // gave the catalog a parameter would break the sidecar's call, and one
+    // that took it away would break it the other way.  Both installed faces
+    // are read: the sidecar is the client and the host is the server.
+    for (const face of [
+      "dsh-api-session-controller/lib/typert.host.js",
+      "dsh-api-session-controller/lib/typert.remote-client.js",
+    ]) {
+      expect(descriptorWireKeys(readInstalled(face), "modelCatalog")).toEqual([]);
     }
   });
 });

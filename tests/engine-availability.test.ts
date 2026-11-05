@@ -131,7 +131,12 @@ describe("engine availability", () => {
 
     const store = join(host.home, ".minimax", "auth", "prod", "en", "mcode-public");
     mkdirSync(store, { recursive: true });
-    writeFileSync(join(store, "auth.json"), "{}\n");
+    const credential = join(store, "auth.json");
+    writeFileSync(credential, "{}\n");
+    // The credential only counts when nobody else can read it: MiniMax Code
+    // refuses a group- or other-readable file, so the fixture has to be the
+    // private file the CLI writes rather than whatever the umask allows.
+    chmodSync(credential, 0o600);
     await expect(engineAvailability("mcode", host.context)).resolves.toMatchObject({ available: true });
   });
 

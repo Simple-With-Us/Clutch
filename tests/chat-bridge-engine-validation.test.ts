@@ -4,11 +4,26 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 
 const TOKEN = `engine-validation-test-${"x".repeat(48)}`;
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
+
+/**
+ * The answer the sidecar gives when it refuses an engine it does not know.
+ *
+ * The sidecar is another process on this machine, so its answer is read
+ * through a schema rather than cast into a shape: a field that is missing or
+ * of the wrong type fails here instead of reaching an assertion as an
+ * undefined that happens to look right.
+ */
+const engineRefusalSchema = z.object({
+  error: z.string(),
+  engine: z.string(),
+  knownEngines: z.array(z.string()),
+});
 
 let sidecar: ChildProcess | null = null;
 let port = 0;
@@ -28,18 +43,28 @@ function freePort(): Promise<number> {
   });
 }
 
-async function waitFor(url: string, headers: Record<string, string>): Promise<void> {
-  const started = Date.now();
-  while (Date.now() - started < 30_000) {
-    try {
-      const response = await fetch(url, { headers });
-      if (response.status === 200) return;
-    } catch {
-      /* the sidecar is not listening yet */
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error("sidecar did not start");
+/**
+ * The sidecar's health, once it answers.
+ *
+ * The wait is Vitest's own: the condition is the sidecar answering with a
+ * 200, and the poll is what waits for it, so there is no sleep of our own to
+ * be too short on a loaded machine.  It runs before every test rather than
+ * once in `beforeAll`, because a poll is only allowed inside a test.
+ */
+async function waitForSidecar(): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        try {
+          return (await fetch(url("/clutch/v1/health"), { headers: headers() })).status;
+        } catch {
+          // The sidecar is not listening yet.
+          return 0;
+        }
+      },
+      { timeout: 30_000, interval: 100 },
+    )
+    .toBe(200);
 }
 
 function url(path: string): string {
@@ -74,7 +99,10 @@ beforeAll(async () => {
     },
     stdio: ["ignore", "ignore", "ignore"],
   });
-  await waitFor(url("/clutch/v1/health"), headers());
+}, 60_000);
+
+beforeEach(async () => {
+  await waitForSidecar();
 }, 60_000);
 
 afterAll(() => {
@@ -91,7 +119,7 @@ describe("chat engine validation", () => {
     });
 
     expect(response.status).toBe(400);
-    const body = await response.json() as { error?: string; engine?: string; knownEngines?: string[] };
+    const body = engineRefusalSchema.parse(await response.json());
     expect(body.error).toBe("unknown engine");
     expect(body.engine).toBe("minmax");
     expect(body.knownEngines).toEqual(["deepseek", "minimax", "mcode", "muse"]);
@@ -124,7 +152,7 @@ describe("chat engine validation", () => {
       body: JSON.stringify({ prompt: "hello", engine: "e".repeat(200) }),
     });
     expect(oversized.status).toBe(400);
-    const oversizedBody = await oversized.json() as { error?: string; engine?: string };
+    const oversizedBody = engineRefusalSchema.parse(await oversized.json());
     expect(oversizedBody.error).toBe("unknown engine");
     expect(oversizedBody.engine).toHaveLength(40);
 

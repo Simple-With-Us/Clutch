@@ -163,7 +163,12 @@ describe("running a turn in the host", () => {
     // The stream is opened first, so no event of the turn is missed.
     expect(host.streams[0]?.endpoint).toBe("session/follow");
     expect(host.streams[0]?.args).toEqual({
-      request: { address: { kind: "session", sessionId: "host-session-1" } },
+      // The turn reads the live events alone, so it asks for the smallest
+      // window the host accepts: the snapshot it skips is not transferred.
+      request: {
+        address: { kind: "session", sessionId: "host-session-1" },
+        maxMessages: 1,
+      },
     });
     const prompt = host.calls.find((call) => call.endpoint === "session/prompt");
     const asked = business(prompt?.args ?? {});

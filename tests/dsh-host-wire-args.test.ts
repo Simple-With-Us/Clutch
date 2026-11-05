@@ -166,9 +166,9 @@ describe("the dsh host's argument envelope", () => {
         sessionId: "host-session-1",
       });
     }
-    // The turn reads the live events alone, so it leaves the window out
-    // entirely: the host refuses a window of zero.
-    expect(envelope(follows[0]!, "request")).not.toHaveProperty("maxMessages");
+    // The turn reads the live events alone, so it asks for the smallest
+    // window the host accepts: the snapshot it skips is not transferred.
+    expect(envelope(follows[0]!, "request")["maxMessages"]).toBe(1);
     // The history reads the thread's opening window, so it asks for one.
     expect(envelope(follows[1]!, "request")["maxMessages"]).toBe(200);
   });

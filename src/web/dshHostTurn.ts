@@ -191,9 +191,13 @@ export async function runDshHostTurn(
     {
       request: {
         address: { kind: "session", sessionId },
-        // The host refuses a window of zero, and the opening snapshot is the
-        // thread's history, which this turn does not read: the key is left
-        // out, and the turn is read from the live events alone.
+        // The host opens the stream with a snapshot of the committed log,
+        // and this turn reads the live events alone, so the snapshot is
+        // skipped when it arrives.  It is still built, and without a bound
+        // the host pages the whole thread over the wire to build it.  One
+        // message is the smallest window the host accepts, so the transfer
+        // is bounded without changing what the turn reads.
+        maxMessages: 1,
       },
     },
     // A cancelled turn must not leave the host holding the session open for
