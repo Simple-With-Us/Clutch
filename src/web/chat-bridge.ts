@@ -516,8 +516,12 @@ export async function engineAvailability(
       return { available: false, note: `${label} is not installed on this host.` };
     }
     if (!museSignedIn(env, settings)) {
+      // This one stays available.  The Muse sign-in lives behind the engine
+      // being selected, so an engine that needs a sign-in but is dropped from
+      // the picker takes the owner's only way to sign in with it.  The note
+      // says what is still needed, and the app finishes it in place.
       return {
-        available: false,
+        available: true,
         note: `${label} needs a sign-in.\u00A0 Run muse login, or add META_API_KEY in Clutch settings.`,
       };
     }

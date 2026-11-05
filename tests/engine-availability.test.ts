@@ -138,8 +138,11 @@ describe("engine availability", () => {
   it("asks Muse Code to sign in before a turn can run", async () => {
     const host = fixture();
 
+    // The Muse sign-in lives behind the engine being selected, so an engine
+    // that needs one stays in the picker with the note that says what is
+    // still needed: dropping it would take the owner's only way to sign in.
     const muse = await engineAvailability("muse", host.context);
-    expect(muse.available).toBe(false);
+    expect(muse.available).toBe(true);
     expect(muse.note).toContain("muse login");
 
     const withKey = {
