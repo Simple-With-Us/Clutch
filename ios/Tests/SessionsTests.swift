@@ -305,11 +305,15 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertNil(plain.toolCallId)
     }
 
-    func testGroupedFloatsPinnedAboveDateBuckets() {
+    func testGroupedFloatsPinnedAboveDateBuckets() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         let pinned = AcpSessionInfo(sessionId: "old-but-pinned", updatedAt: "2026-09-01T12:00:00Z")
         let today = AcpSessionInfo(sessionId: "today", updatedAt: "2026-10-16T08:00:00Z")
-        let now = AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z")!
-        let groups = AcpSessionInfo.grouped([pinned, today], pinned: ["old-but-pinned"], now: now)
+        let now = try XCTUnwrap(AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z"))
+        // The calendar is pinned, so the bucket this thread lands in does not
+        // depend on the timezone of the machine running the test.
+        let groups = AcpSessionInfo.grouped([pinned, today], pinned: ["old-but-pinned"], now: now, calendar: calendar)
         XCTAssertEqual(groups.map(\.title), ["Pinned", "Today"])
         XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["old-but-pinned"])
     }
