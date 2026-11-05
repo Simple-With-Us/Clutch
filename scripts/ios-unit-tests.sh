@@ -8,11 +8,13 @@
 #
 # The simulator is resolved the way the UI tests resolve one:  use an
 # available iPhone simulator, otherwise download the iOS platform and create a
-# device, otherwise skip.  A missing runtime is not a broken test, so the
-# script exits 10 when the machine has none, and the caller reports a skip.
+# device, otherwise report that the machine has no runtime.  The script exits
+# 10 when the machine has none, and the workflow turns that into a failed
+# step:  a green unit-test gate that ran no test is the state this script
+# exists to end.
 #
-# Exit codes: 0 the tests passed, 10 skipped (no simulator), anything else
-# the tests failed.
+# Exit codes: 0 the tests passed, 10 no simulator runtime (the caller fails
+# the step), anything else the tests failed.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

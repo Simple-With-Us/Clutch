@@ -78,13 +78,16 @@ jobs:
       # compile gate and nothing more.  This step gives those assertions a
       # verdict.  It runs after the UI tests, because that step resolves the
       # simulator first and a runtime it downloaded is then already here.
+      # A skip fails the step:  a green unit-test gate that ran no test is
+      # the state this step exists to end, so a runner with no simulator is
+      # an error here rather than a warning.
       - name: Run the iOS unit tests
         run: |
           status=0
           bash scripts/ios-unit-tests.sh || status=$?
           if [ "$status" = "10" ]; then
-            echo "::warning title=iOS unit tests::no iOS simulator runtime on this runner; the unit tests were skipped"
-            exit 0
+            echo "::error title=iOS unit tests::no iOS simulator runtime on this runner; the unit tests did not run"
+            exit 1
           fi
           exit "$status"
       - name: Publish the iOS unit test result

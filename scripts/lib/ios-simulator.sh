@@ -19,6 +19,11 @@
 # The log file the platform download writes to.
 CLUTCH_IOS_DOWNLOAD_LOG="${CLUTCH_IOS_DOWNLOAD_LOG:-${RUNNER_TEMP:-/tmp}/clutch-ios-download.log}"
 
+# The device this helper creates when it has to download a runtime.  The
+# device lookup matches it by name, so a later resolution reuses it instead
+# of downloading the platform a second time.
+CLUTCH_IOS_CREATED_DEVICE="${CLUTCH_IOS_CREATED_DEVICE:-Clutch Test iPhone}"
+
 # The iOS simulator devices this machine can run, as "UDID<TAB>name" lines.
 clutch_ios_available_devices() {
   # "iPhone 16 Pro (UDID) (Shutdown)" lines, reduced to "UDID<TAB>name".
@@ -26,9 +31,11 @@ clutch_ios_available_devices() {
   # offer a device with the same name.  The name is every word before the
   # parenthesised identifier, so a caller can ask for "iPhone 16 Pro" and
   # have that device picked rather than the first one it sees.
+  # The device this helper created is matched too, so a second lookup finds
+  # it instead of downloading the platform again.
   xcrun simctl list devices available 2>/dev/null \
-    | awk '
-        /^[[:space:]]+iPhone/ {
+    | awk -v created="$CLUTCH_IOS_CREATED_DEVICE" '
+        $0 ~ ("^[[:space:]]+(iPhone|" created ")") {
           name = ""
           for (i = 1; i <= NF; i++) {
             if ($i ~ /^\(/) break
@@ -85,7 +92,13 @@ clutch_ios_download_runtime() {
   local identifier
   identifier="$(xcrun simctl list devicetypes 2>/dev/null | awk -F '[()]' '/iPhone 16 Pro/ { print $2; exit }')"
   [ -n "$identifier" ] || identifier="iPhone 16 Pro"
-  # The created device is named "Clutch Test iPhone", which the device filter
-  # does not keep, so its identifier is captured here and used directly.
-  xcrun simctl create "Clutch Test iPhone" "$identifier" "$runtime" 2>/dev/null | tr -d '[:space:]'
+  # The created device is named "Clutch Test iPhone", and its identifier is
+  # captured here and used directly.  A failed create leaves no UDID, and the
+  # helper's contract is that it returns 1 when the machine has no runtime,
+  # so an empty result is a failure rather than a device with no name.
+  local created
+  created="$(xcrun simctl create "$CLUTCH_IOS_CREATED_DEVICE" "$identifier" "$runtime")" || return 1
+  created="$(printf '%s' "$created" | tr -d '[:space:]')"
+  [ -n "$created" ] || return 1
+  printf '%s\n' "$created"
 }

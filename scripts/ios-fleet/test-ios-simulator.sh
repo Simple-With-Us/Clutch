@@ -57,6 +57,10 @@ case "${1:-} ${2:-}" in
     fi
     ;;
   "simctl create")
+    if [ "${FAKE_CREATE:-ok}" = "fail" ]; then
+      echo "create refused" >&2
+      exit 1
+    fi
     echo "CREATED-DEVICE-UDID"
     ;;
 esac
@@ -88,11 +92,16 @@ FAKE
 chmod +x "${FAKE_BIN}/xcodegen"
 
 pick_device() {
+  # The helper path is handed over as $0 rather than pasted into the program
+  # text, so a checkout path holding shell metacharacters stays an argument.
+  # The inner shell sets no pipefail on purpose:  the helper has to keep its
+  # own contract whatever the caller's shell options are, and pipefail would
+  # hide a pipeline that swallows a failure.
   PATH="$FAKE_BIN:$PATH" bash -c '
-    set -uo pipefail
-    source "'"$HELPER"'"
+    set -u
+    source "${0:?}"
     clutch_ios_simulator_device "${1:-}"
-  ' _ "$1"
+  ' "$HELPER" "$1"
 }
 
 # 1.  A machine with two simulators picks the newest runtime's device.
@@ -119,13 +128,28 @@ check "a refused download means no device" "" "$actual"
 actual="$(FAKE_DEVICES="" FAKE_DOWNLOAD=ok pick_device "")"
 check "a good download creates a device" "CREATED-DEVICE-UDID" "$actual"
 
-# 6.  The unit-test script skips, with exit 10, on a machine with no runtime.
-#     A skip is not a failure:  the caller reports it and the job still
-#     publishes what it has.
+# 6.  The unit-test script exits 10, its no-runtime code, on a machine with
+#     no runtime.  The workflow turns that into a failed step, so a run that
+#     verified nothing never reads green.
 status=0
 PATH="$FAKE_BIN:$PATH" FAKE_DEVICES="" FAKE_DOWNLOAD=fail \
   bash "$UNIT_SCRIPT" >/dev/null 2>&1 || status=$?
-check "the unit-test script skips without a runtime" "10" "$status"
+check "the unit-test script reports no runtime" "10" "$status"
+
+# 7.  A failed create means no device, and the helper says so.  The status
+#     matters as much as the output:  a helper that returns success with no
+#     UDID claims a device it never made.
+status=0
+actual="$(FAKE_DEVICES="" FAKE_DOWNLOAD=ok FAKE_CREATE=fail pick_device "")" || status=$?
+check "a failed create means no device" "" "$actual"
+check "a failed create reports failure" "1" "$status"
+
+# 8.  A device this helper created is found by a later lookup, so CI does not
+#     download the platform and create a second device for the unit tests.
+CREATED_DEVICES='    Clutch Test iPhone (UDID-CREATED) (Shutdown)
+'
+actual="$(FAKE_DEVICES="$CREATED_DEVICES" pick_device "")"
+check "a device the helper created is found again" "UDID-CREATED" "$actual"
 
 if [ "$FAILURES" -eq 0 ]; then
   echo "ios-simulator: every check passed"
