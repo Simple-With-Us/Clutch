@@ -197,10 +197,15 @@ def preflight(args, config, current_attempt=None):
         fail("rollout-paths", lockAbsent=not lock.exists(), receiptPathsAbsent=not before.exists() and not receipt.exists() and not failure.exists(), backupAbsent=not backup.exists())
     if current_attempt is not None:
         verify_current_attempt_paths(config, current_attempt)
-    if STABLE_DROPIN.exists() or not OLD_DROPIN.is_file() or digest(OLD_DROPIN) != OLD_DROPIN_SHA256:
-        fail("current-dropin-cas", oldDropInMatchesExpected=OLD_DROPIN.is_file() and digest(OLD_DROPIN) == OLD_DROPIN_SHA256, stableDropInAbsent=not STABLE_DROPIN.exists())
+    # The current drop-in is the stable name once a guarded transition has
+    # run, or the per-SHA name the first-time activator used.  Accept either
+    # so repeat activations pass preflight; the hash pin is unchanged.
+    old_dropin = STABLE_DROPIN if STABLE_DROPIN.is_file() else OLD_DROPIN
+    old_dropin_ok = old_dropin.is_file() and digest(old_dropin) == OLD_DROPIN_SHA256
+    if not old_dropin_ok:
+        fail("current-dropin-cas", oldDropInMatchesExpected=old_dropin_ok, stableDropInAbsent=not STABLE_DROPIN.exists())
     old_unit = base.unit_snapshot(OLD_RELEASE)
-    expected_current = set(CPU_DROPIN_HASHES) | {str(OLD_DROPIN)}
+    expected_current = set(CPU_DROPIN_HASHES) | {str(old_dropin)}
     assert_unit(old_unit, OLD_RELEASE, expected_current)
     cpu_ok, cpu_metadata = cpu_dropins_current()
     if not cpu_ok:
@@ -222,6 +227,7 @@ def preflight(args, config, current_attempt=None):
         "token": token,
         "tokenMetadata": token_metadata,
         "cpuDropInMetadata": cpu_metadata,
+        "oldDropIn": str(old_dropin),
     }
 
 
@@ -286,7 +292,7 @@ def activate(args, config):
         backup_records = backup_state(config, result)
         initial = base.safe_unit_record(result["unit"], result["processes"], result["sockets"], result["health"], result["tokenMetadata"], False)
         initial["unitFileSha256"] = digest(UNIT_PATH)
-        initial["dropInMetadata"] = result["cpuDropInMetadata"] + base.dropin_metadata([str(OLD_DROPIN)])
+        initial["dropInMetadata"] = result["cpuDropInMetadata"] + base.dropin_metadata([result["oldDropIn"]])
         initial["backupRecords"] = backup_records
         initial["authoritativeIdleClaimed"] = False
         write_json(before, initial)
@@ -308,10 +314,17 @@ def activate(args, config):
         flags["daemonReloadCount"] += 1
         stable_unit = base.unit_snapshot(release)
         assert_unit(stable_unit, release, set(result["unit"]["dropInPaths"]) | {str(STABLE_DROPIN)})
-        if digest(OLD_DROPIN) != OLD_DROPIN_SHA256:
-            fail("old-dropin-cas", oldDropInHashChanged=True)
-        base.command(["sudo", "-n", "unlink", str(OLD_DROPIN)], "unlink-prior-release-dropin")
-        flags["oldDropInRemoved"] = not OLD_DROPIN.exists()
+        old_dropin = Path(result["oldDropIn"])
+        if old_dropin == STABLE_DROPIN:
+            # Repeat guarded transition: installing the candidate over the
+            # stable name already replaced the old drop-in in place, so
+            # there is no separate file to unlink.
+            flags["oldDropInRemoved"] = True
+        else:
+            if digest(old_dropin) != OLD_DROPIN_SHA256:
+                fail("old-dropin-cas", oldDropInHashChanged=True)
+            base.command(["sudo", "-n", "unlink", str(old_dropin)], "unlink-prior-release-dropin")
+            flags["oldDropInRemoved"] = not old_dropin.exists()
         base.command(["sudo", "-n", "systemctl", "daemon-reload"], "daemon-reload-after-old-dropin-removal")
         flags["daemonReloadCount"] += 1
         expected_after_switch = set(CPU_DROPIN_HASHES) | {str(STABLE_DROPIN)}
@@ -407,7 +420,13 @@ def rollback(args, config):
     release, review, candidate, lock, before, receipt, failure, backup = config
     manifest = verify_artifact(args, release, candidate)
     rollback_receipt = review / "production-rollback-receipt.json"
-    old_dropin_backup = backup / "dropins" / OLD_DROPIN.name
+    # The backup records the old drop-in under the name it actually had:
+    # the stable name after a guarded transition, or the per-SHA name from
+    # the first-time activator.
+    stable_backup = backup / "dropins" / STABLE_DROPIN_NAME
+    per_sha_backup = backup / "dropins" / OLD_DROPIN.name
+    old_dropin_backup = stable_backup if stable_backup.is_file() else per_sha_backup
+    restore_target = DROPIN_DIR / old_dropin_backup.name
     if (not lock.is_dir() or lock.is_symlink() or not failure.is_file() or not before.is_file()
             or not old_dropin_backup.is_file() or rollback_receipt.exists()):
         fail("rollback-preflight", ownedLockFailureAndBackupPresent=False)
@@ -426,19 +445,25 @@ def rollback(args, config):
         fail("rollback-sockets", establishedConnections=sockets["establishedCount"], web3180Listeners=sockets["web3180ListenerCount"])
     flags = {"oldDropInRestored": False, "stableDropInRemoved": False, "daemonReloaded": False, "restartAttempted": False}
     try:
-        if OLD_DROPIN.exists():
+        if restore_target == STABLE_DROPIN:
+            # Repeat transition: the failed candidate owns the stable name,
+            # so restore the verified backup over it in place instead of
+            # unlinking it.
+            base.command(["sudo", "-n", "install", "-D", "-o", "root", "-g", "root", "-m", "0644", str(old_dropin_backup), str(STABLE_DROPIN)], "restore-old-dropin")
+        elif OLD_DROPIN.exists():
             if digest(OLD_DROPIN) != OLD_DROPIN_SHA256:
                 fail("rollback-old-dropin-cas", existingOldDropInMatches=False)
         else:
             base.command(["sudo", "-n", "install", "-D", "-o", "root", "-g", "root", "-m", "0644", str(old_dropin_backup), str(OLD_DROPIN)], "restore-old-dropin")
-        flags["oldDropInRestored"] = OLD_DROPIN.is_file() and digest(OLD_DROPIN) == OLD_DROPIN_SHA256
-        if digest(STABLE_DROPIN) != args.dropin_sha256:
-            fail("rollback-stable-dropin-cas", stableDropInHashChanged=True)
-        base.command(["sudo", "-n", "unlink", str(STABLE_DROPIN)], "remove-stable-dropin")
-        flags["stableDropInRemoved"] = not STABLE_DROPIN.exists()
+        flags["oldDropInRestored"] = restore_target.is_file() and digest(restore_target) == OLD_DROPIN_SHA256
+        if restore_target != STABLE_DROPIN:
+            if digest(STABLE_DROPIN) != args.dropin_sha256:
+                fail("rollback-stable-dropin-cas", stableDropInHashChanged=True)
+            base.command(["sudo", "-n", "unlink", str(STABLE_DROPIN)], "remove-stable-dropin")
+        flags["stableDropInRemoved"] = restore_target == STABLE_DROPIN or not STABLE_DROPIN.exists()
         base.command(["sudo", "-n", "systemctl", "daemon-reload"], "rollback-daemon-reload")
         flags["daemonReloaded"] = True
-        expected_old = set(CPU_DROPIN_HASHES) | {str(OLD_DROPIN)}
+        expected_old = set(CPU_DROPIN_HASHES) | {str(restore_target)}
         old_unit = base.unit_snapshot(OLD_RELEASE)
         assert_unit(old_unit, OLD_RELEASE, expected_old)
         flags["restartAttempted"] = True
@@ -472,7 +497,7 @@ def rollback(args, config):
             "action": "rollback_to_known_release",
             "failedCandidateCommit": args.release_sha,
             "rollbackRelease": str(OLD_RELEASE),
-            "rollbackDropIn": str(OLD_DROPIN),
+            "rollbackDropIn": str(restore_target),
             "stableDropInRemoved": True,
             "oldDropInRestoredFromVerifiedBackup": True,
             "cpuDropInsPreserved": True,
@@ -487,6 +512,15 @@ def rollback(args, config):
         print(json.dumps({"status": "rollback_complete", "release": str(OLD_RELEASE), "activeTurns": after_health["activeTurns"], "lockReleased": True}, separators=(",", ":")))
     except base.RolloutStop as error:
         failure_value = {"status": "rollback_failed_after_mutation", "stage": error.step, "flags": {**flags, **error.flags}, "lockRetained": True}
+        write_json(review / "production-rollback-failure.json", failure_value)
+        print(json.dumps(failure_value, separators=(",", ":")))
+        raise SystemExit(1)
+    except Exception as error:
+        # An unexpected failure (for example a missing stable drop-in
+        # raising from digest) must still leave the machine-readable
+        # failure receipt and say the lock is retained, not escape as a
+        # bare traceback with the host partially rolled back.
+        failure_value = {"status": "rollback_failed_after_mutation", "stage": "unexpected", "errorType": type(error).__name__, "flags": flags, "lockRetained": True}
         write_json(review / "production-rollback-failure.json", failure_value)
         print(json.dumps(failure_value, separators=(",", ":")))
         raise SystemExit(1)
@@ -558,13 +592,19 @@ def parse_args():
 def main():
     args = parse_args()
     if args.validate_arguments_only:
-        print(json.dumps({"status": "arguments_valid", "mode": args.mode, "releaseShaValid": len(args.release_sha) == 40 and all(ch in "0123456789abcdef" for ch in args.release_sha)}, separators=(",", ":")))
-        return
-    config = configure(args)
+        valid = len(args.release_sha) == 40 and all(ch in "0123456789abcdef" for ch in args.release_sha)
+        print(json.dumps({"status": "arguments_valid" if valid else "arguments_invalid", "mode": args.mode, "releaseShaValid": valid}, separators=(",", ":")))
+        raise SystemExit(0 if valid else 1)
     try:
+        # Read-only diagnose needs no rollback-target pins; the mutating
+        # modes configure inside the handler so a bad --release-sha or
+        # missing CLUTCH_PREVIOUS_RELEASE_SHA reports preflight_aborted
+        # JSON instead of a traceback.
         if args.mode == "diagnose":
             diagnose(args)
-        elif args.mode == "preflight":
+            return
+        config = configure(args)
+        if args.mode == "preflight":
             preflight_only(args, config)
         elif args.mode == "activate":
             activate(args, config)
