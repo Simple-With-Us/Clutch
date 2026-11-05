@@ -100,6 +100,55 @@ function declaredString(source: string, name: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * The wire keys one session descriptor takes its parameters under.
+ *
+ * The installed build's descriptors look like
+ *
+ *     { id: '…#session/list', namespace: 'session', method: 'list',
+ *       parameters: [ { name: '_request', wire: '_request', source: 'json', … } ] }
+ *
+ * so the descriptor is found by its id and the wire keys are read from the
+ * parameter list.  An endpoint that declares no parameters at all has no
+ * wire key, and that is a contract of its own.  A layout this reader does not
+ * recognise fails with a message that says so, rather than passing on an
+ * empty answer.
+ */
+function descriptorWireKeys(source: string, method: string): string[] {
+  const blocks = source.split(/(?=\n\s*id: ')/);
+  const block = blocks.find((part) => part.includes(`#session/${method}'`));
+  if (!block) {
+    throw new Error(
+      `The installed dsh build no longer declares the session/${method} descriptor. ` +
+        "The host's argument envelope is asserted against that descriptor, so a dsh bump " +
+        "that renames or moves it must be reviewed by hand.",
+    );
+  }
+  if (!/namespace: 'session'/.test(block) || !block.includes(`method: '${method}'`)) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor no longer reads the way this ` +
+        "test reads it, so the wire key it declares cannot be asserted.",
+    );
+  }
+  const parameters = block.indexOf("parameters: [");
+  if (parameters < 0) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor declares no parameters, so the ` +
+        "wire key it takes cannot be asserted.",
+    );
+  }
+  const result = block.indexOf("result:", parameters);
+  const slice = block.slice(parameters, result < 0 ? undefined : result);
+  const wires = [...slice.matchAll(/wire: '([^']*)'/g)].map((match) => match[1]);
+  if (wires.length > 1) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor declares ${wires.length} wire ` +
+        "keys, where this test expects exactly one.",
+    );
+  }
+  return wires;
+}
+
 describe("dsh host contract — pinned to the installed dsh build", () => {
   it("finds the bundled gateway types", () => {
     expect(locatePackage("dsh-api-gateway")).not.toBeNull();
@@ -209,5 +258,39 @@ describe("dsh host contract — pinned to the installed dsh build", () => {
     // the pair, so the sidecar sends both.
     expect(source).toMatch(/'provider':\s*z\.string\(\)/);
     expect(source).toMatch(/'model':\s*z\.string\(\)/);
+  });
+
+  it("declares the wire key every host argument rides in", () => {
+    const source = readInstalled("dsh-api-session-controller/lib/typert.host.js");
+    // The list is the one endpoint whose own argument is `_request`; every
+    // other argument the sidecar sends rides `request`.  The gateway refuses
+    // an argument set that does not match the descriptor exactly, so a dsh
+    // bump that renames one of these keys fails here instead of on a phone.
+    const expected: Record<string, string> = {
+      list: "_request",
+      create: "request",
+      selectModel: "request",
+      prompt: "request",
+      follow: "request",
+    };
+    for (const [method, wire] of Object.entries(expected)) {
+      expect(descriptorWireKeys(source, method)).toEqual([wire]);
+    }
+  });
+
+  it("declares the model catalog as an endpoint that takes no parameters", () => {
+    // The catalog is the one endpoint the sidecar asks for without a
+    // business object: the host publishes its own providers and models, so
+    // the request carries nothing at all.  The gateway refuses an argument
+    // set that does not match the descriptor exactly, so a dsh bump that
+    // gave the catalog a parameter would break the sidecar's call, and one
+    // that took it away would break it the other way.  Both installed faces
+    // are read: the sidecar is the client and the host is the server.
+    for (const face of [
+      "dsh-api-session-controller/lib/typert.host.js",
+      "dsh-api-session-controller/lib/typert.remote-client.js",
+    ]) {
+      expect(descriptorWireKeys(readInstalled(face), "modelCatalog")).toEqual([]);
+    }
   });
 });

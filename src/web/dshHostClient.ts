@@ -122,6 +122,18 @@ export async function readLaunchUrl(options: DshHostClientOptions = {}): Promise
  * redirects internally would drop that header.  Every hop's `set-cookie` is
  * collected, so the cookie is found wherever the host put it.
  *
+ * Collected cookies are sent back on every later hop.  The real host mints the
+ * cookie on the redirect hop and then serves the index only to a request that
+ * carries it, so a hop that forgot the cookie came back 401 and the launch
+ * exchange failed against a host that was working exactly as designed.
+ *
+ * The cookie the caller brought is the first entry in the jar rather than a
+ * header beside it.  The host may set a cookie of its own on any answer, and
+ * a jar that held only the host's cookies replaced the caller's session with
+ * it: the next request left the host without the session it had been given.
+ * Seeding the jar keeps both, and the cookie list the caller is handed back
+ * still carries the session it started with.
+ *
  * A redirect that leaves the origin is refused rather than followed: the
  * cookie is bound to the host, and handing it to another origin would leak
  * the session.
@@ -131,19 +143,27 @@ async function httpWithRedirects(
   init: { readonly method: string; readonly headers?: Record<string, string>; readonly body?: string },
   maxHops = 5,
 ): Promise<{ readonly answer: HttpAnswer; readonly cookies: string[] }> {
-  const cookies: string[] = [];
+  const jar = new Map<string, string>();
+  seedCookieJar(jar, firstHeader(init.headers ?? {}, "cookie"));
   let current = url;
   const origin = new URL(url).origin;
 
   for (let hop = 0; hop <= maxHops; hop += 1) {
-    const answer = await httpOnce(current, init);
+    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    if (jar.size > 0) headers["cookie"] = cookieHeader(jar);
+    const answer = await httpOnce(current, { ...init, headers });
     for (const raw of headerValues(answer.headers, "set-cookie")) {
       const pair = raw.split(";", 1)[0]?.trim();
-      if (pair && pair.length > 0) cookies.push(pair);
+      if (!pair) continue;
+      const separator = pair.indexOf("=");
+      if (separator <= 0) continue;
+      // A refreshed cookie replaces the one it shares a name with; a cookie
+      // under a new name joins it.
+      jar.set(pair.slice(0, separator), pair.slice(separator + 1));
     }
     const location = firstHeader(answer.headers, "location");
     const isRedirect = answer.status >= 300 && answer.status < 400 && location;
-    if (!isRedirect) return { answer, cookies };
+    if (!isRedirect) return { answer, cookies: [...jar].map(([name, value]) => `${name}=${value}`) };
     const next = new URL(location, current);
     if (next.origin !== origin) {
       throw new DshHostTransportError("refused a redirect that leaves the host's origin");
@@ -151,6 +171,31 @@ async function httpWithRedirects(
     current = next.toString();
   }
   throw new DshHostTransportError(`too many redirects from ${redactUrl(url)}`);
+}
+
+/** The `Cookie` header value for a jar of name/value pairs. */
+function cookieHeader(jar: Map<string, string>): string {
+  return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
+/**
+ * Put the name/value pairs of a `Cookie` header into a jar.
+ *
+ * The caller's cookie is seeded rather than carried beside the jar, so every
+ * hop sends one merged header and the jar the caller is given back holds the
+ * session it started with.  A pair that is not a name and a value is left
+ * out: the header is the caller's, and a pair that cannot be read is not one
+ * to send on.
+ */
+function seedCookieJar(jar: Map<string, string>, header: string | null): void {
+  if (!header) return;
+  for (const part of header.split(";")) {
+    const pair = part.trim();
+    if (!pair) continue;
+    const separator = pair.indexOf("=");
+    if (separator <= 0) continue;
+    jar.set(pair.slice(0, separator), pair.slice(separator + 1));
+  }
 }
 
 /** A URL without its query, fragment or credentials, safe to log. */
@@ -339,7 +384,9 @@ export class DshHostClient {
     if (this.cookie) headers["cookie"] = this.cookie;
 
     const { answer, cookies } = await httpWithRedirects(url, { method: "POST", headers, body });
-    // A host that refreshes its cookie mid-flight hands us a new one.
+    // A host that refreshes its cookie mid-flight hands us a new one.  The
+    // list carries the session this call started with as well, so a host that
+    // sets a cookie of its own does not take the session away.
     if (cookies.length > 0) this.cookie = cookies.join("; ");
     if (answer.status < 200 || answer.status >= 300) {
       throw new DshHostTransportError(

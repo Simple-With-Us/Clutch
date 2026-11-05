@@ -11,6 +11,11 @@
  * tool's name as its title, and its result becomes a `tool_call_update` with
  * an empty text — the same convention the ACP path uses, where an empty title
  * tells the client to keep the name it already shows for that call.
+ *
+ * The host's descriptors put each endpoint's business object under one wire
+ * key, and the gateway refuses an argument set that does not match the
+ * descriptor exactly.  The endpoints here use `request`, except for
+ * `session/list`, whose own argument is `_request`.
  */
 
 import type { PlanEntry, SessionUpdate } from "./sessionUpdates.ts";
@@ -380,8 +385,10 @@ export async function loadDshHostHistory(
 ): Promise<SessionUpdate[]> {
   const maxMessages = options.limit ?? 200;
   const stream = client.stream("session/follow", {
-    address: { kind: "session", sessionId: options.sessionId },
-    maxMessages,
+    request: {
+      address: { kind: "session", sessionId: options.sessionId },
+      maxMessages,
+    },
   });
   // The host opens the stream with a snapshot and then keeps it open for live
   // events, so the wait for that snapshot is bounded: a host that never

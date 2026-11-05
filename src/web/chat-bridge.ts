@@ -31,14 +31,15 @@
  *   (mode 600).  The token rides to the phone inside the pairing link.
  * - Logs carry lengths and ids only — never prompt text or tokens.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { z } from "zod";
 
@@ -46,8 +47,15 @@ import { DshHostClientCache, isRefusedIdentity } from "./dshHostClientCache.ts";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
-import { engineCatalog, resolveModelAltValue, resolveModelValue, type EngineCatalog } from "./engine-catalog.ts";
+import { ENGINE_LABELS, ENGINE_ORDER, EngineNameSchema, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
+import {
+  engineCatalog,
+  loadEnginePluginReport,
+  resolveModelAltValue,
+  resolveModelValue,
+  type EngineCatalog,
+  type EnginePluginReport,
+} from "./engine-catalog.ts";
 import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair-link.ts";
 import { readTailnetStatus } from "./tailnet-status.ts";
 import { handleQuotasRequest } from "./quotas-route.ts";
@@ -134,6 +142,16 @@ const CODE_ENGINES: Engine[] = ["mcode", "muse"];
 const HOST_RETRY_COOLDOWN_MS = 30_000;
 
 /**
+ * How long the availability check waits for the dsh host to answer.
+ *
+ * The host is a local process, so it answers at once or not at all.  The
+ * bound keeps a host that accepts the connection and then goes quiet from
+ * holding the catalog back, and the fallback path is the one the check
+ * falls back to when the probe times out.
+ */
+const HOST_PROBE_TIMEOUT_MS = 2_000;
+
+/**
  * How long a permission request waits for the client's answer.
  *
  * The engine is blocked until the request is answered, so a client that
@@ -176,8 +194,8 @@ function log(line: string): void {
 }
 
 /** Whether a bare command name resolves on PATH. */
-function commandOnPath(command: string): boolean {
-  const path = process.env.PATH ?? "";
+function commandOnPath(command: string, env: Record<string, string | undefined> = process.env): boolean {
+  const path = env.PATH ?? "";
   for (const dir of path.split(":")) {
     if (!dir) continue;
     if (existsSync(join(dir, command))) return true;
@@ -344,6 +362,407 @@ export async function museInstalled(
   return Boolean(adapter);
 }
 
+/**
+ * What one engine needs before a turn can run.
+ *
+ * `available` in the catalog means exactly this: the launcher starts and the
+ * credential the engine needs is reachable.  A launcher file on disk is not
+ * enough — a bridge with no interpreter and an engine with no key both
+ * answer every turn with "bridge exited" or an auth error.
+ */
+export interface EngineAvailability {
+  /** True when a turn can actually run on this host. */
+  available: boolean;
+  /**
+   * One short sentence saying what is missing and where to put it.
+   *
+   * The owner reads this in the engine picker, so it names a place to put the
+   * credential and never a value.
+   */
+  note?: string;
+}
+
+/**
+ * The host facts the availability check reads.
+ *
+ * Every input is injectable, so the check can be exercised on any machine:
+ * the environment the launcher will run in, the launcher each engine uses,
+ * the dsh credential store the bridges read, and Clutch's own settings.
+ */
+export interface EngineAvailabilityContext {
+  /** The environment the launcher will run in. */
+  env?: Record<string, string | undefined>;
+  /** The launcher each engine uses. */
+  launchers?: Record<Engine, Launcher>;
+  /** The dsh credential store the bridges read. */
+  credentialFile?: string;
+  /** Clutch's own settings (Infisical-backed), when the sidecar has them. */
+  settings?: { get(key: string): string };
+  /**
+   * Whether a dsh host is reachable to run the dsh-hosted engines.
+   *
+   * The DeepSeek and MiniMax turns run in the host when it answers, and the
+   * Python bridge is only the fallback path, so a host that is up satisfies
+   * the engine on a machine that has no interpreter for the bridge.  The
+   * caller knows this because it holds the host client.
+   */
+  hostReachable?: boolean;
+  /**
+   * Whether a fleet-secrets secret of that name is reachable.
+   *
+   * The lookup shells out to `fleet-secrets names`, so a caller that knows
+   * better supplies its own answer and the check stays a files-and-
+   * environment check in a test.
+   */
+  fleetSecretPresent?: (name: string) => Promise<boolean>;
+}
+
+/**
+ * The dsh credential store the DeepSeek and MiniMax bridges read.
+ *
+ * `scripts/lib/clutch-env.sh` forces `DSH_HOME` to `$CLUTCH_HOME/dsh`, so
+ * this is the one file both bridges open when the environment carries no
+ * key.  Its presence is what makes the credential reachable on a host that
+ * keeps the key in a file rather than in an environment variable.
+ */
+function dshCredentialFile(env: Record<string, string | undefined>): string {
+  const clutchHome = env.CLUTCH_HOME ?? join(env.HOME ?? homedir(), ".clutch");
+  return join(clutchHome, "dsh", ".credentials.yaml");
+}
+
+/**
+ * A managed setting's value.
+ *
+ * The environment comes first: an explicitly-set env var is the operator's
+ * own override, and Clutch's rule is that it beats the managed store.  The
+ * settings cache is the fallback for the keys the environment does not
+ * carry.
+ */
+function settingValue(
+  name: string,
+  env: Record<string, string | undefined>,
+  settings?: { get(key: string): string },
+): string {
+  const fromEnv = (env[name] ?? "").trim();
+  if (fromEnv) return fromEnv;
+  return settings?.get(name)?.trim() ?? "";
+}
+
+/**
+ * The interpreter the dsh launchers will use.
+ *
+ * `scripts/dsh-acp.sh` and `scripts/minimax-acp.sh` look for `PYTHON`, then
+ * `/opt/homebrew/bin/python3`, then `python3` on PATH.  A host with none of
+ * them answers every turn with "bridge exited", which is why the interpreter
+ * is checked here and not left to the turn.
+ */
+function pythonInterpreter(env: Record<string, string | undefined>): string | null {
+  const named = (env.PYTHON ?? "").trim();
+  if (named && executableFile(named)) return named;
+  if (executableFile("/opt/homebrew/bin/python3")) return "/opt/homebrew/bin/python3";
+  for (const dir of (env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, "python3");
+    if (executableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * Whether a fleet-secrets secret of that name is reachable.
+ *
+ * The MiniMax bridge's last resort is `fleet-secrets get NAME`
+ * (`bridges/minimax/minimax-acp.py`), so a host that keeps its key only
+ * there still runs the turn.  `fleet-secrets names` lists the names and
+ * never the values, so this check reads no secret and prints none.
+ */
+async function fleetSecretPresent(
+  name: string,
+  env: Record<string, string | undefined>,
+): Promise<boolean> {
+  const cli = (env.PATH ?? "")
+    .split(":")
+    .map((dir) => (dir ? join(dir, "fleet-secrets") : ""))
+    .find((path) => path && executableFile(path));
+  if (!cli) return false;
+  try {
+    const { stdout } = await execFileAsync(cli, ["names"], {
+      env: env as NodeJS.ProcessEnv,
+      timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return stdout.split(/\r?\n/).some((line) => line.trim() === name);
+  } catch {
+    // A host with no fleet-secrets, or no credentials for it, simply does
+    // not have this source.
+    return false;
+  }
+}
+/**
+ * The MiniMax Code credential files under a directory.
+ *
+ * `mcode login` writes an OAuth credential under `~/.minimax/auth`, in a
+ * layout that has changed between releases, so the file is found by name
+ * rather than by a fixed path.  The search is bounded, so a deep tree of
+ * directories cannot turn a sign-in check into a crawl.
+ */
+function findAuthFiles(dir: string, depth: number): string[] {
+  if (depth > 4) return [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === "auth.json") files.push(join(dir, entry.name));
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    files.push(...findAuthFiles(join(dir, entry.name), depth + 1));
+  }
+  return files;
+}
+
+/**
+ * Whether only the owner can read the credential file.
+ *
+ * MiniMax Code refuses a credential that anybody else can read, so a
+ * group-readable file is not a sign-in: the CLI keeps listing its threads
+ * and refuses every turn, which is the same lie the catalog must not tell.
+ * The rule is the documented one — the credential file is mode 600.
+ */
+function credentialIsPrivate(file: string): boolean {
+  try {
+    return (statSync(file).mode & 0o077) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The MiniMax Code credential, and whether only its owner can read it.
+ *
+ * `mcode login` writes an OAuth credential under `~/.minimax/auth`; without
+ * it the CLI lists its threads but refuses every turn, which is the same
+ * lie the catalog must not tell.
+ */
+function mcodeCredential(env: Record<string, string | undefined>): { file: string; private: boolean } | null {
+  const files = findAuthFiles(join(env.HOME ?? homedir(), ".minimax", "auth"), 0);
+  const first = files[0];
+  if (!first) return null;
+  const privateFile = files.find((file) => credentialIsPrivate(file));
+  return { file: privateFile ?? first, private: privateFile !== undefined };
+}
+
+/**
+ * Whether Muse Code has a credential the spawned host can reach.
+ *
+ * Only `META_API_KEY` counts.  The spawned `muse serve` host cannot read the
+ * CLI's own login: on macOS that login lives in the login keychain, which a
+ * background session cannot open, and the provider catalog on disk says
+ * which models an account may use rather than proving the spawned host can
+ * authenticate.  A browser login therefore leaves the spawned host
+ * unauthenticated, so the key is the only credential the host ever reads
+ * (see INFISICAL.md).
+ */
+function museSignedIn(
+  env: Record<string, string | undefined>,
+  settings?: { get(key: string): string },
+): boolean {
+  return Boolean(settingValue("META_API_KEY", env, settings));
+}
+
+/**
+ * Whether an engine can actually run a turn here.
+ *
+ * Two things have to hold: the launcher has to start (the file is there and
+ * the interpreter it needs is there), and the credential the engine needs
+ * has to be reachable.  The check stays cheap on purpose — files and
+ * environment first, so the picker can ask for it on every request.  The one
+ * exception is a credential that lives only in fleet-secrets, and that
+ * lookup runs only when the cheaper sources have found nothing.
+ *
+ * The dsh-hosted engines are the one case where the answer depends on more
+ * than this machine: the host runs their turns when it answers, and the
+ * Python bridge is only the fallback, so a reachable host satisfies the
+ * engine on its own.
+ */
+export async function engineAvailability(
+  engine: Engine,
+  context: EngineAvailabilityContext = {},
+): Promise<EngineAvailability> {
+  const env = context.env ?? process.env;
+  const launchers = context.launchers ?? LAUNCHERS;
+  const settings = context.settings;
+  const launcher = launchers[engine];
+  const label = ENGINE_LABELS[engine];
+
+  // A launcher with a path is checked against the filesystem; a bare
+  // command name is checked against PATH, so a server without MiniMax
+  // Code does not claim to have it.
+  if (launcher.command.includes("/")) {
+    if (!existsSync(launcher.command)) {
+      return { available: false, note: `${label} is not installed on this host.` };
+    }
+  } else if (!commandOnPath(launcher.command, env)) {
+    return { available: false, note: `${label} is not installed on this host.` };
+  }
+
+  if (engine === "muse") {
+    if (!await museInstalled(env)) {
+      return { available: false, note: `${label} is not installed on this host.` };
+    }
+    if (!museSignedIn(env, settings)) {
+      // This one stays available.  The Muse sign-in lives behind the engine
+      // being selected, so an engine that needs a sign-in but is dropped from
+      // the picker takes the owner's only way to sign in with it.  The note
+      // says what is still needed, and the app finishes it in place.
+      //
+      // The CLI login is the route on the Mac, where the desktop helper
+      // starts Muse in the desktop security session and the saved login is
+      // readable.  Everywhere else the spawned host reads the key only, so
+      // the note names the key as well.
+      return {
+        available: true,
+        note: `${label} needs a sign-in.\u00A0 Run muse login on the Mac, where the desktop helper starts Muse with that saved login, or add META_API_KEY in Clutch settings.`,
+      };
+    }
+    return { available: true };
+  }
+
+  if (engine === "mcode") {
+    const credential = mcodeCredential(env);
+    if (!credential) {
+      return {
+        available: false,
+        note: `${label} needs a sign-in.\u00A0 Run mcode login as the user this sidecar runs as.`,
+      };
+    }
+    if (!credential.private) {
+      // The credential file is there, but MiniMax Code refuses a credential
+      // that anyone else can read, so the turn would fail with a token error
+      // that reads like a sign-in problem.  The note names the file and the
+      // fix instead.
+      return {
+        available: false,
+        note: `${label} needs a private credential file.\u00A0 Run chmod 600 ${credential.file}, then sign in again.`,
+      };
+    }
+    return { available: true };
+  }
+
+  // The dsh engines: the bridge needs an interpreter, and the provider key
+  // has to be reachable from the environment or from the credential store
+  // the bridge reads.  A reachable dsh host runs the turn itself, so the
+  // interpreter is a requirement of the fallback path alone: a host that
+  // answers must not lose the engine from the picker over a bridge it will
+  // never run.
+  if (!context.hostReachable && !pythonInterpreter(env)) {
+    return { available: false, note: `${label} needs Python 3 to run its bridge.` };
+  }
+  const credentialFile = context.credentialFile ?? dshCredentialFile(env);
+  if (engine === "deepseek") {
+    if (!settingValue("DEEPSEEK_API_KEY", env, settings) && !existsSync(credentialFile)) {
+      return {
+        available: false,
+        note: `${label} needs an API key.\u00A0 Add DEEPSEEK_API_KEY in Clutch settings, or save it in ${credentialFile}.`,
+      };
+    }
+  }
+  if (engine === "minimax") {
+    // The bridge's own order: the environment (under either name), the dsh
+    // credential store, then `fleet-secrets get`.  A host that keeps the key
+    // only in fleet-secrets runs the turn, so the catalog must not drop the
+    // engine there.
+    const keyName = settingValue("CLUTCH_MINIMAX_API_KEY_NAME", env, settings) || "MINIMAX_API_KEY";
+    const inEnvironment = Boolean(
+      settingValue(keyName, env, settings) || settingValue("MINIMAX_API_KEY", env, settings),
+    );
+    if (!inEnvironment && !existsSync(credentialFile)) {
+      const inFleetSecrets = context.fleetSecretPresent
+        ? await context.fleetSecretPresent(keyName)
+        : await fleetSecretPresent(keyName, env);
+      if (!inFleetSecrets) {
+        return {
+          available: false,
+          note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings, save it in ${credentialFile}, or keep it in fleet-secrets.`,
+        };
+      }
+    }
+  }
+  return { available: true };
+}
+
+/**
+ * How long the availability answers are reused.
+ *
+ * The same window the engine catalog keeps its entry for, so the probes and
+ * the catalog they feed expire together and a warm catalog never carries an
+ * answer from a probe that is older than the entry it sits in.
+ */
+const AVAILABILITY_TTL_MS = 5 * 60 * 1000;
+
+/** One cached answer, and the moment it was taken. */
+export interface CachedAnswer<T> {
+  at: number;
+  value: T;
+}
+
+/**
+ * The cached answer, or null when there is none or it has expired.
+ *
+ * The availability check reads the filesystem and the catalog that uses its
+ * answer is cached for a few minutes, so the answer is kept for the same
+ * while: a warm catalog must not pay for probes it is about to discard.
+ */
+export function cachedAnswer<T>(
+  entry: CachedAnswer<T> | null,
+  ttlMs: number,
+  now: number,
+): T | null {
+  if (!entry) return null;
+  return now - entry.at < ttlMs ? entry.value : null;
+}
+
+/**
+ * The notes the sidecar has published for an engine, over its lifetime.
+ *
+ * The set is what tells a stale note from one the catalog wrote itself: the
+ * sidecar's notes are the only ones it has ever published, so a note that is
+ * in the set and no longer current was the sidecar's, and a note that is not
+ * in the set came from the catalog and stays.
+ */
+export type PublishedNotes = Map<Engine, Set<string>>;
+
+/**
+ * Put the sidecar's current notes on the catalog's descriptors.
+ *
+ * The catalog is cached for a few minutes, so a descriptor can carry a note
+ * from the moment it was built: an engine that needed a key then can be
+ * signed in now, and the picker would still ask for a key the owner has
+ * already supplied.  The sidecar's note is the current one, and a note that
+ * is gone is dropped rather than left behind.
+ */
+export function withCurrentNotes(
+  catalog: EngineCatalog,
+  notes: Partial<Record<Engine, string>>,
+  published: PublishedNotes = new Map(),
+): EngineCatalog {
+  return {
+    engines: catalog.engines.map((descriptor) => {
+      const { note: built, ...rest } = descriptor;
+      const current = notes[descriptor.id];
+      if (current) return { ...rest, note: current };
+      if (built && published.get(descriptor.id)?.has(built)) return rest;
+      return built ? { ...rest, note: built } : rest;
+    }),
+  };
+}
+
 /** Load the Bearer token, minting and persisting it (mode 600) on first boot. */
 export function loadOrMintToken(file: string = TOKEN_FILE): string {
   try {
@@ -378,8 +797,14 @@ export function loadOrMintToken(file: string = TOKEN_FILE): string {
   }
 }
 
-function bearerOk(req: IncomingMessage, token: string): boolean {
-  const header = req.headers.authorization ?? "";
+/**
+ * Whether the request carries the sidecar's Bearer token.
+ *
+ * The header value arrives parsed, so it is a string or it is nothing: a
+ * malformed value never reaches the comparison.
+ */
+function bearerOk(authorization: string | undefined, token: string): boolean {
+  const header = authorization ?? "";
   const match = /^Bearer (.+)$/.exec(header.trim());
   if (!match || !match[1]) return false;
   const a = Buffer.from(match[1]);
@@ -1623,6 +2048,48 @@ const SessionLoadSchema = z
   })
   .strict();
 
+/**
+ * The inbound headers the sidecar reads.
+ *
+ * A header arrives from the network, so it is parsed before any of it is
+ * believed: a value that is not a string is a malformed request, not a
+ * value to guess at on the way to the authentication branch.  The schema
+ * strips the rest, so the sidecar works with the headers it names and
+ * nothing else.
+ */
+const InboundHeadersSchema = z
+  .object({
+    host: z.string().optional(),
+    authorization: z.string().optional(),
+    cookie: z.string().optional(),
+  })
+  .strip();
+
+/** The headers the sidecar reads, once they have been parsed. */
+export interface InboundHeaders {
+  /** The authority the client addressed. */
+  host?: string | undefined;
+  /** The Bearer credential the client sent. */
+  authorization?: string | undefined;
+  /** The cookies the client sent; parsed here so no header goes unparsed. */
+  cookie?: string | undefined;
+}
+
+/**
+ * The parsed inbound headers, or the reason the request is refused.
+ *
+ * This is the trust boundary: everything after it works with the parsed
+ * headers alone, so a value that did not survive the schema never reaches
+ * the host check or the authentication branch.
+ */
+export function parseInboundHeaders(
+  headers: unknown,
+): { ok: true; headers: InboundHeaders } | { ok: false; error: string } {
+  const parsed = InboundHeadersSchema.safeParse(headers);
+  if (!parsed.success) return { ok: false, error: "malformed request headers" };
+  return { ok: true, headers: parsed.data };
+}
+
 function readJsonBody(req: IncomingMessage, limitBytes = 1_000_000): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -1695,6 +2162,18 @@ async function main(): Promise<void> {
   // is a separate process from start-web.ts, so it initializes its own
   // instance; this is what backs the native Infisical settings panel.
   const settings = await initClutchSettings();
+  // The drop-in engine plugins, read once at boot.  A plugin that maps to an
+  // engine Clutch runs contributes to the catalog; one that maps to no known
+  // engine is reported rather than turned into a phantom picker entry, and
+  // one that does not load contributes nothing.  A new drop-in needs a
+  // restart of the sidecar to show up.
+  const pluginReport: EnginePluginReport = await loadEnginePluginReport();
+  for (const unmapped of pluginReport.unmapped) {
+    log(`engine plugin "${unmapped.id}" names no engine Clutch runs — it is not in the picker`);
+  }
+  for (const problem of pluginReport.problems) {
+    log(`engine plugin ${problem.file} did not load — it contributes nothing`);
+  }
   const diagnostics = createTurnDiagnostics({
     directory: join(dirname(TOKEN_FILE), "diagnostics"),
     endpoint: settings.get("CLUTCH_TELEMETRY_ENDPOINT"),
@@ -1787,6 +2266,33 @@ async function main(): Promise<void> {
    */
   async function openDshHost(): Promise<DshHostClient> {
     return hostClient.run(async (client) => client);
+  }
+
+  /**
+   * Whether the dsh host answers.
+   *
+   * The host owns the dsh-hosted engines, so the picker has to know which
+   * path a turn would take: the host, or the Python bridge that is the
+   * fallback.  The client is cached, so the probe costs nothing once a host
+   * has answered once, and it is bounded so a host that never answers
+   * cannot hold the catalog back.
+   */
+  async function hostAnswers(): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        hostClient.run(async (client) => client),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("the dsh host did not answer in time")), HOST_PROBE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -1936,33 +2442,85 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Whether an engine's launcher and host binary are present here, so the
-   * catalog can say "not installed" instead of failing on the first turn.
+   * Whether an engine can actually run a turn here, and why not when it
+   * cannot.  The catalog says "not installed" for a missing launcher and
+   * names the missing credential for a key the engine never receives, so
+   * the picker never offers an engine whose every turn would fail.
    */
-  async function engineAvailable(engine: Engine): Promise<boolean> {
-    const launcher = LAUNCHERS[engine];
-    // A launcher with a path is checked against the filesystem; a bare
-    // command name is checked against PATH, so a server without MiniMax
-    // Code does not claim to have it.
-    if (launcher.command.includes("/")) {
-      if (!existsSync(launcher.command)) return false;
-    } else if (!commandOnPath(launcher.command)) {
-      return false;
-    }
-    if (engine === "muse") return museInstalled();
-    return true;
+  async function engineAvailable(engine: Engine, hostReachable: boolean): Promise<EngineAvailability> {
+    return engineAvailability(engine, { settings, hostReachable });
   }
 
-  /** The catalog for this host, with the real launchers wired in. */
+  /**
+   * The last availability answers, and when they were taken.
+   *
+   * The catalog asks for them on every request, and the probes behind them
+   * read the filesystem, so the answers are kept for as long as the catalog
+   * entry they fed.
+   */
+  let availabilityCache: CachedAnswer<Record<Engine, EngineAvailability>> | null = null;
+
+  /**
+   * The notes this sidecar has published, per engine.
+   *
+   * A note that is in here and no longer current was the sidecar's own, so
+   * it is dropped from a cached descriptor instead of being left behind.
+   */
+  const publishedNotes: PublishedNotes = new Map();
+
+  /**
+   * The availability of every engine, reused for as long as the catalog is
+   * cached.
+   *
+   * The check reads the filesystem, and the catalog that uses its answer is
+   * cached for the same few minutes, so a warm catalog must not pay for the
+   * probes again: the picker is asked for on every request, and the probes
+   * block the event loop while they run.
+   */
+  async function currentAvailability(): Promise<Record<Engine, EngineAvailability>> {
+    const cached = cachedAnswer(availabilityCache, AVAILABILITY_TTL_MS, Date.now());
+    if (cached) return cached;
+    const hostReachable = await hostAnswers();
+    const answers = await Promise.all(
+      ENGINE_ORDER.map(async (engine) => [engine, await engineAvailable(engine, hostReachable)] as const),
+    );
+    const values = Object.fromEntries(answers) as Record<Engine, EngineAvailability>;
+    availabilityCache = { at: Date.now(), value: values };
+    return values;
+  }
+
+  /**
+   * The catalog for this host, with the real launchers wired in.
+   *
+   * The notes on the answer are always the current ones.  The catalog is
+   * cached for a few minutes, so a descriptor that was built earlier can
+   * carry a note about a credential the owner has since supplied, and the
+   * picker would keep asking for a key that is already there.
+   */
   async function catalog(selectedEngine?: Engine): Promise<EngineCatalog> {
-    const availability = await Promise.all(ENGINE_ORDER.map(async (engine) => [engine, await engineAvailable(engine)] as const));
-    return engineCatalog({
+    const availability = await currentAvailability();
+    const notes: Partial<Record<Engine, string>> = {};
+    for (const engine of ENGINE_ORDER) {
+      const note = availability[engine].note;
+      if (note) {
+        notes[engine] = note;
+        const published = publishedNotes.get(engine) ?? new Set<string>();
+        published.add(note);
+        publishedNotes.set(engine, published);
+      }
+    }
+    const built = await engineCatalog({
       launchers: LAUNCHERS,
-      available: Object.fromEntries(availability) as Record<Engine, boolean>,
+      available: Object.fromEntries(
+        ENGINE_ORDER.map((engine) => [engine, availability[engine].available]),
+      ) as Record<Engine, boolean>,
+      notes,
       probeCwd: process.env.HOME ?? "/tmp",
       readMuseSessionOptions: () => bridges.get("muse")?.catalogOptions() ?? null,
       probeScope: selectedEngine === undefined ? "full" : selectedEngine === "mcode" ? "mcode" : "passive",
+      plugins: pluginReport,
     });
+    return withCurrentNotes(built, notes, publishedNotes);
   }
 
   /**
@@ -2016,7 +2574,16 @@ async function main(): Promise<void> {
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
-    if (!isTrustedHostHeader(req.headers.host, allowed)) {
+    // The headers come off the network, so they are parsed before any of
+    // them is believed.  A malformed value is a bad request, not a value
+    // that reaches the host check or the authentication branch.
+    const parsedHeaders = parseInboundHeaders(req.headers);
+    if (!parsedHeaders.ok) {
+      res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: parsedHeaders.error }));
+      return;
+    }
+    const headers = parsedHeaders.headers;
+    if (!isTrustedHostHeader(headers.host, allowed)) {
       res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "untrusted host" }));
       return;
     }
@@ -2032,7 +2599,7 @@ async function main(): Promise<void> {
       }).end(miniMaxCodeRemoteHtml());
       return;
     }
-    if (!bearerOk(req, token)) {
+    if (!bearerOk(headers.authorization, token)) {
       res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
       return;
     }
@@ -2763,9 +3330,32 @@ async function main(): Promise<void> {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "prompt is required" }));
         return;
       }
+      // An engine the sidecar does not know is a client mistake, not a
+      // fallback: routing it to DeepSeek would silently run the turn on
+      // another provider.  A request that names no engine keeps routing by
+      // its model id, exactly as before.  The name is validated by schema
+      // first, so a malformed or oversized value never reaches the routing.
+      const parsedEngine = EngineNameSchema.safeParse(body.engine);
+      if (!parsedEngine.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+          error: "unknown engine",
+          engine: typeof body.engine === "string" ? body.engine.trim().slice(0, 40) : "",
+          knownEngines: ENGINE_ORDER,
+        }));
+        return;
+      }
+      const namedEngine = parsedEngine.data ?? "";
+      if (namedEngine && !isEngine(namedEngine)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+          error: "unknown engine",
+          engine: namedEngine.slice(0, 40),
+          knownEngines: ENGINE_ORDER,
+        }));
+        return;
+      }
       const engine = routeForModel(
         typeof body.model === "string" ? body.model : undefined,
-        typeof body.engine === "string" ? body.engine : undefined,
+        namedEngine || undefined,
       );
       const cwd = typeof body.cwd === "string" && body.cwd.length > 0 ? body.cwd : process.env.HOME ?? "/tmp";
       // A client that can answer a permission request says so, and the

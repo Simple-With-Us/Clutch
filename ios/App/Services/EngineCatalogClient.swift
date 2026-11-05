@@ -31,6 +31,37 @@ public struct EngineCatalogClient {
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw ChatClientError.http((response as? HTTPURLResponse)?.statusCode ?? -1)
         }
-        return try JSONDecoder().decode(EngineCatalog.self, from: data)
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: data)
+        // The catalog this host published is kept, so a later failed read
+        // does not empty the pickers.
+        await EngineCatalogMemory.shared.remember(catalog, for: host.id.uuidString)
+        return catalog
+    }
+
+    /// The catalog this host published last, when it published one.
+    public func lastKnownCatalog() async -> EngineCatalog? {
+        await EngineCatalogMemory.shared.catalog(for: host.id.uuidString)
+    }
+}
+
+/// The last catalog each host published, kept in memory.
+///
+/// A failed read must not make the chat unusable: the choices the host
+/// published last stay on screen, and the built-in models stand in only
+/// when there never were any.  The catalogs are small and per host, so
+/// they are kept for the life of the app.
+public actor EngineCatalogMemory {
+    public static let shared = EngineCatalogMemory()
+
+    private var catalogs: [String: EngineCatalog] = [:]
+
+    /// Remember the catalog a host published.
+    public func remember(_ catalog: EngineCatalog, for hostKey: String) {
+        catalogs[hostKey] = catalog
+    }
+
+    /// The catalog a host published last, when it published one.
+    public func catalog(for hostKey: String) -> EngineCatalog? {
+        catalogs[hostKey]
     }
 }

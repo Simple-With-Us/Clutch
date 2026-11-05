@@ -9,6 +9,11 @@
  *
  * The event stream is opened before the prompt is sent, so no event of the
  * turn is missed, and the turn ends with the host's own `turn/end` event.
+ *
+ * The host's descriptors put each endpoint's business object under one wire
+ * key, and the gateway refuses an argument set that does not match the
+ * descriptor exactly, so the turn's calls carry the host's `request`
+ * envelope.
  */
 
 import { randomUUID } from "node:crypto";
@@ -106,12 +111,12 @@ export async function selectHostModel(
     ...(effort ? { reasoningEffort: effort } : {}),
   };
   try {
-    await client.call("session/selectModel", payload);
+    await client.call("session/selectModel", { request: payload });
     return wanted;
   } catch (err) {
     const fallback = provider.models[0];
     if (!fallback || fallback === wanted) throw err;
-    await client.call("session/selectModel", { ...payload, model: fallback });
+    await client.call("session/selectModel", { request: { ...payload, model: fallback } });
     return fallback;
   }
 }
@@ -150,8 +155,10 @@ export async function createDshHostSession(
   options: { readonly cwd: string; readonly agentPreset?: string },
 ): Promise<string> {
   const value = await client.call("session/create", {
-    cwd: options.cwd,
-    ...(options.agentPreset ? { agentPreset: options.agentPreset } : {}),
+    request: {
+      cwd: options.cwd,
+      ...(options.agentPreset ? { agentPreset: options.agentPreset } : {}),
+    },
   });
   const sessionId = readRecord(value)?.["sessionId"];
   if (typeof sessionId !== "string" || sessionId.length === 0) {
@@ -182,10 +189,16 @@ export async function runDshHostTurn(
   const stream = client.stream(
     "session/follow",
     {
-      address: { kind: "session", sessionId },
-      // The opening window is the thread's history, which the client already
-      // has; this turn is read from the live events alone.
-      maxMessages: 0,
+      request: {
+        address: { kind: "session", sessionId },
+        // The host opens the stream with a snapshot of the committed log,
+        // and this turn reads the live events alone, so the snapshot is
+        // skipped when it arrives.  It is still built, and without a bound
+        // the host pages the whole thread over the wire to build it.  One
+        // message is the smallest window the host accepts, so the transfer
+        // is bounded without changing what the turn reads.
+        maxMessages: 1,
+      },
     },
     // A cancelled turn must not leave the host holding the session open for
     // a stream nobody reads.
@@ -239,10 +252,12 @@ export async function runDshHostTurn(
   options.signal?.addEventListener("abort", abort, { once: true });
   try {
     await client.call("session/prompt", {
-      requestId: `clutch-${randomUUID()}`,
-      sessionId,
-      mode: "queue",
-      content,
+      request: {
+        requestId: `clutch-${randomUUID()}`,
+        sessionId,
+        mode: "queue",
+        content,
+      },
     });
     const stopReason = await finished;
     if (failure) throw failure;

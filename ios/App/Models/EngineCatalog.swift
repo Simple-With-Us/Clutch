@@ -126,21 +126,64 @@ public enum EngineLabels {
     }
 }
 
+/// The engines Clutch can run, by the id the sidecar knows them by.
+///
+/// The catalog says which of them a host runs, but the ids themselves are
+/// fixed: the sidecar refuses a chat request that names an engine it does
+/// not know, so a client only ever sends one of these.
+public enum EngineIds {
+    /// Every engine id, in the order the picker shows them.
+    public static let all = ["deepseek", "minimax", "mcode", "muse"]
+
+    /// True when the id names an engine Clutch can run.
+    public static func isKnown(_ id: String) -> Bool {
+        all.contains(id)
+    }
+}
+
 /// One model an engine offers.
 public struct EngineModel: Decodable, Equatable, Sendable, Identifiable {
     public var id: String
     public var label: String
     /// The exact wire value the engine wants for this model.
     public var value: String
+    /// A second spelling of the same model the engine may accept.
+    ///
+    /// Muse Code writes a model two ways: the bare id and a
+    /// provider-qualified tuple, and which one the adapter takes depends on
+    /// its backend and on the account's catalog.  The sidecar tries this
+    /// form when the first one is refused.
+    public var altValue: String?
     public var contextWindow: Int?
     public var images: Bool?
 
-    public init(id: String, label: String, value: String, contextWindow: Int? = nil, images: Bool? = nil) {
+    public init(
+        id: String,
+        label: String,
+        value: String,
+        altValue: String? = nil,
+        contextWindow: Int? = nil,
+        images: Bool? = nil
+    ) {
         self.id = id
         self.label = label
         self.value = value
+        self.altValue = altValue
         self.contextWindow = contextWindow
         self.images = images
+    }
+
+    /// The fields the sidecar publishes, named as it names them.
+    ///
+    /// Without these the decoder drops every field it does not know by
+    /// name, so a field the server adds later never reaches the app.
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case value
+        case altValue
+        case contextWindow
+        case images
     }
 
     /// What a picker row shows.
@@ -182,6 +225,10 @@ private enum MuseModelCatalogPolicy {
                 id: supported.id,
                 label: supported.label,
                 value: supported.id,
+                // The provider-qualified form of the same model is part of
+                // what the host published, so it is kept: the sidecar tries
+                // it when the bare id is refused.
+                altValue: metadata?.altValue,
                 contextWindow: metadata?.contextWindow,
                 images: metadata?.images
             )
