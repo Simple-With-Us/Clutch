@@ -577,9 +577,12 @@ public final class DshHostClient {
     }
 
     /// Whether the host minted a cookie this client would send.
+    ///
+    /// The cookie storage answers with an optional list, because a host that
+    /// minted none has no list to answer with at all.
     private func hasCookie(for host: ClutchHost) -> Bool {
         guard let cookies = cookieStorage else { return false }
-        return !cookies.cookies(for: host.rootURL).isEmpty
+        return !(cookies.cookies(for: host.rootURL) ?? []).isEmpty
     }
 
     // MARK: - Recovery
