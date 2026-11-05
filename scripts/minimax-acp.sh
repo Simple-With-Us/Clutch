@@ -15,4 +15,20 @@ export CLUTCH_MINIMAX_API_KEY_NAME="${CLUTCH_MINIMAX_API_KEY_NAME:-MINIMAX_API_K
 export CLUTCH_MINIMAX_ACP_TIMEOUT_SEC="${CLUTCH_MINIMAX_ACP_TIMEOUT_SEC:-900}"
 export CLUTCH_MINIMAX_ACP_HEARTBEAT_SEC="${CLUTCH_MINIMAX_ACP_HEARTBEAT_SEC:-5}"
 
-exec /opt/homebrew/bin/python3 "$CLUTCH_RUNTIME_ROOT/bridges/minimax/minimax-acp.py" "$@"
+# The interpreter is found, not assumed: /opt/homebrew is the Mac's path only,
+# and this launcher also runs on the Linux server, where a bridge that cannot
+# start answers every turn with "bridge exited".
+PY="${PYTHON:-}"
+if [ -z "$PY" ]; then
+  if [ -x /opt/homebrew/bin/python3 ]; then
+    PY=/opt/homebrew/bin/python3
+  else
+    PY="$(command -v python3 || true)"
+  fi
+fi
+if [ -z "$PY" ]; then
+  echo "clutch: no python3 found to run the MiniMax ACP bridge" >&2
+  exit 127
+fi
+
+exec "$PY" "$CLUTCH_RUNTIME_ROOT/bridges/minimax/minimax-acp.py" "$@"

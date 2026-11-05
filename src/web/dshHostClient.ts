@@ -122,6 +122,11 @@ export async function readLaunchUrl(options: DshHostClientOptions = {}): Promise
  * redirects internally would drop that header.  Every hop's `set-cookie` is
  * collected, so the cookie is found wherever the host put it.
  *
+ * Collected cookies are sent back on every later hop.  The real host mints the
+ * cookie on the redirect hop and then serves the index only to a request that
+ * carries it, so a hop that forgot the cookie came back 401 and the launch
+ * exchange failed against a host that was working exactly as designed.
+ *
  * A redirect that leaves the origin is refused rather than followed: the
  * cookie is bound to the host, and handing it to another origin would leak
  * the session.
@@ -131,19 +136,26 @@ async function httpWithRedirects(
   init: { readonly method: string; readonly headers?: Record<string, string>; readonly body?: string },
   maxHops = 5,
 ): Promise<{ readonly answer: HttpAnswer; readonly cookies: string[] }> {
-  const cookies: string[] = [];
+  const jar = new Map<string, string>();
   let current = url;
   const origin = new URL(url).origin;
 
   for (let hop = 0; hop <= maxHops; hop += 1) {
-    const answer = await httpOnce(current, init);
+    const headers: Record<string, string> = { ...(init.headers ?? {}) };
+    if (jar.size > 0) headers["cookie"] = cookieHeader(jar);
+    const answer = await httpOnce(current, { ...init, headers });
     for (const raw of headerValues(answer.headers, "set-cookie")) {
       const pair = raw.split(";", 1)[0]?.trim();
-      if (pair && pair.length > 0) cookies.push(pair);
+      if (!pair) continue;
+      const separator = pair.indexOf("=");
+      if (separator <= 0) continue;
+      // A refreshed cookie replaces the one it shares a name with; a cookie
+      // under a new name joins it.
+      jar.set(pair.slice(0, separator), pair.slice(separator + 1));
     }
     const location = firstHeader(answer.headers, "location");
     const isRedirect = answer.status >= 300 && answer.status < 400 && location;
-    if (!isRedirect) return { answer, cookies };
+    if (!isRedirect) return { answer, cookies: [...jar].map(([name, value]) => `${name}=${value}`) };
     const next = new URL(location, current);
     if (next.origin !== origin) {
       throw new DshHostTransportError("refused a redirect that leaves the host's origin");
@@ -151,6 +163,11 @@ async function httpWithRedirects(
     current = next.toString();
   }
   throw new DshHostTransportError(`too many redirects from ${redactUrl(url)}`);
+}
+
+/** The `Cookie` header value for a jar of name/value pairs. */
+function cookieHeader(jar: Map<string, string>): string {
+  return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
 /** A URL without its query, fragment or credentials, safe to log. */

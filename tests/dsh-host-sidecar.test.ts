@@ -52,6 +52,17 @@ beforeEach(async () => {
       }
 
       if (req.url === "/launched") {
+        // The real host serves the index only to a request that carries the
+        // cookie it minted on the redirect hop, and answers 401 to the one
+        // that does not.  The stub behaves the same way, so a client that
+        // collects the cookie but forgets to send it fails here.
+        const cookie = String(req.headers["cookie"] ?? "");
+        if (!cookie.includes("dsh_session=signed-value")) {
+          res.writeHead(401, { "content-type": "application/json" }).end(
+            JSON.stringify({ error: "dsh web authentication required" }),
+          );
+          return;
+        }
         res.writeHead(200, { "content-type": "text/html" }).end("ok");
         return;
       }
@@ -176,6 +187,18 @@ describe("DshHostClient", () => {
     expect(client.origin).toBe(origin);
     const launch = calls.find((call) => call.url.startsWith("/launch"));
     expect(launch?.method).toBe("GET");
+  });
+
+  it("sends the cookie it collected on the redirect hop back to the host", async () => {
+    // The host mints the cookie on the redirect hop and serves the index only
+    // to a request that carries it.  A client that collects the cookie and
+    // then forgets it on the next hop gets a 401 and no host at all.
+    await DshHostClient.connect({ launchUrl: `${origin}/launch?token=secret` });
+
+    const hops = calls.filter((call) => call.url.startsWith("/launch"));
+    expect(hops).toHaveLength(2);
+    expect(hops[0]?.headers["cookie"]).toBeUndefined();
+    expect(hops[1]?.headers["cookie"]).toBe("dsh_session=signed-value");
   });
 
   it("keeps the cookie when the host sets it on the final answer", async () => {
