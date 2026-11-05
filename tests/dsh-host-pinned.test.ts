@@ -100,6 +100,53 @@ function declaredString(source: string, name: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * The wire key one session descriptor takes its request object under.
+ *
+ * The installed build's descriptors look like
+ *
+ *     { id: '…#session/list', namespace: 'session', method: 'list',
+ *       parameters: [ { name: '_request', wire: '_request', source: 'json', … } ] }
+ *
+ * so the descriptor is found by its id and the wire key is read from the
+ * parameter list.  A layout this reader does not recognise fails with a
+ * message that says so, rather than passing on an empty answer.
+ */
+function descriptorWireKey(source: string, method: string): string {
+  const blocks = source.split(/(?=\n\s*id: ')/);
+  const block = blocks.find((part) => part.includes(`#session/${method}'`));
+  if (!block) {
+    throw new Error(
+      `The installed dsh build no longer declares the session/${method} descriptor. ` +
+        "The host's argument envelope is asserted against that descriptor, so a dsh bump " +
+        "that renames or moves it must be reviewed by hand.",
+    );
+  }
+  if (!/namespace: 'session'/.test(block) || !block.includes(`method: '${method}'`)) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor no longer reads the way this ` +
+        "test reads it, so the wire key it declares cannot be asserted.",
+    );
+  }
+  const parameters = block.indexOf("parameters: [");
+  if (parameters < 0) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor declares no parameters, so the ` +
+        "wire key it takes cannot be asserted.",
+    );
+  }
+  const result = block.indexOf("result:", parameters);
+  const slice = block.slice(parameters, result < 0 ? undefined : result);
+  const wires = [...slice.matchAll(/wire: '([^']*)'/g)].map((match) => match[1]);
+  if (wires.length !== 1) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor declares ${wires.length} wire ` +
+        "keys, where this test expects exactly one.",
+    );
+  }
+  return wires[0]!;
+}
+
 describe("dsh host contract — pinned to the installed dsh build", () => {
   it("finds the bundled gateway types", () => {
     expect(locatePackage("dsh-api-gateway")).not.toBeNull();
@@ -209,5 +256,23 @@ describe("dsh host contract — pinned to the installed dsh build", () => {
     // the pair, so the sidecar sends both.
     expect(source).toMatch(/'provider':\s*z\.string\(\)/);
     expect(source).toMatch(/'model':\s*z\.string\(\)/);
+  });
+
+  it("declares the wire key every host argument rides in", () => {
+    const source = readInstalled("dsh-api-session-controller/lib/typert.host.js");
+    // The list is the one endpoint whose own argument is `_request`; every
+    // other argument the sidecar sends rides `request`.  The gateway refuses
+    // an argument set that does not match the descriptor exactly, so a dsh
+    // bump that renames one of these keys fails here instead of on a phone.
+    const expected: Record<string, string> = {
+      list: "_request",
+      create: "request",
+      selectModel: "request",
+      prompt: "request",
+      follow: "request",
+    };
+    for (const [method, wire] of Object.entries(expected)) {
+      expect(descriptorWireKey(source, method)).toBe(wire);
+    }
   });
 });

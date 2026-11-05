@@ -80,11 +80,12 @@ class FakeHost {
     if (endpoint === "session/create") return { sessionId: "host-session-1" };
     if (endpoint === "session/modelCatalog") return this.catalog;
     if (endpoint === "session/selectModel") {
-      const model = String(args["model"] ?? "");
+      const request = business(args);
+      const model = String(request["model"] ?? "");
       if (this.refusedModels.includes(model)) {
         throw new Error(`model-unavailable: ${model}`);
       }
-      return { selected: { provider: args["provider"], model } };
+      return { selected: { provider: request["provider"], model } };
     }
     if (endpoint === "session/prompt") {
       for (const frame of this.onPrompt) this.push(frame);
@@ -107,18 +108,35 @@ function event(type: string, data: unknown): unknown {
   return { type: "event", event: { type, seq: 1, time: 0, data } };
 }
 
+/**
+ * The business object the host received under the endpoint's wire key.
+ *
+ * The host's descriptors put each endpoint's arguments under one key, and the
+ * gateway refuses an argument set that does not match, so every call the
+ * sidecar makes carries its business object inside that envelope.
+ */
+function business(args: Record<string, unknown>): Record<string, unknown> {
+  const envelope = args["request"];
+  return (envelope as Record<string, unknown> | undefined) ?? args;
+}
+
 describe("opening a thread in the host", () => {
   it("asks the host for a session and keeps its id", async () => {
     const host = new FakeHost();
     const sessionId = await createDshHostSession(host.asClient(), { cwd: "/work" });
     expect(sessionId).toBe("host-session-1");
-    expect(host.calls[0]).toEqual({ endpoint: "session/create", args: { cwd: "/work" } });
+    expect(host.calls[0]).toEqual({
+      endpoint: "session/create",
+      args: { request: { cwd: "/work" } },
+    });
   });
 
   it("names the agent preset when one is asked for", async () => {
     const host = new FakeHost();
     await createDshHostSession(host.asClient(), { cwd: "/work", agentPreset: "deepseek" });
-    expect(host.calls[0]?.args).toEqual({ cwd: "/work", agentPreset: "deepseek" });
+    expect(host.calls[0]?.args).toEqual({
+      request: { cwd: "/work", agentPreset: "deepseek" },
+    });
   });
 
   it("refuses a session the host did not name", async () => {
@@ -145,14 +163,14 @@ describe("running a turn in the host", () => {
     // The stream is opened first, so no event of the turn is missed.
     expect(host.streams[0]?.endpoint).toBe("session/follow");
     expect(host.streams[0]?.args).toEqual({
-      address: { kind: "session", sessionId: "host-session-1" },
-      maxMessages: 0,
+      request: { address: { kind: "session", sessionId: "host-session-1" } },
     });
     const prompt = host.calls.find((call) => call.endpoint === "session/prompt");
-    expect(prompt?.args["sessionId"]).toBe("host-session-1");
-    expect(prompt?.args["mode"]).toBe("queue");
-    expect(prompt?.args["content"]).toEqual([{ type: "text", text: "Fix the failing test" }]);
-    expect(typeof prompt?.args["requestId"]).toBe("string");
+    const asked = business(prompt?.args ?? {});
+    expect(asked["sessionId"]).toBe("host-session-1");
+    expect(asked["mode"]).toBe("queue");
+    expect(asked["content"]).toEqual([{ type: "text", text: "Fix the failing test" }]);
+    expect(typeof asked["requestId"]).toBe("string");
   });
 
   it("carries the attached images with the prompt", async () => {
@@ -167,7 +185,7 @@ describe("running a turn in the host", () => {
     });
 
     const prompt = host.calls.find((call) => call.endpoint === "session/prompt");
-    expect(prompt?.args["content"]).toEqual([
+    expect(business(prompt?.args ?? {})["content"]).toEqual([
       { type: "text", text: "What is this?" },
       { type: "image", mediaType: "image/png", data: "AAAA", name: "shot.png" },
     ]);
@@ -273,10 +291,12 @@ describe("choosing the model in the host", () => {
     expect(chosen).toBe("DeepSeek-V4.1-Pro");
     const selection = host.calls.find((call) => call.endpoint === "session/selectModel");
     expect(selection?.args).toEqual({
-      sessionId: "host-session-1",
-      provider: "deepseek-official",
-      model: "DeepSeek-V4.1-Pro",
-      reasoningEffort: "high",
+      request: {
+        sessionId: "host-session-1",
+        provider: "deepseek-official",
+        model: "DeepSeek-V4.1-Pro",
+        reasoningEffort: "high",
+      },
     });
   });
 

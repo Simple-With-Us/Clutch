@@ -27,7 +27,7 @@ if [ -z "$PY" ]; then
   fi
 fi
 if [ -z "$PY" ]; then
-  echo "clutch: no python3 found to run the MiniMax ACP bridge" >&2
+  printf '%s\n' "clutch: no python3 found to run the MiniMax ACP bridge" >&2
   exit 127
 fi
 
