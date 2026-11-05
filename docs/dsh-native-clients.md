@@ -1,12 +1,12 @@
 # Native dsh clients
 
-Clutch's web UI is the upstream `dsh web` binary.  `scripts/start-web.sh`
+Clutch's web UI is the upstream `dsh web` binary.  `scripts/start-web.sh`
 execs `clutch.sh web`, so a dsh host — a cordis application — already runs
 inside Clutch's always-on stack on `$CLUTCH_WEB_PORT` (3180 by default).
 
-That host is a **client server**.  It serves the dsh client contract: a
-unary RPC over HTTP and a stream mux over WebSocket.  The upstream browser UI
-is one client of it.  A native Swift app can be another.
+That host is a **client server**.  It serves the dsh client contract: a
+unary RPC over HTTP and a stream mux over WebSocket.  The upstream browser UI
+is one client of it.  A native Swift app can be another.
 
 This document records why that is worth doing, what the contract is, and what
 is and is not built.
@@ -15,7 +15,7 @@ is and is not built.
 
 The owner set the condition before the work started: build native clients
 **only if** cordis is as efficient as possible, and **not** if cordis is
-Electron-like or otherwise resource-hungry.  The answer, from the source and
+Electron-like or otherwise resource-hungry.  The answer, from the source and
 from measurement on this Mac:
 
 | Thing | Size | Processes | Notes |
@@ -27,7 +27,7 @@ from measurement on this Mac:
 | Claude (Electron) | 333 MB | 20 | measured on this Mac |
 
 The cost of an Electron app is Chromium, and the numbers above are almost
-entirely Chromium.  A native macOS app is a SwiftUI process plus the dsh host
+entirely Chromium.  A native macOS app is a SwiftUI process plus the dsh host
 that already runs: no Chromium, no WebKit content process, no JavaScript
 engine on the device.
 
@@ -39,16 +39,16 @@ condition.
 
 dsh is already a dependency of Clutch (`"@deepseek-ai/dsh": "0.1.5-rc.3"`),
 and the installed package bundles its own dependencies, including the gateway
-and client-connection packages that define the wire contract.  Clutch does
+and client-connection packages that define the wire contract.  Clutch does
 not fork it and does not vendor the upstream tree:
 
 - Upstream is MIT, so a fork is unnecessary.
-- Upstream moved `0.1.5-rc.3` → `0.2.1-rc.2` in a day.  A vendored tree of
+- Upstream moved `0.1.5-rc.3` → `0.2.1-rc.2` in a day.  A vendored tree of
   roughly 4,100 TypeScript files across about 130 packages would turn every
   bump into a manual merge, and Clutch's npm pin plus `renovate.json` already
   automates that.
 - The extension surface Clutch needs — profiles, patch rows, client modules —
-  is the one upstream designs for.  Upstream's own words: *"adding a setting
+  is the one upstream designs for.  Upstream's own words: *"adding a setting
   never means editing the shell."*
 
 What Clutch **does** carry in-repo is the contract itself, in two mirrored
@@ -62,7 +62,7 @@ places plus a check that keeps them honest:
   contract fails in CI rather than on a phone.
 
 A read-only reference clone of the upstream source lives at
-`~/apps/upstream/deepseek-harness`, pinned to `dsh-v0.1.5-rc.3`.  See
+`~/apps/upstream/deepseek-harness`, pinned to `dsh-v0.1.5-rc.3`.  See
 [`upstream-dsh-reference.md`](./upstream-dsh-reference.md).
 
 ## The contract
@@ -72,7 +72,7 @@ against the installed package.
 
 ### Unary calls
 
-A `POST` to `/api/<endpoint>`.  The body is the client-request envelope, and
+A `POST` to `/api/<endpoint>`.  The body is the client-request envelope, and
 the answer is the server-response envelope.
 
 ```json
@@ -90,14 +90,14 @@ A failure carries a typed error instead of a value:
 ```
 
 Endpoint names are one or more `/`-separated segments, each matching
-`[A-Za-z0-9_$.-]+`, with no empty, `.` or `..` segment.  Upstream joins a
+`[A-Za-z0-9_$.-]+`, with no empty, `.` or `..` segment.  Upstream joins a
 namespace to its method with a slash: `session/list`, `commands/list`,
-`workspace/create`, `subagents/list`, `credentials/describe`.Â  A dot is
-allowed inside a segment but it is not the separatorÂ  `remote.session` is a
+`workspace/create`, `subagents/list`, `credentials/describe`.  A dot is
+allowed inside a segment but it is not the separator  `remote.session` is a
 Context service key, not a wire endpoint, and the host answers it with
-`gateway/method-unavailable`.Â  There is no `terminal`, `job` or `remotes`
+`gateway/method-unavailable`.  There is no `terminal`, `job` or `remotes`
 namespace: a terminal in the web canvas is a tool card rendered from a tool
-call, and background jobs ride the session controller.Â  The namespace list
+call, and background jobs ride the session controller.  The namespace list
 is pinned against the installed dsh build by
 `tests/dsh-host-pinned.test.ts`.
 
@@ -105,28 +105,28 @@ is pinned against the installed dsh build by
 
 The WebSocket mux lives at `/api/remote.mux` and carries every Remote stream.
 The cordis event stream is the logical stream `$events`; `$events/result` is
-the unary endpoint that returns one event outcome.  The mux is **not** the
+the unary endpoint that returns one event outcome.  The mux is **not** the
 unary path — unary calls go over HTTP.
 
 The mux frames are `open` and `cancel` from the client, and `item`, `error`
-and `end` from the host, each carrying the `streamId` it belongs to.Â  A
+and `end` from the host, each carrying the `streamId` it belongs to.  A
 client opens a logical stream by sending `open` with the endpoint it wants, and
-without that frame the host serves no stream at all.Â  The frame union is
+without that frame the host serves no stream at all.  The frame union is
 pinned against the installed build by `tests/dsh-host-pinned.test.ts`.
 
 ### Authentication
 
 The dsh web process mints a per-process launch token and prints the URL.
 `scripts/capture-launch-url.cjs` tees that URL to
-`$CLUTCH_HOME/web-launch-url` (mode 0600).  Visiting the URL once exchanges
+`$CLUTCH_HOME/web-launch-url` (mode 0600).  Visiting the URL once exchanges
 the token for a signed `HttpOnly` cookie, and every later request carries
-that cookie.  The native client does the same exchange on connect.
+that cookie.  The native client does the same exchange on connect.
 
 ### The Host fence
 
-The host binds every request to a trusted authority.  Its own words: *"Non-
+The host binds every request to a trusted authority.  Its own words: *"Non-
 browser and remote clients pass the same fence via loopback, the listener's
-bind IP literal, or a declared `trustedHosts` authority."*  So a native
+bind IP literal, or a declared `trustedHosts` authority."*  So a native
 client is a first-class client, not a workaround — and `scripts/start-web.sh`
 already declares loopback, this Mac's Tailscale name, and anything in
 `CLUTCH_TRUSTED_HOSTS`.
@@ -138,9 +138,9 @@ already declares loopback, this Mac's Tailscale name, and anything in
 - `ios/App/Models/DshHostModels.swift` — the Swift mirror of the envelopes.
 - `ios/App/Services/DshHostClient.swift` — the client core: the launch-token
   exchange, the WebSocket mux, unary calls over HTTP, and a sink for the
-  event stream.  Shared by the iOS and macOS targets.
+  event stream.  Shared by the iOS and macOS targets.
 - `ios/App/Views/DshHostView.swift` — a native surface that connects, calls
-  one endpoint and shows the answer.  Reachable from the "Host" tab on both
+  one endpoint and shows the answer.  Reachable from the "Host" tab on both
   platforms.
 - `tests/dsh-host-contract.test.ts` — the contract's own rules.
 - `tests/dsh-host-pinned.test.ts` — the contract against the installed dsh.
@@ -148,21 +148,21 @@ already declares loopback, this Mac's Tailscale name, and anything in
 
 ## What is not built yet
 
-- A native rendering of the host's own UI.  Upstream's client UI is a DOM
+- A native rendering of the host's own UI.  Upstream's client UI is a DOM
   bundle, so a native app re-implements the surfaces it wants rather than
-  reusing them.  The contract, not the layout, is the reusable part.
+  reusing them.  The contract, not the layout, is the reusable part.
 - The event stream's frame handling beyond "arrived and parsed".
 - The macOS release pipeline still builds the deprecated WKWebView Dock
-  shell, not this app.  That is tracked separately and needs the owner's go,
+  shell, not this app.  That is tracked separately and needs the owner's go,
   because shipping it replaces the app that is installed on his Mac.
 
 ## Telemetry
 
-`scripts/lib/clutch-env.sh` exports `DSH_TELEMETRY_DISABLED=1`.  The dsh base
+`scripts/lib/clutch-env.sh` exports `DSH_TELEMETRY_DISABLED=1`.  The dsh base
 bundle mounts a `session-telemetry-otel` row that exports session events to
 DeepSeek's collector, and the web bundle adds a product-telemetry row on top
-of it.  Upstream ships the kill switch: `apps/cli/src/profile-boot.ts` reads
+of it.  Upstream ships the kill switch: `apps/cli/src/profile-boot.ts` reads
 the variable, and `resolveTelemetryPatch()` turns the row off for **any**
-non-empty value — including `0` and `false` — so the row never mounts.  Clutch
+non-empty value — including `0` and `false` — so the row never mounts.  Clutch
 keeps the engine offline unless the operator sets the variable to the empty
 string on purpose.
