@@ -31,7 +31,7 @@
  *   (mode 600).  The token rides to the phone inside the pairing link.
  * - Logs carry lengths and ids only — never prompt text or tokens.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
@@ -39,6 +39,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/pr
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { z } from "zod";
 
@@ -46,7 +47,7 @@ import { DshHostClientCache, isRefusedIdentity } from "./dshHostClientCache.ts";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
+import { ENGINE_LABELS, ENGINE_ORDER, EngineNameSchema, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
 import {
   engineCatalog,
   loadEnginePluginReport,
@@ -387,6 +388,14 @@ export interface EngineAvailabilityContext {
   credentialFile?: string;
   /** Clutch's own settings (Infisical-backed), when the sidecar has them. */
   settings?: { get(key: string): string };
+  /**
+   * Whether a fleet-secrets secret of that name is reachable.
+   *
+   * The lookup shells out to `fleet-secrets names`, so a caller that knows
+   * better supplies its own answer and the check stays a files-and-
+   * environment check in a test.
+   */
+  fleetSecretPresent?: (name: string) => Promise<boolean>;
 }
 
 /**
@@ -402,15 +411,22 @@ function dshCredentialFile(env: Record<string, string | undefined>): string {
   return join(clutchHome, "dsh", ".credentials.yaml");
 }
 
-/** A managed setting's value: Clutch's own settings first, then the environment. */
+/**
+ * A managed setting's value.
+ *
+ * The environment comes first: an explicitly-set env var is the operator's
+ * own override, and Clutch's rule is that it beats the managed store.  The
+ * settings cache is the fallback for the keys the environment does not
+ * carry.
+ */
 function settingValue(
   name: string,
   env: Record<string, string | undefined>,
   settings?: { get(key: string): string },
 ): string {
-  const fromSettings = settings?.get(name)?.trim();
-  if (fromSettings) return fromSettings;
-  return (env[name] ?? "").trim();
+  const fromEnv = (env[name] ?? "").trim();
+  if (fromEnv) return fromEnv;
+  return settings?.get(name)?.trim() ?? "";
 }
 
 /**
@@ -433,7 +449,38 @@ function pythonInterpreter(env: Record<string, string | undefined>): string | nu
   return null;
 }
 
-/** Look for an OAuth credential file under a store, a few levels deep. */
+const execFileAsync = promisify(execFile);
+
+/**
+ * Whether a fleet-secrets secret of that name is reachable.
+ *
+ * The MiniMax bridge's last resort is `fleet-secrets get NAME`
+ * (`bridges/minimax/minimax-acp.py`), so a host that keeps its key only
+ * there still runs the turn.  `fleet-secrets names` lists the names and
+ * never the values, so this check reads no secret and prints none.
+ */
+async function fleetSecretPresent(
+  name: string,
+  env: Record<string, string | undefined>,
+): Promise<boolean> {
+  const cli = (env.PATH ?? "")
+    .split(":")
+    .map((dir) => (dir ? join(dir, "fleet-secrets") : ""))
+    .find((path) => path && executableFile(path));
+  if (!cli) return false;
+  try {
+    const { stdout } = await execFileAsync(cli, ["names"], {
+      env: env as NodeJS.ProcessEnv,
+      timeout: 10_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return stdout.split(/\r?\n/).some((line) => line.trim() === name);
+  } catch {
+    // A host with no fleet-secrets, or no credentials for it, simply does
+    // not have this source.
+    return false;
+  }
+}
 function findAuthFile(dir: string, depth: number): boolean {
   if (depth > 4) return false;
   let entries: Dirent[];
@@ -487,8 +534,9 @@ function museSignedIn(
  * Two things have to hold: the launcher has to start (the file is there and
  * the interpreter it needs is there), and the credential the engine needs
  * has to be reachable.  The check stays cheap on purpose — files and
- * environment only, no process and no network — so the picker can ask for
- * it on every request.
+ * environment first, so the picker can ask for it on every request.  The one
+ * exception is a credential that lives only in fleet-secrets, and that
+ * lookup runs only when the cheaper sources have found nothing.
  */
 export async function engineAvailability(
   engine: Engine,
@@ -554,13 +602,24 @@ export async function engineAvailability(
     }
   }
   if (engine === "minimax") {
+    // The bridge's own order: the environment (under either name), the dsh
+    // credential store, then `fleet-secrets get`.  A host that keeps the key
+    // only in fleet-secrets runs the turn, so the catalog must not drop the
+    // engine there.
     const keyName = settingValue("CLUTCH_MINIMAX_API_KEY_NAME", env, settings) || "MINIMAX_API_KEY";
-    if (!settingValue(keyName, env, settings) && !settingValue("MINIMAX_API_KEY", env, settings) &&
-        !existsSync(credentialFile)) {
-      return {
-        available: false,
-        note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings, or save it in ${credentialFile}.`,
-      };
+    const inEnvironment = Boolean(
+      settingValue(keyName, env, settings) || settingValue("MINIMAX_API_KEY", env, settings),
+    );
+    if (!inEnvironment && !existsSync(credentialFile)) {
+      const inFleetSecrets = context.fleetSecretPresent
+        ? await context.fleetSecretPresent(keyName)
+        : await fleetSecretPresent(keyName, env);
+      if (!inFleetSecrets) {
+        return {
+          available: false,
+          note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings, save it in ${credentialFile}, or keep it in fleet-secrets.`,
+        };
+      }
     }
   }
   return { available: true };
@@ -3000,9 +3059,19 @@ async function main(): Promise<void> {
       // An engine the sidecar does not know is a client mistake, not a
       // fallback: routing it to DeepSeek would silently run the turn on
       // another provider.  A request that names no engine keeps routing by
-      // its model id, exactly as before.
-      const namedEngine = typeof body.engine === "string" ? body.engine.trim() : "";
-      if (body.engine !== undefined && body.engine !== null && !isEngine(namedEngine)) {
+      // its model id, exactly as before.  The name is validated by schema
+      // first, so a malformed or oversized value never reaches the routing.
+      const parsedEngine = EngineNameSchema.safeParse(body.engine);
+      if (!parsedEngine.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
+          error: "unknown engine",
+          engine: typeof body.engine === "string" ? body.engine.trim().slice(0, 40) : "",
+          knownEngines: ENGINE_ORDER,
+        }));
+        return;
+      }
+      const namedEngine = parsedEngine.data ?? "";
+      if (namedEngine && !isEngine(namedEngine)) {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({
           error: "unknown engine",
           engine: namedEngine.slice(0, 40),

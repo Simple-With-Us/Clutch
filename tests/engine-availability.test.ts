@@ -162,4 +162,56 @@ describe("engine availability", () => {
     }
     expect(existsSync(host.marker)).toBe(false);
   });
+
+  it("counts a key that lives only in fleet-secrets as reachable", async () => {
+    const host = fixture();
+    const asked: string[] = [];
+
+    // The MiniMax bridge's last resort is `fleet-secrets get NAME`, so a host
+    // that keeps its key only there still runs the turn.  The catalog must
+    // not drop the engine there.
+    const minimax = await engineAvailability("minimax", {
+      ...host.context,
+      fleetSecretPresent: async (name) => {
+        asked.push(name);
+        return name === "MINIMAX_API_KEY";
+      },
+    });
+
+    expect(minimax.available).toBe(true);
+    expect(asked).toEqual(["MINIMAX_API_KEY"]);
+  });
+
+  it("asks fleet-secrets only when the cheaper sources found nothing", async () => {
+    const host = fixture();
+    let asked = 0;
+
+    const withKey = { ...host.context, env: { ...host.context.env, MINIMAX_API_KEY: "present" } };
+    const minimax = await engineAvailability("minimax", {
+      ...withKey,
+      fleetSecretPresent: async () => {
+        asked += 1;
+        return false;
+      },
+    });
+
+    expect(minimax.available).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  it("lets the environment name the MiniMax key over Clutch's own settings", async () => {
+    const host = fixture();
+
+    // An explicitly-set env var is the operator's own override, so it beats
+    // the managed store.  The key the check looks for is named in the note,
+    // which is how the difference is observable.
+    const minimax = await engineAvailability("minimax", {
+      ...host.context,
+      env: { ...host.context.env, CLUTCH_MINIMAX_API_KEY_NAME: "ENV_NAMED_KEY" },
+      settings: { get: (key: string) => (key === "CLUTCH_MINIMAX_API_KEY_NAME" ? "SETTINGS_NAMED_KEY" : "") },
+    });
+
+    expect(minimax.note).toContain("ENV_NAMED_KEY");
+    expect(minimax.note).not.toContain("SETTINGS_NAMED_KEY");
+  });
 });

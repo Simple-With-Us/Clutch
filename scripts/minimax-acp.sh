@@ -19,6 +19,12 @@ export CLUTCH_MINIMAX_ACP_HEARTBEAT_SEC="${CLUTCH_MINIMAX_ACP_HEARTBEAT_SEC:-5}"
 # and this launcher also runs on the Linux server, where a bridge that cannot
 # start answers every turn with "bridge exited".
 PY="${PYTHON:-}"
+# A PYTHON that points at a stale path is worse than no PYTHON at all: the
+# launcher would exec it and every turn would answer "bridge exited", while
+# the catalog's interpreter check has already fallen back to a real one.
+if [ -n "$PY" ] && [ ! -x "$PY" ]; then
+  PY=""
+fi
 if [ -z "$PY" ]; then
   if [ -x /opt/homebrew/bin/python3 ]; then
     PY=/opt/homebrew/bin/python3

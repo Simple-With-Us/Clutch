@@ -4,6 +4,8 @@
  * Kept in its own module so the chat bridge and the engine catalog can both
  * name engines without importing each other.
  */
+import { z } from "zod";
+
 export type Engine = "deepseek" | "minimax" | "mcode" | "muse";
 
 /** The engines a phone or Mac can pick, in the order the picker shows them. */
@@ -21,6 +23,16 @@ export const ENGINE_LABELS: Record<Engine, string> = {
 export function isEngine(value: unknown): value is Engine {
   return typeof value === "string" && (ENGINE_ORDER as readonly string[]).includes(value);
 }
+
+/**
+ * The engine name an inbound request may carry.
+ *
+ * The name is validated before it reaches the routing, so a malformed or
+ * oversized value is refused with a 400 instead of travelling on to the
+ * provider.  A request that names no engine at all is allowed: it keeps
+ * routing by model id, exactly as before.
+ */
+export const EngineNameSchema = z.string().trim().min(1).max(40).nullish();
 
 /**
  * The engines the dsh host runs, and whose threads it owns.

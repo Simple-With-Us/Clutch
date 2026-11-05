@@ -110,4 +110,32 @@ describe("chat engine validation", () => {
     await response.body?.cancel();
     await expect.poll(() => existsSync(marker), { timeout: 10_000, interval: 50 }).toBe(true);
   });
+
+  it("refuses an engine name that is malformed, before any turn starts", async () => {
+    // The marker is cleared first: the test above really did start a turn,
+    // and this one has to show that no new one began.
+    rmSync(marker, { force: true });
+
+    // The name is validated by schema before it reaches the routing, so a
+    // value that is not a short engine id never travels on to the provider.
+    const oversized = await fetch(url("/clutch/v1/chat"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ prompt: "hello", engine: "e".repeat(200) }),
+    });
+    expect(oversized.status).toBe(400);
+    const oversizedBody = await oversized.json() as { error?: string; engine?: string };
+    expect(oversizedBody.error).toBe("unknown engine");
+    expect(oversizedBody.engine).toHaveLength(40);
+
+    const notAString = await fetch(url("/clutch/v1/chat"), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ prompt: "hello", engine: 42 }),
+    });
+    expect(notAString.status).toBe(400);
+
+    // The turn never started.
+    expect(existsSync(marker)).toBe(false);
+  });
 });
