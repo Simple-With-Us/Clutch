@@ -51,7 +51,62 @@ The health answer reports `mcode.available`, which is false when MiniMax Code is
 - Reachable at `https://jay-server.boa-roygbiv.ts.net:3181` on the tailnet only (`tailscale serve`, set up by `scripts/chat-bridge.sh` on every start).
 - Engines include MiniMax Code and Muse Code.  Updated native Muse clients and sidecars offer only the three exact contributor model IDs documented in [Muse Contributor Models And Launch Options](muse-contributor-options.md).
 - Pairing link: `$CLUTCH_HOME/server-pairing-link.txt` for the actual service user.  On the verified November 3 installation that user is `jay`, with Clutch home `/home/jay/.clutch`.  Preserve the existing link and token when they already pass authenticated health and session-list checks.
-- Updating: pull the checkout, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  Re-run the installer if the checkout moved, because the unit points at it.
+- Updating: the unit runs the checkout it was installed from, so pull it, run `npm ci`, then `systemctl restart clutch-chat-bridge`.  The live host pins the unit to a release instead; see [Pinning The Sidecar To A Release](#pinning-the-sidecar-to-a-release).
+
+### Pinning The Sidecar To A Release
+
+The unit that `scripts/install-server-bridge.sh` writes runs the checkout it was installed from, so on a fresh host `git pull`, `npm ci` and `systemctl restart clutch-chat-bridge` are the whole update.  The live host does not run that way: a drop-in pins the unit to one merged commit, so pulling the checkout changes nothing that is running.
+
+The drop-in is `/etc/systemd/system/clutch-chat-bridge.service.d/20-clutch-release.conf`, and it overrides both the working directory and the command:
+
+```ini
+[Service]
+WorkingDirectory=/mnt/fleet-extra/apps/runtime/Clutch/releases/<sha>
+ExecStart=
+ExecStart=/mnt/fleet-extra/apps/runtime/Clutch/releases/<sha>/scripts/chat-bridge.sh
+```
+
+A release is one merged commit, exported with `git archive` so it carries no `.git` and no working-tree state:
+
+```bash
+SHA=$(git -C /mnt/fleet-extra/Code/Clutch rev-parse main)
+NEW=/mnt/fleet-extra/apps/runtime/Clutch/releases/$SHA
+mkdir -p "$NEW"
+git -C /mnt/fleet-extra/Code/Clutch archive "$SHA" | tar -x -C "$NEW"
+chown -R jay:fleet "$NEW"
+```
+
+`node_modules` is not in the archive, so it is hard-linked from the release that is already running, which makes a roll a copy and not a build:
+
+```bash
+cp -al /mnt/fleet-extra/apps/runtime/Clutch/releases/<old-sha>/node_modules "$NEW/node_modules"
+```
+
+Point the drop-in at the new directory, reload and restart:
+
+```bash
+sudo tee /etc/systemd/system/clutch-chat-bridge.service.d/20-clutch-release.conf >/dev/null <<EOF
+[Service]
+WorkingDirectory=$NEW
+ExecStart=
+ExecStart=$NEW/scripts/chat-bridge.sh
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart clutch-chat-bridge.service
+```
+
+Two traps.  `git archive` keeps the executable bit on the tracked scripts, but a blanket `chmod` over the tree strips it and the unit then dies with status 203/EXEC.  And the exported tree belongs to whoever exported it, which is why the `chown` above is part of the export rather than a later repair.
+
+To go back to tracking the checkout, drop the drop-in and restart:
+
+```bash
+sudo rm /etc/systemd/system/clutch-chat-bridge.service.d/20-clutch-release.conf
+sudo systemctl daemon-reload
+sudo systemctl restart clutch-chat-bridge.service
+```
+
+Re-running `scripts/install-server-bridge.sh` does not unpin the service: it rewrites the base unit file, and the drop-in still overrides it.
+
 
 ### Muse Code On A Server
 
