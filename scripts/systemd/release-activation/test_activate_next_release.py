@@ -8,7 +8,11 @@ from unittest.mock import patch
 import activate_next_release as rollout
 
 
-@unittest.skipUnless(rollout.UNIT_PATH.is_file(), "needs the installed unit file to copy as a fixture")
+# The unit file is committed at scripts/systemd/clutch-chat-bridge.service, so these
+# tests run on any host instead of skipping when the service is not installed locally.
+REPO_UNIT = Path(__file__).resolve().parents[1] / "clutch-chat-bridge.service"
+
+
 class CurrentAttemptPathTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -21,7 +25,7 @@ class CurrentAttemptPathTests(unittest.TestCase):
         self.backup = self.root / "backup-before-activation"
         self.backup.mkdir(mode=0o700)
         shutil_unit = self.backup / "clutch-chat-bridge.service.before"
-        shutil_unit.write_bytes(rollout.UNIT_PATH.read_bytes())
+        shutil_unit.write_bytes(REPO_UNIT.read_bytes())
         self.dropin_dir = self.backup / "dropins"
         self.dropin_dir.mkdir(mode=0o700)
         self.dropin_name = "50-fixture.conf"
@@ -31,15 +35,19 @@ class CurrentAttemptPathTests(unittest.TestCase):
         self.receipt = self.root / "production-receipt.json"
         self.failure = self.root / "production-failure.json"
         self.config = (self.root, self.root, self.root / "candidate.conf", self.lock, self.before, self.receipt, self.failure, self.backup)
+        # verify_current_attempt_paths reads the live unit path; point it at the committed fixture.
+        self.unit_patcher = patch.object(rollout, "UNIT_PATH", REPO_UNIT)
+        self.unit_patcher.start()
         lock_stat = os.stat(self.lock, follow_symlinks=False)
         self.attempt = {
             "lockIdentity": (lock_stat.st_dev, lock_stat.st_ino),
             "beforeSha256": hashlib.sha256(self.before.read_bytes()).hexdigest(),
-            "unitSha256": hashlib.sha256(rollout.UNIT_PATH.read_bytes()).hexdigest(),
-            "dropInBackups": [{"path": "/etc/systemd/system.control/50-fixture.conf", "sha256": self.dropin_hash}],
+            "unitSha256": hashlib.sha256(REPO_UNIT.read_bytes()).hexdigest(),
+            "dropInBackups": [{"path": "/etc/systemd/system.control/50-fixture.conf", "backup": str(self.dropin_file), "sha256": self.dropin_hash}],
         }
 
     def tearDown(self):
+        self.unit_patcher.stop()
         self.temp.cleanup()
 
     def test_current_invocation_artifacts_pass_exact_last_moment_check(self):
