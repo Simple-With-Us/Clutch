@@ -171,7 +171,7 @@ def verify_current_attempt_paths(config, attempt):
     if (not stat.S_ISREG(unit_backup_stat.st_mode) or unit_backup_stat.st_uid != os.getuid()
             or digest(unit_backup) != attempt["unitSha256"] or digest(UNIT_PATH) != attempt["unitSha256"]):
         fail("last-moment-backup", currentAttemptUnitBackupMatches=False)
-    expected = {Path(item["path"]).name: item["sha256"] for item in attempt["dropInBackups"]}
+    expected = {Path(item["backup"]).name: item["sha256"] for item in attempt["dropInBackups"]}
     backup_dropins = backup / "dropins"
     if (not stat.S_ISDIR(dropins_stat.st_mode) or dropins_stat.st_uid != os.getuid()
             or stat.S_IMODE(dropins_stat.st_mode) != 0o700
@@ -268,7 +268,9 @@ def backup_state(config, result):
     copied = []
     for path in sorted(set(result["unit"]["dropInPaths"])):
         source = Path(path)
-        dest = dropin_backup_dir / source.name
+        # Basenames collide across /etc, /run and /usr/lib systemd directories; key the
+        # backup by the full source path so a later copy never overwrites an earlier one.
+        dest = dropin_backup_dir / (hashlib.sha256(path.encode("utf-8")).hexdigest()[:12] + "-" + source.name)
         shutil.copy2(source, dest)
         if digest(source) != digest(dest):
             fail("backup-dropin", dropInBackupMatches=False)
@@ -403,6 +405,10 @@ def activate(args, config):
             if lock_held:
                 lock.rmdir()
                 lock_held = False
+            # No mutation happened, so reclaim this attempt's review artifacts; leftovers
+            # otherwise block the next attempt at the backup-path preflight.
+            shutil.rmtree(backup, ignore_errors=True)
+            Path(before).unlink(missing_ok=True)
         print(json.dumps(failure_value, separators=(",", ":")))
         raise SystemExit(1)
     except Exception as error:
@@ -412,6 +418,8 @@ def activate(args, config):
         elif lock_held:
             lock.rmdir()
             lock_held = False
+            shutil.rmtree(backup, ignore_errors=True)
+            Path(before).unlink(missing_ok=True)
         print(json.dumps(failure_value, separators=(",", ":")))
         raise SystemExit(1)
 

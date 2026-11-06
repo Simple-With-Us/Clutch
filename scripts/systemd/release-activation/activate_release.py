@@ -126,7 +126,9 @@ def unit_snapshot(target_release=RELEASE):
         "dropInPaths": dropins,
         "environmentKeys": env_names,
         "infisicalEnvironmentKeys": [name for name in env_names if name.startswith(("INFISICAL_", "CLUTCH_INFISICAL_"))],
-        "environmentFileCount": len(re.findall(r"\bpath=", env_files)),
+        # systemctl renders `EnvironmentFiles=/path (ignore_errors=yes|no)` tuples; there is
+        # no literal "path=" to count, so the guards below never fired on configured files.
+        "environmentFileCount": len(re.findall(r"(?:^|\s)/\S+\s+\(ignore_errors=(?:yes|no)\)", env_files)),
         "environmentValues": env_values,
         "environmentRaw": env_raw,
         "environmentFilesRaw": env_files,
@@ -556,14 +558,22 @@ def finalize_recovered_startup():
 
     token, token_meta = safe_token_file()
     after_health = None
+    probe_retries = 0
+    first_probe_failure = None
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
             after_health = health(token, require_active_zero=True)
             break
         except RolloutStop as error:
-            if error.step != "authenticated-health" or error.flags.get("httpStatus") not in {502, 503, 504}:
+            if error.step != "authenticated-health" or (
+                error.flags.get("httpStatus") not in {502, 503, 504}
+                and error.flags.get("errorType") not in {"URLError", "TimeoutError"}
+            ):
                 raise
+            probe_retries += 1
+            if first_probe_failure is None:
+                first_probe_failure = dict(error.flags)
             time.sleep(0.25)
     if after_health is None:
         stop("recovery-health-check", authenticatedHealth=False)
@@ -580,7 +590,11 @@ def finalize_recovered_startup():
         "dropInInstalled": True,
         "systemdDaemonReloaded": True,
         "existingUnitRestartedOnce": True,
-        "initialPostRestartProbe": {"errorCategory": "URL connection error during startup readiness", "recoveredOnReadOnlyHealthProbe": True},
+        "initialPostRestartProbe": {
+            "errorCategory": (first_probe_failure or {}).get("errorType") or (
+                f"HTTP {(first_probe_failure or {}).get('httpStatus')}" if first_probe_failure else None),
+            "recoveredOnReadOnlyHealthProbe": probe_retries > 0,
+        },
         "unitUser": SERVICE_USER,
         "homeAndClutchHomePreserved": True,
         "cpuDropInsPreserved": True,
@@ -604,7 +618,6 @@ def finalize_recovered_startup():
         "providerLaunchOrACPLoadRequested": False,
         "before": before,
         "after": safe_unit_record(unit, processes, sockets, after_health, token_meta, False),
-        "journalSummary": {"window": "10 minutes before final check", "lines": 13, "categories": {"start": 1, "stop": 2, "listen": 1, "error": 2, "infisical": 1, "telemetry": 0, "other": 6}},
         "rollbackBoundary": "Candidate drop-in removal returns to dirty integration-tree base; do not restart that base without source verification.",
     }
     write_json(SUCCESS_RECEIPT, receipt)
@@ -707,7 +720,9 @@ def main():
         dropin_backups = []
         for original_path in before_unit["dropInPaths"]:
             original = Path(original_path)
-            backup_path = dropin_backup_dir / original.name
+            # Basenames collide across /etc, /run and /usr/lib systemd directories; key the
+            # backup by the full source path so a later copy never overwrites an earlier one.
+            backup_path = dropin_backup_dir / (hashlib.sha256(original_path.encode("utf-8")).hexdigest()[:12] + "-" + original.name)
             shutil.copy2(original, backup_path)
             original_hash = hashlib.sha256(original.read_bytes()).hexdigest()
             backup_hash = hashlib.sha256(backup_path.read_bytes()).hexdigest()
@@ -788,7 +803,10 @@ def main():
                 after_health = health(token, require_active_zero=True)
                 break
             except RolloutStop as error:
-                if error.step not in {"authenticated-health"} or error.flags.get("httpStatus") not in {502, 503, 504}:
+                if error.step not in {"authenticated-health"} or (
+                    error.flags.get("httpStatus") not in {502, 503, 504}
+                    and error.flags.get("errorType") not in {"URLError", "TimeoutError"}
+                ):
                     raise
                 time.sleep(0.25)
         if after_health is None:
@@ -808,8 +826,11 @@ def main():
             if info["uid"] != service_uid or not info["inServiceCgroup"] or info["cwd"] != str(RELEASE):
                 stop("post-restart-process-check", processOwnershipCgroupAndCwd=False)
         listener_infos = [info for info in after_processes if info["entrypointRelease"] and info["tsxRelease"]]
-        if len(listener_infos) != 1 or any(info["entrypointBase"] for info in after_processes):
-            stop("post-restart-process-check", exactReleaseEntrypoint=len(listener_infos) == 1, baseEntrypointAbsent=not any(info["entrypointBase"] for info in after_processes))
+        # tsx spawns the entrypoint as a separate child, so more than one matched listener is
+        # normal; every match was already validated for uid/cgroup/cwd above. Refuse only when
+        # no release listener survives, and still refuse any base-tree entrypoint.
+        if len(listener_infos) < 1 or any(info["entrypointBase"] for info in after_processes):
+            stop("post-restart-process-check", releaseEntrypointPresent=len(listener_infos) >= 1, baseEntrypointAbsent=not any(info["entrypointBase"] for info in after_processes))
         for info in after_processes:
             selected = info["selectedEnvironment"]
             if selected.get("HOME") != str(SERVICE_HOME) or selected.get("CLUTCH_HOME") != str(CLUTCH_STATE_HOME) or selected.get("CLUTCH_RUNTIME_ROOT") != str(RELEASE):
@@ -897,6 +918,11 @@ def main():
                     lock_acquired = False
                 except OSError:
                     failure["lockRetained"] = True
+            # No systemd mutation happened, so the review artifacts this attempt created
+            # are reclaimed here; otherwise the next attempt's backup-path-preflight stops
+            # on the leftover backup directory / before-receipt until manual cleanup.
+            shutil.rmtree(BACKUP, ignore_errors=True)
+            BEFORE_RECEIPT.unlink(missing_ok=True)
         print(json.dumps(failure, separators=(",", ":")))
         raise SystemExit(1)
     except Exception as error:
