@@ -305,11 +305,15 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertNil(plain.toolCallId)
     }
 
-    func testGroupedFloatsPinnedAboveDateBuckets() {
+    func testGroupedFloatsPinnedAboveDateBuckets() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
         let pinned = AcpSessionInfo(sessionId: "old-but-pinned", updatedAt: "2026-09-01T12:00:00Z")
         let today = AcpSessionInfo(sessionId: "today", updatedAt: "2026-10-16T08:00:00Z")
-        let now = AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z")!
-        let groups = AcpSessionInfo.grouped([pinned, today], pinned: ["old-but-pinned"], now: now)
+        let now = try XCTUnwrap(AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z"))
+        // The calendar is pinned, so the bucket this thread lands in does not
+        // depend on the timezone of the machine running the test.
+        let groups = AcpSessionInfo.grouped([pinned, today], pinned: ["old-but-pinned"], now: now, calendar: calendar)
         XCTAssertEqual(groups.map(\.title), ["Pinned", "Today"])
         XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["old-but-pinned"])
     }
@@ -385,8 +389,11 @@ final class AcpSessionTests: XCTestCase {
 
         let emptyCatalogJSON = #"{"engines":[{"id":"muse","label":"Muse Code","available":true,"models":[],"effortLevels":[],"effortConfigId":"reasoningEffort","modelConfigId":"model"}]}"#
         let emptyMuse = try XCTUnwrap(JSONDecoder().decode(EngineCatalog.self, from: Data(emptyCatalogJSON.utf8)).descriptor("muse"))
+        // The model list still falls back to the documented contributor ids, but
+        // a host that advertises no effort levels keeps the effort control
+        // hidden, so the menu stays empty (see docs/muse-contributor-options.md).
         XCTAssertEqual(emptyMuse.models.map(\.id), contributorIDs)
-        XCTAssertEqual(emptyMuse.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
+        XCTAssertEqual(emptyMuse.effortLevels, [])
 
         let mcode = try XCTUnwrap(catalog.descriptor("mcode"))
         XCTAssertFalse(mcode.available)
@@ -581,9 +588,11 @@ final class AcpSessionTests: XCTestCase {
             ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-b", preferencesJSON: preferences),
             Set(["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"])
         )
+        // The other engine's own scope on the same host is untouched by the
+        // muse reset: it keeps every model the user did not hide there.
         XCTAssertEqual(
             ModelVisibilityPreferences.selectedModelIDs(engineID: "minimax", hostKey: "host-a", preferencesJSON: preferences),
-            Set(["muse-wonder-1.0-contributor"])
+            Set(["muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"])
         )
     }
 

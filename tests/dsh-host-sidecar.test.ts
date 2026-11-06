@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import { AddressInfo } from "node:net";
+import { z } from "zod";
 
 import {
   DshHostClient,
@@ -28,22 +29,68 @@ interface StubCall {
   readonly body: string;
 }
 
+/**
+ * The request headers the stub reads.
+ *
+ * The cookie is the one header that decides whether a request is served, so
+ * it is checked at the boundary rather than read as it comes: a value that
+ * is not a cookie header is a bad request, not a missing session.  The
+ * schema strips the headers the stub does not read, so a header that is
+ * added later cannot change what the stub does.
+ */
+const stubRequestHeaders = z
+  .object({
+    cookie: z
+      .string()
+      .optional()
+      .refine(
+        (value) =>
+          value === undefined ||
+          value
+            .split(";")
+            .every((pair) => /^[^\s=;]+=[^\s;]*$/.test(pair.trim())),
+        { message: "the cookie header is not a cookie header" },
+      ),
+  })
+  .strip();
+
 let server: Server;
 let origin: string;
 let calls: StubCall[];
 let launchRedirects = true;
 let launchLoop = false;
+/** Whether the host sets a cookie of its own on the answers it serves. */
+let hostSetsCookie = false;
 
 beforeEach(async () => {
   calls = [];
   launchRedirects = true;
   launchLoop = false;
+  hostSetsCookie = false;
   server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       const body = Buffer.concat(chunks).toString("utf8");
-      calls.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body });
+
+      // The headers are checked before any of them is read.  A value that is
+      // not a cookie header never reaches the session check, so a malformed
+      // request is refused as a bad request instead of being answered as an
+      // authentication failure.
+      const parsedHeaders = stubRequestHeaders.safeParse(req.headers);
+      if (!parsedHeaders.success) {
+        res.writeHead(400, { "content-type": "application/json" }).end(
+          JSON.stringify({ error: "malformed request headers" }),
+        );
+        return;
+      }
+      calls.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        headers: parsedHeaders.data,
+        body,
+      });
+      const cookie = parsedHeaders.data.cookie ?? "";
 
       if (req.url?.startsWith("/launch-away")) {
         res.writeHead(302, { location: "http://elsewhere.invalid/api/session/list" });
@@ -52,6 +99,16 @@ beforeEach(async () => {
       }
 
       if (req.url === "/launched") {
+        // The real host serves the index only to a request that carries the
+        // cookie it minted on the redirect hop, and answers 401 to the one
+        // that does not.  The stub behaves the same way, so a client that
+        // collects the cookie but forgets to send it fails here.
+        if (!cookie.includes("dsh_session=signed-value")) {
+          res.writeHead(401, { "content-type": "application/json" }).end(
+            JSON.stringify({ error: "dsh web authentication required" }),
+          );
+          return;
+        }
         res.writeHead(200, { "content-type": "text/html" }).end("ok");
         return;
       }
@@ -81,14 +138,34 @@ beforeEach(async () => {
         return;
       }
 
+      if (req.url?.startsWith("/api/")) {
+        // The host serves its API only to a request that carries the session
+        // cookie, so a client that lost the cookie is refused here rather
+        // than served an answer it should never have reached.
+        if (!cookie.includes("dsh_session=signed-value")) {
+          res.writeHead(401, { "content-type": "application/json" }).end(
+            JSON.stringify({ error: "dsh web authentication required" }),
+          );
+          return;
+        }
+      }
+
       if (req.url === "/api/session/list") {
-        res.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({
-            type: "server-response",
-            rpcId: "any",
-            result: { ok: true, value: { items: [{ sessionId: "session-1" }] } },
-          }),
-        );
+        res
+          .writeHead(200, {
+            "content-type": "application/json",
+            // The host may set a cookie of its own on any answer.  A client
+            // that treats that cookie as a replacement for the session it
+            // was holding loses the session.
+            ...(hostSetsCookie ? { "set-cookie": "host_pref=host-value; Path=/" } : {}),
+          })
+          .end(
+            JSON.stringify({
+              type: "server-response",
+              rpcId: "any",
+              result: { ok: true, value: { items: [{ sessionId: "session-1" }] } },
+            }),
+          );
         return;
       }
 
@@ -178,6 +255,18 @@ describe("DshHostClient", () => {
     expect(launch?.method).toBe("GET");
   });
 
+  it("sends the cookie it collected on the redirect hop back to the host", async () => {
+    // The host mints the cookie on the redirect hop and serves the index only
+    // to a request that carries it.  A client that collects the cookie and
+    // then forgets it on the next hop gets a 401 and no host at all.
+    await DshHostClient.connect({ launchUrl: `${origin}/launch?token=secret` });
+
+    const hops = calls.filter((call) => call.url.startsWith("/launch"));
+    expect(hops).toHaveLength(2);
+    expect(hops[0]?.headers["cookie"]).toBeUndefined();
+    expect(hops[1]?.headers["cookie"]).toBe("dsh_session=signed-value");
+  });
+
   it("keeps the cookie when the host sets it on the final answer", async () => {
     launchRedirects = false;
     const client = await DshHostClient.connect({
@@ -192,6 +281,34 @@ describe("DshHostClient", () => {
 
     const api = calls.find((call) => call.url === "/api/session/list");
     expect(api?.headers["cookie"]).toBe("dsh_session=signed-value");
+  });
+
+  it("keeps the caller's session cookie when the host sets one of its own", async () => {
+    // The host may set a cookie of its own on any answer.  A client that
+    // keeps only the cookie the host just set has given its session away,
+    // and the next request is refused: the host serves its API only to a
+    // request that carries the session cookie.
+    hostSetsCookie = true;
+    const client = await DshHostClient.connect({ launchUrl: `${origin}/launch?token=secret` });
+    await client.call("session/list");
+    await client.call("session/list");
+
+    const api = calls.filter((call) => call.url === "/api/session/list");
+    expect(api).toHaveLength(2);
+    for (const call of api) {
+      expect(call.headers["cookie"]).toContain("dsh_session=signed-value");
+    }
+  });
+
+  it("refuses a malformed cookie header before the session check", async () => {
+    // A header value that is not a cookie header is a bad request, not a
+    // missing session, so it is refused as one and never reaches the
+    // authentication branch.
+    const response = await fetch(`${origin}/launched`, {
+      headers: { cookie: "not-a-cookie" },
+    });
+
+    expect(response.status).toBe(400);
   });
 
   it("calls one endpoint and returns its value", async () => {

@@ -26,6 +26,10 @@ jobs:
       # the environment or from Infisical, and a named ASC_KEY_PATH is ignored.
       - run: node --test scripts/ios-fleet/*.test.mjs
       - run: bash scripts/ios-fleet/test-asc-credentials.sh
+      # The iOS simulator helper decides whether an iOS test run happens at
+      # all, and a wrong decision there is silent:  the suite stops running
+      # and nothing fails.  It is checked offline, with a fake simctl.
+      - run: bash scripts/ios-fleet/test-ios-simulator.sh
       # The Infisical loader (AFC-465) and its entry-module regression
       # (AFC-475).  Clutch carried the canonical loader test without a line
       # that ran it, so the copy was never exercised here.
@@ -67,6 +71,31 @@ jobs:
         with:
           name: ios-ui-screenshots
           path: ios-ui.xcresult
+          if-no-files-found: ignore
+      # The unit-test bundle is built by the Clutch scheme's test action, so
+      # CI has been compiling all of it without ever running it: a failing
+      # assertion in that bundle could not fail a build, and the bundle was a
+      # compile gate and nothing more.  This step gives those assertions a
+      # verdict.  It runs after the UI tests, because that step resolves the
+      # simulator first and a runtime it downloaded is then already here.
+      # A skip fails the step:  a green unit-test gate that ran no test is
+      # the state this step exists to end, so a runner with no simulator is
+      # an error here rather than a warning.
+      - name: Run the iOS unit tests
+        run: |
+          status=0
+          bash scripts/ios-unit-tests.sh || status=$?
+          if [ "$status" = "10" ]; then
+            echo "::error title=iOS unit tests::no iOS simulator runtime on this runner; the unit tests did not run"
+            exit 1
+          fi
+          exit "$status"
+      - name: Publish the iOS unit test result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-unit-tests
+          path: ios-unit.xcresult
           if-no-files-found: ignore
 
   macos:

@@ -72,17 +72,20 @@ describe("dsh host contract — paths", () => {
 
 describe("dsh host contract — request envelope", () => {
   it("builds a client-request envelope", () => {
-    const request = buildDshHostRequest("rpc-1", "remote.session", { args: { limit: 10 } });
+    // The endpoint is the wire name the host dispatches on: a namespace and a
+    // method joined with a slash.  `remote.session` is a Context service key,
+    // not an endpoint, and the host answers it with `gateway/method-unavailable`.
+    const request = buildDshHostRequest("rpc-1", "session/list", { args: { limit: 10 } });
     expect(request).toEqual({
       type: "client-request",
       rpcId: "rpc-1",
-      method: "remote.session",
+      method: "session/list",
       payload: { args: { limit: 10 } },
     });
   });
 
   it("defaults the payload to an empty argument object", () => {
-    expect(buildDshHostRequest("rpc-2", "remote.commands").payload).toEqual({ args: {} });
+    expect(buildDshHostRequest("rpc-2", "commands/list").payload).toEqual({ args: {} });
   });
 });
 
