@@ -35,7 +35,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Engine } from "../shared/engine-types.ts";
-import { isDshHostedEngine, supportsThreads } from "../shared/engine-types.ts";
+import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, supportsThreads } from "../shared/engine-types.ts";
 import { loadEnginePlugins } from "../shared/engines/index.ts";
 import { museContributorModelId } from "./muse-launch-options.ts";
 
@@ -104,6 +104,7 @@ export interface EngineCatalog {
 export const ENGINE_PLUGIN_ID_MAP: Readonly<Record<string, Engine>> = {
   "muse-code": "muse",
   minimax: "minimax",
+  zcode: "zcode",
 };
 
 /** What one plugin contributes to the engine it maps to. */
@@ -219,7 +220,7 @@ interface CacheEntry {
   museProviderModels: EngineModel[];
 }
 
-export type CatalogProbeScope = "full" | "mcode" | "passive";
+export type CatalogProbeScope = "full" | "mcode" | "zcode" | "passive";
 type CatalogCacheScope = "probed" | "passive";
 
 const cache = new Map<CatalogCacheScope, CacheEntry>();
@@ -256,6 +257,9 @@ const EFFORT_CONFIG_IDS: Record<string, string> = {
   minimax: "reasoning_effort",
   mcode: "thinkingEffort",
   muse: "reasoningEffort",
+  // Same config id family as mcode until a live Z Code session advertises
+  // its own; a wrong guess costs the effort levels only, never the models.
+  zcode: "thinkingEffort",
 };
 const MUSE_CONTRIBUTOR_EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"];
 
@@ -688,7 +692,11 @@ export async function buildEngineCatalog(sources: CatalogSources): Promise<Engin
 async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEntry, "at">> {
   const engines: EngineDescriptor[] = [];
 
-  const probeTargets: Engine[] = scopeFor(sources) === "passive" ? [] : ["mcode"];
+  // A targeted scope probes just that engine; the full scope probes every
+  // engine whose catalog is not passive.  Both are availability-guarded
+  // below, so a host without the CLI pays nothing for the probe.
+  const scope = scopeFor(sources);
+  const probeTargets: Engine[] = scope === "passive" ? [] : scope === "full" ? ["mcode", "zcode"] : [scope];
   const probes = new Map<Engine, ProbeResult>();
   await Promise.all(
     probeTargets.map(async (engine) => {
@@ -705,7 +713,7 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
   );
 
   const museProviderModels = (sources.readMuseCatalog ?? readMuseProviderCatalog)();
-  for (const engine of ["deepseek", "minimax", "mcode", "muse"] as Engine[]) {
+  for (const engine of ENGINE_ORDER) {
     if (engine === "muse") {
       engines.push(museDescriptor(sources, museProviderModels));
       continue;
@@ -725,9 +733,18 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
       if (!note && !models.length) note = "MiniMax Code did not advertise a model catalog on this host.";
     }
 
+    // Z Code behaves like mcode: the probe's own catalog wins when the
+    // session advertised one, and the plugin's declared catalog fills the
+    // gap through mergePluginModels below.
+    if (engine === "zcode") {
+      models = probed?.models ?? models;
+      effortLevels = probed?.initialized ? probed.efforts : effortLevels;
+      if (available && !note && !models.length) note = "Z Code did not advertise a model catalog on this host.";
+    }
+
     const descriptor: EngineDescriptor = {
       id: engine,
-      label: engine === "mcode" ? "MiniMax Code" : engine === "minimax" ? "MiniMax" : "DeepSeek",
+      label: ENGINE_LABELS[engine],
       available,
       supportsThreads: probed?.initialized ? probed.supportsThreads : supportsThreads(engine),
       models: mergePluginModels(models, pluginModelsFor(sources, engine)),

@@ -122,7 +122,7 @@ describe("chat engine validation", () => {
     const body = engineRefusalSchema.parse(await response.json());
     expect(body.error).toBe("unknown engine");
     expect(body.engine).toBe("minmax");
-    expect(body.knownEngines).toEqual(["deepseek", "minimax", "mcode", "muse"]);
+    expect(body.knownEngines).toEqual(["deepseek", "minimax", "mcode", "muse", "zcode"]);
     // The turn never started: a typo must not run on another provider.
     expect(existsSync(marker)).toBe(false);
   });

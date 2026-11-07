@@ -218,13 +218,14 @@ describe("buildEngineCatalog", () => {
         minimax: { command: "minimax", args: [] },
         mcode: { command: "mcode", args: ["acp"] },
         muse: { command: "muse", args: [] },
+        zcode: { command: "zcode", args: ["acp"] },
       },
       // No probe runs here: the launchers are not executable in the test.
-      available: { deepseek: true, minimax: true, mcode: false, muse: false },
+      available: { deepseek: true, minimax: true, mcode: false, muse: false, zcode: false },
       probeCwd: "/tmp",
       readMuseCatalog: () => [],
     });
-    expect(catalog.engines.map((engine) => engine.id)).toEqual(["deepseek", "minimax", "mcode", "muse"]);
+    expect(catalog.engines.map((engine) => engine.id)).toEqual(["deepseek", "minimax", "mcode", "muse", "zcode"]);
     const deepseek = catalog.engines[0];
     expect(deepseek.available).toBe(true);
     expect(deepseek.models.map((model) => model.id)).toContain("DeepSeek-V4.1-Pro");
@@ -371,14 +372,15 @@ describe("buildEngineCatalog", () => {
         minimax: { command: "minimax", args: [] },
         mcode: { command: "mcode", args: ["acp"] },
         muse: { command: "muse", args: [] },
+        zcode: { command: "zcode", args: ["acp"] },
       },
       // An engine that is not installed here still lists its threads: the
       // capability belongs to the engine, not to this machine's copy of it.
-      available: { deepseek: true, minimax: true, mcode: false, muse: false },
+      available: { deepseek: true, minimax: true, mcode: false, muse: false, zcode: false },
       probeCwd: "/tmp",
       readMuseCatalog: () => [],
     });
-    expect(catalog.engines.map((engine) => engine.supportsThreads)).toEqual([true, true, true, true]);
+    expect(catalog.engines.map((engine) => engine.supportsThreads)).toEqual([true, true, true, true, true]);
   });
 
   it("notes when an engine advertised nothing", async () => {

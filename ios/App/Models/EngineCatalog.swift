@@ -121,6 +121,7 @@ public enum EngineLabels {
         case "minimax": return "MiniMax"
         case "mcode": return "MiniMax Code"
         case "muse": return "Muse Code"
+        case "zcode": return "Z Code"
         default: return id
         }
     }
@@ -133,7 +134,7 @@ public enum EngineLabels {
 /// not know, so a client only ever sends one of these.
 public enum EngineIds {
     /// Every engine id, in the order the picker shows them.
-    public static let all = ["deepseek", "minimax", "mcode", "muse"]
+    public static let all = ["deepseek", "minimax", "mcode", "muse", "zcode"]
 
     /// True when the id names an engine Clutch can run.
     public static func isKnown(_ id: String) -> Bool {

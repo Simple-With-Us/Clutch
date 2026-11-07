@@ -61,6 +61,7 @@ function fixture(options: { python?: boolean } = {}): Fixture {
         minimax: { command: process.execPath, args: [] },
         mcode: { command: "mcode", args: ["acp"] },
         muse: { command: process.execPath, args: [] },
+        zcode: { command: process.execPath, args: ["acp"] },
       },
       credentialFile,
     },
@@ -155,6 +156,23 @@ describe("engine availability", () => {
       settings: { get: (key: string) => (key === "META_API_KEY" ? "present" : "") },
     };
     await expect(engineAvailability("muse", withKey)).resolves.toMatchObject({ available: true });
+  });
+
+  it("keeps Z Code in the picker without a key and says where one goes", async () => {
+    const host = fixture();
+
+    // Same reasoning as Muse: the CLI's own login may be the credential, and
+    // the picker is where that sign-in starts, so the engine stays listed.
+    const zcode = await engineAvailability("zcode", host.context);
+    expect(zcode.available).toBe(true);
+    expect(zcode.note).toContain("zcode login");
+    expect(zcode.note).toContain("ZAI_API_KEY");
+
+    const withKey = {
+      ...host.context,
+      settings: { get: (key: string) => (key === "ZAI_API_KEY" ? "present" : "") },
+    };
+    await expect(engineAvailability("zcode", withKey)).resolves.toMatchObject({ available: true });
   });
 
   it("never starts an engine to answer the question", async () => {

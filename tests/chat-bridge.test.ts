@@ -205,8 +205,8 @@ describe("Muse engine wiring", () => {
     expect(source).toContain("CLUTCH_CHAT_LAUNCHER_MUSE");
   });
 
-  it("sends ACP content blocks to Muse, which rejects a bare string", () => {
-    expect(source).toContain('this.engine === "mcode" || this.engine === "muse"');
+  it("sends ACP content blocks to the code engines, which reject a bare string", () => {
+    expect(source).toContain("CODE_ENGINES.includes(this.engine)");
   });
 
   it("publishes the engine catalog the native model picker reads", () => {

@@ -111,7 +111,7 @@ export function serverPairingLink(options: {
   chatToken: string;
   chatPort?: string | undefined;
   tls?: boolean;
-  /** The code engine the server runs (`mcode` or `muse`). */
+  /** The code engine the server runs (`mcode`, `muse` or `zcode`). */
   engine?: string;
 }): string {
   const host = options.host.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
