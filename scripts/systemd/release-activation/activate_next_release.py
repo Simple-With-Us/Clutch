@@ -402,13 +402,14 @@ def activate(args, config):
         if mutation_started:
             write_json(failure, failure_value)
         else:
+            # No mutation happened, so reclaim this attempt's review artifacts while the
+            # lock is still held; leftovers otherwise block the next attempt at the
+            # backup-path preflight.
+            shutil.rmtree(backup, ignore_errors=True)
+            Path(before).unlink(missing_ok=True)
             if lock_held:
                 lock.rmdir()
                 lock_held = False
-            # No mutation happened, so reclaim this attempt's review artifacts; leftovers
-            # otherwise block the next attempt at the backup-path preflight.
-            shutil.rmtree(backup, ignore_errors=True)
-            Path(before).unlink(missing_ok=True)
         print(json.dumps(failure_value, separators=(",", ":")))
         raise SystemExit(1)
     except Exception as error:
@@ -416,10 +417,10 @@ def activate(args, config):
         if mutation_started:
             write_json(failure, failure_value)
         elif lock_held:
-            lock.rmdir()
-            lock_held = False
             shutil.rmtree(backup, ignore_errors=True)
             Path(before).unlink(missing_ok=True)
+            lock.rmdir()
+            lock_held = False
         print(json.dumps(failure_value, separators=(",", ":")))
         raise SystemExit(1)
 

@@ -85,5 +85,56 @@ class ReadinessRetryTests(unittest.TestCase):
         self.assertFalse(rollout.retryable_health_failure(rollout.base.RolloutStop("other-stage", {"errorType": "URLError"})))
 
 
+class AbortArtifactOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.lock = root / "production-rollout.lock"
+        self.backup = root / "backup-before-activation"
+        self.before = root / "production-before.json"
+        # A prior attempt failed after mutating, so these are its recovery material.
+        self.backup.mkdir(mode=0o700)
+        (self.backup / "clutch-chat-bridge.service.before").write_text("unit\n", encoding="utf-8")
+        self.before.write_text("{}\n", encoding="utf-8")
+        base = rollout.base
+        for name, value in (("LOCK", self.lock), ("BACKUP", self.backup), ("BEFORE_RECEIPT", self.before)):
+            patcher = patch.object(base, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_activate(self, validate):
+        with patch.object(rollout.base.sys, "argv", ["activate_release.py", "--activate"]):
+            with patch.object(rollout.base, "validate_release", validate):
+                with patch("builtins.print"):
+                    with self.assertRaises(SystemExit):
+                        rollout.base.main()
+
+    def assert_recovery_material_kept(self):
+        self.assertTrue((self.backup / "clutch-chat-bridge.service.before").is_file())
+        self.assertTrue(self.before.is_file())
+
+    def test_stop_before_lock_keeps_prior_attempt_artifacts(self):
+        self.run_activate(lambda: rollout.base.stop("release-validation", valid=False))
+        self.assert_recovery_material_kept()
+
+    def test_lock_held_by_prior_attempt_keeps_its_artifacts(self):
+        self.lock.mkdir(mode=0o700)
+        self.run_activate(lambda: {"sourceCommit": "test"})
+        self.assert_recovery_material_kept()
+        self.assertTrue(self.lock.is_dir())
+
+    def test_unexpected_error_before_lock_keeps_prior_attempt_artifacts(self):
+        def explode():
+            raise OSError("unreadable release")
+        self.run_activate(explode)
+        self.assert_recovery_material_kept()
+
+    def test_reclaim_removes_this_attempts_artifacts(self):
+        self.assertTrue(rollout.base.reclaim_attempt_artifacts())
+        self.assertFalse(self.backup.exists())
+        self.assertFalse(self.before.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

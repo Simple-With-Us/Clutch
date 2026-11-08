@@ -64,6 +64,17 @@ def stop(step, **flags):
     raise RolloutStop(step, flags)
 
 
+def reclaim_attempt_artifacts():
+    """Remove the backup and before-receipt this attempt created.  True when both are gone."""
+    try:
+        if BACKUP.exists():
+            shutil.rmtree(BACKUP)
+        BEFORE_RECEIPT.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
+
+
 def command(args, step, timeout=15):
     try:
         result = subprocess.run(
@@ -671,6 +682,7 @@ def main():
         raise SystemExit(2)
     mutation_started = False
     lock_acquired = False
+    artifacts_owned = False
     success = False
     stage = "start"
     state_flags = {"dropinInstalled": False, "daemonReloaded": False, "restartAttempted": False}
@@ -711,6 +723,7 @@ def main():
         pre_record["authoritativeIdleClaimed"] = False
 
         BACKUP.mkdir(mode=0o700)
+        artifacts_owned = True
         unit_backup = BACKUP / "clutch-chat-bridge.service.before"
         shutil.copy2(UNIT_PATH, unit_backup)
         if hashlib.sha256(unit_backup.read_bytes()).hexdigest() != unit_hash:
@@ -912,17 +925,18 @@ def main():
                 "lockRetained": False,
                 "rollbackAttempted": False,
             }
+            # No systemd mutation happened, so the review artifacts this attempt created
+            # are reclaimed here, while the lock is still held; otherwise the next attempt's
+            # backup-path-preflight stops on them until manual cleanup.  Artifacts this
+            # attempt did not create belong to an earlier attempt's recovery and are kept.
+            if artifacts_owned and not reclaim_attempt_artifacts():
+                failure["reviewArtifactsRetained"] = True
             if lock_acquired:
                 try:
                     LOCK.rmdir()
                     lock_acquired = False
                 except OSError:
                     failure["lockRetained"] = True
-            # No systemd mutation happened, so the review artifacts this attempt created
-            # are reclaimed here; otherwise the next attempt's backup-path-preflight stops
-            # on the leftover backup directory / before-receipt until manual cleanup.
-            shutil.rmtree(BACKUP, ignore_errors=True)
-            BEFORE_RECEIPT.unlink(missing_ok=True)
         print(json.dumps(failure, separators=(",", ":")))
         raise SystemExit(1)
     except Exception as error:
@@ -940,13 +954,16 @@ def main():
                 write_json(FAILURE_RECEIPT, failure)
             except Exception:
                 pass
-        elif lock_acquired:
-            try:
-                LOCK.rmdir()
-                lock_acquired = False
-                failure["lockRetained"] = False
-            except OSError:
-                failure["lockRetained"] = True
+        else:
+            if artifacts_owned and not reclaim_attempt_artifacts():
+                failure["reviewArtifactsRetained"] = True
+            if lock_acquired:
+                try:
+                    LOCK.rmdir()
+                    lock_acquired = False
+                    failure["lockRetained"] = False
+                except OSError:
+                    failure["lockRetained"] = True
         print(json.dumps(failure, separators=(",", ":")))
         raise SystemExit(1)
 
