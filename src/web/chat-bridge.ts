@@ -37,7 +37,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -130,7 +130,7 @@ interface Launcher {
  * their session log, and the sidecar reads it through the host while the
  * bridge only carries the turns.
  */
-const CODE_ENGINES: Engine[] = ["mcode", "muse"];
+const CODE_ENGINES: Engine[] = ["mcode", "muse", "zcode"];
 
 /**
  * How long a failed connection to the dsh host is remembered.
@@ -167,6 +167,11 @@ const defaultMcode = [
 ].find(existsSync) ?? "mcode";
 const mcodeLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MCODE?.trim();
 const museLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MUSE?.trim();
+const zcodeLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_ZCODE?.trim();
+const defaultZcode = [
+  join(homedir(), ".local", "bin", "zcode"),
+  join(homedir(), ".zcode", "bin", "zcode"),
+].find(existsSync) ?? "zcode";
 
 const LAUNCHERS: Record<Engine, Launcher> = {
   // CLUTCH_CHAT_LAUNCHER_<ENGINE> overrides exist for the full-loop test,
@@ -184,6 +189,13 @@ const LAUNCHERS: Record<Engine, Launcher> = {
   muse: museLauncherOverride
     ? { command: museLauncherOverride, args: [] }
     : { command: join(ROOT, "scripts", "muse-code-acp.sh"), args: [] },
+  // Z Code is the third code engine: like mcode, its launcher is the CLI
+  // itself driven over ACP v1 stdio — no backend selection to resolve, so
+  // no script of its own.  CLUTCH_ZCODE_CLI names a CLI the default search
+  // (`~/.local/bin`, `~/.zcode/bin`, then PATH) missed.
+  zcode: zcodeLauncherOverride
+    ? { command: zcodeLauncherOverride, args: [] }
+    : { command: process.env.CLUTCH_ZCODE_CLI?.trim() || defaultZcode, args: ["acp"] },
 };
 
 /** Engines a phone or Mac can pick, in the order the picker shows them. */
@@ -215,7 +227,8 @@ export function routeForModel(model: string | undefined, engine: string | undefi
 /**
  * The engine a model id belongs to, when the model names its own engine.
  * `muse-wonder` and `muse-spark-1.3` are Muse models; `mcode-*` are
- * MiniMax Code's; everything else stays on the DeepSeek sidecar.
+ * MiniMax Code's; `zcode-*` and GLM ids (`glm-*`) are Z Code's; everything
+ * else stays on the DeepSeek sidecar.
  */
 export function engineForModelId(model: string | undefined): Engine | null {
   if (typeof model !== "string") return null;
@@ -225,6 +238,8 @@ export function engineForModelId(model: string | undefined): Engine | null {
   if (id.startsWith("mcode")) return "mcode";
   if (id.startsWith("minimax")) return "minimax";
   if (id.startsWith("deepseek")) return "deepseek";
+  if (id.startsWith("zcode")) return "zcode";
+  if (id.startsWith("glm-")) return "zcode";
   return null;
 }
 
@@ -306,6 +321,14 @@ async function detectTailnetHost(): Promise<string | null> {
 /** Whether the direct MiniMax Code launcher is present on this machine. */
 export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
   return launcher.command.includes("/") ? existsSync(launcher.command) : true;
+}
+
+/** Whether the direct Z Code launcher is present on this machine. */
+export function zcodeAvailable(launcher: Launcher = LAUNCHERS.zcode, path = process.env.PATH ?? ""): boolean {
+  if (launcher.command.includes("/")) return existsSync(launcher.command);
+  // A bare name is the PATH fallback: resolve it, so health reports false
+  // when the CLI is missing instead of failing on the first send.
+  return path.split(delimiter).filter(Boolean).some((dir) => executableFile(join(dir, launcher.command)));
 }
 
 function executableFile(path: string): boolean {
@@ -650,6 +673,19 @@ export async function engineAvailability(
       return {
         available: false,
         note: `${label} needs a private credential file.\u00A0 Run chmod 600 ${credential.file}, then sign in again.`,
+      };
+    }
+    return { available: true };
+  }
+
+  if (engine === "zcode") {
+    // Same reasoning as Muse: the CLI's own login may be the credential, and
+    // the picker is where that sign-in starts, so a missing key keeps the
+    // engine listed with a note instead of dropping it.
+    if (!settingValue("ZAI_API_KEY", env, settings)) {
+      return {
+        available: true,
+        note: `${label} needs a sign-in.\u00A0 Run zcode login as the user this sidecar runs as, or add ZAI_API_KEY in Clutch settings.`,
       };
     }
     return { available: true };
@@ -1910,7 +1946,7 @@ export class Bridge implements MuseAuthBridge {
     // Muse Code rejects a bare string ("Invalid params"), so the code
     // engines get the block form every time.
     let prompt: unknown = text;
-    if (this.engine === "mcode" || this.engine === "muse") {
+    if (CODE_ENGINES.includes(this.engine)) {
       const blocks: unknown[] = [{ type: "text", text }];
       for (const image of images) {
         blocks.push({ type: "image", mimeType: image.mimeType, data: image.data });
@@ -2517,7 +2553,11 @@ async function main(): Promise<void> {
       notes,
       probeCwd: process.env.HOME ?? "/tmp",
       readMuseSessionOptions: () => bridges.get("muse")?.catalogOptions() ?? null,
-      probeScope: selectedEngine === undefined ? "full" : selectedEngine === "mcode" ? "mcode" : "passive",
+      probeScope: selectedEngine === undefined
+        ? "full"
+        : selectedEngine === "mcode" || selectedEngine === "zcode"
+          ? selectedEngine
+          : "passive",
       plugins: pluginReport,
     });
     return withCurrentNotes(built, notes, publishedNotes);
@@ -2679,6 +2719,7 @@ async function main(): Promise<void> {
           ok: true,
           engines: ENGINE_ORDER,
           mcode: { available: mcodeAvailable() },
+          zcode: { available: zcodeAvailable() },
           tailnetHost,
           activeTurns: [...sessions.values()].filter((session) => session.busy).length,
           diagnostics: await diagnostics.status(),

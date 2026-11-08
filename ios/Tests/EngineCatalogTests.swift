@@ -60,9 +60,10 @@ final class EngineCatalogTests: XCTestCase {
     }
 
     func testOnlyTheEnginesTheSidecarKnowsAreOffered() {
-        XCTAssertEqual(EngineIds.all, ["deepseek", "minimax", "mcode", "muse"])
+        XCTAssertEqual(EngineIds.all, ["deepseek", "minimax", "mcode", "muse", "zcode"])
         XCTAssertTrue(EngineIds.isKnown("deepseek"))
         XCTAssertTrue(EngineIds.isKnown("muse"))
+        XCTAssertTrue(EngineIds.isKnown("zcode"))
         XCTAssertFalse(EngineIds.isKnown("gpt"))
         XCTAssertFalse(EngineIds.isKnown(""))
     }

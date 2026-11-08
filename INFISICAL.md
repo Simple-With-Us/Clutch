@@ -51,6 +51,7 @@ Secrets (placeholders below — Jay fills real values in the Infisical UI; nothi
   Read by the spawned `muse serve` host, which cannot read a login-keychain OAuth credential, so a
   browser login alone leaves headless spawns unauthenticated.  Missing = Muse Code turns fail with
   `not logged in`, classified as `invalid_credentials`; nothing else crashes. |
+| `ZAI_API_KEY` | secret | — | Z.ai API key for the Z Code engine.  The `zcode login` OAuth credential is the other accepted route, so a missing key only lowers the picker's note; turns fail with an auth error, classified as `invalid_credentials`. |
 | `COMETCHAT_AUTH_KEY` | secret | — | CometChat Auth Key served to the paired phone via chat-config (dev-grade; server-minted user tokens are the follow-up). |
 | `COMETCHAT_REST_API_KEY` | secret | — | CometChat REST key, backend-only.  The sidecar relay authenticates with it; it never ships in the app. |
 | `APPLE_API_KEY_ID` | secret | — | App Store Connect API key id for GitHub-hosted iOS/Mac ships (org-wide GitHub sync or CI fetch). |
@@ -83,6 +84,8 @@ Env config:
 | `CLUTCH_AGENT_PROXY_PROJECT_ID` | config | — | Optional Infisical Project ID override for Agent Proxy (defaults to Clutch project) |
 | `CLUTCH_AGENT_PROXY_ENV` | config | `prod` | Infisical environment slug for Agent Proxy |
 | `CLUTCH_AGENT_PROXY_PATH` | config | `/` | Secret path folder scope for Agent Proxy |
+| `CLUTCH_ZCODE_CLI` | config | `zcode` | Path to the Z Code CLI the sidecar spawns (`zcode acp`), when the default search misses it |
+| `CLUTCH_CHAT_LAUNCHER_ZCODE` | config | — | Full launcher override for Z Code (test hooks and unusual installs) |
 | `CLUTCH_AGENT_PROXY_CA_CERT_PATH` | config | — | Optional CA certificate path for Agent Proxy TLS MITM |
 
 Knobs:

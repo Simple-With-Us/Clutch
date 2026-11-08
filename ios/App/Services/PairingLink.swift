@@ -111,12 +111,12 @@ public enum PairingLink {
 
     /// The `kind=` / `mode=` pairing value as a host kind, when it names one.
     ///
-    /// `mcode` and `muse` both mean a code server: the sidecar behind them
-    /// decides which engines it actually runs, and the app reads that from
-    /// the host's engine catalog.
+    /// `mcode`, `muse` and `zcode` all mean a code server: the sidecar behind
+    /// them decides which engines it actually runs, and the app reads that
+    /// from the host's engine catalog.
     static func hostKind(_ raw: String?) -> HostKind? {
         switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "mcode", "muse", "minimax-code", "minimaxcode", "muse-code", "musecode":
+        case "mcode", "muse", "zcode", "minimax-code", "minimaxcode", "muse-code", "musecode":
             return .codeServer
         case "web": return .web
         default: return nil

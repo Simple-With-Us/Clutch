@@ -143,3 +143,49 @@ The reasoning-effort config offers `minimal` and `ultra`, which have no
 equivalent in Clutch's shared `EffortLevel` union (`none`, `low`, `medium`,
 `high`, `xhigh`, `max`); `max` is not offered at all.  The plugin advertises the
 intersection and leaves the rest unmapped.
+
+## zcode
+
+Z Code joins `mcode` and `muse` as a code engine: the sidecar spawns its CLI
+over ACP v1 stdio (`zcode acp`), and the engine keeps its own resumable
+threads the way the other two do.  There is no launcher script and no bridge —
+Z Code has no backend selection to resolve, so the launcher is the CLI itself,
+exactly as `mcode` is.  `CLUTCH_CHAT_LAUNCHER_ZCODE` overrides the whole
+launcher and `CLUTCH_ZCODE_CLI` names a CLI the default search
+(`~/.local/bin`, `~/.zcode/bin`, then PATH) missed.
+
+### Why a manifest and not a module
+
+Everything Z Code needs today is data: one declared model, generic provider
+error patterns, and the credential rule.  The declarative tier expresses all
+of it, so there is no `zcode.engine.mjs` and nothing for a parity test to
+pin.  When a live Z Code session proves behaviour a manifest cannot express,
+that is the point to move to the programmatic tier.
+
+### The declared catalog is a placeholder by design
+
+The manifest declares one model (`glm-5.3`) because a manifest must ship a
+catalog, and no Z Code CLI was installed on the machine that wrote it.  The
+catalog probe (`src/web/engine-catalog.ts`) includes `zcode` in its targets:
+on the first host with a working CLI, a throwaway `session/new` reads the
+engine's own `configOptions` and its list replaces the declared one, exactly
+as MiniMax Code's does.  `images` is declared `false` for the same reason —
+an unproven engine must not promise image attachments its ACP session may
+drop; flip it on evidence.
+
+### Where it runs
+
+Local spawns first, and the remote story is the standard one: a server host
+runs the sidecar with the Z Code CLI installed and signed in, and the apps
+reach it over Tailscale HTTPS.  See `docs/zcode-server.md`.  There is no SSH
+transport in Clutch and this engine adds none.
+
+### What is verified, and what is not
+
+The manifest loads, maps onto the `zcode` engine id, and merges its declared
+models into the picker (`tests/zcode-plugin.test.ts`), and the sidecar paths
+it rides are the same ones the mcode and muse tests drive.  **Not verified: a
+live turn.**  No Z Code CLI was installed on the authoring machine, so
+`zcode acp` is the assumed command — it is the shape every other code engine
+speaks — and the launcher overrides exist precisely so an operator can point
+the engine at the real thing without a code change if the assumption misses.
