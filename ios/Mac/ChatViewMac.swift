@@ -96,6 +96,7 @@ enum ChatEngine: String, CaseIterable, Identifiable {
     case minimax
     case mcode
     case muse
+    case zcode
 
     var id: String { rawValue }
 
@@ -108,6 +109,7 @@ enum ChatEngine: String, CaseIterable, Identifiable {
         case .minimax: return "MiniMax"
         case .mcode: return "MiniMax Code"
         case .muse: return "Muse Code"
+        case .zcode: return "Z Code"
         }
     }
 }
@@ -1216,6 +1218,7 @@ public struct ChatView: View {
         case .minimax: return "2"
         case .mcode: return "3"
         case .muse: return "4"
+        case .zcode: return "5"
         }
     }
 

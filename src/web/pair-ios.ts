@@ -190,7 +190,9 @@ function pairServer(args: Set<string>): void {
   const engine = process.env.CLUTCH_SERVER_ENGINE?.trim()
     || (existsSync("/usr/local/bin/muse-code-acp") || existsSync(join(homedir(), ".local", "bin", "muse-code-acp"))
       ? "muse"
-      : "mcode");
+      : existsSync(join(homedir(), ".local", "bin", "zcode")) || existsSync(join(homedir(), ".zcode", "bin", "zcode"))
+        ? "zcode"
+        : "mcode");
   const link = serverPairingLink({ host, name, chatToken, chatPort: clutchChatPort(), engine });
   if (args.has("--print")) {
     process.stdout.write(`${link}\n`);

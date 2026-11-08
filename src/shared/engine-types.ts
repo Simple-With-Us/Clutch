@@ -6,10 +6,10 @@
  */
 import { z } from "zod";
 
-export type Engine = "deepseek" | "minimax" | "mcode" | "muse";
+export type Engine = "deepseek" | "minimax" | "mcode" | "muse" | "zcode";
 
 /** The engines a phone or Mac can pick, in the order the picker shows them. */
-export const ENGINE_ORDER: readonly Engine[] = ["deepseek", "minimax", "mcode", "muse"];
+export const ENGINE_ORDER: readonly Engine[] = ["deepseek", "minimax", "mcode", "muse", "zcode"];
 
 /** Owner-facing names for the engines. */
 export const ENGINE_LABELS: Record<Engine, string> = {
@@ -17,6 +17,7 @@ export const ENGINE_LABELS: Record<Engine, string> = {
   minimax: "MiniMax",
   mcode: "MiniMax Code",
   muse: "Muse Code",
+  zcode: "Z Code",
 };
 
 /** True when the id names an engine Clutch can run. */

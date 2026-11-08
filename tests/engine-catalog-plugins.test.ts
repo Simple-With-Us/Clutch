@@ -54,8 +54,9 @@ function sources(plugins?: EnginePluginReport) {
       minimax: { command: "/unused", args: [] },
       mcode: { command: "/unused", args: [] },
       muse: { command: "/never-start-muse", args: [] },
+      zcode: { command: "/unused", args: ["acp"] },
     },
-    available: { deepseek: false, minimax: false, mcode: false, muse: true },
+    available: { deepseek: false, minimax: false, mcode: false, muse: true, zcode: false },
     probeCwd: "/unused",
     readMuseCatalog: () => [],
     ...(plugins ? { plugins } : {}),
@@ -69,6 +70,7 @@ describe("engine plugin wiring", () => {
     const mapped = report.contributions.map((entry) => [entry.pluginId, entry.engine]);
     expect(mapped).toContainEqual(["muse-code", "muse"]);
     expect(mapped).toContainEqual(["minimax", "minimax"]);
+    expect(mapped).toContainEqual(["zcode", "zcode"]);
     expect(report.unmapped).toEqual([]);
     expect(report.problems).toEqual([]);
   });
@@ -82,7 +84,7 @@ describe("engine plugin wiring", () => {
     expect(report.contributions).toEqual([]);
 
     const catalog = await buildEngineCatalog(sources(report));
-    expect(catalog.engines.map((engine) => engine.id)).toEqual(["deepseek", "minimax", "mcode", "muse"]);
+    expect(catalog.engines.map((engine) => engine.id)).toEqual(["deepseek", "minimax", "mcode", "muse", "zcode"]);
     expect(catalog.engines.some((engine) => engine.id === "grok")).toBe(false);
   });
 
@@ -108,9 +110,31 @@ describe("engine plugin wiring", () => {
     expect(report.contributions.map((entry) => entry.pluginId)).toEqual(["muse-code"]);
 
     const catalog = await buildEngineCatalog(sources(report));
-    expect(catalog.engines.map((engine) => engine.id)).toEqual(["deepseek", "minimax", "mcode", "muse"]);
+    expect(catalog.engines.map((engine) => engine.id)).toEqual(["deepseek", "minimax", "mcode", "muse", "zcode"]);
     expect(catalog.engines.find((engine) => engine.id === "muse")?.models.map((model) => model.id))
       .toContain("muse-floor-model");
+  });
+
+  it("gives an unprobed Z Code its declared models and effort levels without a no-catalog note", async () => {
+    const report = await loadEnginePluginReport({ dirs: [BUNDLED] });
+    const base = sources(report);
+    const catalog = await buildEngineCatalog({
+      ...base,
+      available: { ...base.available, zcode: true },
+      probeScope: "passive" as const,
+    });
+    const zcode = catalog.engines.find((engine) => engine.id === "zcode");
+    expect(zcode?.models.map((model) => model.id)).toContain("glm-5.3");
+    expect(zcode?.effortLevels.length).toBeGreaterThan(0);
+    expect(zcode?.note).toBeUndefined();
+
+    const bare = await buildEngineCatalog({
+      ...sources(),
+      available: { ...base.available, zcode: true },
+      probeScope: "passive" as const,
+    });
+    expect(bare.engines.find((engine) => engine.id === "zcode")?.note)
+      .toBe("Z Code did not advertise a model catalog on this host.");
   });
 
   it("leaves the dsh engines' model list to their profile", async () => {
