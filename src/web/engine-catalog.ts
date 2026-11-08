@@ -221,7 +221,9 @@ interface CacheEntry {
 }
 
 export type CatalogProbeScope = "full" | "mcode" | "zcode" | "passive";
-type CatalogCacheScope = "probed" | "passive";
+// Each probe scope keeps its own entry: the full scope probes every probed
+// engine, a targeted scope only one, so they must never serve each other.
+type CatalogCacheScope = CatalogProbeScope;
 
 const cache = new Map<CatalogCacheScope, CacheEntry>();
 const inflight = new Map<CatalogCacheScope, Promise<CacheEntry>>();
@@ -250,6 +252,9 @@ const EFFORT_LEVELS: Record<string, string[]> = {
   deepseek: ["none", "low", "medium", "high", "xhigh", "max"],
   minimax: ["none", "low", "medium", "high", "xhigh", "max"],
   mcode: ["default", "low", "medium", "high", "xhigh", "max"],
+  // Same family as mcode until a live probe advertises Z Code's own list; an
+  // effort the session does not offer is refused without failing the turn.
+  zcode: ["default", "low", "medium", "high", "xhigh", "max"],
 };
 
 const EFFORT_CONFIG_IDS: Record<string, string> = {
@@ -739,7 +744,13 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
     if (engine === "zcode") {
       models = probed?.models ?? models;
       effortLevels = probed?.initialized ? probed.efforts : effortLevels;
-      if (available && !note && !models.length) note = "Z Code did not advertise a model catalog on this host.";
+    }
+
+    const mergedModels = mergePluginModels(models, pluginModelsFor(sources, engine));
+    // Judged after the plugin merge, so a declared catalog never shows beside
+    // a note saying there is none.
+    if (engine === "zcode" && available && !note && !mergedModels.length) {
+      note = "Z Code did not advertise a model catalog on this host.";
     }
 
     const descriptor: EngineDescriptor = {
@@ -747,7 +758,7 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
       label: ENGINE_LABELS[engine],
       available,
       supportsThreads: probed?.initialized ? probed.supportsThreads : supportsThreads(engine),
-      models: mergePluginModels(models, pluginModelsFor(sources, engine)),
+      models: mergedModels,
       effortLevels,
       effortConfigId: EFFORT_CONFIG_IDS[engine] ?? "reasoning_effort",
       modelConfigId: "model",
@@ -762,7 +773,7 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
 /** The catalog, cached for a few minutes. */
 export async function engineCatalog(sources: CatalogSources): Promise<EngineCatalog> {
   const probeScope = scopeFor(sources);
-  const scope: CatalogCacheScope = probeScope === "passive" ? "passive" : "probed";
+  const scope: CatalogCacheScope = probeScope;
   const now = Date.now();
   const cached = cache.get(scope);
   if (cached && now - cached.at < CATALOG_TTL_MS) return withCurrentMuse(cached, sources);

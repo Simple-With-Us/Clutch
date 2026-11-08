@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { Bridge, compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf } from "../src/web/chat-bridge.ts";
+import { Bridge, compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf, zcodeAvailable } from "../src/web/chat-bridge.ts";
 import { engineCatalog, parseAcpMessage, readMuseProviderCatalog, resetEngineCatalogCache } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
@@ -350,6 +350,20 @@ describe("chat-bridge server-host wiring", () => {
     expect(source).toContain("mcodeAvailable");
     expect(mcodeAvailable({ command: "/definitely/not/here/mcode", args: ["acp"] })).toBe(false);
     expect(mcodeAvailable({ command: "mcode", args: ["acp"] })).toBe(true);
+  });
+
+  it("resolves a bare Z Code launcher against PATH for the health route", () => {
+    expect(source).toContain("zcodeAvailable");
+    const dir = mkdtempSync(join(tmpdir(), "clutch-zcode-path-"));
+    try {
+      expect(zcodeAvailable({ command: "/definitely/not/here/zcode", args: ["acp"] })).toBe(false);
+      expect(zcodeAvailable({ command: "zcode", args: ["acp"] }, dir)).toBe(false);
+      writeFileSync(join(dir, "zcode"), "#!/bin/sh\n");
+      chmodSync(join(dir, "zcode"), 0o755);
+      expect(zcodeAvailable({ command: "zcode", args: ["acp"] }, `/definitely/not/here:${dir}`)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

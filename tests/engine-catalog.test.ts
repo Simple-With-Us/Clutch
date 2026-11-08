@@ -465,7 +465,6 @@ lines.on("line", (line) => {
       expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
       expect(mcodeSettled).toBe(false);
       expect(fullSettled).toBe(false);
-      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
 
       writeFileSync(release, "continue");
       const [probed, full] = await Promise.all([mcodeBuild, fullBuild]);
@@ -475,12 +474,37 @@ lines.on("line", (line) => {
         .toEqual(["m:minimax:MiniMax-M3.1:v:"]);
       expect((await engineCatalog({ ...sources, probeScope: "mcode" })).engines.find((engine) => engine.id === "mcode")?.models)
         .toEqual(probed.engines.find((engine) => engine.id === "mcode")?.models);
-      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(1);
+      await engineCatalog(sources);
+      // The full and targeted scopes probe different engine sets, so each
+      // builds its own entry once; later reads in either scope reuse it.
+      expect(readFileSync(count, "utf8").trim().split("\n")).toHaveLength(2);
     } finally {
       writeFileSync(release, "continue");
       await Promise.allSettled([mcodeRequest, fullRequest].filter((request): request is Promise<EngineCatalog> => request !== undefined));
       resetEngineCatalogCache();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the full and targeted probe scopes in separate cache entries", async () => {
+    resetEngineCatalogCache();
+    const sources = {
+      launchers: {
+        deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
+        mcode: { command: "/unused", args: [] }, muse: { command: "/never-start-muse", args: [] },
+        zcode: { command: "/unused", args: ["acp"] },
+      },
+      available: { deepseek: false, minimax: false, mcode: false, muse: false, zcode: false },
+      probeCwd: "/unused",
+      readMuseCatalog: () => [],
+    };
+    try {
+      const targeted = await engineCatalog({ ...sources, probeScope: "zcode", notes: { deepseek: "targeted build" } });
+      const full = await engineCatalog({ ...sources, probeScope: "full", notes: { deepseek: "full build" } });
+      expect(targeted.engines.find((engine) => engine.id === "deepseek")?.note).toBe("targeted build");
+      expect(full.engines.find((engine) => engine.id === "deepseek")?.note).toBe("full build");
+    } finally {
+      resetEngineCatalogCache();
     }
   });
 

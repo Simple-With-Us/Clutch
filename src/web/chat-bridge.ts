@@ -37,7 +37,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -324,8 +324,11 @@ export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
 }
 
 /** Whether the direct Z Code launcher is present on this machine. */
-export function zcodeAvailable(launcher: Launcher = LAUNCHERS.zcode): boolean {
-  return launcher.command.includes("/") ? existsSync(launcher.command) : true;
+export function zcodeAvailable(launcher: Launcher = LAUNCHERS.zcode, path = process.env.PATH ?? ""): boolean {
+  if (launcher.command.includes("/")) return existsSync(launcher.command);
+  // A bare name is the PATH fallback: resolve it, so health reports false
+  // when the CLI is missing instead of failing on the first send.
+  return path.split(delimiter).filter(Boolean).some((dir) => executableFile(join(dir, launcher.command)));
 }
 
 function executableFile(path: string): boolean {

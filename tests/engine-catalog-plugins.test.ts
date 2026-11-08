@@ -115,6 +115,28 @@ describe("engine plugin wiring", () => {
       .toContain("muse-floor-model");
   });
 
+  it("gives an unprobed Z Code its declared models and effort levels without a no-catalog note", async () => {
+    const report = await loadEnginePluginReport({ dirs: [BUNDLED] });
+    const base = sources(report);
+    const catalog = await buildEngineCatalog({
+      ...base,
+      available: { ...base.available, zcode: true },
+      probeScope: "passive" as const,
+    });
+    const zcode = catalog.engines.find((engine) => engine.id === "zcode");
+    expect(zcode?.models.map((model) => model.id)).toContain("glm-5.3");
+    expect(zcode?.effortLevels.length).toBeGreaterThan(0);
+    expect(zcode?.note).toBeUndefined();
+
+    const bare = await buildEngineCatalog({
+      ...sources(),
+      available: { ...base.available, zcode: true },
+      probeScope: "passive" as const,
+    });
+    expect(bare.engines.find((engine) => engine.id === "zcode")?.note)
+      .toBe("Z Code did not advertise a model catalog on this host.");
+  });
+
   it("leaves the dsh engines' model list to their profile", async () => {
     const report = await loadEnginePluginReport({ dirs: [BUNDLED] });
 
