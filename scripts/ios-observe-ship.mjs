@@ -5,10 +5,8 @@
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const TAIL_MAX = 8 * 1024;
 
 const uploadedRe =
   /upload path succeeded via xcodebuild export \(destination=upload\)|build .+ submitted for |upload submitted; watch TestFlight processing/;
@@ -22,48 +20,105 @@ if (cmd.length === 0) {
 }
 
 const outputs = process.env.GITHUB_OUTPUT?.trim();
+
+/** @type {{ stdout: { sawUploaded: boolean; sawSkipped: boolean; carry: string }; stderr: { sawUploaded: boolean; sawSkipped: boolean; carry: string } }} */
+const streamState = {
+  stdout: { sawUploaded: false, sawSkipped: false, carry: "" },
+  stderr: { sawUploaded: false, sawSkipped: false, carry: "" },
+};
+
+/**
+ * @param {string} line
+ * @param {{ sawUploaded: boolean; sawSkipped: boolean }} state
+ */
+function scanLine(line, state) {
+  if (uploadedRe.test(line)) {
+    state.sawUploaded = true;
+  }
+  if (skippedRe.test(line)) {
+    state.sawSkipped = true;
+  }
+}
+
+/**
+ * @param {Buffer | string} chunk
+ * @param {{ sawUploaded: boolean; sawSkipped: boolean; carry: string }} state
+ * @param {NodeJS.WritableStream} sink
+ */
+function feedStream(chunk, state, sink) {
+  sink.write(chunk);
+  state.carry += chunk.toString();
+  let nl = state.carry.indexOf("\n");
+  while (nl !== -1) {
+    const line = state.carry.slice(0, nl);
+    state.carry = state.carry.slice(nl + 1);
+    scanLine(line, state);
+    nl = state.carry.indexOf("\n");
+  }
+  if (state.carry.length > TAIL_MAX) {
+    state.carry = state.carry.slice(-TAIL_MAX);
+  }
+}
+
+function flushStream(state) {
+  if (state.carry.length > 0) {
+    scanLine(state.carry, state);
+    state.carry = "";
+  }
+}
+
+function classifyOutcome(exitCode) {
+  const sawUploaded = streamState.stdout.sawUploaded || streamState.stderr.sawUploaded;
+  const sawSkipped = streamState.stdout.sawSkipped || streamState.stderr.sawSkipped;
+  if (sawUploaded) {
+    return { uploaded: "true", observed: "uploaded", exitCode };
+  }
+  if (sawSkipped) {
+    return { uploaded: "false", observed: "skipped", exitCode };
+  }
+  if (exitCode === 0) {
+    return { uploaded: "unknown", observed: "unknown_success", exitCode };
+  }
+  return { uploaded: "false", observed: "none", exitCode };
+}
+
+let settled = false;
+
+/**
+ * @param {{ uploaded: string; observed: string; exitCode: number }} outcome
+ */
+function settle(outcome) {
+  if (settled) {
+    return;
+  }
+  settled = true;
+  if (outputs) {
+    fs.appendFileSync(outputs, `uploaded=${outcome.uploaded}\n`);
+    fs.appendFileSync(outputs, `ship_observed=${outcome.observed}\n`);
+  }
+  process.exit(outcome.exitCode);
+}
+
 const child = spawn(cmd[0], cmd.slice(1), {
   stdio: ["inherit", "pipe", "pipe"],
   shell: false,
 });
 
-let stdoutBuf = "";
-let stderrBuf = "";
 child.stdout.on("data", (chunk) => {
-  const text = chunk.toString();
-  stdoutBuf += text;
-  process.stdout.write(chunk);
+  feedStream(chunk, streamState.stdout, process.stdout);
 });
 child.stderr.on("data", (chunk) => {
-  const text = chunk.toString();
-  stderrBuf += text;
-  process.stderr.write(chunk);
+  feedStream(chunk, streamState.stderr, process.stderr);
 });
 
-const exitPromise = new Promise((resolve) => {
-  child.on("close", (code, signal) => {
-    resolve({ code: code ?? (signal ? 1 : 0), signal });
-  });
+child.on("error", (err) => {
+  console.error(err);
+  settle({ uploaded: "false", observed: "spawn_error", exitCode: 1 });
 });
 
-const { code } = await exitPromise;
-
-const combined = stdoutBuf + stderrBuf;
-const uploaded = uploadedRe.test(combined);
-const skipped = skippedRe.test(combined);
-
-let observed = "none";
-if (uploaded) {
-  observed = "uploaded";
-} else if (skipped) {
-  observed = "skipped";
-} else if (code === 0) {
-  observed = "unknown_success";
-}
-
-if (outputs) {
-  fs.appendFileSync(outputs, `uploaded=${uploaded ? "true" : "false"}\n`);
-  fs.appendFileSync(outputs, `ship_observed=${observed}\n`);
-}
-
-process.exit(code);
+child.on("close", (code, signal) => {
+  flushStream(streamState.stdout);
+  flushStream(streamState.stderr);
+  const exitCode = code ?? (signal ? 1 : 0);
+  settle(classifyOutcome(exitCode));
+});

@@ -225,6 +225,7 @@ describe("ios-ship.yml auto-ship contract", () => {
     const recheckStep = code.slice(recheckAt).split(/\n {6}- name:/)[0];
     expect(recheckStep).toMatch(/id: recheck_tf/);
     expect(recheckStep).toMatch(/steps\.ship\.outputs\.uploaded == 'true'/);
+    expect(code).toMatch(/uploaded.*unknown/);
     expect(code).toMatch(/recheck_tf\.outputs\.tf_ready_summary/);
     expect(code).toMatch(/iOS ship summary \(TestFlight readiness after sync\)/);
     const recheckSh = read("scripts/ios-recheck-tf-ready.sh");

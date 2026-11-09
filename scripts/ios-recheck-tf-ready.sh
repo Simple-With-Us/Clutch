@@ -7,23 +7,49 @@ APP_KEY="${1:?app key (clutch)}"
 BUILD_NUM="${2:?CFBundleVersion build number}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FLEET_DIR="${ROOT}/scripts/ios-fleet"
+FLEET_DIR="${IOS_RECHECK_FLEET_DIR:-${ROOT}/scripts/ios-fleet}"
 # shellcheck source=scripts/ios-fleet/tf-ready-rc.sh
 source "${FLEET_DIR}/tf-ready-rc.sh"
 
-mapfile -t _APP_META < <(python3 - "$APP_KEY" "${FLEET_DIR}/apps.json" <<'PY'
+if ! mapfile -t _APP_META < <(python3 - "$APP_KEY" "${FLEET_DIR}/apps.json" <<'PY'
 import json, sys
 app_key, path = sys.argv[1], sys.argv[2]
-app = json.load(open(path))["apps"][app_key]
+try:
+    data = json.load(open(path, encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as err:
+    print(f"::error::recheck-tf-ready: could not read apps.json ({err})", file=sys.stderr)
+    sys.exit(2)
+apps = data.get("apps")
+if not isinstance(apps, dict):
+    print("::error::recheck-tf-ready: apps.json has no apps map", file=sys.stderr)
+    sys.exit(2)
+app = apps.get(app_key)
+if not isinstance(app, dict):
+    print(f"::error::recheck-tf-ready: unknown app key {app_key!r} in apps.json", file=sys.stderr)
+    sys.exit(2)
+bundle = app.get("bundleId")
+if not bundle or not str(bundle).strip():
+    print(f"::error::recheck-tf-ready: apps.json apps.{app_key}.bundleId is missing", file=sys.stderr)
+    sys.exit(2)
+apple = app.get("appleId")
+if apple is None or apple == "":
+    print(f"::error::recheck-tf-ready: apps.json apps.{app_key}.appleId is missing", file=sys.stderr)
+    sys.exit(2)
 marketing = app.get("fixedMarketingVersion") or app.get("marketingVersionDefault") or "1.0.0"
-print(app["bundleId"])
+print(bundle)
 print(marketing)
-print(app["appleId"])
+print(apple)
 PY
-)
+); then
+  exit 2
+fi
 BUNDLE_ID="${_APP_META[0]:-}"
 MARKETING="${_APP_META[1]:-}"
 APPLE_ID="${_APP_META[2]:-}"
+if [[ -z "$BUNDLE_ID" || -z "$APPLE_ID" ]]; then
+  echo "::error::recheck-tf-ready: apps.json metadata was incomplete after validation"
+  exit 2
+fi
 
 [[ "$BUILD_NUM" =~ ^[1-9][0-9]{11}$ ]] || {
   echo "::error::recheck-tf-ready for ${APP_KEY}: build '${BUILD_NUM}' is not a 12-digit merge-stamp build"

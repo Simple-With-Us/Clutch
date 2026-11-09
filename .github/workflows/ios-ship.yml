@@ -266,8 +266,10 @@ jobs:
               echo "- Clutch (${{ steps.recheck_tf.outputs.tf_ready_bundle }} build ${{ steps.recheck_tf.outputs.tf_ready_build }}): rc=${{ steps.recheck_tf.outputs.tf_ready_rc }} — ${{ steps.recheck_tf.outputs.tf_ready_summary }}"
             elif [ "${{ steps.ship.outputs.uploaded }}" = "true" ]; then
               echo "- Clutch: post-sync readiness check did not run or produced no summary"
+            elif [ "${{ steps.ship.outputs.uploaded }}" = "unknown" ]; then
+              echo "- Clutch: ship exited 0 but upload was not confirmed in the ship log (recheck skipped)"
             else
-              echo "- Clutch: no upload this run (gate skip or dry success without upload)"
+              echo "- Clutch: no upload this run (gate skip or ship failure)"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
