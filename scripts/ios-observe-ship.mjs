@@ -8,6 +8,9 @@ import fs from "node:fs";
 
 const TAIL_MAX = 8 * 1024;
 
+// ship-testflight.sh log() prefixes every line with "[ios-ship] "; patterns must
+// match anywhere on the line (never line-anchor the marker), or upload detection
+// stays false and post-sync recheck never runs.
 const uploadedRe =
   /upload path succeeded via xcodebuild export \(destination=upload\)|build .+ submitted for |upload submitted; watch TestFlight processing/;
 const skippedRe =

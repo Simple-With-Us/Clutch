@@ -233,6 +233,20 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(recheckSh).toMatch(/IFS= read -r BUNDLE_ID/);
     expect(recheckSh).not.toMatch(/GITHUB_STEP_SUMMARY/);
   });
+
+  it("ios-observe-ship upload/skip regexes match anywhere on a line (fleet log prefix)", () => {
+    const observe = read("scripts/ios-observe-ship.mjs");
+    const uploadedBlock = observe.match(/const uploadedRe =\s*(\/[\s\S]*?\/);/)?.[1] ?? "";
+    const skippedBlock = observe.match(/const skippedRe =\s*(\/[\s\S]*?\/);/)?.[1] ?? "";
+    expect(uploadedBlock).toBeTruthy();
+    expect(skippedBlock).toBeTruthy();
+    for (const src of [uploadedBlock, skippedBlock]) {
+      const body = src.slice(1, src.lastIndexOf("/"));
+      expect(body).not.toMatch(/(?:\||^)\^/);
+      expect(body).not.toMatch(/\(ios-ship\]/);
+    }
+    expect(observe).toMatch(/ship-testflight\.sh log\(\) prefixes every line with "\[ios-ship\] "/);
+  });
 });
 
 describe("TestFlight What to Test uses the owner clock", () => {

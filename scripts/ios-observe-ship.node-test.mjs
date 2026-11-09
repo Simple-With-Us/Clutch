@@ -40,6 +40,52 @@ test("ios-observe-ship marks skip lines as not uploaded", () => {
   }
 });
 
+/** Exact stdout shapes from scripts/ios-fleet/ship-testflight.sh log() (prefix included). */
+const CLUTCH_UPLOAD_LOG_LINES = [
+  "[ios-ship] upload path succeeded via xcodebuild export (destination=upload)",
+  "[ios-ship] build 1.2.3 (202611091430) submitted for codes.clutch.ios",
+  "[ios-ship] upload submitted; watch TestFlight processing for codes.clutch.ios build 202611091430",
+  "[ios-ship] upload submitted; watch TestFlight processing in App Store Connect",
+];
+
+for (const line of CLUTCH_UPLOAD_LOG_LINES) {
+  test(`ios-observe-ship marks fleet upload line as uploaded: ${line.slice(12, 56)}…`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
+    const fakeShip = join(dir, "fake-ship.sh");
+    const outFile = join(dir, "github-output.txt");
+    writeFileSync(fakeShip, `#!/bin/sh\necho "${line.replace(/"/g, '\\"')}"\nexit 0\n`, {
+      mode: 0o755,
+    });
+    try {
+      const r = runObserve(["sh", fakeShip], { GITHUB_OUTPUT: outFile });
+      assert.equal(r.status, 0);
+      assert.match(r.ghOut, /uploaded=true/);
+      assert.match(r.ghOut, /ship_observed=uploaded/);
+    } finally {
+      if (existsSync(fakeShip)) unlinkSync(fakeShip);
+      if (existsSync(outFile)) unlinkSync(outFile);
+    }
+  });
+}
+
+test("ios-observe-ship marks fleet skip-exit line with log prefix as not uploaded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
+  const fakeShip = join(dir, "fake-ship.sh");
+  const outFile = join(dir, "github-output.txt");
+  const line =
+    "[ios-ship] ship-gate: exiting 0 before any version is resolved (nothing consumed)";
+  writeFileSync(fakeShip, `#!/bin/sh\necho "${line}"\nexit 0\n`, { mode: 0o755 });
+  try {
+    const r = runObserve(["sh", fakeShip], { GITHUB_OUTPUT: outFile });
+    assert.equal(r.status, 0);
+    assert.match(r.ghOut, /uploaded=false/);
+    assert.match(r.ghOut, /ship_observed=skipped/);
+  } finally {
+    if (existsSync(fakeShip)) unlinkSync(fakeShip);
+    if (existsSync(outFile)) unlinkSync(outFile);
+  }
+});
+
 test("ios-observe-ship marks upload log lines as uploaded", () => {
   const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
   const fakeShip = join(dir, "fake-ship.sh");
