@@ -43,6 +43,8 @@ on:
       - 'assets/clutch-icon-1024.png'
       - 'scripts/ios-fleet/**'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
       - 'scripts/ios-xcodegen-post.sh'
@@ -61,6 +63,8 @@ on:
       - 'assets/clutch-icon-1024.png'
       - 'scripts/ios-fleet/**'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/build-ios.sh'
       - 'scripts/ios-ui-tests.sh'
       - '.github/workflows/ios-ship.yml'
@@ -135,6 +139,8 @@ jobs:
             --path-prefix 'assets/clutch-icon-1024.png' \
             --path-prefix 'scripts/ios-fleet/**' \
             --path-prefix 'scripts/ios-ship-testflight.sh' \
+            --path-prefix 'scripts/ios-observe-ship.mjs' \
+            --path-prefix 'scripts/ios-recheck-tf-ready.sh' \
             --path-prefix 'scripts/ios-appstore-gm-prepare.sh' \
             --path-prefix 'scripts/ios-install-appstore-profiles.sh' \
             --path-prefix 'scripts/ios-xcodegen-post.sh' \
@@ -205,7 +211,7 @@ jobs:
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
-        run: bash scripts/ios-ship-testflight.sh --build "${{ steps.plan.outputs.build }}"
+        run: node scripts/ios-observe-ship.mjs bash scripts/ios-ship-testflight.sh --build "${{ steps.plan.outputs.build }}"
 
       - name: Sync standing TestFlight testers
         if: success() && steps.gate.outputs.should_ship == '1'
@@ -236,15 +242,34 @@ jobs:
       # can clear after sync assigns the external group.  Re-check read-only
       # after sync so the job summary reflects post-sync installability (OPS-1052).
       - name: Re-check TestFlight readiness after tester sync
-        id: recheck
-        if: ${{ !cancelled() && steps.gate.outputs.should_ship == '1' && steps.ship.outcome == 'success' && steps.plan.outputs.build != '' }}
+        id: recheck_tf
+        if: success() && steps.gate.outputs.should_ship == '1' && steps.ship.outputs.uploaded == 'true'
         continue-on-error: true
         env:
           IOS_TF_READY_TIMEOUT_SEC: "300"
         run: |
           set -euo pipefail
           build="${{ steps.plan.outputs.build }}"
+          if ! [[ "$build" =~ ^[1-9][0-9]{11}$ ]]; then
+            echo "::warning::missing planned build for post-sync recheck; skipping"
+            exit 0
+          fi
           bash "$GITHUB_WORKSPACE/scripts/ios-recheck-tf-ready.sh" clutch "$build"
+
+      - name: iOS ship summary (TestFlight readiness after sync)
+        if: always() && steps.gate.outputs.should_ship == '1'
+        run: |
+          set -euo pipefail
+          {
+            echo "## TestFlight readiness (after standing-tester sync)"
+            if [ "${{ steps.ship.outcome }}" = "success" ] && [ "${{ steps.ship.outputs.uploaded }}" = "true" ] && [ -n "${{ steps.recheck_tf.outputs.tf_ready_summary }}" ]; then
+              echo "- Clutch (${{ steps.recheck_tf.outputs.tf_ready_bundle }} build ${{ steps.recheck_tf.outputs.tf_ready_build }}): rc=${{ steps.recheck_tf.outputs.tf_ready_rc }} — ${{ steps.recheck_tf.outputs.tf_ready_summary }}"
+            elif [ "${{ steps.ship.outputs.uploaded }}" = "true" ]; then
+              echo "- Clutch: post-sync readiness check did not run or produced no summary"
+            else
+              echo "- Clutch: no upload this run (gate skip or dry success without upload)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Saved even when the ship step failed after it recorded the upload, but
       # only on ticks that tried to ship.

@@ -11,8 +11,7 @@ FLEET_DIR="${ROOT}/scripts/ios-fleet"
 # shellcheck source=scripts/ios-fleet/tf-ready-rc.sh
 source "${FLEET_DIR}/tf-ready-rc.sh"
 
-read -r BUNDLE_ID MARKETING APPLE_ID <<EOF
-$(python3 - <<'PY' "$APP_KEY" "$FLEET_DIR/apps.json"
+mapfile -t _APP_META < <(python3 - "$APP_KEY" "${FLEET_DIR}/apps.json" <<'PY'
 import json, sys
 app_key, path = sys.argv[1], sys.argv[2]
 app = json.load(open(path))["apps"][app_key]
@@ -22,7 +21,9 @@ print(marketing)
 print(app["appleId"])
 PY
 )
-EOF
+BUNDLE_ID="${_APP_META[0]:-}"
+MARKETING="${_APP_META[1]:-}"
+APPLE_ID="${_APP_META[2]:-}"
 
 [[ "$BUILD_NUM" =~ ^[1-9][0-9]{11}$ ]] || {
   echo "::error::recheck-tf-ready for ${APP_KEY}: build '${BUILD_NUM}' is not a 12-digit merge-stamp build"
@@ -52,14 +53,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "tf_ready_bundle=${BUNDLE_ID}"
     echo "tf_ready_build=${BUILD_NUM}"
   } >>"$GITHUB_OUTPUT"
-fi
-
-if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-  {
-    echo "### TestFlight readiness after standing-tester sync"
-    echo ""
-    echo "- **${APP_KEY}** (\`${BUNDLE_ID}\` build **${BUILD_NUM}**): rc=**${rc}** — ${summary}"
-  } >>"$GITHUB_STEP_SUMMARY"
 fi
 
 exit 0
