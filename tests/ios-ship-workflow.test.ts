@@ -229,7 +229,8 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(code).toMatch(/recheck_tf\.outputs\.tf_ready_summary/);
     expect(code).toMatch(/iOS ship summary \(TestFlight readiness after sync\)/);
     const recheckSh = read("scripts/ios-recheck-tf-ready.sh");
-    expect(recheckSh).toMatch(/mapfile -t _APP_META/);
+    expect(recheckSh).not.toMatch(/^\s*mapfile\b/m);
+    expect(recheckSh).toMatch(/IFS= read -r BUNDLE_ID/);
     expect(recheckSh).not.toMatch(/GITHUB_STEP_SUMMARY/);
   });
 });

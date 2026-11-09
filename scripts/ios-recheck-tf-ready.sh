@@ -11,7 +11,8 @@ FLEET_DIR="${IOS_RECHECK_FLEET_DIR:-${ROOT}/scripts/ios-fleet}"
 # shellcheck source=scripts/ios-fleet/tf-ready-rc.sh
 source "${FLEET_DIR}/tf-ready-rc.sh"
 
-if ! mapfile -t _APP_META < <(python3 - "$APP_KEY" "${FLEET_DIR}/apps.json" <<'PY'
+_APP_META_TMP="$(mktemp)"
+if ! python3 - "$APP_KEY" "${FLEET_DIR}/apps.json" >"$_APP_META_TMP" <<'PY'
 import json, sys
 app_key, path = sys.argv[1], sys.argv[2]
 try:
@@ -32,7 +33,7 @@ if not bundle or not str(bundle).strip():
     print(f"::error::recheck-tf-ready: apps.json apps.{app_key}.bundleId is missing", file=sys.stderr)
     sys.exit(2)
 apple = app.get("appleId")
-if apple is None or apple == "":
+if apple is None or not str(apple).strip():
     print(f"::error::recheck-tf-ready: apps.json apps.{app_key}.appleId is missing", file=sys.stderr)
     sys.exit(2)
 marketing = app.get("fixedMarketingVersion") or app.get("marketingVersionDefault") or "1.0.0"
@@ -40,12 +41,19 @@ print(bundle)
 print(marketing)
 print(apple)
 PY
-); then
+then
+  rm -f "$_APP_META_TMP"
   exit 2
 fi
-BUNDLE_ID="${_APP_META[0]:-}"
-MARKETING="${_APP_META[1]:-}"
-APPLE_ID="${_APP_META[2]:-}"
+BUNDLE_ID=""
+MARKETING=""
+APPLE_ID=""
+{
+  IFS= read -r BUNDLE_ID || exit 2
+  IFS= read -r MARKETING || exit 2
+  IFS= read -r APPLE_ID || exit 2
+} <"$_APP_META_TMP"
+rm -f "$_APP_META_TMP"
 if [[ -z "$BUNDLE_ID" || -z "$APPLE_ID" ]]; then
   echo "::error::recheck-tf-ready: apps.json metadata was incomplete after validation"
   exit 2
