@@ -182,7 +182,9 @@ describe("ios-ship.yml auto-ship contract", () => {
   it("publishes What to Test and ships through the fleet wrapper", () => {
     expect(code).toMatch(/IOS_TF_RELEASE_NOTES:\s*"1"/);
     expect(code).not.toMatch(/IOS_TF_RELEASE_NOTES:\s*"0"/);
-    expect(code).toMatch(/run: bash scripts\/ios-ship-testflight\.sh --build "\$\{\{ steps\.plan\.outputs\.build \}\}"/);
+    expect(code).toMatch(
+      /run: node scripts\/ios-observe-ship\.mjs bash scripts\/ios-ship-testflight\.sh --build "\$\{\{ steps\.plan\.outputs\.build \}\}"/,
+    );
   });
 
   it("plans the release build once and hands that one value to the ship", () => {
@@ -207,6 +209,29 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(code).not.toMatch(/IOS_TF_MIN_INTERVAL_SEC/);
     expect(code).not.toMatch(/--force-ship/);
     expect(code).not.toMatch(/if:.*secrets\./);
+  });
+
+  it("rechecks TestFlight readiness after standing-tester sync", () => {
+    expect(code).toMatch(/name: Re-check TestFlight readiness after tester sync/);
+    expect(code).toMatch(/ios-recheck-tf-ready\.sh" clutch/);
+    expect(code).toMatch(/steps\.plan\.outputs\.build/);
+    expect(code).toMatch(/IOS_TF_READY_TIMEOUT_SEC: "300"/);
+    expect(code).toMatch(/continue-on-error: true/);
+    expect(code).toMatch(/ios-observe-ship\.mjs bash scripts\/ios-ship-testflight\.sh/);
+    const syncAt = code.indexOf("name: Sync standing TestFlight testers");
+    const recheckAt = code.indexOf("name: Re-check TestFlight readiness after tester sync");
+    expect(syncAt).toBeGreaterThan(-1);
+    expect(recheckAt).toBeGreaterThan(syncAt);
+    const recheckStep = code.slice(recheckAt).split(/\n {6}- name:/)[0];
+    expect(recheckStep).toMatch(/id: recheck_tf/);
+    expect(recheckStep).toMatch(/steps\.ship\.outputs\.uploaded == 'true'/);
+    expect(code).toMatch(/uploaded.*unknown/);
+    expect(code).toMatch(/recheck_tf\.outputs\.tf_ready_summary/);
+    expect(code).toMatch(/iOS ship summary \(TestFlight readiness after sync\)/);
+    const recheckSh = read("scripts/ios-recheck-tf-ready.sh");
+    expect(recheckSh).not.toMatch(/^\s*mapfile\b/m);
+    expect(recheckSh).toMatch(/IFS= read -r BUNDLE_ID/);
+    expect(recheckSh).not.toMatch(/GITHUB_STEP_SUMMARY/);
   });
 });
 

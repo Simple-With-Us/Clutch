@@ -1688,7 +1688,18 @@ release_archive_lock() {
 # ITSAppUsesNonExemptEncryption. Otherwise TestFlight stays
 # MISSING_EXPORT_COMPLIANCE and the phone never sees the build (ST 1.0.1/2
 # on 2026-08-12).
+# shellcheck source=scripts/ios-fleet/tf-ready-rc.sh
+source "${FLEET_DIR}/tf-ready-rc.sh"
+
 TF_READY_CONFIRMED=0
+emit_github_ship_outputs() {
+  [[ -n "${GITHUB_OUTPUT:-}" ]] || return 0
+  {
+    echo "ios_build_number=${BUILD_NUM}"
+    echo "ios_marketing_version=${MARKETING}"
+    echo "ios_bundle_id=${BUNDLE_ID}"
+  } >>"$GITHUB_OUTPUT"
+}
 ensure_tf_ready() {
   log "verifying TestFlight ready-to-install for ${BUNDLE_ID} build ${BUILD_NUM}"
   set +e
@@ -1709,56 +1720,9 @@ ensure_tf_ready() {
     while IFS= read -r line; do log "tf-ready: $line"; done <"${LOG_DIR}/ensure-tf-ready.err"
   fi
   if [[ $rc -eq 0 ]]; then
-    log "TestFlight external install path is live for ${BUNDLE_ID} (an external group has testers or an enabled public link); the standing-testers sync assigns and verifies this build next"
     TF_READY_CONFIRMED=1
-    return 0
   fi
-  if [[ $rc -eq 5 ]]; then
-    # Apple finished processing the build, but it is assigned to no external
-    # group with testers or a public link, so nobody can install it.  This is
-    # not a failed upload (the build is in App Store Connect), so do not fail
-    # the job; make it impossible to miss instead.  A new bundle ID starts with
-    # no groups, and 14 green ships once reached nobody this way (GH #1018).
-    log "warning: build ${BUILD_NUM} is processed but ${BUNDLE_ID} has no external TestFlight group with testers or a public link; nobody can install it yet"
-    log "warning: the Sync standing TestFlight testers step assigns the external group; otherwise enable the public link under TestFlight > External Testing"
-    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-      echo "::warning title=TestFlight has no reachable external tester::${BUNDLE_ID} build ${BUILD_NUM} is processed but no external tester can install it.  Check the Sync standing TestFlight testers step."
-    fi
-    return 0
-  fi
-  if [[ $rc -eq 6 ]]; then
-    # Processed, but the external installability could not be read, so we
-    # cannot say anyone can install it.  Say so instead of printing the success line.
-    log "warning: build ${BUILD_NUM} is processed but the external TestFlight installability could not be read for ${BUNDLE_ID}; installability is unverified"
-    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-      echo "::warning title=TestFlight installability unverified::${BUNDLE_ID} build ${BUILD_NUM} is processed but the external installability could not be read.  Check TestFlight."
-    fi
-    return 0
-  fi
-  if [[ $rc -eq 3 ]]; then
-    log "warning: upload succeeded but ASC has not reached IN_BETA_TESTING yet; watch TestFlight"
-    return 0
-  fi
-  if [[ $rc -eq 4 ]]; then
-    # The upload itself succeeded; ASC simply never surfaced the build in time.
-    # Warn loudly but do NOT fail: the caller must still record_successful_ship,
-    # or the rate gate never advances and the next scheduled run re-ships the
-    # same HEAD. A red job after a successful upload also mislabels the outcome.
-    log "warning: ASC never surfaced build ${BUILD_NUM}; export compliance NOT declared on it"
-    log "warning: if the phone never gets this build, declare compliance by hand in App Store Connect"
-    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-      echo "::warning::ensure-tf-ready could not find uploaded build ${BUILD_NUM} for ${BUNDLE_ID}; export compliance not declared"
-    fi
-    return 0
-  fi
-  # rc=2 is a usage error or an ASC API error. Compliance was NOT declared, so
-  # this deserves the same CI annotation rc=4 gets -- otherwise the only trace
-  # is one log line inside a green job, which is how ST 1.0.1/2 stayed
-  # VALID-but-uninstallable without anyone noticing.
-  log "warning: ensure-tf-ready failed (rc=$rc); build may be stuck on export compliance"
-  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    echo "::warning::ensure-tf-ready failed (rc=${rc}) for ${BUNDLE_ID} build ${BUILD_NUM}; export compliance not declared"
-  fi
+  handle_ensure_tf_ready_rc "$rc"
   return 0
 }
 
@@ -1895,6 +1859,7 @@ if [[ $EXPORT_RC -eq 0 ]]; then
   release_archive_lock
   ensure_tf_ready
   record_successful_ship
+  emit_github_ship_outputs
   emit_sentry_deployment_receipt
   log "logs: ${LOG_DIR}"
   exit 0
@@ -1954,6 +1919,7 @@ fi
 release_archive_lock
 ensure_tf_ready
 record_successful_ship
+emit_github_ship_outputs
 emit_sentry_deployment_receipt
 log "upload submitted; watch TestFlight processing for ${BUNDLE_ID} build ${BUILD_NUM}"
 log "logs: ${LOG_DIR}"

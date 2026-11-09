@@ -74,14 +74,16 @@ describe("ensure-tf-ready readiness is external-only", () => {
 
 
 
-  it("ship-testflight.sh no longer claims internal testers can install", () => {
+  it("ship-testflight and tf-ready-rc use external-only readiness copy", () => {
     const sh = read("scripts/ios-fleet/ship-testflight.sh");
+    const rc = read("scripts/ios-fleet/tf-ready-rc.sh");
+    expect(sh).toMatch(/source "\$\{FLEET_DIR\}\/tf-ready-rc\.sh"/);
     expect(sh).not.toMatch(/TestFlight internal testers can install this build/);
     // The readiness step runs before the sync assigns the build, so the rc=0
     // line states exactly what was verified: the app's external install path.
-    expect(sh).toMatch(/TestFlight external install path is live for /);
-    expect(sh).not.toMatch(/TestFlight external testers can install this build/);
-    expect(sh).not.toMatch(/has no internal TestFlight tester/);
+    expect(rc).toMatch(/TestFlight external install path is live for /);
+    expect(rc).not.toMatch(/TestFlight external testers can install this build/);
+    expect(rc).not.toMatch(/has no internal TestFlight tester/);
   });
 });
 
