@@ -234,18 +234,31 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(recheckSh).not.toMatch(/GITHUB_STEP_SUMMARY/);
   });
 
-  it("ios-observe-ship upload/skip regexes match anywhere on a line (fleet log prefix)", () => {
+  it("ios-observe-ship upload/skip regexes require [ios-ship] before each marker", () => {
     const observe = read("scripts/ios-observe-ship.mjs");
-    const uploadedBlock = observe.match(/const uploadedRe =\s*(\/[\s\S]*?\/);/)?.[1] ?? "";
-    const skippedBlock = observe.match(/const skippedRe =\s*(\/[\s\S]*?\/);/)?.[1] ?? "";
-    expect(uploadedBlock).toBeTruthy();
-    expect(skippedBlock).toBeTruthy();
-    for (const src of [uploadedBlock, skippedBlock]) {
-      const body = src.slice(1, src.lastIndexOf("/"));
-      expect(body).not.toMatch(/(?:\||^)\^/);
-      expect(body).not.toMatch(/\(ios-ship\]/);
+    expect(observe).toMatch(/const fleetPrefix = String\.raw`\\\[ios-ship\\\] `;/);
+    const uploadedSrc = observe.match(/const uploadedRe = new RegExp\(\s*([\s\S]*?)\s*\);/)?.[1] ?? "";
+    const skippedSrc = observe.match(/const skippedRe = new RegExp\(\s*([\s\S]*?)\s*\);/)?.[1] ?? "";
+    expect(uploadedSrc).toBeTruthy();
+    expect(skippedSrc).toBeTruthy();
+    expect(uploadedSrc).toContain('${fleetPrefix}');
+    expect(skippedSrc).toContain('${fleetPrefix}');
+    const ship = read("scripts/ios-fleet/ship-testflight.sh");
+    for (const marker of [
+      "upload path succeeded via xcodebuild export (destination=upload)",
+      "submitted for ",
+      "upload submitted; watch TestFlight processing",
+      "ship-gate: exiting 0 before any version is resolved (nothing consumed)",
+    ]) {
+      const hits = [...ship.matchAll(new RegExp(marker.replace(/[()]/g, "\\$&"), "g"))];
+      expect(hits.length, marker).toBeGreaterThan(0);
+      for (const hit of hits) {
+        const line = ship.slice(ship.lastIndexOf("\n", hit.index!) + 1, ship.indexOf("\n", hit.index!));
+        expect(line, marker).toMatch(/\blog "/);
+      }
     }
-    expect(observe).toMatch(/ship-testflight\.sh log\(\) prefixes every line with "\[ios-ship\] "/);
+    expect(observe).not.toMatch(/const uploadedRe =\s*\//);
+    expect(observe).not.toMatch(/const skippedRe =\s*\//);
   });
 });
 

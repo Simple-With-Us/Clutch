@@ -8,13 +8,18 @@ import fs from "node:fs";
 
 const TAIL_MAX = 8 * 1024;
 
-// ship-testflight.sh log() prefixes every line with "[ios-ship] "; patterns must
-// match anywhere on the line (never line-anchor the marker), or upload detection
-// stays false and post-sync recheck never runs.
-const uploadedRe =
-  /upload path succeeded via xcodebuild export \(destination=upload\)|build .+ submitted for |upload submitted; watch TestFlight processing/;
-const skippedRe =
-  /ship-gate: exiting 0 before any version is resolved \(nothing consumed\)/;
+// ship-testflight.sh log() prefixes every upload/skip marker with "[ios-ship] ".
+// Require that prefix immediately before each marker (substring match, not ^ line
+// anchor) so unrelated tool output cannot set uploaded=true.
+const fleetPrefix = String.raw`\[ios-ship\] `;
+const uploadedRe = new RegExp(
+  `${fleetPrefix}upload path succeeded via xcodebuild export \\(destination=upload\\)|` +
+    `${fleetPrefix}build .+ submitted for |` +
+    `${fleetPrefix}upload submitted; watch TestFlight processing`,
+);
+const skippedRe = new RegExp(
+  `${fleetPrefix}ship-gate: exiting 0 before any version is resolved \\(nothing consumed\\)`,
+);
 
 const cmd = process.argv.slice(2);
 if (cmd.length === 0) {

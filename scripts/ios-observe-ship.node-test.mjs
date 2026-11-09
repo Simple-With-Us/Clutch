@@ -20,7 +20,7 @@ function runObserve(args, env = {}, opts = {}) {
   return { ...r, ghOut };
 }
 
-test("ios-observe-ship marks skip lines as not uploaded", () => {
+test("ios-observe-ship ignores bare skip marker without fleet log prefix", () => {
   const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
   const fakeShip = join(dir, "fake-ship.sh");
   const outFile = join(dir, "github-output.txt");
@@ -32,8 +32,50 @@ test("ios-observe-ship marks skip lines as not uploaded", () => {
   try {
     const r = runObserve(["sh", fakeShip], { GITHUB_OUTPUT: outFile });
     assert.equal(r.status, 0);
-    assert.match(r.ghOut, /uploaded=false/);
-    assert.match(r.ghOut, /ship_observed=skipped/);
+    assert.doesNotMatch(r.ghOut, /uploaded=true/);
+    assert.match(r.ghOut, /uploaded=unknown/);
+    assert.match(r.ghOut, /ship_observed=unknown_success/);
+  } finally {
+    unlinkSync(fakeShip);
+    unlinkSync(outFile);
+  }
+});
+
+test("ios-observe-ship ignores bare upload markers without fleet log prefix", () => {
+  const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
+  const fakeShip = join(dir, "fake-ship.sh");
+  const outFile = join(dir, "github-output.txt");
+  writeFileSync(
+    fakeShip,
+    '#!/bin/sh\necho "upload submitted; watch TestFlight processing for codes.clutch.ios build 202611091430"\nexit 0\n',
+    { mode: 0o755 },
+  );
+  try {
+    const r = runObserve(["sh", fakeShip], { GITHUB_OUTPUT: outFile });
+    assert.equal(r.status, 0);
+    assert.doesNotMatch(r.ghOut, /uploaded=true/);
+    assert.match(r.ghOut, /uploaded=unknown/);
+    assert.match(r.ghOut, /ship_observed=unknown_success/);
+  } finally {
+    unlinkSync(fakeShip);
+    unlinkSync(outFile);
+  }
+});
+
+test("ios-observe-ship prefixed upload line yields uploaded=true", () => {
+  const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
+  const fakeShip = join(dir, "fake-ship.sh");
+  const outFile = join(dir, "github-output.txt");
+  writeFileSync(
+    fakeShip,
+    '#!/bin/sh\necho "[ios-ship] upload submitted; watch TestFlight processing for codes.clutch.ios build 202611091430"\nexit 0\n',
+    { mode: 0o755 },
+  );
+  try {
+    const r = runObserve(["sh", fakeShip], { GITHUB_OUTPUT: outFile });
+    assert.equal(r.status, 0);
+    assert.match(r.ghOut, /uploaded=true/);
+    assert.match(r.ghOut, /ship_observed=uploaded/);
   } finally {
     unlinkSync(fakeShip);
     unlinkSync(outFile);
@@ -86,26 +128,6 @@ test("ios-observe-ship marks fleet skip-exit line with log prefix as not uploade
   }
 });
 
-test("ios-observe-ship marks upload log lines as uploaded", () => {
-  const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
-  const fakeShip = join(dir, "fake-ship.sh");
-  const outFile = join(dir, "github-output.txt");
-  writeFileSync(
-    fakeShip,
-    '#!/bin/sh\necho "upload submitted; watch TestFlight processing for codes.clutch.ios build 202611091430"\nexit 0\n',
-    { mode: 0o755 },
-  );
-  try {
-    const r = runObserve(["sh", fakeShip], { GITHUB_OUTPUT: outFile });
-    assert.equal(r.status, 0);
-    assert.match(r.ghOut, /uploaded=true/);
-    assert.match(r.ghOut, /ship_observed=uploaded/);
-  } finally {
-    unlinkSync(fakeShip);
-    unlinkSync(outFile);
-  }
-});
-
 test("ios-observe-ship reports unknown when exit 0 has no upload markers", () => {
   const dir = mkdtempSync(join(tmpdir(), "observe-ship-"));
   const fakeShip = join(dir, "fake-ship.sh");
@@ -149,7 +171,7 @@ while [ "$i" -lt 8000 ]; do
   echo "${"x".repeat(200)}"
   i=$((i + 1))
 done
-echo "upload submitted; watch TestFlight processing for codes.clutch.ios build 202611091430"
+echo "[ios-ship] upload submitted; watch TestFlight processing for codes.clutch.ios build 202611091430"
 exit 0
 `,
     { mode: 0o755 },
