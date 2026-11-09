@@ -200,6 +200,7 @@ jobs:
           echo "build=${build}" >>"$GITHUB_OUTPUT"
 
       - name: Ship Clutch to TestFlight
+        id: ship
         if: steps.gate.outputs.should_ship == '1'
         env:
           IOS_TF_RELEASE_NOTES: "1"
@@ -230,6 +231,20 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
           fi
+
+      # The in-ship ensure-tf-ready runs before standing-tester sync, so rc=5
+      # can clear after sync assigns the external group.  Re-check read-only
+      # after sync so the job summary reflects post-sync installability (OPS-1052).
+      - name: Re-check TestFlight readiness after tester sync
+        id: recheck
+        if: ${{ !cancelled() && steps.gate.outputs.should_ship == '1' && steps.ship.outcome == 'success' && steps.plan.outputs.build != '' }}
+        continue-on-error: true
+        env:
+          IOS_TF_READY_TIMEOUT_SEC: "300"
+        run: |
+          set -euo pipefail
+          build="${{ steps.plan.outputs.build }}"
+          bash "$GITHUB_WORKSPACE/scripts/ios-recheck-tf-ready.sh" clutch "$build"
 
       # Saved even when the ship step failed after it recorded the upload, but
       # only on ticks that tried to ship.

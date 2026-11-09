@@ -208,6 +208,18 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(code).not.toMatch(/--force-ship/);
     expect(code).not.toMatch(/if:.*secrets\./);
   });
+
+  it("rechecks TestFlight readiness after standing-tester sync", () => {
+    expect(code).toMatch(/name: Re-check TestFlight readiness after tester sync/);
+    expect(code).toMatch(/ios-recheck-tf-ready\.sh" clutch/);
+    expect(code).toMatch(/steps\.plan\.outputs\.build/);
+    expect(code).toMatch(/IOS_TF_READY_TIMEOUT_SEC: "300"/);
+    expect(code).toMatch(/continue-on-error: true/);
+    const syncAt = code.indexOf("name: Sync standing TestFlight testers");
+    const recheckAt = code.indexOf("name: Re-check TestFlight readiness after tester sync");
+    expect(syncAt).toBeGreaterThan(-1);
+    expect(recheckAt).toBeGreaterThan(syncAt);
+  });
 });
 
 describe("TestFlight What to Test uses the owner clock", () => {
