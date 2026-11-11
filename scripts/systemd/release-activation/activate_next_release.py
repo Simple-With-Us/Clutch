@@ -432,10 +432,19 @@ def rollback(args, config):
     # The backup records the old drop-in under the name it actually had:
     # the stable name after a guarded transition, or the per-SHA name from
     # the first-time activator.
-    stable_backup = backup / "dropins" / STABLE_DROPIN_NAME
-    per_sha_backup = backup / "dropins" / OLD_DROPIN.name
+    # backup_state stores each drop-in under a hash-prefixed name
+    # (sha256 of the full source path, first 12 hex chars, then the
+    # basename) so same-named drop-ins from different directories never
+    # collide; the rollback lookup must derive that same name, and the
+    # restore target is the canonical drop-in path, not the backup name.
+    def _dropin_backup(canonical):
+        prefixed = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:12] + "-" + canonical.name
+        return backup / "dropins" / prefixed
+
+    stable_backup = _dropin_backup(STABLE_DROPIN)
+    per_sha_backup = _dropin_backup(OLD_DROPIN)
     old_dropin_backup = stable_backup if stable_backup.is_file() else per_sha_backup
-    restore_target = DROPIN_DIR / old_dropin_backup.name
+    restore_target = STABLE_DROPIN if old_dropin_backup == stable_backup else OLD_DROPIN
     if (not lock.is_dir() or lock.is_symlink() or not failure.is_file() or not before.is_file()
             or not old_dropin_backup.is_file() or rollback_receipt.exists()):
         fail("rollback-preflight", ownedLockFailureAndBackupPresent=False)
