@@ -68,7 +68,7 @@
     "test:infisical-fetch": "node --test scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs",
     "test:ci-scope": "vitest run --typecheck",
     "test:e2e": "playwright test",
-    "test:ios-fleet": "node --test scripts/ios-fleet/publish-ios-versions.test.mjs scripts/ios-fleet/asc-api-standing-testers.node-test.mjs",
+    "test:ios-fleet": "node --test scripts/ios-fleet/publish-ios-versions.test.mjs scripts/ios-fleet/asc-api-standing-testers.node-test.mjs scripts/ios-fleet/test-ensure-tf-ready-rc.node-test.mjs scripts/ios-observe-ship.node-test.mjs scripts/ios-recheck-tf-ready.node-test.mjs",
     "test:release-activation": "python3 -m unittest discover -s scripts/systemd/release-activation -p 'test_*.py'"
   },
   "optionalDependencies": {
