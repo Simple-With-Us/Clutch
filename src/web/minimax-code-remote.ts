@@ -61,7 +61,7 @@ export function miniMaxCodeRemoteHtml(): string {
       display: flex; flex-direction: column; min-width: 0;
       border-right: 1px solid var(--line); background: var(--surface);
     }
-    header { display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    header { display: flex; align-items: center; gap: 12px; padding: max(14px, env(safe-area-inset-top)) 16px 14px; border-bottom: 1px solid var(--line); }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
     .mark {
       display: grid; place-items: center; width: 36px; height: 36px; flex: none;
@@ -151,7 +151,7 @@ export function miniMaxCodeRemoteHtml(): string {
         <label class="sr" for="filter">Filter threads</label>
         <input id="filter" type="search" placeholder="Filter threads" autocomplete="off" aria-label="Filter threads">
       </div>
-      <div id="threads" role="list" aria-label="Threads"><p class="subtle empty-threads">No threads yet.</p></div>
+      <div id="threads" role="group" aria-label="Threads"><p class="subtle empty-threads">No threads yet.</p></div>
     </aside>
     <main>
       <header class="main-head">
@@ -213,7 +213,10 @@ export function miniMaxCodeRemoteHtml(): string {
         banner.textContent = text;
         if (phone()) setThreadsOpen(false);
       };
-      const hideBanner = () => { banner.hidden = true; banner.textContent = ''; };
+      const signInNote = 'This page is not signed in.\\u00a0 Start Clutch on this Mac, then open MiniMax Code again.';
+      // Keep the sign-in guidance up until a signed-in request can succeed.
+      const hideBanner = () => { if (!token) return; banner.hidden = true; banner.textContent = ''; };
+      const showFailure = (error) => showBanner(token ? error.message : signInNote);
       const showEmpty = (heading, copy) => {
         messages.replaceChildren();
         const wrap = document.createElement('div');
@@ -256,7 +259,6 @@ export function miniMaxCodeRemoteHtml(): string {
           const button = document.createElement('button');
           button.type = 'button';
           button.className = 'thread' + (item.sessionId === remoteSessionId ? ' active' : '');
-          button.setAttribute('role', 'listitem');
           if (item.sessionId === remoteSessionId) button.setAttribute('aria-current', 'true');
           const name = document.createElement('strong');
           name.textContent = item.title || 'Untitled thread';
@@ -274,6 +276,7 @@ export function miniMaxCodeRemoteHtml(): string {
         }
       };
       const refresh = async () => {
+        if (!token) { setStatus('Not signed in'); showBanner(signInNote); return; }
         setStatus('Loading threads…');
         try {
           const body = await api('/clutch/v1/sessions?engine=mcode');
@@ -283,7 +286,7 @@ export function miniMaxCodeRemoteHtml(): string {
           setStatus('Ready');
         } catch (error) {
           setStatus('Unavailable');
-          showBanner(error.message);
+          showFailure(error);
         }
       };
       const loadThread = async (item) => {
@@ -313,7 +316,7 @@ export function miniMaxCodeRemoteHtml(): string {
           await refresh();
         } catch (error) {
           setStatus('Could not open thread');
-          showBanner(error.message);
+          showFailure(error);
         } finally {
           busy = false;
           send.disabled = false;
@@ -374,8 +377,7 @@ export function miniMaxCodeRemoteHtml(): string {
           await refresh();
         } catch (error) {
           setStatus('Message failed');
-          showBanner(error.message);
-          addMessage('error', error.message);
+          showFailure(error);
         } finally {
           busy = false;
           send.disabled = false;
@@ -394,7 +396,7 @@ export function miniMaxCodeRemoteHtml(): string {
       if (phone()) setThreadsOpen(true);
       if (!token) {
         setStatus('Not signed in');
-        showBanner('This page is not signed in.\\u00a0 Start Clutch on this Mac, then open MiniMax Code again.');
+        showBanner(signInNote);
       } else {
         refresh();
       }

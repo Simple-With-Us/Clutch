@@ -39,6 +39,7 @@ public struct FleetRecallView: View {
                             .font(.footnote.monospaced())
                             .foregroundColor(.secondary)
                             .accessibilityLabel("Connection")
+                            .accessibilityValue(recall.endpoint)
                     }
                 }
 
@@ -254,7 +255,7 @@ struct ContributeRecallSheet: View {
                         }
                     }
                     TextField("App", text: $appSlug, prompt: Text("Example: clutch"))
-                    TextField("Author", text: $seatTag, prompt: Text("Your name"))
+                    TextField("Seat Tag", text: $seatTag, prompt: Text("Example: AG"))
                 }
 
                 Section(header: Text("Lesson Text")) {
