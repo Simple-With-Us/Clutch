@@ -7,7 +7,7 @@
 // This module implements the fleet canonical pattern (see INFISICAL.md):
 //
 //   - initClutchSettings() loads the full settings set at startup into an
-//     in-memory cache.  When universal-auth credentials are present it loads
+//     in-memory cache.  When a scoped service token is present it loads
 //     from Infisical; otherwise it seeds the cache from process.env with a
 //     loud warning (local dev / offline fallback — never silent).
 //   - After a successful Infisical load, owned keys that are NOT already set
@@ -38,17 +38,13 @@
 // starts.  See scripts/lib/clutch-infisical-env.sh, which backfills the
 // managed keys from Infisical for the always-on bash path (pm2).
 //
-// The machine identity that unlocks Infisical (project ID, client ID, client
-// secret) is NOT managed here either — it cannot live in Infisical, because it
-// is what authenticates the read.  It lives in one owner-only local file,
-// $CLUTCH_HOME/infisical.json, with an explicitly-set environment variable
-// always winning over the file.  See infisicalIdentity.ts.
+// The service tokens that unlock Infisical are NOT managed here either — they
+// live in a per-host mode-0600 file or explicit environment variables.  See
+// infisicalCredentials.ts.
 
 import {
-  resolveInfisicalIdentity,
-  summarizeInfisicalIdentity,
-  type InfisicalIdentitySummary,
-} from "./infisicalIdentity.ts";
+  resolveInfisicalCredentials,
+} from "./infisicalCredentials.ts";
 import {
   createInfisicalSettings,
   InfisicalWriteError,
@@ -89,6 +85,8 @@ export const CLUTCH_SETTINGS_SCHEMA: ClutchSettingDef[] = [
   { key: "CLUTCH_TAILNET_IPV4", kind: "config", defaultValue: "", description: "Optional Tailscale IPv4 to trust for /api" },
   { key: "CLUTCH_TRUSTED_HOSTS", kind: "config", defaultValue: "", description: "Extra comma-separated trusted Host values for /api" },
   { key: "CLUTCH_SETTINGS_REFRESH_MS", kind: "knob", defaultValue: "300000", description: "Background settings refresh interval (ms)" },
+  { key: "CLUTCH_TELEMETRY_ENDPOINT", kind: "config", defaultValue: "", description: "Authenticated telemetry hub OTLP traces URL (restart the sidecar after changing)" },
+  { key: "CLUTCH_TELEMETRY_AUTHORIZATION", kind: "secret", defaultValue: "", description: "Clutch producer Authorization header for the telemetry hub (restart the sidecar after changing)" },
   { key: "COMETCHAT_APP_ID", kind: "config", defaultValue: "", description: "CometChat App ID (native chat coordinates)" },
   { key: "COMETCHAT_REGION", kind: "config", defaultValue: "", description: "CometChat region (us, eu, or in)" },
   { key: "COMETCHAT_AUTH_KEY", kind: "secret", defaultValue: "", description: "CometChat Auth Key served to the paired phone (dev-grade; server-minted tokens are the follow-up)" },
@@ -196,7 +194,7 @@ class ClutchSettingsImpl implements ClutchSettings {
     if (this.client === undefined) {
       throw new InfisicalWriteError(
         key,
-        "Infisical is not configured (no universal-auth credentials); refusing to save to process.env only — configure Infisical or edit the Infisical UI directly",
+        "Infisical is not configured (no scoped service token); refusing to save to process.env only — configure a service token or edit the Infisical UI directly",
       );
     }
     // Write-through: Infisical FIRST, then cache (inside client.set), then
@@ -368,28 +366,27 @@ function resolveInfisicalEnvironment(): string {
  * load.
  */
 export async function initClutchSettings(): Promise<ClutchSettings> {
-  // Explicit env wins, then $CLUTCH_HOME/infisical.json, then the canonical
-  // Clutch project ID for the project coordinate only.
-  const identity = resolveInfisicalIdentity({ projectId: CLUTCH_INFISICAL_PROJECT_ID });
-  const { clientId, clientSecret } = identity;
-  if (!clientId || !clientSecret) {
+  // Explicit env wins, then $CLUTCH_HOME/infisical.json, then the canonical project ID.
+  const credentials = resolveInfisicalCredentials({ projectId: CLUTCH_INFISICAL_PROJECT_ID });
+  if (!credentials.readToken) {
     console.error(
-      `${LOG_PREFIX} no Infisical machine identity — seeding settings from process.env. ` +
-        `Set INFISICAL_CLIENT_ID and INFISICAL_CLIENT_SECRET, or save them to ` +
+      `${LOG_PREFIX} no Infisical service token — seeding settings from process.env. ` +
+        `Set INFISICAL_TOKEN, or save one to ` +
         `$CLUTCH_HOME/infisical.json, to make Infisical the source of truth (see INFISICAL.md).`,
     );
     applyAgentProxyToProcessEnv();
     return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   }
   const environment = resolveInfisicalEnvironment();
-  const client = createInfisicalSettings({
-    projectId: identity.projectId,
-    environment,
-    refreshIntervalMs: refreshIntervalMs(),
-    clientId,
-    clientSecret,
-  });
+  let client: InfisicalSettings | undefined;
   try {
+    client = createInfisicalSettings({
+      projectId: credentials.projectId,
+      environment,
+      refreshIntervalMs: refreshIntervalMs(),
+      readToken: credentials.readToken,
+      ...(credentials.writeToken ? { writeToken: credentials.writeToken } : {}),
+    });
     await client.init();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -397,10 +394,11 @@ export async function initClutchSettings(): Promise<ClutchSettings> {
       `${LOG_PREFIX} Infisical load failed (${message}) — seeding settings from process.env instead. ` +
         `Fix Infisical access and restart for Infisical-sourced settings.`,
     );
-    client.stop();
+    client?.stop();
     applyAgentProxyToProcessEnv();
     return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   }
+  if (!client) return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   backfillProcessEnv(client);
   return new ClutchSettingsImpl(client, new Map());
 }

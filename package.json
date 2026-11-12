@@ -17,6 +17,7 @@
     "src",
     "engines",
     "bridges",
+    "native",
     "scripts",
     "docs",
     "assets",
@@ -63,19 +64,22 @@
     "build:ios": "bash scripts/build-ios.sh",
     "update:mac": "bash scripts/update-mac-app.sh",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && npm run test:infisical-fetch && npm run test:ios-fleet",
+    "test:infisical-fetch": "node --test scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch-expand.node-test.mjs",
     "test:ci-scope": "vitest run --typecheck",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:ios-fleet": "node --test scripts/ios-fleet/publish-ios-versions.test.mjs scripts/ios-fleet/asc-api-standing-testers.node-test.mjs scripts/ios-fleet/test-ensure-tf-ready-rc.node-test.mjs scripts/ios-observe-ship.node-test.mjs scripts/ios-recheck-tf-ready.node-test.mjs"
   },
   "optionalDependencies": {
     "@deepseek-ai/dsh": "0.1.5-rc.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.0.0",
     "tsx": "^4.19.0",
     "typescript": "^7.0.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "zod": "4.6.7"
   },
   "engines": {
     "node": ">=22.0.0"

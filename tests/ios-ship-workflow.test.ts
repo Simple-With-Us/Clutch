@@ -111,6 +111,16 @@ function onBlock(yml: string): string {
   return m[1];
 }
 
+/** Values from an on.push.paths list: single, double or no quotes. */
+function pushPathsFrom(listBlock: string): string[] {
+  return Array.from(listBlock.matchAll(/^\s+-\s+['"]?([^'"\s]+)['"]?\s*(?:#.*)?$/gm), (m) => m[1] as string);
+}
+
+/** --path-prefix values: single, double or no quotes. */
+function gatePrefixesFrom(gateBlock: string): string[] {
+  return Array.from(gateBlock.matchAll(/--path-prefix\s+['"]?([^'"\s]+)['"]?\s*(?:#.*)?/g), (m) => m[1] as string);
+}
+
 describe("ios-ship.yml auto-ship contract", () => {
   const yml = read(".github/workflows/ios-ship.yml");
   const code = withoutComments(yml);
@@ -126,9 +136,35 @@ describe("ios-ship.yml auto-ship contract", () => {
   it("retries a failed push ship on a schedule, behind the scheduled path gate", () => {
     expect(on).toMatch(/^\s+schedule:\s*\n\s+- cron: '[^']+'/m);
     expect(code).toMatch(/scheduled-ship-gate\.sh/);
-    expect(code).toMatch(/--path-prefix 'ios\/'/);
+    expect(code).toMatch(/--path-prefix 'ios\/\*\*'/);
     expect(code).toMatch(/--event "\$\{\{ github\.event_name \}\}"/);
     expect(existsSync(join(ROOT, "scripts/ios-fleet/scheduled-ship-gate.sh"))).toBe(true);
+  });
+
+  it("gives the scheduled gate every push path, so a missed push still ships", () => {
+    // The cron has no paths filter of its own: the gate replays on.push.paths
+    // one --path-prefix each.  A push path missing from the gate never ships
+    // when its push run is missed (disabled workflow, dropped event, bot
+    // merge); an extra gate prefix ships builds no push would have built.
+    const pushPathsList = pushBlock.match(/^\s+paths:\s*\n((?:\s+-\s+.*(?:\n|$))*)/m)?.[1] ?? "";
+    const pushPaths = pushPathsFrom(pushPathsList);
+    expect(pushPaths).toContain("ios/**");
+    const gateBlock = code.match(/scheduled-ship-gate\.sh[\s\S]*?\n\s*clutch/)?.[0] ?? "";
+    const gatePrefixes = gatePrefixesFrom(gateBlock);
+    expect([...gatePrefixes].sort()).toEqual([...pushPaths].sort());
+  });
+
+  it("extracts single-, double- and unquoted values", () => {
+    expect(
+      pushPathsFrom(
+        "      - 'ios/**'\n      - \"scripts/foo/**\"\n      - scripts/bar.sh\n      - 'a/**' # reason\n",
+      ),
+    ).toEqual(["ios/**", "scripts/foo/**", "scripts/bar.sh", "a/**"]);
+    expect(
+      gatePrefixesFrom(
+        "--path-prefix 'ios/**' --path-prefix \"scripts/foo/**\" --path-prefix scripts/bar.sh --path-prefix 'a/**' # reason",
+      ),
+    ).toEqual(["ios/**", "scripts/foo/**", "scripts/bar.sh", "a/**"]);
   });
 
   it("carries the last-ship state between hosted runs", () => {
@@ -146,7 +182,20 @@ describe("ios-ship.yml auto-ship contract", () => {
   it("publishes What to Test and ships through the fleet wrapper", () => {
     expect(code).toMatch(/IOS_TF_RELEASE_NOTES:\s*"1"/);
     expect(code).not.toMatch(/IOS_TF_RELEASE_NOTES:\s*"0"/);
-    expect(code).toMatch(/run: bash scripts\/ios-ship-testflight\.sh\s*$/m);
+    expect(code).toMatch(
+      /run: node scripts\/ios-observe-ship\.mjs bash scripts\/ios-ship-testflight\.sh --build "\$\{\{ steps\.plan\.outputs\.build \}\}"/,
+    );
+  });
+
+  it("plans the release build once and hands that one value to the ship", () => {
+    // One plan per release: the plan step runs --plan-build-only behind the
+    // scheduled gate, exposes the value as a step and job output, and the
+    // ship step is the only consumer of it.
+    expect(code).toMatch(/id: plan\n(\s+)if: steps\.gate\.outputs\.should_ship == '1'/);
+    expect(code).toMatch(/bash scripts\/ios-ship-testflight\.sh --plan-build-only/);
+    expect(code).toMatch(/echo "build=\$\{build\}" >>"\$GITHUB_OUTPUT"/);
+    expect(code).toMatch(/build: \$\{\{ steps\.plan\.outputs\.build \}\}/);
+    expect(code).not.toMatch(/next-shared-build/);
   });
 
   it("takes ASC credentials from Fleet-OPS /asc and guards the Xcode toolchain", () => {
@@ -160,6 +209,29 @@ describe("ios-ship.yml auto-ship contract", () => {
     expect(code).not.toMatch(/IOS_TF_MIN_INTERVAL_SEC/);
     expect(code).not.toMatch(/--force-ship/);
     expect(code).not.toMatch(/if:.*secrets\./);
+  });
+
+  it("rechecks TestFlight readiness after standing-tester sync", () => {
+    expect(code).toMatch(/name: Re-check TestFlight readiness after tester sync/);
+    expect(code).toMatch(/ios-recheck-tf-ready\.sh" clutch/);
+    expect(code).toMatch(/steps\.plan\.outputs\.build/);
+    expect(code).toMatch(/IOS_TF_READY_TIMEOUT_SEC: "300"/);
+    expect(code).toMatch(/continue-on-error: true/);
+    expect(code).toMatch(/ios-observe-ship\.mjs bash scripts\/ios-ship-testflight\.sh/);
+    const syncAt = code.indexOf("name: Sync standing TestFlight testers");
+    const recheckAt = code.indexOf("name: Re-check TestFlight readiness after tester sync");
+    expect(syncAt).toBeGreaterThan(-1);
+    expect(recheckAt).toBeGreaterThan(syncAt);
+    const recheckStep = code.slice(recheckAt).split(/\n {6}- name:/)[0];
+    expect(recheckStep).toMatch(/id: recheck_tf/);
+    expect(recheckStep).toMatch(/steps\.ship\.outputs\.uploaded == 'true'/);
+    expect(code).toMatch(/uploaded.*unknown/);
+    expect(code).toMatch(/recheck_tf\.outputs\.tf_ready_summary/);
+    expect(code).toMatch(/iOS ship summary \(TestFlight readiness after sync\)/);
+    const recheckSh = read("scripts/ios-recheck-tf-ready.sh");
+    expect(recheckSh).not.toMatch(/^\s*mapfile\b/m);
+    expect(recheckSh).toMatch(/IFS= read -r BUNDLE_ID/);
+    expect(recheckSh).not.toMatch(/GITHUB_STEP_SUMMARY/);
   });
 });
 

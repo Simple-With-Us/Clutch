@@ -53,6 +53,22 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertNil(try payload("127.0.0.1:3180").launchToken)
     }
 
+    func testServerLinkPairsMiniMaxCodeHostWithoutLaunchToken() throws {
+        let p = try payload("clutch://pair?h=jay-server.boa-roygbiv.ts.net&tls=1&kind=mcode&chat=bridge-token-9&chatPort=3181&name=jay-server")
+        XCTAssertEqual(p.kind, .codeServer)
+        XCTAssertEqual(p.chatToken, "bridge-token-9")
+        XCTAssertEqual(p.chatPort, 3181)
+        XCTAssertNil(p.launchToken)
+        // No web port exists on a server host: the origin rides the chat port.
+        XCTAssertEqual(p.origin.absoluteString, "https://jay-server.boa-roygbiv.ts.net:3181")
+        XCTAssertEqual(p.name, "jay-server")
+    }
+
+    func testWebLinksCarryNoServerKind() throws {
+        let p = try payload("http://127.0.0.1:3180/?token=t0k")
+        XCTAssertNil(p.kind)
+    }
+
     func testGarbageIsRejected() {
         XCTAssertEqual(failure("   "), .empty)
         XCTAssertEqual(failure("ftp://example.com"), .unsupportedScheme("ftp"))
@@ -102,6 +118,13 @@ final class HostProbeTests: XCTestCase {
         XCTAssertEqual(HostProbe.classify(statusCode: 401, body: "dsh web authentication required; reopen the URL printed by dsh web.\n"), .online)
     }
 
+    func testMiniMaxCodeProbeTrustsTheSidecarHealthAnswers() {
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 200), .online)
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 401), .online)
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 404), .notClutch)
+        XCTAssertEqual(HostProbe.classifyMiniMaxCode(statusCode: 0), .offline)
+    }
+
     func testOtherResponsesAreNotClutch() {
         XCTAssertEqual(HostProbe.classify(statusCode: 401, body: "Unauthorized"), .notClutch)
         XCTAssertEqual(HostProbe.classify(statusCode: 200, body: "<html>"), .notClutch)
@@ -122,25 +145,52 @@ final class HostStoreTests: XCTestCase {
         let defaults = freshDefaults()
         let store = HostStore(defaults: defaults)
         XCTAssertNil(store.activeHost)
-        let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one"))
+        let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
         XCTAssertEqual(store.activeHost?.id, host.id)
-        XCTAssertEqual(store.loadGeneration, 1)
+        // The surfaces key their loads by the pairing, so the key has to
+        // carry the tokens the sidecar and the host will be asked with.
+        XCTAssertEqual(store.activeHost?.pairingKey, "\(host.id.uuidString)#chat-one#one")
 
         let reloaded = HostStore(defaults: defaults)
         XCTAssertEqual(reloaded.hosts.count, 1)
         XCTAssertEqual(reloaded.activeHost?.pendingLaunchToken, "one")
     }
 
+    func testTheTokensAreNotKeptInThePreferencesFile() {
+        // The preferences file rides the device backup, so a token that can
+        // drive a coding session stays out of it.
+        let defaults = freshDefaults()
+        let store = HostStore(defaults: defaults)
+        let host = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
+        let data = defaults.data(forKey: HostStore.storageKey)
+        XCTAssertNotNil(data)
+        let decoded = try? JSONDecoder().decode([ClutchHost].self, from: data ?? Data())
+        XCTAssertEqual(decoded?.count, 1)
+        XCTAssertNil(decoded?.first?.chatToken, "the chat token is in the preferences file")
+        XCTAssertNil(decoded?.first?.pendingLaunchToken, "the launch token is in the preferences file")
+        // The host itself is still there, and it still has its tokens.
+        XCTAssertEqual(store.activeHost?.id, host.id)
+        XCTAssertEqual(store.activeHost?.chatToken, "chat-one")
+    }
+
+    func testTheKeychainAccountsArePerHost() {
+        let id = UUID()
+        XCTAssertEqual(HostStore.chatAccount(for: id), "host.\(id.uuidString).chat")
+        XCTAssertEqual(HostStore.launchAccount(for: id), "host.\(id.uuidString).launch")
+        XCTAssertNotEqual(HostStore.chatAccount(for: id), HostStore.chatAccount(for: UUID()))
+    }
+
     func testRepairSameOriginRefreshesTokenInsteadOfDuplicating() {
         let store = HostStore(defaults: freshDefaults())
-        let first = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one"))
-        store.consumeLaunchToken(for: first.id)
-        XCTAssertNil(store.activeHost?.pendingLaunchToken)
-        store.pair(PairingPayload(name: "Other", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "two"))
+        let first = store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
+        store.pair(PairingPayload(name: "Other", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "two", chatToken: "chat-two"))
         XCTAssertEqual(store.hosts.count, 1)
         XCTAssertEqual(store.activeHost?.pendingLaunchToken, "two")
         XCTAssertEqual(store.activeHost?.name, "Mac")
-        XCTAssertEqual(store.loadGeneration, 2)
+        XCTAssertEqual(store.activeHost?.chatToken, "chat-two")
+        // A re-pair hands the sidecar a new token, so the surfaces have to
+        // load again with it.
+        XCTAssertNotEqual(store.activeHost?.pairingKey, first.pairingKey)
     }
 
     func testRemoveActiveFallsBackToRemainingHost() {
@@ -184,5 +234,22 @@ final class HostStoreTests: XCTestCase {
         XCTAssertNil(host.pendingLaunchToken)
         XCTAssertEqual(host.chatPort, 3181)
         XCTAssertEqual(host.status, .online)
+        // Archives written before server hosts existed decode as web hosts.
+        XCTAssertEqual(host.kind, .web)
+        XCTAssertFalse(host.isMiniMaxCodeOnly)
+    }
+
+    func testServerPairingPersistsKind() {
+        let defaults = freshDefaults()
+        let store = HostStore(defaults: defaults)
+        var payload = PairingPayload(name: "jay-server", origin: URL(string: "https://jay-server.boa-roygbiv.ts.net:3181")!, launchToken: nil)
+        payload.kind = .codeServer
+        payload.chatToken = "chat-server"
+        store.pair(payload)
+        XCTAssertEqual(store.activeHost?.kind, .codeServer)
+        XCTAssertTrue(store.activeHost?.isMiniMaxCodeOnly == true)
+
+        let reloaded = HostStore(defaults: defaults)
+        XCTAssertEqual(reloaded.activeHost?.kind, .codeServer)
     }
 }

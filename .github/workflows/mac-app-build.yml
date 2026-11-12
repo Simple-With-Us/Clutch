@@ -4,17 +4,34 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/web/dock-app/**'
-      - 'assets/clutch-icon-1024.png'
+      # The Mac app is the `Clutch macOS` Xcode target, so the filter has to see
+      # what that target is built from.  C-86: this list used to hold only the
+      # retired WKWebView shell's inputs, so no change under ios/ could ever
+      # ship a Mac release.
+      - 'ios/Mac/**'
+      - 'ios/App/**'
+      - 'ios/Resources/**'
+      - 'ios/Assets.xcassets/**'
+      - 'ios/project.yml'
+      - 'ios/Clutch.xcodeproj/**'
       - 'scripts/build-mac-app.sh'
+      - 'scripts/lib/clutch-build-lock.sh'
       - 'scripts/install-dock-app.sh'
       - '.github/workflows/mac-app-build.yml'
   workflow_dispatch:
   pull_request:
     paths:
-      - 'src/web/dock-app/**'
-      - 'assets/clutch-icon-1024.png'
+      # Same inputs as the push block above, so a change that would ship from
+      # main is compiled on its PR first.  The installer drives build-mac-app.sh.
+      - 'ios/Mac/**'
+      - 'ios/App/**'
+      - 'ios/Resources/**'
+      - 'ios/Assets.xcassets/**'
+      - 'ios/project.yml'
+      - 'ios/Clutch.xcodeproj/**'
       - 'scripts/build-mac-app.sh'
+      - 'scripts/lib/clutch-build-lock.sh'
+      - 'scripts/install-dock-app.sh'
       - '.github/workflows/mac-app-build.yml'
 
 permissions:
@@ -22,7 +39,23 @@ permissions:
   actions: write
 
 concurrency:
-  group: mac-app-build-clutch
+  # Same event-scoped shape as ios-ship.yml and Usage-Monitor's mac-release.yml.
+  #
+  # This workflow is triggered by push, workflow_dispatch and pull_request, and
+  # the build job is skipped on pull_request, so a PR run contributes nothing
+  # to the Mac release.  While PR runs shared one group with the push-to-main
+  # build, cancel-in-progress: true meant a PR run cancelled main's build
+  # outright, and two different PRs also cancelled each other.
+  #
+  # 2026-10-24, twice in 70 minutes:
+  #   - push 6b3487f2 mac build 40075066076 was cancelled at 07:42:50Z by PR
+  #     run 40073521084.
+  #   - push ed510c85 mac build 40070842512 was cancelled at 06:36:16Z.
+  #
+  # Keying the group on the event gives every PR its own group (so PR builds
+  # stop cancelling each other) and leaves main alone in the 'main' group.
+  # cancel-in-progress stays true so a newer push to the same PR still wins.
+  group: mac-app-build-clutch-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
   cancel-in-progress: true
 
 jobs:
@@ -40,9 +73,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # build-mac-app.sh stamps the bundle with the commit count, which a
+          # shallow clone under-counts.
+          fetch-depth: 0
 
       - name: Assert stable Xcode (never beta)
         run: bash scripts/ios-assert-xcode.sh 27.0
+
+      - name: Install xcodegen
+        run: bash scripts/ios-install-xcodegen.sh
 
       - name: Load Mac signing secrets (optional)
         uses: ./.github/actions/infisical-secrets
@@ -51,9 +90,8 @@ jobs:
             MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD
             APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64
           required: ""
-          project-id: ${{ secrets.INFISICAL_PROJECT_ID }}
-          client-id: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+          project-id: 077fd6f3-9f9b-438e-9b6f-5c69076cf36c
+          token: ${{ secrets.INFISICAL_CLUTCH_CI_READ_TOKEN }}
         env:
           GH_FALLBACK_MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           GH_FALLBACK_MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
@@ -91,6 +129,7 @@ jobs:
           CLUTCH_MAC_APP_OUT: ${{ runner.temp }}/Clutch.app
           CLUTCH_MAC_KILL_RUNNING: "0"
           CLUTCH_MAC_BUILD_COMMIT: ${{ github.sha }}
+          CLUTCH_MAC_REGENERATE_PROJECT: "1"
           CLUTCH_MAC_MANIFEST_OUT: ${{ runner.temp }}/clutch-mac-build.json
           CLUTCH_MAC_SIGN: ${{ steps.mac_sign.outputs.sign_mode }}
           CLUTCH_MAC_CODESIGN_IDENTITY: ${{ steps.mac_sign.outputs.identity }}
@@ -179,7 +218,7 @@ jobs:
           PY
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: mac-${{ github.sha }}
           name: Clutch Mac ${{ github.sha }}
@@ -202,10 +241,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bash scripts/ios-assert-xcode.sh 27.0
+      - name: Install xcodegen
+        run: bash scripts/ios-install-xcodegen.sh
       - name: Ad-hoc build smoke
         env:
           CLUTCH_RUNTIME_ROOT: ${{ github.workspace }}
           CLUTCH_MAC_APP_OUT: ${{ runner.temp }}/Clutch.app
           CLUTCH_MAC_KILL_RUNNING: "0"
           CLUTCH_MAC_SIGN: adhoc
+          CLUTCH_MAC_REGENERATE_PROJECT: "1"
         run: bash scripts/build-mac-app.sh

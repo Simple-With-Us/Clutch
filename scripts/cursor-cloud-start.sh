@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Clutch — Cursor cloud agent start (runs on each agent boot).
-#  Cursor dashboard injects INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET.
+#  Cursor dashboard injects the scoped INFISICAL_TOKEN service token.
 #  This script:
 #    * exports Infisical coordinates (PROJECT_ID / ENV / DOMAIN) into a
 #      process-friendly env file under $HOME/.cursor-cloud-env/
@@ -13,7 +13,9 @@
 
 set -euo pipefail
 
-# Two ASCII spaces after periods and colons (fleet copy rule).
+# Sentence gap: AGENTS.md § Copy Rules (a real U+00A0 plus a normal space
+# between sentences in prose a human reads;  code, identifiers and
+# machine-readable config never take a U+00A0).
 REPO_NAME="Clutch"
 ENV_DIR="${HOME}/.cursor-cloud-env"
 ENV_FILE="${ENV_DIR}/${REPO_NAME}.env"
@@ -58,8 +60,7 @@ export CLUTCH_INFISICAL_ENV="prod"
 
 # 3.  If dashboard credentials are missing, print NAMES only and exit 0.
 missing=()
-[[ -z "${INFISICAL_CLIENT_ID:-}"     ]] && missing+=("INFISICAL_CLIENT_ID")
-[[ -z "${INFISICAL_CLIENT_SECRET:-}" ]] && missing+=("INFISICAL_CLIENT_SECRET")
+[[ -z "${INFISICAL_TOKEN:-}" ]] && missing+=("INFISICAL_TOKEN")
 if [[ ${#missing[@]} -gt 0 ]]; then
   log "missing Cursor dashboard secret(s): ${missing[*]}"
   log "ask Jay to add them under the team/org Cursor dashboard; agent boot continues without Infisical"
@@ -78,59 +79,21 @@ EOF
   exit 0
 fi
 
-# 4.  Fetch the managed-key set from Infisical using universal auth.
-#     We reuse the project's own runtime helper to keep the contract
-#     identical with the Mac launcher.  See INFISICAL.md "Key inventory".
-if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
-  log "curl or python3 missing — cannot fetch Infisical secrets; agent boot continues"
+# 4. Fetch using the scoped service token through the shared bounded helper.
+if ! command -v python3 >/dev/null 2>&1; then
+  log "python3 missing — cannot fetch Infisical secrets; agent boot continues"
   exit 0
 fi
-
-token="$(curl -s --max-time 15 -X POST "${INFISICAL_DOMAIN}/api/v1/auth/universal-auth/login" \
-  -H 'Content-Type: application/json' \
-  -d "{\"clientId\":\"${INFISICAL_CLIENT_ID}\",\"clientSecret\":\"${INFISICAL_CLIENT_SECRET}\"}" \
-  | python3 -c 'import json,sys
-try:
-    print(json.load(sys.stdin).get("accessToken",""))
-except Exception:
-    pass
-' 2>/dev/null || true)"
-if [[ -z "${token}" ]]; then
-  log "Infisical universal-auth login failed — agent boot continues"
-  exit 0
-fi
-
-secrets_json="$(curl -s --max-time 20 \
-  "${INFISICAL_DOMAIN}/api/v3/secrets/raw?workspaceId=${INFISICAL_PROJECT_ID}&environment=${INFISICAL_ENV}&secretPath=/" \
-  -H "Authorization: Bearer ${token}" 2>/dev/null || true)"
-token=""
-if [[ -z "${secrets_json}" ]]; then
-  log "Infisical secrets fetch failed — agent boot continues"
-  exit 0
-fi
-
-# 5.  Build the env file from the managed-key set (matches
-#     scripts/lib/clutch-infisical-env.sh and INFISICAL.md).
+# 5. Backfill the managed-key set without printing values to stdout.
 INTERNAL_TMP="$(mktemp -t clutch-cursor-cloud-env.XXXXXX)"
 chmod 600 "${INTERNAL_TMP}"
-
-CLUTCH_MANAGED_KEYS="MINIMAX_API_KEY DEEPSEEK_API_KEY CLUTCH_MINIMAX_API_KEY_NAME CLUTCH_MINIMAX_BASE_URL CLUTCH_MINIMAX_MODEL CLUTCH_MINIMAX_PROFILE CLUTCH_WEB_HOST CLUTCH_WEB_PORT CLUTCH_TAILNET_HOST CLUTCH_TAILNET_IPV4 CLUTCH_TRUSTED_HOSTS CLUTCH_SETTINGS_REFRESH_MS" \
-python3 - "${secrets_json}" >"${INTERNAL_TMP}" <<'PY'
-import json, os, shlex, sys
-try:
-    data = json.loads(sys.argv[1])
-except Exception:
-    sys.exit(2)
-managed = os.environ.get("CLUTCH_MANAGED_KEYS", "").split()
-values = {s.get("secretKey"): s.get("secretValue", "") for s in data.get("secrets", []) if s.get("secretKey")}
-for key in managed:
-    v = values.get(key)
-    if v:
-        print("export " + shlex.quote(key) + "=" + shlex.quote(v))
-PY
-write_status=$?
-if [[ ${write_status} -ne 0 ]]; then
-  log "Infisical response unparseable — agent boot continues"
+helper_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib" && pwd)"
+if ! CLUTCH_MANAGED_KEYS="MINIMAX_API_KEY DEEPSEEK_API_KEY CLUTCH_MINIMAX_API_KEY_NAME CLUTCH_MINIMAX_BASE_URL CLUTCH_MINIMAX_MODEL CLUTCH_MINIMAX_PROFILE CLUTCH_WEB_HOST CLUTCH_WEB_PORT CLUTCH_TAILNET_HOST CLUTCH_TAILNET_IPV4 CLUTCH_TRUSTED_HOSTS CLUTCH_SETTINGS_REFRESH_MS" \
+  CLUTCH_INFISICAL_PROJECT_ID="${INFISICAL_PROJECT_ID}" \
+  CLUTCH_INFISICAL_URL="${INFISICAL_DOMAIN}" \
+  CLUTCH_INFISICAL_OUTPUT_FILE="${INTERNAL_TMP}" \
+  python3 "${helper_dir}/infisical-backfill.py"; then
+  log "Infisical service-token backfill failed — agent boot continues"
   exit 0
 fi
 

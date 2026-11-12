@@ -22,6 +22,10 @@ const ALLOWED_FILES = [
 const ALLOWED_LINE =
   /DeepSeek Harness|deepseek-harness|deepseek_harness|retired-name|\[HARNESS\]|`harness\/\*`/;
 
+// The report index links to this canonical historical audit by its original name.
+const ALLOWED_REPORT_INDEX_LINE =
+  /^- \[2026-09-23-harness-simplewithus-rename\]\(\.\.\/audits\/2026-09-23-harness-simplewithus-rename\.md\)$/;
+
 // Port 3080 is vanilla dsh's.  Clutch serves on 3180.
 const PORT_ALLOWED_FILES = [
   ...ALLOWED_FILES,
@@ -51,6 +55,17 @@ function textOf(path: string): string | null {
 describe("brand guard", () => {
   const files = trackedFiles();
 
+  it("allows only the canonical historical audit link in the reports index", () => {
+    expect(
+      ALLOWED_REPORT_INDEX_LINE.test(
+        "- [2026-09-23-harness-simplewithus-rename](../audits/2026-09-23-harness-simplewithus-rename.md)",
+      ),
+    ).toBe(true);
+    expect(
+      ALLOWED_REPORT_INDEX_LINE.test("- unrelated harness mention in the reports index"),
+    ).toBe(false);
+  });
+
   it("keeps the retired product name out of tracked paths", () => {
     const bad = files.filter(
       (f) => /harness/i.test(f) && !ALLOWED_FILES.some((re) => re.test(f)),
@@ -65,7 +80,11 @@ describe("brand guard", () => {
       const text = textOf(f);
       if (text === null) continue;
       text.split("\n").forEach((line, i) => {
-        if (/harness/i.test(line) && !ALLOWED_LINE.test(line)) {
+        if (
+          /harness/i.test(line) &&
+          !ALLOWED_LINE.test(line) &&
+          !(f === "docs/reports/README.md" && ALLOWED_REPORT_INDEX_LINE.test(line.trim()))
+        ) {
           hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 120)}`);
         }
       });

@@ -1,104 +1,235 @@
 #!/usr/bin/env bash
-# Build Clutch.app (WKWebView shell).  Used by install-dock-app.sh locally and
-# by GitHub-hosted macOS runners.  Never prints secret values.
+# Build Clutch.app from the native `Clutch macOS` Xcode target.
+#
+# This used to compile a single hand-rolled WKWebView shell (src/web/dock-app/
+# ClutchWindow.swift) with swiftc and write an Info.plist by hand.  That shell
+# was replaced by the real native target in #123, but this script kept building
+# it, so every "Mac release" shipped the deprecated app under the native app's
+# own bundle identifier.  C-86 repoints the release path at the target that
+# actually contains the product.
+#
+# Contract with the rest of the fleet (scripts/fetch-ci-mac-app.sh, the publish
+# job, scripts/install-dock-app.sh, scripts/auto-update-mac.sh) is unchanged:
+# the product is $APP/Clutch.app and, when CLUTCH_MAC_MANIFEST_OUT is set, a
+# manifest with schemaVersion / commit / signedAs / bundleId.
+#
+# bundleId is now READ BACK from the built Info.plist rather than written here,
+# so the manifest cannot claim an identity the binary does not carry.
+#
+# Local fallback, not the primary route:  scripts/fetch-ci-mac-app.sh installs the
+# CI-built app first, and this script only runs when no CI build exists for the
+# commit.  A local build needs a full Xcode (see the preflight below).
+#
+# Seams, all optional:
+#   CLUTCH_MAC_REGENERATE_PROJECT=1  run `xcodegen generate` first so the build
+#                                    comes from ios/project.yml, not the committed
+#                                    pbxproj (the release workflow sets this)
+#   CLUTCH_MAC_DERIVED_DATA          DerivedData directory; default is stable, so
+#                                    dependency and incremental state survive
+#   CLUTCH_MAC_BUILD_LOCK_WAIT       seconds to wait for another build on the same
+#                                    DerivedData before giving up (default 3600)
+#   CLUTCH_MAC_BUILD_NUMBER          CFBundleVersion; default is the commit's
+#                                    America/Chicago merge timestamp (YYYYMMDDHHMM)
+#   CLUTCH_MAC_MARKETING_VERSION     CFBundleShortVersionString; default 0.1.0
+#
+# Never prints secret values.
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
 LIVE="${CLUTCH_RUNTIME_ROOT:-${HOME}/apps/clutch-runtime}"
 APP="${CLUTCH_MAC_APP_OUT:-${HOME}/Applications/Clutch.app}"
-PNG="${LIVE}/assets/clutch-icon-1024.png"
-SWIFT="${LIVE}/src/web/dock-app/ClutchWindow.swift"
+IOS_DIR="${CLUTCH_MAC_IOS_DIR:-${LIVE}/ios}"
+SCHEME="${CLUTCH_MAC_SCHEME:-Clutch macOS}"
+CONFIGURATION="${CLUTCH_MAC_CONFIGURATION:-Release}"
 SIGN_MODE="${CLUTCH_MAC_SIGN:-adhoc}"
 MANIFEST_OUT="${CLUTCH_MAC_MANIFEST_OUT:-}"
+PROJECT="${CLUTCH_MAC_XCODEPROJ:-${IOS_DIR}/Clutch.xcodeproj}"
+STAGE_ROOT=""
+STAGED_APP=""
+PREVIOUS_APP=""
 
-if [[ ! -f "$PNG" ]]; then
-  echo "missing ${PNG}" >&2
+if [[ ! -d "$IOS_DIR" ]]; then
+  echo "missing ${IOS_DIR}" >&2
   exit 1
 fi
-if [[ ! -f "$SWIFT" ]]; then
-  echo "missing ${SWIFT}" >&2
+
+# A local build needs a full Xcode.  With only the Command Line Tools selected,
+# `xcodebuild` is a stub that dies with an opaque "requires Xcode" error partway
+# through an update, so say what is wrong and what to do before touching
+# anything.  The CI-built app is the primary route and needs none of this.
+if ! xcodebuild -version >/dev/null 2>&1; then
+  echo "a local Mac build needs a full Xcode install, and xcodebuild is not usable here" >&2
+  echo "install Xcode and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+  echo "or wait for the CI-built app (scripts/fetch-ci-mac-app.sh installs it when it exists)" >&2
   exit 1
 fi
 
-if [[ "${CLUTCH_MAC_KILL_RUNNING:-1}" == "1" ]]; then
-  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
+# ios/Clutch.xcodeproj is generated from ios/project.yml by XcodeGen.  The
+# committed copy is fine for a local rebuild, but the release path must ship what
+# project.yml says, the way ci.yml and build-ios.sh do: a Swift file added or a
+# setting changed in project.yml without a regenerated pbxproj would otherwise
+# silently miss the shipped app.  A clone with no project at all gets one too,
+# rather than failing with a bare "cannot find scheme".
+if [[ "${CLUTCH_MAC_REGENERATE_PROJECT:-0}" == "1" || ! -d "$PROJECT" ]]; then
+  if ! command -v xcodegen >/dev/null 2>&1; then
+    echo "xcodegen is needed to generate ${PROJECT} and is not installed" >&2
+    echo "install it with: bash ${LIVE}/scripts/ios-install-xcodegen.sh" >&2
+    exit 1
+  fi
+  echo "generating ${PROJECT} from ios/project.yml"
+  (cd "$IOS_DIR" && xcodegen generate)
+fi
+
+# The notary API key and the notarization zip are written to $RUNNER_TEMP, so
+# declare them before the trap and remove them on every exit path (notarytool
+# error, SIGTERM, errexit) or the private key outlives the build.
+KEY_PATH="${RUNNER_TEMP:-/tmp}/clutch-notary-key.p8"
+ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/clutch-build-lock.sh
+. "$HERE/lib/clutch-build-lock.sh"
+cleanup_build() {
+  local keep_stage=0
+  rm -f "$KEY_PATH" "$ZIP"
+  if [[ -n "$STAGE_ROOT" && -d "$STAGE_ROOT" ]]; then
+    if [[ -e "$PREVIOUS_APP" || -L "$PREVIOUS_APP" ]]; then
+      if [[ ! -e "$APP" && ! -L "$APP" ]]; then
+        if ! mv "$PREVIOUS_APP" "$APP"; then
+          echo "could not restore previous Clutch.app from $PREVIOUS_APP" >&2
+          keep_stage=1
+        fi
+      else
+        rm -rf "$PREVIOUS_APP"
+      fi
+    fi
+    if [[ "$keep_stage" == "0" ]]; then rm -rf "$STAGE_ROOT"; fi
+  fi
+  clutch_build_lock_release
+}
+trap cleanup_build EXIT
+
+# DerivedData lives OUTSIDE anything the exit trap removes.  A throwaway one
+# re-resolves CometChatUIKitSwift and recompiles the whole app on every install,
+# which is most of the build time on the Mac that rebuilds on each update.
+DD="${CLUTCH_MAC_DERIVED_DATA:-${CLUTCH_HOME:-${HOME}/.clutch}/derived-data/mac}"
+mkdir -p "$DD"
+# One build at a time against it.  The auto-updater's local rebuild, update:mac
+# and an operator running clutch-install-dock can overlap, and a shared
+# DerivedData plus the product removal below would let one run delete or
+# half-overwrite what another is about to copy into the app.  The lock covers
+# the build and the swap into $APP and is released on every exit path.
+clutch_build_lock_acquire "$DD/.build.lock" "${CLUTCH_MAC_BUILD_LOCK_WAIT:-3600}"
+
+# Version stamps.  Explicit CLUTCH_MAC_* values always win.  Otherwise every
+# Clutch platform uses marketing version 0.1.0 and the build number names the
+# commit's merge minute in America/Chicago.  The release workflow invokes this
+# fallback, which keeps local builds honest too.
+BUILD_COMMIT="${CLUTCH_MAC_BUILD_COMMIT:-HEAD}"
+COMMIT_EPOCH="$(git -C "$LIVE" show -s --format=%ct "$BUILD_COMMIT" 2>/dev/null || true)"
+DEFAULT_BUILD_NUMBER=""
+if [[ "$COMMIT_EPOCH" =~ ^[0-9]+$ ]]; then
+  if date -r "$COMMIT_EPOCH" '+%Y%m%d%H%M' >/dev/null 2>&1; then
+    DEFAULT_BUILD_NUMBER="$(TZ=America/Chicago date -r "$COMMIT_EPOCH" '+%Y%m%d%H%M')"
+  else
+    DEFAULT_BUILD_NUMBER="$(TZ=America/Chicago date -d "@$COMMIT_EPOCH" '+%Y%m%d%H%M')"
+  fi
+fi
+BUILD_NUMBER="${CLUTCH_MAC_BUILD_NUMBER:-$DEFAULT_BUILD_NUMBER}"
+MARKETING_VERSION_VALUE="${CLUTCH_MAC_MARKETING_VERSION:-0.1.0}"
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]{12}$ ]]; then
+  echo "CLUTCH_MAC_BUILD_NUMBER must be a 12-digit YYYYMMDDHHMM value" >&2
+  exit 1
+fi
+if [[ ! "$MARKETING_VERSION_VALUE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CLUTCH_MAC_MARKETING_VERSION must be a dotted numeric version" >&2
+  exit 1
+fi
+
+# Build unsigned and sign below.  The target declares CODE_SIGN_STYLE
+# Automatic with a development team, which cannot resolve on a runner with no
+# signing identity; signing here keeps one code path for both CI modes and
+# keeps the notary step exactly where it already was.
+XCODE_ARGS=(
+  -project "$PROJECT"
+  -scheme "$SCHEME"
+  -configuration "$CONFIGURATION"
+  -derivedDataPath "$DD"
+  -destination "platform=macOS,arch=arm64"
+  CODE_SIGNING_ALLOWED=NO
+  CODE_SIGNING_REQUIRED=NO
+  CODE_SIGN_IDENTITY=""
+)
+if [[ -n "$BUILD_NUMBER" ]]; then
+  XCODE_ARGS+=("CURRENT_PROJECT_VERSION=${BUILD_NUMBER}")
+fi
+if [[ -n "$MARKETING_VERSION_VALUE" ]]; then
+  XCODE_ARGS+=("MARKETING_VERSION=${MARKETING_VERSION_VALUE}")
+fi
+
+BUILT="$DD/Build/Products/${CONFIGURATION}/Clutch.app"
+# DerivedData persists now, so remove the previous product first: a build that
+# fails or does nothing must never leave an old Clutch.app that passes the check
+# below and gets shipped as this commit.
+rm -rf "$BUILT"
+
+echo "==> building scheme ${SCHEME} (${CONFIGURATION})"
+xcodebuild "${XCODE_ARGS[@]}" build
+
+if [[ ! -d "$BUILT" ]]; then
+  echo "xcodebuild produced no ${BUILT}" >&2
+  exit 1
 fi
 
 mkdir -p "$(dirname "$APP")"
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+STAGE_ROOT="$(mktemp -d "$(dirname "$APP")/.clutch-app-build.XXXXXX")"
+STAGED_APP="$STAGE_ROOT/Clutch.app"
+PREVIOUS_APP="$STAGE_ROOT/Previous.app"
+ditto "$BUILT" "$STAGED_APP"
 
-SDK="$(xcrun --sdk macosx --show-sdk-path)"
-swiftc -O \
-  -target arm64-apple-macos14 \
-  -sdk "$SDK" \
-  -framework Cocoa -framework WebKit \
-  -o "$APP/Contents/MacOS/Clutch" \
-  "$SWIFT"
-chmod 755 "$APP/Contents/MacOS/Clutch"
-
-TMP="$(mktemp -d)"
-# The notary API key and the notarization zip are written to $RUNNER_TEMP, not
-# to $TMP, so declare them before the trap and remove them on every exit path
-# (notarytool error, SIGTERM, errexit) or the private key outlives the build.
-KEY_PATH="${RUNNER_TEMP:-/tmp}/clutch-notary-key.p8"
-ZIP="${RUNNER_TEMP:-/tmp}/Clutch-notarize.zip"
-trap 'rm -rf "$TMP"; rm -f "$KEY_PATH" "$ZIP"' EXIT
-mkdir -p "$TMP/AppIcon.iconset"
-for s in 16 32 128 256 512; do
-  sips -z "$s" "$s" "$PNG" --out "$TMP/AppIcon.iconset/icon_${s}x${s}.png" >/dev/null
-  sips -z "$((s * 2))" "$((s * 2))" "$PNG" --out "$TMP/AppIcon.iconset/icon_${s}x${s}@2x.png" >/dev/null
+MAIN_EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$STAGED_APP/Contents/Info.plist")"
+MAIN_EXECUTABLE="$STAGED_APP/Contents/MacOS/$MAIN_EXECUTABLE_NAME"
+if [[ ! -x "$MAIN_EXECUTABLE" ]]; then
+  echo "built app has no executable at $MAIN_EXECUTABLE" >&2
+  exit 1
+fi
+APP_ARCH_TEXT="$(xcrun lipo -archs "$MAIN_EXECUTABLE")"
+read -r -a APP_ARCHS <<< "$APP_ARCH_TEXT"
+if [[ ${#APP_ARCHS[@]} -eq 0 ]]; then
+  echo "built app has no supported architectures" >&2
+  exit 1
+fi
+for arch in "${APP_ARCHS[@]}"; do
+  case "$arch" in
+    arm64|x86_64) ;;
+    *) echo "unsupported built app architecture: $arch" >&2; exit 1 ;;
+  esac
 done
-iconutil -c icns "$TMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleDisplayName</key><string>Clutch</string>
-  <key>CFBundleExecutable</key><string>Clutch</string>
-  <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>codes.clutch.macos</string>
-  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>Clutch</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
-  <key>LSMultipleInstancesProhibited</key><true/>
-  <key>NSHighResolutionCapable</key><true/>
-  <key>NSSupportsAutomaticTermination</key><false/>
-  <key>NSAppTransportSecurity</key>
-  <dict>
-    <key>NSAllowsLocalNetworking</key><true/>
-    <key>NSAllowsArbitraryLoads</key><true/>
-  </dict>
-  <key>CFBundleURLTypes</key>
-  <array>
-    <dict>
-      <key>CFBundleURLName</key><string>codes.clutch.macos</string>
-      <key>CFBundleURLSchemes</key>
-      <array>
-        <string>clutch</string>
-        <string>minimax</string>
-      </array>
-    </dict>
-  </array>
-</dict>
-</plist>
-PLIST
-echo -n "APPL????" > "$APP/Contents/PkgInfo"
+NESTED_HELPER="$STAGED_APP/Contents/Helpers/ClutchMuseACP.app"
+bash "$HERE/build-muse-gui-helper.sh" "$NESTED_HELPER" "${APP_ARCHS[@]}"
+APP_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGED_APP/Contents/Info.plist")"
+APP_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$STAGED_APP/Contents/Info.plist")"
+if [[ -z "$APP_MARKETING_VERSION" || -z "$APP_BUILD_NUMBER" ]]; then
+  echo "built app is missing bundle version fields; refusing to package Muse helper" >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_MARKETING_VERSION" "$NESTED_HELPER/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_BUILD_NUMBER" "$NESTED_HELPER/Contents/Info.plist"
 
 case "$SIGN_MODE" in
   adhoc)
-    codesign --force --deep -s - "$APP" >/dev/null 2>&1 || true
+    codesign --force --deep -s - "$NESTED_HELPER"
+    codesign --force --deep -s - "$STAGED_APP"
+    codesign --verify --strict "$NESTED_HELPER"
+    codesign --verify --deep --strict "$STAGED_APP"
     SIGNED_AS="adhoc"
     ;;
   developer-id)
     : "${CLUTCH_MAC_CODESIGN_IDENTITY:?CLUTCH_MAC_CODESIGN_IDENTITY required for developer-id signing}"
-    codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$APP"
+    codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$NESTED_HELPER"
+    codesign --force --deep --options runtime -s "$CLUTCH_MAC_CODESIGN_IDENTITY" "$STAGED_APP"
+    codesign --verify --strict "$NESTED_HELPER"
+    codesign --verify --deep --strict "$STAGED_APP"
     SIGNED_AS="developer-id"
     if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" && -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
       case "$APPLE_API_KEY_P8_BASE64" in
@@ -113,9 +244,10 @@ case "$SIGN_MODE" in
         echo "notary key did not decode to a PEM private key" >&2
         exit 1
       fi
-      ditto -c -k --keepParent "$APP" "$ZIP"
+      ditto -c -k --keepParent "$STAGED_APP" "$ZIP"
       xcrun notarytool submit "$ZIP" --wait --key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
-      xcrun stapler staple "$APP" || true
+      xcrun stapler staple "$STAGED_APP" || true
+      codesign --verify --deep --strict "$STAGED_APP"
       SIGNED_AS="developer-id-notarized"
     fi
     ;;
@@ -130,11 +262,45 @@ esac
 
 if [[ -n "$MANIFEST_OUT" ]]; then
   COMMIT="${CLUTCH_MAC_BUILD_COMMIT:-unknown}"
-  python3 - "$MANIFEST_OUT" "$COMMIT" "$SIGNED_AS" <<'PY'
+  # Read the identity off the product instead of repeating it here.  Two builds
+  # that both claim codes.clutch.macos is the exact bug C-86 exists to kill, so
+  # the manifest must not be able to assert one the bundle does not carry.
+  BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -z "$BUNDLE_ID" ]]; then
+    echo "built app has no CFBundleIdentifier; refusing to write a manifest" >&2
+    exit 1
+  fi
+  BUILT_MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+  BUILT_BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -z "$BUILT_MARKETING_VERSION" || -z "$BUILT_BUILD_NUMBER" ]]; then
+    echo "built app has no version stamp; refusing to write a manifest" >&2
+    exit 1
+  fi
+  python3 - "$MANIFEST_OUT" "$COMMIT" "$SIGNED_AS" "$BUNDLE_ID" "$BUILT_MARKETING_VERSION" "$BUILT_BUILD_NUMBER" <<'PY'
 import json, sys
-path, commit, signed = sys.argv[1], sys.argv[2], sys.argv[3]
-json.dump({"schemaVersion": 1, "commit": commit, "signedAs": signed, "bundleId": "codes.clutch.macos"}, open(path, "w"), indent=2)
+path, commit, signed, bundle_id, marketing_version, build_number = sys.argv[1:]
+json.dump({
+    "schemaVersion": 1,
+    "commit": commit,
+    "signedAs": signed,
+    "bundleId": bundle_id,
+    "marketingVersion": marketing_version,
+    "buildNumber": build_number,
+}, open(path, "w"), indent=2)
 PY
+fi
+
+# Signing, optional notarization and manifest generation finish before replacing
+# the installed app.
+if [[ "${CLUTCH_MAC_KILL_RUNNING:-1}" == "1" ]]; then
+  pkill -f 'Clutch.app/Contents/MacOS/Clutch' 2>/dev/null || true
+fi
+if [[ -e "$APP" || -L "$APP" ]]; then
+  mv "$APP" "$PREVIOUS_APP"
+fi
+if ! mv "$STAGED_APP" "$APP"; then
+  echo "could not install staged Clutch.app at $APP" >&2
+  exit 1
 fi
 
 echo "built ${APP} (${SIGNED_AS})"

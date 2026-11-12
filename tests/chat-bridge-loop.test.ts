@@ -10,9 +10,11 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 interface CcCall {
@@ -23,14 +25,28 @@ interface CcCall {
 }
 
 const ccCalls: CcCall[] = [];
+const telemetryCalls: unknown[] = [];
 let ccServer: Server;
 let ccPort = 0;
 let sidecar: ChildProcess | null = null;
 let chatPort = 0;
 let tokenFile = "";
+/** Isolated so the loop test never writes the developer's real metadata. */
+let metaFile = "";
+/** Where the stub records what the sidecar did to the engine. */
+let stubLogFile = "";
+let stubSessionsFile = "";
+let museDataRoot = "";
+const PREVIEW_ID = "01a11111-2222-7333-8444-555555555555";
+let museLogFile = "";
 const CHAT_TOKEN = `loop-test-token-${"x".repeat(48)}`;
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
+
+function hasCompleteEvent(text: string, event: string): boolean {
+  const start = text.indexOf(`event: ${event}\n`);
+  return start >= 0 && text.indexOf("\n\n", start) >= 0;
+}
 
 function freePort(): Promise<number> {
   return new Promise((resolve) => {
@@ -74,6 +90,11 @@ async function waitFor(url: string, headers: Record<string, string>, timeoutMs =
 beforeAll(async () => {
   ccServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const body = await readBody(req);
+    if (req.url === "/v1/traces") {
+      telemetryCalls.push(body);
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ received: 1, written: 1, ignored: 0 }));
+      return;
+    }
     ccCalls.push({
       method: req.method ?? "?",
       path: new URL(req.url ?? "/", "http://x").pathname,
@@ -86,23 +107,44 @@ beforeAll(async () => {
   ccPort = (ccServer.address() as { port: number }).port;
 
   const dir = mkdtempSync(join(tmpdir(), "chat-loop-"));
+  museDataRoot = join(dir, "data");
+  const sessionDir = join(museDataRoot, "muse", "sessions", "2026", "11", "01", PREVIEW_ID);
+  mkdirSync(sessionDir, { recursive: true });
+  museLogFile = join(sessionDir, "session.jsonl");
+  writeFileSync(museLogFile, [
+    { payload_type: "runtime.session.metadata", payload: { record: { model_id: "muse-wonder-1.0-contributor", provider_id: "meta", workspace_root: "/tmp/project" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "user_prompt_display", prompt: "Previewed question" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "assistant_message_committed", text: "Previewed answer" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "goal_usage_attribution", record: { usage_id: "reported-1", usage_family: "provider", quantity: { unit: "tokens", reported: true, input_tokens: 24, output_tokens: 12, cached_tokens: 8 } } } } },
+  ].map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n");
   tokenFile = join(dir, "chat-token");
   writeFileSync(tokenFile, `${CHAT_TOKEN}\n`, { mode: 0o600 });
+  metaFile = join(dir, "session-meta.json");
+  stubLogFile = join(dir, "stub-log.jsonl");
+  stubSessionsFile = join(dir, "stub-sessions.json");
   chatPort = await freePort();
 
   sidecar = spawn(TSX, [BRIDGE], { env: sidecarEnv(tokenFile), stdio: ["ignore", "pipe", "pipe"] });
-  sidecar.stderr?.on("data", () => undefined);
+  sidecar.stderr?.on("data", (c) => { if (process.env.CHAT_LOOP_DEBUG) process.stderr.write(c); });
   await waitFor(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { Authorization: `Bearer ${CHAT_TOKEN}` });
 }, 60000);
 
 function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    XDG_DATA_HOME: museDataRoot,
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
+    CLUTCH_TELEMETRY_ENDPOINT: `http://127.0.0.1:${ccPort}/v1/traces`,
+    CLUTCH_TELEMETRY_AUTHORIZATION: "Bearer diagnostic-test-only-token",
+    CLUTCH_SESSION_META_FILE: metaFile,
+    CLUTCH_DSH_HOME: join(tmpdir(), "chat-loop-absent-dsh-home"),
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CLUTCH_CHAT_LAUNCHER_MUSE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CHAT_BRIDGE_STUB_LOG: stubLogFile,
+    CHAT_BRIDGE_STUB_SESSIONS_FILE: stubSessionsFile,
     COMETCHAT_APP_ID: "loop",
     COMETCHAT_REGION: "us",
     COMETCHAT_AUTH_KEY: "loop-auth-key",
@@ -117,9 +159,146 @@ afterAll(() => {
   if (ccServer?.listening) ccServer.close();
 });
 
+/** What the stub saw, oldest first. */
+function stubLog(): Array<Record<string, unknown>> {
+  if (!stubLogFile) return [];
+  try {
+    return readFileSync(stubLogFile, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+}
+
+/** How many permission answers the stub has seen so far. */
+function stubAnswerCount(): number {
+  return stubLog().filter((entry) => entry["event"] === "permission-answered").length;
+}
+
+/** Wait for the stub to report one more permission answer than it had. */
+async function waitForStubAnswer(before: number, timeoutMs = 20000): Promise<Record<string, unknown> | null> {
+  const start = Date.now();
+  for (;;) {
+    const answered = stubLog().filter((entry) => entry["event"] === "permission-answered")[before];
+    if (answered) return answered;
+    if (Date.now() - start > timeoutMs) return null;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+async function waitForStubTurn(beforeCount: number, timeoutMs = 20000): Promise<boolean> {
+  const start = Date.now();
+  for (;;) {
+    if (stubLog().filter((entry) => entry.event === "active-turn").length > beforeCount) return true;
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 function chatHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${CHAT_TOKEN}`, "Content-Type": "application/json" };
 }
+
+it("previews and renames a Muse thread without acquiring an ACP session", async () => {
+  const before = stubLog();
+  const logBefore = readFileSync(museLogFile, "utf8");
+  const previewURL = `http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${PREVIEW_ID}`;
+  const preview = await fetch(previewURL, { headers: chatHeaders() });
+  expect(preview.status).toBe(200);
+  expect(await preview.json()).toMatchObject({
+    readOnly: true, remoteSessionId: PREVIEW_ID, running: false,
+    model: "muse-wonder-1.0-contributor", provider: "meta",
+    history: [{ text: "Previewed question" }, { text: "Previewed answer" }],
+    usage: { basis: "session-totals", totalsComplete: true, inputTokens: 24, outputTokens: 12, cachedTokens: 8, totalTokens: 0 },
+  });
+  const rename = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
+    method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: "  Named\nThread  " }),
+  });
+  expect(rename.status).toBe(200);
+  const renamed = await fetch(previewURL, { headers: chatHeaders() });
+  expect(await renamed.json()).toMatchObject({ title: "Named Thread" });
+  await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
+    method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: null }),
+  });
+  expect(readFileSync(museLogFile, "utf8")).toBe(logBefore);
+  expect(stubLog()).toEqual(before);
+});
+
+it("keeps the selected folder when preview metadata omits its workspace root", async () => {
+  const before = stubLog();
+  const original = readFileSync(museLogFile, "utf8");
+  const withoutRoot = original.split("\n").filter(Boolean).map((line) => {
+    const entry = JSON.parse(line);
+    if (entry.payload_type === "runtime.session.metadata") delete entry.payload.record.workspace_root;
+    return JSON.stringify(entry);
+  }).join("\n");
+  try {
+    writeFileSync(museLogFile, withoutRoot);
+    const preview = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${PREVIEW_ID}&cwd=/tmp/kept-project`, { headers: chatHeaders() });
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({ cwd: "/tmp/kept-project", readOnly: true });
+    expect(stubLog()).toEqual(before);
+  } finally {
+    writeFileSync(museLogFile, original);
+  }
+});
+
+it("bounds list enrichment while reading details for an older row without acquiring it", async () => {
+  const created: string[] = [];
+  const rows = Array.from({ length: 60 }, (_, index) => ({
+    sessionId: `a1111111-2222-4333-8444-${index.toString(16).padStart(12, "0")}`,
+    cwd: "/tmp/bulk-project", title: `Recorded thread ${index}`,
+    updatedAt: new Date(1_800_000_000_000 + index * 1_000).toISOString(),
+  }));
+  const ownershipEvents = () => stubLog().filter((row) => ["session-new", "session-load", "active-turn"].includes(String(row.event)));
+  const before = ownershipEvents();
+  try {
+    for (const row of rows) {
+      const directory = join(museDataRoot, "muse", "sessions", "2026", "11", "01", row.sessionId);
+      mkdirSync(directory, { recursive: true });
+      created.push(directory);
+      writeFileSync(join(directory, "session.jsonl"), JSON.stringify({
+        payload_type: "runtime.session.metadata",
+        payload: { record: { model_id: "muse-spark-1.3-contributor", provider_id: "meta", workspace_root: row.cwd } },
+      }) + "\n");
+    }
+    writeFileSync(stubSessionsFile, JSON.stringify(rows));
+    let page: Array<{ sessionId: string; model?: string }> = [];
+    // Newly created logs become visible after the location index's short miss cache expires.
+    await expect.poll(async () => {
+      const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse&limit=60`, { headers: chatHeaders() });
+      expect(response.status).toBe(200);
+      page = (await response.json()).sessions;
+      return page.filter((row) => row.model).length;
+    }, { timeout: 5_000, interval: 50 }).toBe(50);
+    expect(page).toHaveLength(60);
+    const older = page[59]!;
+    expect(older.model).toBeUndefined();
+    const details = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/details?engine=muse&sessionId=${older.sessionId}`, { headers: chatHeaders() });
+    expect(details.status).toBe(200);
+    const detail = await details.json();
+    expect(detail).toMatchObject({ readOnly: true, sessionId: older.sessionId, model: "muse-spark-1.3-contributor", provider: "meta", cwd: "/tmp/bulk-project" });
+    expect(detail).not.toHaveProperty("history");
+    expect(ownershipEvents()).toEqual(before);
+  } finally {
+    rmSync(stubSessionsFile, { force: true });
+    for (const directory of created) rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("filters folder trees by path segment while retaining the all-folder view", async () => {
+  const root = `http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`;
+  const all = await fetch(root, { headers: chatHeaders() });
+  expect((await all.json()).sessions).toHaveLength(1);
+  const descendants = await fetch(`${root}&cwd=/tmp&scope=tree`, { headers: chatHeaders() });
+  expect((await descendants.json()).sessions).toHaveLength(1);
+  const siblingPrefix = await fetch(`${root}&cwd=/tmp/proj&scope=tree`, { headers: chatHeaders() });
+  expect((await siblingPrefix.json()).sessions).toEqual([]);
+  const exact = await fetch(`${root}&cwd=/tmp&scope=exact`, { headers: chatHeaders() });
+  expect((await exact.json()).sessions).toEqual([]);
+});
 
 async function postChat(body: unknown): Promise<{ status: number; text: string }> {
   const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
@@ -131,6 +310,341 @@ async function postChat(body: unknown): Promise<{ status: number; text: string }
 }
 
 describe("chat sidecar full loop", () => {
+  it("records turn diagnostics and exports a correlated summary without transcript content", async () => {
+    const result = await postChat({ prompt: "diagnostic-private-prompt", engine: "mcode", cwd: "/tmp" });
+    const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(result.text);
+    const diagnosticId = (JSON.parse(start![1]!) as { diagnosticId: string }).diagnosticId;
+    expect(diagnosticId).toMatch(/^[a-f0-9-]{36}$/);
+    const logFile = join(tokenFile, "..", "diagnostics", "turn-diagnostics.jsonl");
+    let terminal: { traceId?: string } | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const rows = readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+      const ownRows = rows.filter((row) => row.turnId === diagnosticId);
+      terminal = ownRows.find((row) => row.kind === "terminal");
+      if (terminal && JSON.stringify(telemetryCalls).includes(String(terminal.traceId))) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(terminal).toMatchObject({ outcome: "success", engine: "mcode" });
+    const exported = JSON.stringify(telemetryCalls);
+    expect(exported).toContain(String(terminal?.traceId));
+    expect(exported).not.toContain("diagnostic-private-prompt");
+    expect(exported).not.toContain("stub-answer");
+    expect(exported).not.toContain("gen_ai.usage.input_tokens");
+    const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
+    const status = await health.json() as { diagnostics: Record<string, unknown> };
+    expect(status.diagnostics).toMatchObject({ configured: true, lastAcceptedAtMs: expect.any(Number) });
+    expect(JSON.stringify(status)).not.toContain("diagnostic-test-only-token");
+  });
+
+  it("ignores malformed engine frames and keeps the turn and server available", async () => {
+    const result = await postChat({ prompt: "malformed-events", engine: "mcode", cwd: "/tmp" });
+    expect(result.status).toBe(200);
+    expect(result.text).toContain("stub-answer");
+    expect(result.text).toContain('"stopReason":"endTurn"');
+    const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
+    expect(health.status).toBe(200);
+  });
+
+  it("negotiates Muse steering and injects into the existing active turn", async () => {
+    const initialLog = stubLog();
+    const initialSessions = initialLog.filter((entry) => entry.event === "session-new").length;
+    const initialPrompts = initialLog.filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait").length;
+    const initialActiveTurns = initialLog.filter((entry) => entry.event === "active-turn").length;
+    const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "steer-wait", engine: "muse", cwd: "/tmp" }),
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let seen = "";
+    while (!seen.includes("event: start")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+    }
+    const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+    const chatId = start ? (JSON.parse(start[1]) as { sessionId: string }).sessionId : "";
+    expect(chatId).not.toBe("");
+    expect(await waitForStubTurn(initialActiveTurns)).toBe(true);
+
+    const injected = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, text: "Keep the existing scope" }),
+    });
+    expect(injected.status).toBe(200);
+    expect(await injected.json()).toEqual({ outcome: "injected" });
+    let remainder = "";
+    for (;;) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      remainder += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(seen + remainder).toContain('event: capabilities\ndata: {"supportsSteering":true}');
+    const idle = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, text: "Too late for this turn" }),
+    });
+    expect(idle.status).toBe(409);
+
+    const log = stubLog();
+    const initialize = log.find((entry) => entry.event === "initialize" &&
+      (entry.clientCapabilities as { _meta?: Record<string, unknown> } | undefined)?._meta?.["muse/steering"] === 1);
+    expect(initialize?.clientCapabilities).toMatchObject({ _meta: { "muse/steering": 1 } });
+    const steer = log.find((entry) => entry.event === "steer");
+    expect(steer?.params).toMatchObject({
+      sessionId: expect.any(String),
+      expectedTurnId: "stub-turn-1",
+      prompt: [{ type: "text", text: "Keep the existing scope" }],
+    });
+    expect(log.filter((entry) => entry.event === "session-new")).toHaveLength(initialSessions + 1);
+    expect(log.filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait")).toHaveLength(initialPrompts + 1);
+  }, 60000);
+
+  it("rejects loading or replaying a busy Muse native thread while another thread can finish", async () => {
+    const seed = await postChat({ prompt: "create-resumable-thread", engine: "muse", cwd: "/tmp/busy-native-thread" });
+    expect(seed.status).toBe(200);
+    const seedDone = /event: done\ndata: (\{[^\n]*\})\n\n/.exec(seed.text);
+    const nativeId = seedDone ? (JSON.parse(seedDone[1]!) as { remoteSessionId?: string }).remoteSessionId : undefined;
+    expect(nativeId).toEqual(expect.any(String));
+    const loadLocalCopy = async (): Promise<string> => {
+      const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+        method: "POST",
+        headers: chatHeaders(),
+        body: JSON.stringify({ engine: "muse", sessionId: nativeId, cwd: "/tmp/busy-native-thread" }),
+      });
+      expect(loaded.status).toBe(200);
+      return (await loaded.json() as { sessionId: string }).sessionId;
+    };
+    const heldChatId = await loadLocalCopy();
+    const otherWindowChatId = await loadLocalCopy();
+    const activeTurnsBefore = stubLog().filter((entry) => entry.event === "active-turn").length;
+    const heldPromptsBefore = stubLog().filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait").length;
+    const held = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: heldChatId, prompt: "steer-wait", engine: "muse", cwd: "/tmp/busy-native-thread" }),
+    });
+    expect(held.status).toBe(200);
+    const heldReader = held.body?.getReader();
+    expect(heldReader).toBeDefined();
+    const decoder = new TextDecoder();
+    let heldSeen = "";
+    while (!hasCompleteEvent(heldSeen, "start")) {
+      const chunk = await heldReader!.read();
+      if (chunk.done) break;
+      heldSeen += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(heldSeen).toContain(`"sessionId":"${heldChatId}"`);
+    expect(await waitForStubTurn(activeTurnsBefore)).toBe(true);
+    expect(stubLog().filter((entry) => entry.event === "prompt" && entry.promptText === "steer-wait")[heldPromptsBefore]?.sessionId).toBe(nativeId);
+
+    const loadBusy = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "muse", sessionId: nativeId, cwd: "/tmp/busy-native-thread" }),
+    });
+    expect(loadBusy.status).toBe(409);
+
+    const replayBusy = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: otherWindowChatId, prompt: "another turn", engine: "muse", cwd: "/tmp/busy-native-thread" }),
+    });
+    expect(replayBusy.status).toBe(409);
+
+    const independent = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "muse", cwd: "/tmp/independent-native-thread", permissions: "ask" }),
+    });
+    expect(independent.status).toBe(200);
+    const independentReader = independent.body?.getReader();
+    expect(independentReader).toBeDefined();
+    let independentSeen = "";
+    while (!hasCompleteEvent(independentSeen, "permission")) {
+      const chunk = await independentReader!.read();
+      if (chunk.done) break;
+      independentSeen += decoder.decode(chunk.value, { stream: true });
+    }
+    const independentStart = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(independentSeen);
+    const independentChatId = independentStart ? (JSON.parse(independentStart[1]!) as { sessionId: string }).sessionId : "";
+    const permission = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(independentSeen);
+    const requestId = permission ? (JSON.parse(permission[1]!) as { requestId: string }).requestId : "";
+    expect(independentChatId).not.toBe(heldChatId);
+    expect(requestId).not.toBe("");
+    expect(stubLog().find((entry) => entry.event === "prompt" && entry.promptText === "say stub")?.sessionId).not.toBe(nativeId);
+    const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: independentChatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answered.status).toBe(200);
+    let independentRest = "";
+    while (!hasCompleteEvent(independentRest, "done")) {
+      const chunk = await independentReader!.read();
+      if (chunk.done) break;
+      independentRest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(independentSeen + independentRest).toContain("stub-answer");
+
+    const stillActive = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: heldChatId, text: "Finish the held turn" }),
+    });
+    expect(stillActive.status).toBe(200);
+    expect(await stillActive.json()).toEqual({ outcome: "injected" });
+    let heldRest = "";
+    while (!hasCompleteEvent(heldRest, "done")) {
+      const chunk = await heldReader!.read();
+      if (chunk.done) break;
+      heldRest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(heldRest).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
+  it("routes same-ID cross-engine updates and permissions to the owning session", async () => {
+    const activeTurnsBefore = stubLog().filter((entry) => entry.event === "active-turn").length;
+    const muse = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "steer-wait", engine: "muse", cwd: "/tmp/engine-collision", permissions: "ask" }),
+    });
+    expect(muse.status).toBe(200);
+    const museReader = muse.body?.getReader();
+    expect(museReader).toBeDefined();
+    const decoder = new TextDecoder();
+    let museStart = "";
+    while (!hasCompleteEvent(museStart, "start")) {
+      const chunk = await museReader!.read();
+      if (chunk.done) break;
+      museStart += decoder.decode(chunk.value, { stream: true });
+    }
+    const museStartFrame = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(museStart);
+    const museChatId = museStartFrame ? (JSON.parse(museStartFrame[1]) as { sessionId: string }).sessionId : "";
+    expect(museChatId).not.toBe("");
+    expect(await waitForStubTurn(activeTurnsBefore)).toBe(true);
+
+    const mcode = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp/engine-collision", permissions: "ask" }),
+    });
+    expect(mcode.status).toBe(200);
+    const mcodeReader = mcode.body?.getReader();
+    expect(mcodeReader).toBeDefined();
+    let mcodeSeen = "";
+    while (!hasCompleteEvent(mcodeSeen, "permission")) {
+      const chunk = await mcodeReader!.read();
+      if (chunk.done) break;
+      mcodeSeen += decoder.decode(chunk.value, { stream: true });
+    }
+    const mcodeStartFrame = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(mcodeSeen);
+    const mcodeChatId = mcodeStartFrame ? (JSON.parse(mcodeStartFrame[1]) as { sessionId: string }).sessionId : "";
+    const permissionFrame = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(mcodeSeen);
+    const requestId = permissionFrame ? (JSON.parse(permissionFrame[1]) as { requestId: string }).requestId : "";
+    expect(mcodeChatId).not.toBe("");
+    expect(mcodeChatId).not.toBe(museChatId);
+    expect(requestId).not.toBe("");
+
+    const answer = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: mcodeChatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answer.status).toBe(200);
+    let mcodeRest = "";
+    while (!hasCompleteEvent(mcodeRest, "done")) {
+      const chunk = await mcodeReader!.read();
+      if (chunk.done) break;
+      mcodeRest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(mcodeRest).toContain("stub-answer");
+    expect(mcodeRest).toMatch(/event: done[\s\S]*endTurn/);
+
+    const canceled = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/cancel`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: museChatId }),
+    });
+    expect(canceled.status).toBe(200);
+    expect(await canceled.json()).toMatchObject({ cancelled: true });
+    await museReader!.cancel();
+  }, 60000);
+
+  it("does not steer an unknown session", async () => {
+    const missing = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: "unknown-chat", text: "Correction" }),
+    });
+    expect(missing.status).toBe(404);
+  });
+
+  it("reports Muse model identity from loaded config options and reuses it in thread listing", async () => {
+    const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "muse", sessionId: "mcode-existing-1", cwd: "/tmp" }),
+    });
+    expect(loaded.status).toBe(200);
+    expect(await loaded.json()).toMatchObject({
+      remoteSessionId: "mcode-existing-1",
+      provider: "meta",
+      model: "muse-wonder-1.0",
+    });
+
+    const listed = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`, { headers: chatHeaders() });
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toMatchObject({
+      sessions: [expect.objectContaining({
+        sessionId: "mcode-existing-1",
+        provider: "meta",
+        model: "muse-wonder-1.0",
+      })],
+    });
+  }, 60000);
+
+  it("sanitizes provider text from a rejected Muse steering request", async () => {
+    const activeTurnsBefore = stubLog().filter((entry) => entry.event === "active-turn").length;
+    const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "steer-error", engine: "muse", cwd: "/tmp" }),
+    });
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let seen = "";
+    while (!seen.includes("event: start")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+    }
+    const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+    const chatId = start ? (JSON.parse(start[1]) as { sessionId: string }).sessionId : "";
+    expect(chatId).not.toBe("");
+    expect(await waitForStubTurn(activeTurnsBefore)).toBe(true);
+
+    const rejected = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/steer`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, text: "trigger-error" }),
+    });
+    expect(rejected.status).toBe(502);
+    const body = await rejected.text();
+    expect(body).toContain("Muse request failed (ACP code -32000).");
+    expect(body).not.toContain("credential-like-secret");
+    expect(body).not.toContain("private-test-prompt");
+    await reader!.cancel();
+  }, 60000);
+
   it("serves the MiniMax Code remote shell without exposing its token", async () => {
     const res = await fetch(`http://127.0.0.1:${chatPort}/minimax-code/?token=${CHAT_TOKEN}`);
     expect(res.status).toBe(200);
@@ -193,6 +707,36 @@ describe("chat sidecar full loop", () => {
     expect(recovered.text).not.toContain("loaded thread was detached");
   }, 60000);
 
+  it("lists, loads, and continues a Muse Code ACP thread through the generic route", async () => {
+    const listed = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`, {
+      headers: chatHeaders(),
+    });
+    expect(listed.status).toBe(200);
+    const listBody = (await listed.json()) as { sessions: Array<{ sessionId: string }> };
+    expect(listBody.sessions).toEqual([
+      expect.objectContaining({ sessionId: "mcode-existing-1" }),
+    ]);
+
+    const loaded = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/load`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ engine: "muse", sessionId: "mcode-existing-1", cwd: "/tmp/project" }),
+    });
+    expect(loaded.status).toBe(200);
+    const loadBody = (await loaded.json()) as { sessionId: string; remoteSessionId: string };
+    expect(loadBody.remoteSessionId).toBe("mcode-existing-1");
+
+    const continued = await postChat({
+      engine: "muse",
+      sessionId: loadBody.sessionId,
+      prompt: "continue the Muse thread",
+      cwd: "/tmp/project",
+    });
+    expect(continued.status).toBe(200);
+    expect(continued.text).toContain("stub-answer");
+    expect(continued.text).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
   it("serves chat-config with the relay coordinates", async () => {
     const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat-config`, { headers: chatHeaders() });
     expect(res.status).toBe(200);
@@ -217,6 +761,10 @@ describe("chat sidecar full loop", () => {
     expect(text).toContain("event: message");
     expect(text).toContain("stub-answer");
     expect(text).toMatch(/event: done[\s\S]*endTurn/);
+    // The plan travels with the turn, so the client can show what the engine
+    // is working on.
+    expect(text).toContain("event: plan");
+    expect(text).toContain("Read the failing test");
 
     const posts = ccCalls.filter((c) => c.method === "POST" && c.path === "/v3/messages");
     expect(posts.length).toBe(1);
@@ -231,6 +779,262 @@ describe("chat sidecar full loop", () => {
     expect(puts.length).toBeGreaterThanOrEqual(1);
     expect(puts[puts.length - 1]?.path).toBe("/v3/messages/101");
   }, 60000);
+
+  it("waits for the client's answer to a permission request", async () => {
+    // The code engines send their prompt as content blocks, and the stub
+    // bridge asks for a permission before it answers.  The sidecar has to
+    // hold that request until the client answers it, rather than answering
+    // it on the owner's behalf.
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    expect(reader).toBeTruthy();
+    const decoder = new TextDecoder();
+    let seen = "";
+    let requestId = "";
+    let chatId = "";
+    while (!hasCompleteEvent(seen, "permission")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+      const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+      if (start) chatId = (JSON.parse(start[1]) as { sessionId: string }).sessionId;
+      const permission = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+      if (permission) {
+        requestId = (JSON.parse(permission[1]) as { requestId: string }).requestId;
+      }
+    }
+    expect(chatId).not.toBe("");
+    expect(requestId).not.toBe("");
+    expect(seen).toContain("allow-once");
+
+    const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answered.status).toBe(200);
+    expect(await answered.json()).toEqual({ ok: true });
+
+    // The stub only finishes the turn when the answer says allow-once, so
+    // the answer really did reach the engine.
+    let rest = "";
+    while (!hasCompleteEvent(rest, "done")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      rest += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(rest).toContain("stub-answer");
+    expect(rest).toMatch(/event: done[\s\S]*endTurn/);
+  }, 60000);
+
+  it("refuses an answer for a request the turn did not raise", async () => {
+    // The request ids are process-wide and predictable, so an answer must be
+    // checked against the requests this turn owns: a stale card from another
+    // turn must not be able to answer this one.
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let seen = "";
+    let requestId = "";
+    let chatId = "";
+    while (!hasCompleteEvent(seen, "permission")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+      const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+      if (start) chatId = (JSON.parse(start[1]) as { sessionId: string }).sessionId;
+      const permission = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+      if (permission) requestId = (JSON.parse(permission[1]) as { requestId: string }).requestId;
+    }
+    expect(chatId).not.toBe("");
+    expect(requestId, seen).not.toBe("");
+
+    const foreign = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, requestId: "perm-999999", optionId: "allow-once" }),
+    });
+    expect(foreign.status).toBe(404);
+
+    // The real answer still works, so the refused one did not consume it.
+    const answersBefore = stubAnswerCount();
+    const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answered.status).toBe(200);
+    const engineAnswer = await waitForStubAnswer(answersBefore);
+    expect(engineAnswer).toMatchObject({ optionId: "allow-once", outcome: "selected" });
+  }, 60000);
+
+  it("refuses an answer that names another turn's request", async () => {
+    const answersBefore = stubAnswerCount();
+    // Two turns are blocked on the same engine at once.  Their request ids
+    // are process-wide, so answering turn A's request through turn B's
+    // session would hand turn B's client the power to answer turn A's
+    // question.  The answer is refused, and the engine is left waiting.
+    const first = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    const firstReader = first.body?.getReader();
+    const decoder = new TextDecoder();
+    let firstSeen = "";
+    let firstRequestId = "";
+    let firstChatId = "";
+    while (!hasCompleteEvent(firstSeen, "permission")) {
+      const chunk = await firstReader!.read();
+      if (chunk.done) break;
+      firstSeen += decoder.decode(chunk.value, { stream: true });
+      const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(firstSeen);
+      if (start) firstChatId = (JSON.parse(start[1]) as { sessionId: string }).sessionId;
+      const permission = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(firstSeen);
+      if (permission) firstRequestId = (JSON.parse(permission[1]) as { requestId: string }).requestId;
+    }
+    expect(firstRequestId).not.toBe("");
+
+    const second = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub again", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    const secondReader = second.body?.getReader();
+    let secondSeen = "";
+    let secondChatId = "";
+    while (!hasCompleteEvent(secondSeen, "permission")) {
+      const chunk = await secondReader!.read();
+      if (chunk.done) break;
+      secondSeen += decoder.decode(chunk.value, { stream: true });
+      const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(secondSeen);
+      if (start) secondChatId = (JSON.parse(start[1]) as { sessionId: string }).sessionId;
+    }
+    expect(secondChatId).not.toBe("");
+    expect(secondChatId).not.toBe(firstChatId);
+
+    const crossed = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: secondChatId, requestId: firstRequestId, optionId: "allow-once" }),
+    });
+    expect(crossed.status).toBe(404);
+
+    // The engine was not answered behind the refused request's back.
+    await new Promise((r) => setTimeout(r, 500));
+    expect(stubAnswerCount()).toBe(answersBefore);
+
+    await firstReader!.cancel();
+    await secondReader!.cancel();
+  }, 60000);
+
+  it("refuses an option the engine never offered", async () => {
+    // An option id the engine did not offer would be forwarded to a blocked
+    // engine, which rejects it and leaves the turn stuck.  It is refused at
+    // the door instead, and the request stays open for a real answer.
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let seen = "";
+    let requestId = "";
+    let chatId = "";
+    while (!hasCompleteEvent(seen, "permission")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+      const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+      if (start) chatId = (JSON.parse(start[1]) as { sessionId: string }).sessionId;
+      const permission = /event: permission\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+      if (permission) requestId = (JSON.parse(permission[1]) as { requestId: string }).requestId;
+    }
+    expect(requestId).not.toBe("");
+
+    const unknown = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, requestId, optionId: "not-an-option" }),
+    });
+    expect(unknown.status).toBe(400);
+
+    const answersBefore = stubAnswerCount();
+    const answered = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId, requestId, optionId: "allow-once" }),
+    });
+    expect(answered.status).toBe(200);
+    expect(await answered.json()).toEqual({ ok: true });
+    const engineAnswer = await waitForStubAnswer(answersBefore);
+    expect(engineAnswer).toMatchObject({ optionId: "allow-once", outcome: "selected" });
+  }, 60000);
+
+  it("releases a blocked engine when the turn ends without an answer", async () => {
+    // The engine waits on the answer, so a turn that ends must let it go
+    // instead of leaving it blocked forever on a question nobody can answer.
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ prompt: "say stub", engine: "mcode", cwd: "/tmp", permissions: "ask" }),
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    const decoder = new TextDecoder();
+    let seen = "";
+    while (!hasCompleteEvent(seen, "permission")) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      seen += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(seen).toContain("event: permission");
+    const answersBefore = stubAnswerCount();
+
+    // Stopping the turn is what a native client does: the Stop button.
+    const start = /event: start\ndata: (\{[^\n]*\})\n\n/.exec(seen);
+    const chatId = start ? (JSON.parse(start[1]) as { sessionId: string }).sessionId : "";
+    expect(chatId).not.toBe("");
+    const cancelled = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/chat/cancel`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: chatId }),
+    });
+    expect(cancelled.status).toBe(200);
+
+    const answered = await waitForStubAnswer(answersBefore);
+    expect(answered).not.toBeNull();
+    // The sidecar's own fallback is the allow-once it has always sent.
+    expect(answered?.["optionId"]).toBe("allow-once");
+  }, 60000);
+
+  it("refuses an answer for a request that is not there", async () => {
+    const res = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ sessionId: "no-such-session", requestId: "perm-999", optionId: "allow-once" }),
+    });
+    expect(res.status).toBe(404);
+
+    const missing = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/permissions`, {
+      method: "POST",
+      headers: chatHeaders(),
+      body: JSON.stringify({ requestId: "perm-999" }),
+    });
+    expect(missing.status).toBe(400);
+  });
 
   it("a second bridge on the same port yields quietly", async () => {
     // start-web.sh and start-web.ts both launch the sidecar; the loser of
@@ -289,4 +1093,135 @@ describe("chat sidecar full loop", () => {
       missingSidecar.kill("SIGKILL");
     }
   }, 60000);
+});
+
+describe("project and archive routes", () => {
+  const metaUrl = (): string => `http://127.0.0.1:${chatPort}/clutch/v1/session-meta`;
+  const projectsUrl = (): string => `http://127.0.0.1:${chatPort}/clutch/v1/projects`;
+
+  // Validate the sidecar's response envelopes before the test reads them:
+  // a shape change should fail here, at the boundary, not inside an expect.
+  const TestApiResponseSchema = z
+    .object({
+      projects: z.array(z.unknown()).optional(),
+      sessions: z.record(z.string(), z.unknown()).optional(),
+      project: z.record(z.string(), z.unknown()).optional(),
+      created: z.boolean().optional(),
+      entry: z.record(z.string(), z.unknown()).optional(),
+      ok: z.boolean().optional(),
+      error: z.string().optional(),
+    })
+    .strict();
+
+  async function meta(method: string, url: string, body?: unknown) {
+    const res = await fetch(url, {
+      method,
+      headers: chatHeaders(),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: res.status, json: TestApiResponseSchema.parse(await res.json()) };
+  }
+
+  it("starts empty and stays behind the chat token", async () => {
+    const anon = await fetch(metaUrl());
+    expect(anon.status).toBe(401);
+
+    const got = await meta("GET", metaUrl());
+    expect(got.status).toBe(200);
+    expect(got.json.projects).toEqual([]);
+    expect(got.json.sessions).toEqual({});
+  });
+
+  it("creates a project and assigns a thread to it", async () => {
+    const created = await meta("POST", projectsUrl(), { name: "  Clutch   Work  " });
+    expect(created.status).toBe(201);
+    const project = created.json.project as { id: string; name: string };
+    expect(project.name).toBe("Clutch Work");
+
+    const assigned = await meta("PUT", metaUrl(), { sessionId: "session-a", projectId: project.id });
+    expect(assigned.status).toBe(200);
+    const sessions = assigned.json.sessions as Record<string, { projectId?: string }>;
+    expect(sessions["session-a"]?.projectId).toBe(project.id);
+
+    // It survives a fresh read:  this is the point of the store existing.
+    const reread = await meta("GET", metaUrl());
+    const rereadSessions = reread.json.sessions as Record<string, { projectId?: string }>;
+    expect(rereadSessions["session-a"]?.projectId).toBe(project.id);
+  });
+
+  it("returns the same project for the same name instead of duplicating it", async () => {
+    const first = await meta("POST", projectsUrl(), { name: "Repeatable" });
+    const second = await meta("POST", projectsUrl(), { name: "repeatable" });
+    expect(first.json.created).toBe(true);
+    expect(second.json.created).toBe(false);
+    expect((second.json.project as { id: string }).id).toBe((first.json.project as { id: string }).id);
+  });
+
+  it("archives and then restores a thread", async () => {
+    const archived = await meta("PUT", metaUrl(), { sessionId: "session-archive", archived: true });
+    expect(archived.status).toBe(200);
+    expect((archived.json.entry as { archived?: boolean }).archived).toBe(true);
+
+    const restored = await meta("PUT", metaUrl(), { sessionId: "session-archive", archived: false });
+    const sessions = restored.json.sessions as Record<string, unknown>;
+    // Un-archiving clears the record entirely rather than leaving a tombstone.
+    expect(sessions["session-archive"]).toBeUndefined();
+  });
+
+  it("clears an assignment with an explicit null", async () => {
+    const projects = (await meta("GET", metaUrl())).json.projects as { id: string }[];
+    const id = projects[0]?.id;
+    expect(id).toBeTruthy();
+    const cleared = await meta("PUT", metaUrl(), { sessionId: "session-a", projectId: null });
+    const sessions = cleared.json.sessions as Record<string, { projectId?: string }>;
+    expect(sessions["session-a"]?.projectId).toBeUndefined();
+  });
+
+  it("rejects a dangling project, a bad body and an empty update", async () => {
+    expect((await meta("PUT", metaUrl(), { sessionId: "s", projectId: "prj_nope" })).status).toBe(400);
+    expect((await meta("PUT", metaUrl(), { projectId: "prj_nope" })).status).toBe(400);
+    expect((await meta("PUT", metaUrl(), { sessionId: "s" })).status).toBe(400);
+    expect((await meta("PUT", metaUrl(), { sessionId: "s", archived: "yes" })).status).toBe(400);
+    expect((await meta("POST", projectsUrl(), { name: "   " })).status).toBe(400);
+    expect((await meta("POST", projectsUrl(), {})).status).toBe(400);
+  });
+
+  it("answers a literal null body with 400 on every JSON route and stays up", async () => {
+    // `null` is valid JSON, so it passes the parse and used to reach a
+    // property read inside the async handler, which ended the bridge.
+    expect((await meta("PUT", metaUrl(), null)).status).toBe(400);
+    expect((await meta("POST", projectsUrl(), null)).status).toBe(400);
+    for (const path of ["/clutch/v1/sessions/load", "/clutch/v1/chat", "/clutch/v1/chat/cancel"]) {
+      for (const body of ["null", "[]", "7"]) {
+        const res = await fetch(`http://127.0.0.1:${chatPort}${path}`, {
+          method: "POST",
+          headers: chatHeaders(),
+          body,
+        });
+        expect(res.status, `${path} ${body}`).toBe(400);
+      }
+    }
+    const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
+    expect(health.status).toBe(200);
+  });
+
+  it("deleting a project clears the assignments that pointed at it", async () => {
+    const made = await meta("POST", projectsUrl(), { name: "Doomed" });
+    const id = (made.json.project as { id: string }).id;
+    await meta("PUT", metaUrl(), { sessionId: "session-doomed", projectId: id });
+
+    const res = await fetch(`${projectsUrl()}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: chatHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const json = TestApiResponseSchema.parse(await res.json());
+    expect(json.sessions?.["session-doomed"]).toBeUndefined();
+
+    const again = await fetch(`${projectsUrl()}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: chatHeaders(),
+    });
+    expect(again.status).toBe(404);
+  });
 });

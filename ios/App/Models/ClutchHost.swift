@@ -29,18 +29,43 @@ public enum HostStatus: String, Codable, Equatable {
     }
 }
 
+/// What a paired host actually runs.  A `web` host is the full clutch stack
+/// (dsh web plus the chat sidecar); a `codeServer` host runs only the chat
+/// sidecar in front of a code engine — `mcode` (MiniMax Code) or `muse`
+/// (Muse Code) — typically a Linux server.  Such a host has code threads but
+/// no dsh host contract.
+public enum HostKind: String, Codable, Equatable, Hashable, Sendable {
+    case web
+    case codeServer
+
+    /// The kind stored in an archive, mapping the retired `miniMaxCode`
+    /// spelling onto a code server so old pairings keep working.
+    public static func fromStored(_ raw: String) -> HostKind {
+        switch raw {
+        case "codeServer", "miniMaxCode": return .codeServer
+        default: return .web
+        }
+    }
+}
+
 /// One clutch web deployment the app can show — a Mac over Tailscale, or
 /// `127.0.0.1:3180` when running in the Simulator on that Mac.
 public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     public var id: UUID
     public var name: String
+    public var kind: HostKind
     /// `scheme://host[:port]` with no path.
     public var origin: URL
-    /// The launch token from the pairing link.  Cleared once clutch web has
-    /// exchanged it for its signed cookie, so it is never kept longer than needed.
+    /// The launch token from the pairing link.
+    ///
+    /// Kept for the life of the pairing: the dsh host client exchanges it
+    /// for a signed cookie on every connect, and that cookie does not
+    /// survive an app restart.  It lives in the keychain, not in the
+    /// preferences file.
     public var pendingLaunchToken: String?
     /// The chat-bridge auth token (`Bearer` on `/clutch/v1/chat`).  Long-lived
-    /// and refreshed on re-pair — unlike the launch token it is kept.
+    /// and refreshed on re-pair — unlike the launch token it is kept.  It
+    /// lives in the keychain, not in the preferences file.
     public var chatToken: String?
     /// The sidecar's port on the same host.  3181 is the shipped default.
     public var chatPort: Int
@@ -51,6 +76,7 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         id: UUID = UUID(),
         name: String,
         origin: URL,
+        kind: HostKind = .web,
         pendingLaunchToken: String? = nil,
         chatToken: String? = nil,
         chatPort: Int = 3181,
@@ -59,6 +85,7 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     ) {
         self.id = id
         self.name = name
+        self.kind = kind
         self.origin = origin
         self.pendingLaunchToken = pendingLaunchToken
         self.chatToken = chatToken
@@ -70,13 +97,16 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     // MARK: - Codable (chatToken/chatPort decode to defaults from pre-chat archives)
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, origin, pendingLaunchToken, chatToken, chatPort, status, lastChecked
+        case id, name, kind, origin, pendingLaunchToken, chatToken, chatPort, status, lastChecked
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
+        // Hosts paired before server hosts existed are web hosts; the retired
+        // `miniMaxCode` spelling still reads as a code server.
+        kind = try c.decodeIfPresent(String.self, forKey: .kind).map(HostKind.fromStored) ?? .web
         origin = try c.decode(URL.self, forKey: .origin)
         pendingLaunchToken = try c.decodeIfPresent(String.self, forKey: .pendingLaunchToken)
         chatToken = try c.decodeIfPresent(String.self, forKey: .chatToken)
@@ -89,6 +119,7 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(name, forKey: .name)
+        try c.encode(kind, forKey: .kind)
         try c.encode(origin, forKey: .origin)
         try c.encodeIfPresent(pendingLaunchToken, forKey: .pendingLaunchToken)
         try c.encodeIfPresent(chatToken, forKey: .chatToken)
@@ -98,7 +129,28 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     }
 
     public init(pairing: PairingPayload) {
-        self.init(name: pairing.name, origin: pairing.origin, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
+        self.init(name: pairing.name, origin: pairing.origin, kind: pairing.kind ?? .web, pendingLaunchToken: pairing.launchToken, chatToken: pairing.chatToken, chatPort: pairing.chatPort ?? 3181)
+    }
+
+    /// True for a code server host: code-engine threads only, and no dsh host
+    /// contract behind it.
+    public var isMiniMaxCodeOnly: Bool { kind == .codeServer }
+
+    /// The identity of a pairing, as the surfaces key their loads by.
+    ///
+    /// Re-pairing the same host replaces the tokens, and a surface that kept
+    /// the old ones would keep asking with a token the sidecar has already
+    /// dropped.  Both tokens are part of the key, so a re-pair loads again.
+    public var pairingKey: String {
+        "\(id.uuidString)#\(chatToken ?? "")#\(pendingLaunchToken ?? "")"
+    }
+
+    /// The owner-facing label for the host kind.
+    public var kindLabel: String {
+        switch kind {
+        case .web: return "Clutch Host"
+        case .codeServer: return "Code Server"
+        }
     }
 
     /// `host[:port]` for display.

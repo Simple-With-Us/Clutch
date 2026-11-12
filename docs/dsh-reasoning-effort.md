@@ -43,8 +43,6 @@ replaced, not removed.  The current offered set is `MiniMax-M3.1-Flash`,
 `MiniMax-M3`, `MiniMax-M2.7-highspeed` and `MiniMax-M2.7` (in
 `STATIC_MINIMAX_MODELS`), and the rest of this file describes the per-model
 story in the present tense only for those rows.
-the rest of this file describes the per-model story in the present tense only
-for those rows.
 
 ## Gate On The Installed Settings
 

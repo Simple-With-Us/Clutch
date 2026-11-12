@@ -16,8 +16,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // The native model pickers advertise their rows by literal string, so a
 // retired id left behind in Swift is selectable and reproduces the API
-// refusal the catalog removal was meant to eliminate.
+// refusal the catalog removal was meant to eliminate.  The Mac picker now
+// reads the host's live catalog (src/web/engine-catalog.ts), so that file
+// is part of the same guard: it is where the native rows come from.
 const NATIVE_PICKERS = ["ios/App/Views/ChatView.swift", "ios/Mac/ChatViewMac.swift"];
+const NATIVE_CATALOGS = ["src/web/engine-catalog.ts"];
 
 describe("minimax http client", () => {
   it("builds the chat-completions URL", () => {
@@ -68,16 +71,20 @@ describe("minimaxSupport", () => {
     // literals, so the catalog guard above does not reach them.  Offering
     // the retired id there reproduces "model is not available for the
     // managed_token_plan route" on the next turn.
-    for (const picker of NATIVE_PICKERS) {
+    for (const picker of [...NATIVE_PICKERS, ...NATIVE_CATALOGS]) {
       expect(readFileSync(join(ROOT, picker), "utf8"), picker)
         .not.toContain("MiniMax-M3.1-Flash-Preview");
     }
     // The native pickers must offer the working replacement, or the M3.1
     // option the owner asked for exists only in the TypeScript catalog.
-    for (const picker of NATIVE_PICKERS) {
+    // The Mac picker reads the live catalog, so the catalog carries the
+    // row now; the iOS agent menu still names it as a literal.
+    for (const picker of NATIVE_CATALOGS) {
       expect(readFileSync(join(ROOT, picker), "utf8"), picker)
         .toContain("MiniMax-M3.1-Flash");
     }
+    expect(readFileSync(join(ROOT, NATIVE_PICKERS[0]), "utf8"), NATIVE_PICKERS[0])
+      .toContain("MiniMax-M3.1-Flash");
   });
 });
 

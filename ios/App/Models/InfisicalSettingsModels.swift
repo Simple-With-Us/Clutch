@@ -8,24 +8,20 @@ import Foundation
 ///   1. A secret's VALUE never crosses the wire.  For every `secret` kind the
 ///      server sends `value: ""` and only `isSet` is meaningful, so no decoded
 ///      property here may be rendered as a stored secret value.
-///   2. A `PUT` answers with the `GET` body plus `identitySaved` and
+///   2. A `PUT` answers with the `GET` body plus `credentialsSaved` and
 ///      `settingSaved`, so one type covers both.  A save therefore refreshes
 ///      the panel from the server's own post-save state instead of leaving the
 ///      UI describing what was true before the write.
 ///
 /// Unknown enum cases decode to a fallback rather than failing the whole
 /// payload, so a server that grows a new `kind` or `source` still loads.
-public struct InfisicalIdentity: Decodable, Equatable {
+public struct InfisicalCredentialsSummary: Decodable, Equatable {
     public var projectId: String
-    public var clientId: String
-    /// Whether a client secret is stored on the Mac.  Never the secret itself.
-    public var hasClientSecret: Bool
-    /// Trailing characters of the client id, for display when the id itself is
-    /// not shown.
-    public var clientIdHint: String
-    /// True when the identity is coming from the process environment rather
-    /// than the identity file, which means an edit here will not win.
-    public var fromEnv: Bool
+    /// Token values never cross the wire.
+    public var hasReadToken: Bool
+    public var hasWriteToken: Bool
+    public var readTokenFromEnv: Bool
+    public var writeTokenFromEnv: Bool
 }
 
 /// Whether a managed key holds a secret (never displayed), or a plain value
@@ -112,16 +108,16 @@ public struct InfisicalManagedKey: Decodable, Identifiable, Equatable {
 
 /// A `GET` or `PUT` response body.
 public struct InfisicalSettingsSnapshot: Decodable, Equatable {
-    public var identity: InfisicalIdentity
+    public var credentials: InfisicalCredentialsSummary
     public var source: InfisicalSettingsSource
     /// Only sent by `GET`.
-    public var identityPath: String?
-    /// True after a `PUT` that changed the stored identity: the running
+    public var credentialsPath: String?
+    /// True after a `PUT` that changed the stored service tokens: the running
     /// process still holds the previous credentials until Clutch restarts.
     public var restartRequired: Bool
     public var keys: [InfisicalManagedKey]
     /// `PUT` only.
-    public var identitySaved: Bool?
+    public var credentialsSaved: Bool?
     /// `PUT` only: the key that was written, or `""`.
     public var settingSaved: String?
 
@@ -140,10 +136,9 @@ public enum InfisicalSettingsError: Error, LocalizedError {
     case untrustedHost
     /// 503: Infisical is not configured on the Mac, or the write-through failed.
     case notConfigured(key: String, reason: String)
-    /// 400: the Mac refused the request — an unknown key, or an incomplete
-    /// machine identity.
+    /// 400: the Mac refused the request — an unknown key or missing read token.
     case rejected(reason: String)
-    /// 409: the request combined an identity change with a setting write.
+    /// 409: the request combined a credential change with a setting write.
     case restartRequired(reason: String)
     case transport(String)
     case unreadablePayload

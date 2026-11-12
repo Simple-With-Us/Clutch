@@ -5,18 +5,45 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  # Same event-scoped shape as ios-ship.yml and mac-app-build.yml: a
+  # pull_request run must not share a group with push-to-main, or a newer PR
+  # push cancels the main CI run.  cancel-in-progress stays true so a newer
+  # push to the same PR branch wins.
+  # The pr- prefix keeps a PR from a fork branch named main out of the main group.
+  group: ci-clutch-${{ github.event_name == 'pull_request' && format('pr-{0}', github.head_ref) || 'main' }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
       - run: bash scripts/ios-fleet/test-scheduled-ship-gate.sh
+      # The version-numbering rules (AFC-517):  the marketing version is the
+      # next patch on the app's train and the build number is independent of
+      # it.  The offline test script answers the App Store Connect queries
+      # from a stub node, so it never touches the network.
+      - run: bash scripts/ios-fleet/test-ship-seq.sh
+      # The App Store Connect credential rules (AFC-459):  the key comes from
+      # the environment or from Infisical, and a named ASC_KEY_PATH is ignored.
+      - run: node --test scripts/ios-fleet/*.test.mjs
+      - run: bash scripts/ios-fleet/test-asc-credentials.sh
+      # The iOS simulator helper decides whether an iOS test run happens at
+      # all, and a wrong decision there is silent:  the suite stops running
+      # and nothing fails.  It is checked offline, with a fake simctl.
+      - run: bash scripts/ios-fleet/test-ios-simulator.sh
+      # The Infisical loader (AFC-465) and its entry-module regression
+      # (AFC-475).  Clutch carried the canonical loader test without a line
+      # that ran it, so the copy was never exercised here.
+      - run: node --test scripts/infisical-fetch.node-test.mjs scripts/infisical-fetch.symlink-regression.node-test.mjs
       - run: python3 -m py_compile bridges/dsh/dsh-acp.py bridges/minimax/minimax-acp.py bridges/grok/grok-acp.py
       - run: git diff --check
 
@@ -28,12 +55,59 @@ jobs:
     # with "package 'kingfisher' @ 8.13.0 is using Swift tools version 6.2.0
     # but the installed version is 6.1.0" on the older image.
     runs-on: macos-26
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Build Clutch iOS App
         run: bash scripts/build-ios.sh --simulator
+      # The thread surfaces (the Code tab, the transcript, the find bar) are
+      # UI, so they are verified by running them: the UI test drives the app
+      # against a local stub sidecar and keeps a screenshot per state, which
+      # the artifact below publishes for review.  A build alone proves the
+      # code compiles, not that the surface works.
+      - name: Run the iOS UI tests
+        run: |
+          status=0
+          bash scripts/ios-ui-tests.sh || status=$?
+          if [ "$status" = "10" ]; then
+            echo "::warning title=iOS UI tests::no iOS simulator runtime on this runner; the UI tests were skipped"
+            exit 0
+          fi
+          exit "$status"
+      - name: Publish the iOS UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ui-screenshots
+          path: ios-ui.xcresult
+          if-no-files-found: ignore
+      # The unit-test bundle is built by the Clutch scheme's test action, so
+      # CI has been compiling all of it without ever running it: a failing
+      # assertion in that bundle could not fail a build, and the bundle was a
+      # compile gate and nothing more.  This step gives those assertions a
+      # verdict.  It runs after the UI tests, because that step resolves the
+      # simulator first and a runtime it downloaded is then already here.
+      # A skip fails the step:  a green unit-test gate that ran no test is
+      # the state this step exists to end, so a runner with no simulator is
+      # an error here rather than a warning.
+      - name: Run the iOS unit tests
+        run: |
+          status=0
+          bash scripts/ios-unit-tests.sh || status=$?
+          if [ "$status" = "10" ]; then
+            echo "::error title=iOS unit tests::no iOS simulator runtime on this runner; the unit tests did not run"
+            exit 1
+          fi
+          exit "$status"
+      - name: Publish the iOS unit test result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-unit-tests
+          path: ios-unit.xcresult
+          if-no-files-found: ignore
 
   macos:
     name: macOS Build
@@ -44,6 +118,7 @@ jobs:
     # src/web/dock-app/ClutchWindow.swift.  So every swift change under
     # ios/Mac/ merged without ever being compiled.  This job closes that gap.
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Install XcodeGen
@@ -61,11 +136,12 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: "26"
       - run: npm install --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

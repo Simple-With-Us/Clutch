@@ -23,7 +23,7 @@ struct InfisicalSettingsSection: View {
         } footer: {
             Text(Copy.gap(
                 "Infisical is the source of truth for Clutch's settings on the Mac.",
-                "Secret values never leave the Mac and are never shown here."
+                "Token values are sent to the paired Mac for storage and are never returned after saving."
             ))
         }
         .task { await model.loadIfNeeded() }
@@ -64,13 +64,16 @@ struct InfisicalSettingsSection: View {
             }
         } else {
             sourceRows(model)
-            identityRows(model)
+            credentialsRows(model)
             managedSettingsRows(model)
         }
     }
 
     private var hostUnavailableText: String {
-        "Pair a Mac to manage Infisical settings.  This section reads and writes that Mac's Infisical identity and managed settings."
+        Copy.gap(
+            "Pair a Mac to manage Infisical settings.",
+            "This section reads and writes that Mac's service tokens and managed settings."
+        )
     }
 
     // MARK: - Source
@@ -83,20 +86,23 @@ struct InfisicalSettingsSection: View {
             }
             .accessibilityLabel(Text("Infisical settings source, \(snapshot.source.label)"))
 
-            if let path = snapshot.identityPath, !path.isEmpty {
-                LabeledContent("Identity File") {
+            if let path = snapshot.credentialsPath, !path.isEmpty {
+                LabeledContent("Credentials File") {
                     Text(path)
                         .font(.caption.monospaced())
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(.secondary)
                 }
-                .accessibilityLabel(Text("Machine identity file, \(path)"))
+                .accessibilityLabel(Text("Service-token file, \(path)"))
             }
 
-            if snapshot.identity.fromEnv {
+            if snapshot.credentials.readTokenFromEnv || snapshot.credentials.writeTokenFromEnv {
                 Label {
-                    Text("The machine identity is coming from the Mac's environment.  Saving a change here writes the identity file, which the environment still overrides.")
+                    Text(Copy.gap(
+                        "A service token is coming from the Mac's environment.",
+                        "Environment tokens take precedence over the credentials file."
+                    ))
                         .font(.footnote)
                 } icon: {
                     Image(systemName: "info.circle")
@@ -115,7 +121,7 @@ struct InfisicalSettingsSection: View {
         if model.needsRestart {
             Label {
                 Text(Copy.gap(
-                    "Clutch must restart on the Mac to use the new credentials.",
+                    "Clutch must restart on the Mac to use the new service tokens.",
                     "Managed settings stay locked until you restart it and reload here."
                 ))
                 .font(.footnote)
@@ -123,57 +129,56 @@ struct InfisicalSettingsSection: View {
                 Image(systemName: "arrow.clockwise.circle.fill")
                     .foregroundStyle(.orange)
             }
-            .accessibilityLabel(Text("Clutch must restart on the Mac to use the new credentials"))
+            .accessibilityLabel(Text("Clutch must restart on the Mac to use the new service tokens"))
         }
     }
 
-    // MARK: - Machine identity
+    // MARK: - Service tokens
 
     @ViewBuilder
-    private func identityRows(_ model: InfisicalSettingsModel) -> some View {
-        subheading("Machine Identity", symbol: "key.horizontal")
+    private func credentialsRows(_ model: InfisicalSettingsModel) -> some View {
+        subheading("Service Tokens", symbol: "key.horizontal")
 
         TextField("Project ID", text: $model.projectId)
             .identifierField()
             .accessibilityLabel(Text("Infisical Project ID"))
 
-        TextField("Client ID", text: $model.clientId)
+        SecureField(model.readTokenPlaceholder, text: $model.readToken)
             .identifierField()
-            .accessibilityLabel(Text("Infisical Client ID"))
-            .accessibilityValue(Text(clientIDAccessibilityValue(model)))
+            .accessibilityLabel(Text("Infisical Read Service Token"))
 
-        // The stored secret is never loaded into the app, so this field only
-        // ever holds what the operator typed this session.
-        SecureField(model.clientSecretPlaceholder, text: $model.clientSecret)
-            .identifierField()
-            .accessibilityLabel(Text("Infisical Client Secret"))
-
-        Text(clientSecretHelpText(model))
+        Text(model.hasStoredReadToken
+             ? Copy.gap("A read-only service token is available on the Mac.", "Leave empty to keep it.")
+             : "No read service token is available on the Mac yet.")
             .font(.footnote)
             .foregroundStyle(.secondary)
 
+        SecureField(model.writeTokenPlaceholder, text: $model.writeToken)
+            .identifierField()
+            .accessibilityLabel(Text("Infisical Write Service Token"))
+
+        Text(model.hasStoredWriteToken
+             ? Copy.gap("A separate write service token is available on the Mac.", "Leave empty to keep it.")
+             : Copy.gap("A separate write token is required for managed-setting edits.", "Reads never use write access."))
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+        if model.hasStoredWriteToken {
+            Toggle("Remove Separate Write Token", isOn: $model.clearWriteToken)
+                .accessibilityLabel(Text("Remove Separate Write Token"))
+        }
+
         Button {
-            Task { await model.saveIdentity() }
+            Task { await model.saveCredentials() }
         } label: {
-            if model.isSavingIdentity {
-                Label("Saving Machine Identity", systemImage: "arrow.triangle.2.circlepath")
+            if model.isSavingCredentials {
+                Label("Saving Service Tokens", systemImage: "arrow.triangle.2.circlepath")
             } else {
-                Label("Save Machine Identity", systemImage: "checkmark.circle")
+                Label("Save Service Tokens", systemImage: "checkmark.circle")
             }
         }
-        .disabled(!model.canSaveIdentity)
-        .accessibilityLabel(Text("Save Machine Identity"))
-    }
-
-    private func clientIDAccessibilityValue(_ model: InfisicalSettingsModel) -> String {
-        guard let hint = model.identity?.clientIdHint, !hint.isEmpty else { return "Not set" }
-        return "Ending in \(hint)"
-    }
-
-    private func clientSecretHelpText(_ model: InfisicalSettingsModel) -> String {
-        model.hasStoredClientSecret
-            ? "A client secret is saved on the Mac.  Leave this empty to keep it."
-            : "No client secret is saved on the Mac yet."
+        .disabled(!model.canSaveCredentials)
+        .accessibilityLabel(Text("Save Service Tokens"))
     }
 
     // MARK: - Managed settings
@@ -188,6 +193,11 @@ struct InfisicalSettingsSection: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } else {
+            if model.snapshot?.credentials.hasWriteToken != true {
+                Label("Add a separate write service token to edit managed settings.", systemImage: "lock.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
             Picker("Setting", selection: selectionBinding(model)) {
                 ForEach(keys) { entry in
                     Text(entry.key).tag(entry.key)
@@ -261,9 +271,15 @@ struct InfisicalSettingsSection: View {
             return "Saving writes this value to Infisical and updates the Mac's settings cache."
         }
         if entry.isSet {
-            return "A value is saved on the Mac.  Clutch never shows a stored secret, so enter a new one to replace it."
+            return Copy.gap(
+                "A value is saved on the Mac.",
+                "Clutch never shows a stored secret, so enter a new one to replace it."
+            )
         }
-        return "No value is set on this Mac.  Leave it empty to keep it that way — saving an empty secret would clear it."
+        return Copy.gap(
+            "No value is set on this Mac.",
+            "Leave it empty to keep it that way — saving an empty secret would clear it."
+        )
     }
 
     // MARK: - Shared

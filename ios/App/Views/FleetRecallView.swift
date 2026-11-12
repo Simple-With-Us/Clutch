@@ -33,11 +33,13 @@ public struct FleetRecallView: View {
                         .foregroundColor(.accentColor)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Fleet Recall Corpus")
+                        Text("Saved Lessons")
                             .font(.system(size: 15, weight: .bold))
                         Text(recall.endpoint)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.footnote.monospaced())
                             .foregroundColor(.secondary)
+                            .accessibilityLabel("Connection")
+                            .accessibilityValue(recall.endpoint)
                     }
                 }
 
@@ -46,7 +48,10 @@ public struct FleetRecallView: View {
                 if recall.stats.isPlaceholder {
                     // No stats method is confirmed on this endpoint, so say that
                     // instead of showing invented counts.
-                    Text("Corpus counts are unavailable.  This endpoint doesn't serve a stats call.")
+                    Text(Copy.gap(
+                        "Counts are unavailable.",
+                        "This connection does not report them."
+                    ))
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 } else {
@@ -80,7 +85,8 @@ public struct FleetRecallView: View {
                     Button("Search") {
                         Task { await recall.search(query: queryText) }
                     }
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.body.weight(.semibold))
+                    .frame(minHeight: 44)
                 }
             }
         }
@@ -108,7 +114,10 @@ public struct FleetRecallView: View {
                 ContentUnavailableView {
                     Label("No Lessons Matched", systemImage: "magnifyingglass")
                 } description: {
-                    Text("The corpus has nothing for this query.  Try different words or a narrower phrase.")
+                    Text(Copy.gap(
+                        "Nothing matched this search.",
+                        "Try different words."
+                    ))
                 }
             }
             .listRowInsets(EdgeInsets())
@@ -128,7 +137,7 @@ public struct FleetRecallView: View {
             Button(action: {
                 isShowingContributeSheet = true
             }) {
-                Label("Contribute New Lesson to Fleet Recall", systemImage: "square.and.pencil")
+                Label("Add a Lesson", systemImage: "square.and.pencil")
             }
 
             if let message = recall.contributionSuccessMessage {
@@ -158,13 +167,9 @@ struct RecallHitRow: View {
 
                 // Only claim a match percentage when the corpus reported one.
                 if let score = hit.score {
-                    Text("\(Int(score * 100))% MATCH")
-                        .font(.system(size: 9, weight: .black))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.15))
-                        .foregroundColor(.green)
-                        .clipShape(Capsule())
+                    Text("\(Int(score * 100))% match")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -249,8 +254,8 @@ struct ContributeRecallSheet: View {
                             Text(option.label).tag(option)
                         }
                     }
-                    TextField("App Slug", text: $appSlug)
-                    TextField("Seat Tag", text: $seatTag)
+                    TextField("App", text: $appSlug, prompt: Text("Example: clutch"))
+                    TextField("Seat Tag", text: $seatTag, prompt: Text("Example: AG"))
                 }
 
                 Section(header: Text("Lesson Text")) {
@@ -267,7 +272,7 @@ struct ContributeRecallSheet: View {
                         HStack(spacing: 8) {
                             ProgressView()
                                 .scaleEffect(0.7)
-                            Text("Contributing to the corpus…")
+                            Text("Saving the lesson…")
                                 .font(.footnote)
                                 .foregroundColor(.secondary)
                         }
@@ -302,7 +307,7 @@ struct ContributeRecallSheet: View {
                     }
                 }
             }
-            .navigationTitle("Contribute to Recall")
+            .navigationTitle("Add a Lesson")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -330,7 +335,10 @@ struct ContributeRecallSheet: View {
     }
 
     private var lengthSummary: String {
-        "\(content.count) of \(RecallContributionDraft.maxTextLength) characters.  At least \(RecallContributionDraft.minTextLength) required."
+        Copy.gap(
+            "\(content.count) of \(RecallContributionDraft.maxTextLength) characters.",
+            "At least \(RecallContributionDraft.minTextLength) required."
+        )
     }
 
     private func submit() async {

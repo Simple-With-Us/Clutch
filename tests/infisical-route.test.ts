@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import type { ClutchSettings } from "../src/shared/clutchSettings";
 // =============================================================================
 // infisical-route — the native settings panel's transport.
 //
-// The contract under test is the one that protects the machine secret: values
+// The contract under test protects scoped service tokens: values
 // never cross the wire, an empty secret never wipes a stored one, and a
 // request that changes credentials cannot also write a setting under them.
 // Fake credentials only; nothing here touches a real Infisical.
@@ -98,18 +98,18 @@ describe("route matching", () => {
 });
 
 describe("GET /clutch/v1/infisical", () => {
-  it("reports the source and the identity file path", async () => {
+  it("reports the source and the credentials file path", async () => {
     const { status, body } = await call("GET");
     expect(status).toBe(200);
     expect(body.source).toBe("infisical");
-    expect(body.identityPath).toBe(join(home, "infisical.json"));
+    expect(body.credentialsPath).toBe(join(home, "infisical.json"));
     expect(body.restartRequired).toBe(false);
   });
 
-  it("returns the canonical project when no identity file exists", async () => {
+  it("returns the canonical project when no credentials file exists", async () => {
     const { body } = await call("GET");
-    expect(body.identity.projectId).toBe(CANONICAL_PROJECT);
-    expect(body.identity.hasClientSecret).toBe(false);
+    expect(body.credentials.projectId).toBe(CANONICAL_PROJECT);
+    expect(body.credentials.hasReadToken).toBe(false);
   });
 
   it("never returns a secret value, only presence", async () => {
@@ -128,45 +128,111 @@ describe("GET /clutch/v1/infisical", () => {
   });
 });
 
-describe("PUT /clutch/v1/infisical — machine identity", () => {
-  const identity = { projectId: "new-project", clientId: "new-id", clientSecret: "new-secret" };
+describe("PUT /clutch/v1/infisical — service tokens", () => {
+  const credentials = { projectId: "new-project", readToken: "st.fixture-read-token-value-123456789", writeToken: "st.fixture-write-token-value-123456789" };
 
   it("saves the identity at mode 600 and demands a restart", async () => {
-    const { status, body } = await call("PUT", { identity });
+    const { status, body } = await call("PUT", { credentials });
     expect(status).toBe(200);
-    expect(body.identitySaved).toBe(true);
+    expect(body.credentialsSaved).toBe(true);
     expect(body.restartRequired).toBe(true);
     const path = join(home, "infisical.json");
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(identity);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ projectId: credentials.projectId, serviceToken: credentials.readToken, writeServiceToken: credentials.writeToken });
   });
 
   it("never echoes the submitted secret back", async () => {
-    const { raw, body } = await call("PUT", { identity });
-    expect(raw).not.toContain("new-secret");
-    expect(body.identity.hasClientSecret).toBe(true);
+    const { raw, body } = await call("PUT", { credentials });
+    expect(raw).not.toContain(credentials.readToken);
+    expect(raw).not.toContain(credentials.writeToken);
+    expect(body.credentials.hasReadToken).toBe(true);
   });
 
   it("keeps the stored secret when the field is submitted empty", async () => {
-    await call("PUT", { identity });
+    await call("PUT", { credentials });
     const { body } = await call("PUT", {
-      identity: { projectId: "changed-project", clientId: "changed-id", clientSecret: "" },
+      credentials: { projectId: "changed-project", readToken: "st.fixture-replacement-read-token-12", writeToken: "" },
     });
-    expect(body.identitySaved).toBe(true);
-    expect(JSON.parse(readFileSync(join(home, "infisical.json"), "utf8")).clientSecret).toBe("new-secret");
+    expect(body.credentialsSaved).toBe(true);
+    expect(JSON.parse(readFileSync(join(home, "infisical.json"), "utf8")).writeServiceToken).toBe(credentials.writeToken);
   });
 
   it("is a no-op save when nothing actually changed", async () => {
-    await call("PUT", { identity });
-    const { body } = await call("PUT", { identity });
-    expect(body.identitySaved).toBe(false);
+    await call("PUT", { credentials });
+    const { body } = await call("PUT", { credentials });
+    expect(body.credentialsSaved).toBe(false);
     expect(body.restartRequired).toBe(false);
   });
 
-  it("rejects an identity with no credentials available", async () => {
-    const { status, body } = await call("PUT", { identity: { projectId: "p" } });
+  it("rejects a credential payload with no read service token", async () => {
+    const { status, body } = await call("PUT", { credentials: { projectId: "p" } });
     expect(status).toBe(400);
-    expect(body.error).toContain("client ID");
+    expect(body.error).toContain("read service token");
+  });
+
+  it("refuses to save a token that an explicit environment override would hide", async () => {
+    env.INFISICAL_TOKEN = "st.fixture-env-read-token-value-123456789";
+    const { status, body } = await call("PUT", { credentials: { projectId: CANONICAL_PROJECT, readToken: "st.fixture-new-read-token-value-123456789" } });
+    expect(status).toBe(409);
+    expect(body.error).toContain("INFISICAL_TOKEN");
+    expect(existsSync(join(home, "infisical.json"))).toBe(false);
+  });
+
+  it("merges a partial update from file-backed credentials only", async () => {
+    const fileCredentials = {
+      projectId: "file-project",
+      serviceToken: "st.fixture-file-read-token-value-123456789",
+      writeServiceToken: "st.fixture-file-write-token-value-123456789",
+    };
+    writeFileSync(join(home, "infisical.json"), `${JSON.stringify(fileCredentials)}\n`, { mode: 0o600 });
+    env.INFISICAL_TOKEN = "st.fixture-explicit-read-token-value-123456789";
+
+    const { status, body } = await call("PUT", {
+      credentials: { writeToken: "st.fixture-updated-write-token-value-123456789" },
+    });
+
+    expect(status).toBe(200);
+    expect(body.credentialsSaved).toBe(true);
+    const persisted = JSON.parse(readFileSync(join(home, "infisical.json"), "utf8"));
+    expect(persisted).toEqual({
+      projectId: "file-project",
+      serviceToken: fileCredentials.serviceToken,
+      writeServiceToken: "st.fixture-updated-write-token-value-123456789",
+    });
+    expect(JSON.stringify(persisted)).not.toContain(env.INFISICAL_TOKEN);
+  });
+
+  it("does not persist either explicit environment token during a partial project update", async () => {
+    const fileCredentials = {
+      projectId: "file-project",
+      serviceToken: "st.fixture-file-read-token-value-123456789",
+      writeServiceToken: "st.fixture-file-write-token-value-123456789",
+    };
+    writeFileSync(join(home, "infisical.json"), `${JSON.stringify(fileCredentials)}\n`, { mode: 0o600 });
+    env.INFISICAL_TOKEN = "st.fixture-explicit-read-token-value-123456789";
+    env.INFISICAL_WRITE_TOKEN = "st.fixture-explicit-write-token-value-123456789";
+
+    const { status } = await call("PUT", {
+      credentials: { projectId: "updated-file-project" },
+    });
+
+    expect(status).toBe(200);
+    const persisted = readFileSync(join(home, "infisical.json"), "utf8");
+    expect(persisted).toContain(fileCredentials.serviceToken);
+    expect(persisted).toContain(fileCredentials.writeServiceToken);
+    expect(persisted).not.toContain(env.INFISICAL_TOKEN);
+    expect(persisted).not.toContain(env.INFISICAL_WRITE_TOKEN);
+  });
+
+  it("fails closed when a partial file update has no file-backed read token", async () => {
+    env.INFISICAL_TOKEN = "st.fixture-explicit-read-token-value-123456789";
+    const { status, body } = await call("PUT", {
+      credentials: { projectId: "new-file-project" },
+    });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain("read service token");
+    expect(existsSync(join(home, "infisical.json"))).toBe(false);
   });
 
   it("rejects a non-object body", async () => {
@@ -218,7 +284,7 @@ describe("PUT /clutch/v1/infisical — managed setting write-through", () => {
     const { status, body } = await call(
       "PUT",
       {
-        identity: { projectId: "p", clientId: "i", clientSecret: "s" },
+        credentials: { projectId: "p", readToken: "st.fixture-read-token-value-123456789" },
         setting: { key: OPEN_KEY, value: "x" },
       },
       settings,

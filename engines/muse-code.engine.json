@@ -4,8 +4,8 @@
   "driverKind": "museCodeAgent",
   "displayName": "Muse Code",
   "defaultCli": "muse-code-acp.sh",
-  "nativeSource": "muse.serve",
-  "loginNote": "Headless spawns need META_API_KEY.  A browser/OAuth credential in the login keychain works in an interactive terminal but is not readable by the `muse serve` child a GUI-spawned client starts, and that fails with 'not logged in'.  Store an API key instead: `muse auth set --provider meta --api-key-stdin`.",
+  "nativeSource": "muse.acp",
+  "loginNote": "Current Muse Code builds speak ACP v1 directly through the experimental `muse acp` command.\u00A0 On macOS, the Clutch app starts Muse through an on-demand desktop helper so it can use the saved login from `muse login`, without a preliminary background Muse process.\u00A0 Older Muse versions without native ACP require MUSE_CODE_ACP_BACKEND=adapter when that helper is installed.",
 
   "images": true,
   "mcpServers": true,
@@ -18,7 +18,7 @@
         "id": "muse-spark-1.3-contributor",
         "label": "Muse Spark 1.3 (contributor)",
         "badge": "1 model",
-        "badgeTitle": "The complete catalog this adapter advertises on Muse Code 1.4.4 with adapter 0.7.0. It was observed identical both signed-out and with an authenticated account on this Mac, so the list does not grow with a login. No model turn has completed here yet, because a GUI-spawned host cannot read the login keychain credential (see the login note)."
+        "badgeTitle": "This is the configured model catalog.\u00A0 Signing in does not expand the model list; availability depends on the installed Muse runtime and account."
       }
     ]
   },
@@ -41,11 +41,8 @@
     { "pattern": "unknown model|model not found|no such model|invalid model", "code": "model_catalog_outage" }
   ],
 
-  "credentialEnv": ["META_API_KEY", "MUSE_CODE_EXECUTABLE", "MUSE_CODE_ACP_BACKEND", "MUSE_CODE_ACP_ALLOW_YOLO"],
+  "credentialEnv": ["META_API_KEY", "MUSE_CODE_EXECUTABLE", "MUSE_CODE_ACP_BACKEND", "MUSE_EXPERIMENTAL_ACP", "MUSE_CODE_ACP_ALLOW_YOLO"],
   "authFailure": "continue",
-  "authenticatedWhen": {
-    "anyEnv": ["META_API_KEY"]
-  },
 
   "install": {
     "command": {

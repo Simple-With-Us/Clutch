@@ -42,14 +42,13 @@ describe("the shipped Muse Code plugin", () => {
     expect(plugin.file.endsWith("engines/muse-code.engine.json")).toBe(true);
   });
 
-  it("describes the adapter-over-MSP shape, not a dsh profile", async () => {
+  it("describes the native ACP shape, not a dsh profile", async () => {
     const { support } = await loadMuse();
     expect(support.driverKind).toBe("museCodeAgent");
     expect(support.displayName).toBe("Muse Code");
-    // Muse Code is not an ACP agent: `muse serve` speaks MSP and the adapter
-    // translates.  Recording that here keeps a future reader from expecting a
-    // bridge under bridges/muse-code/.
-    expect(support.nativeSource).toBe("muse.serve");
+    // Current Muse builds speak ACP v1 directly.  Recording that here keeps a
+    // future reader from routing Muse through dsh or the MSP adapter by default.
+    expect(support.nativeSource).toBe("muse.acp");
     expect(support.defaultCli).toBe("muse-code-acp.sh");
     expect(support.resumeMethod).toBe("session/load");
   });
@@ -70,18 +69,19 @@ describe("the shipped Muse Code plugin", () => {
     expect(support.effortLevels).toEqual(["none", "low", "medium", "high", "xhigh"]);
   });
 
-  it("names the Muse credential and the adapter's env knobs", async () => {
+  it("names the Muse credential and backend-selection knobs", async () => {
     const { support } = await loadMuse();
     expect(support.credentialEnv).toContain("META_API_KEY");
     expect(support.credentialEnv).toContain("MUSE_CODE_EXECUTABLE");
-    expect(support.isAuthenticated!({ META_API_KEY: "set" })).toBe(true);
-    expect(support.isAuthenticated!({})).toBe(false);
+    expect(support.credentialEnv).toContain("MUSE_CODE_ACP_BACKEND");
+    expect(support.credentialEnv).toContain("MUSE_EXPERIMENTAL_ACP");
   });
 
-  it("leaves auth negotiation to the adapter, which publishes an env_var method", async () => {
+  it("leaves authentication to the selected ACP runtime", async () => {
     const { support } = await loadMuse();
     expect(support.pickAuthMethod).toBeUndefined();
     expect(support.authFailure).toBe("continue");
+    expect(support.isAuthenticated).toBeUndefined();
   });
 
   it("maps the model onto the encoded wire value the adapter advertised", async () => {
@@ -103,21 +103,18 @@ describe("the shipped Muse Code plugin", () => {
     expect(ids).toContain(support.models.default);
   });
 
-  it("states that the catalog is complete for this adapter, and what is still unproven", async () => {
+  it("describes model availability without claiming that login expands the catalog", async () => {
     const { support } = await loadMuse();
     const [option] = support.models.options;
-    // Observed identical signed-out and authenticated on this Mac, so the
-    // earlier "an account gets a larger catalog" claim was wrong and is gone.
-    expect(option!.badgeTitle).toMatch(/complete catalog this adapter advertises/);
-    expect(option!.badgeTitle).toMatch(/does not grow with a login/);
-    expect(option!.badgeTitle).toMatch(/No model turn has completed/);
-    expect(option!.badgeTitle).not.toMatch(/floor, not the truth/);
+    expect(option!.badgeTitle).toMatch(/configured model catalog/);
+    expect(option!.badgeTitle).toMatch(/Signing in does not expand the model list/);
+    expect(option!.badgeTitle).toMatch(/installed Muse runtime and account/);
   });
 
-  it("tells the operator that a keychain credential will not reach a spawned host", async () => {
+  it("tells the operator about native ACP and service-user login", async () => {
     const { support } = await loadMuse();
-    expect(support.loginNote).toMatch(/login keychain/);
-    expect(support.loginNote).toMatch(/muse auth set --provider meta --api-key-stdin/);
+    expect(support.loginNote).toMatch(/muse acp/);
+    expect(support.loginNote).toMatch(/muse login/);
   });
 
   it("classifies a missing Meta key as invalid credentials", async () => {
@@ -148,12 +145,156 @@ describe("the Muse Code launcher", () => {
     expect(readFileSync(LAUNCHER, "utf8")).not.toMatch(/^\s*(source|\.)\s+.*clutch-env\.sh/m);
   });
 
-  it("execs the adapter with the Muse host resolved and passed through", () => {
+  it("prefers native ACP when the installed Muse binary proves support", () => {
+    const stub = scratch();
+    const muse = join(stub, "muse");
+    writeFileSync(
+      muse,
+      '#!/usr/bin/env bash\nif [ "$1" = acp ] && [ "${2:-}" = --help ]; then exit 0; fi\nprintf "NATIVE gate=%s args=%s\\n" "$MUSE_EXPERIMENTAL_ACP" "$*"\n',
+    );
+    chmodSync(muse, 0o755);
+
+    const started = Date.now();
+    const out = execFileSync(LAUNCHER, ["--trust-workspace"], {
+      env: {
+        PATH: `${stub}:${process.env.PATH ?? ""}`,
+        HOME: stub,
+      },
+      encoding: "utf8",
+    });
+    expect(out).toContain("NATIVE gate=on");
+    expect(out).toContain("args=acp --trust-workspace");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("routes Darwin native ACP through the installed GUI helper", () => {
+    const stub = scratch();
+    const app = join(stub, "Clutch.app");
+    const helperApp = join(app, "Contents", "Helpers", "ClutchMuseACP.app");
+    const helperExecutable = join(helperApp, "Contents", "MacOS", "ClutchMuseACP");
+    mkdirSync(dirname(helperExecutable), { recursive: true });
+    writeFileSync(helperExecutable, "fixture helper");
+    chmodSync(helperExecutable, 0o755);
+    const museStarts = join(stub, "muse-starts.log");
+    writeFileSync(museStarts, "");
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MUSE_STARTS_LOG"\n[ "$1" = acp ] && [ "${2:-}" = --help ] && exit 0\nprintf "NATIVE args=%s\\n" "$*"\n');
+    chmodSync(muse, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+    const python = join(stub, "python3");
+    writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\nprintf "%s\\n" "$@"\n');
+    chmodSync(python, 0o755);
+
+    const out = execFileSync(LAUNCHER, ["--trust-workspace"], {
+      env: { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app, MUSE_STARTS_LOG: museStarts },
+      encoding: "utf8",
+    });
+    expect(out).toContain("BROKER");
+    expect(out).toContain(join(ROOT, "bridges", "muse", "gui-acp.py"));
+    expect(out).toContain(helperApp);
+    expect(out).toContain(muse);
+    expect(out).toContain("--trust-workspace");
+    expect(out).not.toContain("NATIVE");
+    expect(readFileSync(museStarts, "utf8")).toBe("");
+  });
+
+  it("does not start Muse when the GUI broker fails", () => {
+    const stub = scratch();
+    const app = join(stub, "Clutch.app");
+    const helperExecutable = join(app, "Contents", "Helpers", "ClutchMuseACP.app", "Contents", "MacOS", "ClutchMuseACP");
+    mkdirSync(dirname(helperExecutable), { recursive: true });
+    writeFileSync(helperExecutable, "fixture helper");
+    chmodSync(helperExecutable, 0o755);
+    const museStarts = join(stub, "muse-starts.log");
+    writeFileSync(museStarts, "");
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MUSE_STARTS_LOG"\nexit 0\n');
+    chmodSync(muse, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+    const python = join(stub, "python3");
+    writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\nexit 17\n');
+    chmodSync(python, 0o755);
+
+    expect(() => execFileSync(LAUNCHER, ["--flag"], {
+      env: { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app, MUSE_STARTS_LOG: museStarts },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })).toThrow();
+    expect(readFileSync(museStarts, "utf8")).toBe("");
+  });
+
+  it("fails before starting Muse when the bundled helper has no Python", () => {
+    const stub = scratch();
+    const mirror = join(stub, "runtime");
+    const scripts = join(mirror, "scripts");
+    const brokerDir = join(mirror, "bridges", "muse");
+    mkdirSync(scripts, { recursive: true });
+    mkdirSync(brokerDir, { recursive: true });
+    const launcher = join(scripts, "muse-code-acp.sh");
+    const source = readFileSync(LAUNCHER, "utf8");
+    expect(source).toContain("find_python3() {");
+    writeFileSync(launcher, source.replace("find_python3() {", "find_python3() {\n  return 1"));
+    chmodSync(launcher, 0o755);
+    writeFileSync(join(brokerDir, "gui-acp.py"), "fixture broker marker");
+    const app = join(stub, "Clutch.app");
+    const helperExecutable = join(app, "Contents", "Helpers", "ClutchMuseACP.app", "Contents", "MacOS", "ClutchMuseACP");
+    mkdirSync(dirname(helperExecutable), { recursive: true });
+    writeFileSync(helperExecutable, "fixture helper");
+    chmodSync(helperExecutable, 0o755);
+    const museStarts = join(stub, "muse-starts.log");
+    writeFileSync(museStarts, "");
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MUSE_STARTS_LOG"\nexit 0\n');
+    chmodSync(muse, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+
+    expect(() => execFileSync(launcher, [], {
+      env: { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app, MUSE_STARTS_LOG: museStarts },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })).toThrow(/Python 3 is unavailable for the bundled Muse desktop helper/);
+    expect(readFileSync(museStarts, "utf8")).toBe("");
+  });
+
+  it("keeps native ACP direct when META_API_KEY is set or the helper is absent", () => {
+    const stub = scratch();
+    const app = join(stub, "Clutch.app");
+    mkdirSync(app, { recursive: true });
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && [ "${2:-}" = --help ] && exit 0\nprintf "NATIVE args=%s\\n" "$*"\n');
+    chmodSync(muse, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+    const python = join(stub, "python3");
+    writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\n');
+    chmodSync(python, 0o755);
+    const base = { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app };
+
+    const withApiKey = execFileSync(LAUNCHER, ["--flag"], {
+      env: { ...base, META_API_KEY: "test-key-placeholder" },
+      encoding: "utf8",
+    });
+    expect(withApiKey).toContain("NATIVE args=acp --flag");
+    expect(withApiKey).not.toContain("BROKER");
+
+    const withoutHelper = execFileSync(LAUNCHER, ["--flag"], { env: base, encoding: "utf8" });
+    expect(withoutHelper).toContain("NATIVE args=acp --flag");
+    expect(withoutHelper).not.toContain("BROKER");
+  });
+
+  it("falls back to the adapter when the installed Muse binary lacks native ACP", () => {
     const stub = scratch();
     const adapter = join(stub, "fake-adapter");
     const muse = join(stub, "muse");
     writeFileSync(adapter, '#!/usr/bin/env bash\nprintf "ADAPTER host=%s args=%s\\n" "$MUSE_CODE_EXECUTABLE" "$*"\n');
-    writeFileSync(muse, "#!/usr/bin/env bash\nexit 0\n");
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && exit 5\nexit 0\n');
     chmodSync(adapter, 0o755);
     chmodSync(muse, 0o755);
 
@@ -167,6 +308,63 @@ describe("the Muse Code launcher", () => {
     });
     expect(out).toContain(`host=${muse}`);
     expect(out).toContain("args=--serve --flag");
+  });
+
+  it.each(["auto", "adapter"])("refuses %s adapter fallback for native launch settings", (backend) => {
+    const stub = scratch();
+    const adapter = join(stub, "fake-adapter");
+    const muse = join(stub, "muse");
+    const marker = join(stub, "adapter-started");
+    writeFileSync(adapter, '#!/usr/bin/env bash\ntouch "$ADAPTER_MARKER"\n');
+    writeFileSync(muse, '#!/usr/bin/env bash\nexit 5\n');
+    chmodSync(adapter, 0o755);
+    chmodSync(muse, 0o755);
+    expect(() => execFileSync(LAUNCHER, ["--contributor-mode", "on", "--disable-sandbox", "--trust-workspace"], {
+      env: {
+        PATH: `${stub}:${process.env.PATH ?? ""}`,
+        HOME: stub,
+        MUSE_CODE_EXECUTABLE: muse,
+        MUSE_CODE_ACP_BIN: adapter,
+        MUSE_CODE_ACP_BACKEND: backend,
+        MUSE_CODE_ACP_REQUIRE_NATIVE: "1",
+        ADAPTER_MARKER: marker,
+      },
+      stdio: "pipe",
+    })).toThrow();
+    expect(() => readFileSync(marker)).toThrow();
+  });
+
+  it("keeps explicit adapter mode even when the GUI helper is installed", () => {
+    const stub = scratch();
+    const app = join(stub, "Clutch.app");
+    const helperExecutable = join(app, "Contents", "Helpers", "ClutchMuseACP.app", "Contents", "MacOS", "ClutchMuseACP");
+    mkdirSync(dirname(helperExecutable), { recursive: true });
+    writeFileSync(helperExecutable, "fixture helper");
+    chmodSync(helperExecutable, 0o755);
+    const museStarts = join(stub, "muse-starts.log");
+    writeFileSync(museStarts, "");
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MUSE_STARTS_LOG"\nexit 0\n');
+    chmodSync(muse, 0o755);
+    const adapter = join(stub, "muse-code-acp");
+    writeFileSync(adapter, '#!/usr/bin/env bash\nprintf "ADAPTER args=%s\\n" "$*"\n');
+    chmodSync(adapter, 0o755);
+    const uname = join(stub, "uname");
+    writeFileSync(uname, '#!/usr/bin/env bash\nprintf "Darwin\\n"\n');
+    chmodSync(uname, 0o755);
+
+    const out = execFileSync(LAUNCHER, ["--flag"], {
+      env: {
+        PATH: `${stub}:/usr/bin:/bin`,
+        HOME: stub,
+        CLUTCH_MAC_APP: app,
+        MUSE_STARTS_LOG: museStarts,
+        MUSE_CODE_ACP_BACKEND: "adapter",
+      },
+      encoding: "utf8",
+    });
+    expect(out).toContain("ADAPTER args=--flag");
+    expect(readFileSync(museStarts, "utf8")).toBe("");
   });
 
   it("prefers an explicit MUSE_CODE_EXECUTABLE over PATH discovery", () => {
@@ -186,6 +384,7 @@ describe("the Muse Code launcher", () => {
         PATH: `${stub}:${process.env.PATH ?? ""}`,
         HOME: stub,
         MUSE_CODE_ACP_BIN: adapter,
+        MUSE_CODE_ACP_BACKEND: "adapter",
         MUSE_CODE_EXECUTABLE: pinned,
       },
       encoding: "utf8",
@@ -193,12 +392,59 @@ describe("the Muse Code launcher", () => {
     expect(out.trim()).toBe(`host=${pinned}`);
   });
 
+  it("lets an operator require the native backend", () => {
+    const stub = scratch();
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && exit 5\nexit 0\n');
+    chmodSync(muse, 0o755);
+
+    expect(() => execFileSync(LAUNCHER, [], {
+      env: {
+        PATH: `${stub}:${process.env.PATH ?? ""}`,
+        HOME: stub,
+        MUSE_CODE_ACP_BACKEND: "native",
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })).toThrow(/native ACP is unavailable/);
+  });
+
+  it("bounds a native capability probe that never answers", () => {
+    const stub = scratch();
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\nif [ "$1" = acp ] && [ "${2:-}" = --help ]; then trap "" TERM; while :; do sleep 1; done; fi\n');
+    chmodSync(muse, 0o755);
+    const started = Date.now();
+
+    expect(() => execFileSync(LAUNCHER, [], {
+      env: {
+        PATH: `${stub}:${process.env.PATH ?? ""}`,
+        HOME: stub,
+        MUSE_CODE_ACP_BACKEND: "native",
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    })).toThrow(/native ACP is unavailable/);
+    expect(Date.now() - started).toBeLessThan(8_000);
+  }, 12_000);
+
   it("explains the missing adapter instead of failing silently", () => {
     const stub = scratch();
+    const muse = join(stub, "muse");
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && exit 5\nexit 0\n');
+    chmodSync(muse, 0o755);
     let message = "";
     try {
       execFileSync(LAUNCHER, [], {
-        env: { PATH: "/usr/bin:/bin", HOME: stub },
+        // The launcher's own search list is replaced with an empty one, so a
+        // machine that really has the adapter installed (this server does)
+        // does not change what this test sees.
+        env: {
+          PATH: `${stub}:/usr/bin:/bin`,
+          HOME: stub,
+          MUSE_CODE_ACP_SEARCH_PATHS: join(stub, "empty"),
+        },
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -206,7 +452,7 @@ describe("the Muse Code launcher", () => {
       const stderr = (error as { stderr?: string }).stderr ?? "";
       message = String(stderr);
     }
-    expect(message).toMatch(/muse-code-acp not found/);
+    expect(message).toMatch(/muse-code-acp was not found/);
     expect(message).toMatch(/npm install -g @bex-co\/muse-code-acp/);
   });
 });
@@ -232,9 +478,8 @@ describe("the real failure this plugin was verified against", () => {
     expect(support.classifyError!("something unrelated")).toBeUndefined();
   });
 
-  it("reports unauthenticated when META_API_KEY is absent, which is the case a headless spawn hits", async () => {
+  it("does not guess native Muse login state from environment variables", async () => {
     const { support } = await loadMuse();
-    expect(support.isAuthenticated!({})).toBe(false);
-    expect(support.isAuthenticated!({ MUSE_CODE_EXECUTABLE: "/usr/local/bin/muse" })).toBe(false);
+    expect(support.isAuthenticated).toBeUndefined();
   });
 });
