@@ -289,6 +289,22 @@ describe("MiniMax Code remote shell", () => {
     expect(script).toBeDefined();
     expect(() => new Function(script ?? "")).not.toThrow();
   });
+
+  it("uses plain copy, a phone layout, and a dark-mode palette", () => {
+    const html = miniMaxCodeRemoteHtml();
+    expect(html).toContain("MiniMax Code Remote");
+    expect(html).toContain("@media (prefers-color-scheme: dark)");
+    expect(html).toContain("@media (max-width: 800px)");
+    expect(html).toContain("min-height: 44px");
+    expect(html).toContain('aria-label="Filter threads"');
+    expect(html).not.toContain("ACP");
+    expect(html).not.toContain("chat token");
+    expect(html).toContain("\\u00a0 Start Clutch on this Mac");
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("if (phone()) setThreadsOpen(false)");
+    expect(html).toContain("No Thread Open");
+    expect(html).toContain('placeholder="Path on this Mac"');
+  });
 });
 
 describe("resolveTailnetHost", () => {

@@ -96,7 +96,7 @@ struct HostsSheet: View {
                 if let host = store.activeHost {
                     Section("Muse Code") {
                         Toggle(isOn: museOptionsBinding(host: host, keyPath: \.yolo)) {
-                            Text("YOLO: Allow Changes Without Asking")
+                            Text("Allow Changes Without Asking")
                         }
                         Text(Copy.gap(
                             "Muse can make changes and run commands without pausing for approval.",

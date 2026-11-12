@@ -34,19 +34,24 @@ struct PermissionCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             if request.options.isEmpty {
                 // An engine that offered no options can only be cancelled.
-                Button("Deny") {
+                Button {
                     answer(nil)
+                } label: {
+                    Text("Deny")
+                        .font(.body.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isAnswering)
             } else {
-                HStack(spacing: 8) {
+                VStack(spacing: 8) {
                     ForEach(request.options) { option in
                         Button {
                             answer(option.optionId)
                         } label: {
                             Text(option.name.isEmpty ? option.kind : option.name)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.body.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(option.allows ? Color.accentColor : Color.secondary)

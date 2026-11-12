@@ -173,7 +173,7 @@ public struct SessionsView: View {
                     ContentUnavailableView(
                         "No Threads Yet",
                         systemImage: "text.bubble",
-                        description: Text("Start One With The Button Above.")
+                        description: Text("Start one with the button above.")
                     )
                 }
             } else {
@@ -442,7 +442,7 @@ struct NewThreadSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                Text("Send The First Message To Start A Thread.")
+                Text("Send the first message to start a thread.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -483,6 +483,7 @@ struct NewThreadSheet: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title2)
+                            .frame(minWidth: 44, minHeight: 44)
                     }
                     .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
                     .accessibilityLabel("Send Message")
