@@ -120,7 +120,10 @@ set -euo pipefail
 # Homebrew rsync 3.5.1 first on PATH shadows the system rsync that `xcodebuild
 # -exportArchive` spawns for the server half, and the IPA step then fails with
 # "rsync: --extended-attributes: unknown option" / "exportArchive Copy failed".
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
+# Offline test-ship-seq sets IOS_FLEET_NODE to a stub; it keeps fake curl first.
+if [[ "${IOS_FLEET_NODE:-node}" == node ]]; then
+  export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
+fi
 # The node that runs asc-api.mjs.  IOS_FLEET_NODE lets an offline test answer
 # App Store Connect from a stub instead of the network; a real ship leaves it
 # unset and uses node from PATH.
