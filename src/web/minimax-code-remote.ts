@@ -114,8 +114,7 @@ export function miniMaxCodeRemoteHtml(): string {
       padding: 14px max(16px, 5vw) max(18px, env(safe-area-inset-bottom));
       border-top: 1px solid var(--line); background: var(--surface);
     }
-    .cwd { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
-    .cwd input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; }
+    .cwd { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
     .prompt {
       display: flex; align-items: flex-end; gap: 10px; padding: 8px;
       border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
@@ -166,12 +165,12 @@ export function miniMaxCodeRemoteHtml(): string {
       <p id="banner" class="banner" role="alert" hidden></p>
       <section id="messages" role="log" aria-live="polite" aria-relevant="additions">
         <div class="empty">
-          <h2>No thread open</h2>
+          <h2>No Thread Open</h2>
           <p>Choose a thread to continue, or start a new one.</p>
         </div>
       </section>
       <section class="composer">
-        <label class="cwd">Folder <input id="cwd" aria-label="Folder" value="" autocomplete="off" spellcheck="false"></label>
+        <label class="cwd">Folder <input id="cwd" aria-label="Folder" placeholder="Path on this Mac" value="" autocomplete="off" spellcheck="false"></label>
         <div class="prompt">
           <label class="sr" for="prompt">Message</label>
           <textarea id="prompt" placeholder="Message MiniMax Code"></textarea>
@@ -389,7 +388,7 @@ export function miniMaxCodeRemoteHtml(): string {
       });
       if (!token) {
         setStatus('Not signed in');
-        showBanner('This page is not signed in.\\u00a0 Start clutch on this Mac, then open MiniMax Code again.');
+        showBanner('This page is not signed in.\\u00a0 Start Clutch on this Mac, then open MiniMax Code again.');
       } else {
         refresh();
       }

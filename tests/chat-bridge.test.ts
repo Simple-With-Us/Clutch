@@ -299,7 +299,9 @@ describe("MiniMax Code remote shell", () => {
     expect(html).toContain('aria-label="Filter threads"');
     expect(html).not.toContain("ACP");
     expect(html).not.toContain("chat token");
-    expect(html).toContain("\\u00a0 Start clutch on this Mac");
+    expect(html).toContain("\\u00a0 Start Clutch on this Mac");
+    expect(html).toContain("No Thread Open");
+    expect(html).toContain('placeholder="Path on this Mac"');
   });
 });
 
