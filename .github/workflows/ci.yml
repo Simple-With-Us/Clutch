@@ -5,9 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  # Same event-scoped shape as ios-ship.yml and mac-app-build.yml: a
+  # pull_request run must not share a group with push-to-main, or a newer PR
+  # push cancels the main CI run.  cancel-in-progress stays true so a newer
+  # push to the same PR branch wins.
+  # The pr- prefix keeps a PR from a fork branch named main out of the main group.
+  group: ci-clutch-${{ github.event_name == 'pull_request' && format('pr-{0}', github.head_ref) || 'main' }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -45,6 +55,7 @@ jobs:
     # with "package 'kingfisher' @ 8.13.0 is using Swift tools version 6.2.0
     # but the installed version is 6.1.0" on the older image.
     runs-on: macos-26
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - name: Install XcodeGen
@@ -107,6 +118,7 @@ jobs:
     # src/web/dock-app/ClutchWindow.swift.  So every swift change under
     # ios/Mac/ merged without ever being compiled.  This job closes that gap.
     runs-on: macos-26
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: Install XcodeGen
@@ -124,6 +136,7 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
