@@ -6,7 +6,7 @@
 
 ## Context
 
-The product was named Harness.  The owner chose Clutch (clutch.codes) as its name, registered the App Store Connect record as Clutch.Codes, and renamed the GitHub repo to `jaywedgeworth22/Clutch`.  The old name also collided with the upstream engine's name ("DeepSeek Harness") and with unrelated generic uses of the word across the fleet.
+The product was named Harness.  The owner chose Clutch (clutch.codes) as its name, registered the App Store Connect record as Clutch.Codes, and renamed the GitHub repo to `Simple-With-Us/Clutch`.  The old name also collided with the upstream engine's name ("DeepSeek Harness") and with unrelated generic uses of the word across the fleet.
 
 ## Decisions
 
