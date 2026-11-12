@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKFLOW = join(ROOT, ".github/workflows/mac-app-build.yml");
-const RELEASE_ACTION = "softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3";
+const RELEASE_ACTION = "softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4";
 
 function workflowText(): string {
   return readFileSync(WORKFLOW, "utf8");
