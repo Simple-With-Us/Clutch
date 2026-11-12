@@ -52,7 +52,7 @@ export function contributorDefaultModel(currentModel?: string): string {
 export class MuseSettingsError extends Error {
   constructor(reason: "busy" | "mode" | "model" | "effort" | "restart" | "native" | "compaction" | "auto-compact") {
     super({
-      busy: "Finish other Muse turns before changing YOLO or Contributor Mode.",
+      busy: "Finish other Muse turns before changing these settings.",
       mode: "This Muse connection could not apply the selected approval mode.",
       model: "Muse could not select the requested model.\u00A0 No prompt was sent.",
       effort: "Muse could not select the requested effort.\u00A0 No prompt was sent.",
