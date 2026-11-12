@@ -155,7 +155,7 @@ export function miniMaxCodeRemoteHtml(): string {
     </aside>
     <main>
       <header class="main-head">
-        <button id="threads-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Threads</button>
+        <button id="threads-toggle" type="button" aria-expanded="true" aria-controls="sidebar">Threads</button>
         <div class="titles">
           <h1 id="title">MiniMax Code</h1>
           <p class="subtle" id="detail">Choose a thread, or start a new one.</p>
@@ -203,12 +203,17 @@ export function miniMaxCodeRemoteHtml(): string {
       let busy = false;
 
       const setStatus = (text) => { status.textContent = text; };
-      const showBanner = (text) => { banner.hidden = false; banner.textContent = text; };
-      const hideBanner = () => { banner.hidden = true; banner.textContent = ''; };
+      const phone = () => window.matchMedia('(max-width: 800px)').matches;
       const setThreadsOpen = (open) => {
         app.classList.toggle('threads-closed', !open);
         toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       };
+      const showBanner = (text) => {
+        banner.hidden = false;
+        banner.textContent = text;
+        if (phone()) setThreadsOpen(false);
+      };
+      const hideBanner = () => { banner.hidden = true; banner.textContent = ''; };
       const showEmpty = (heading, copy) => {
         messages.replaceChildren();
         const wrap = document.createElement('div');
@@ -386,6 +391,7 @@ export function miniMaxCodeRemoteHtml(): string {
       prompt.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendPrompt(); }
       });
+      if (phone()) setThreadsOpen(true);
       if (!token) {
         setStatus('Not signed in');
         showBanner('This page is not signed in.\\u00a0 Start Clutch on this Mac, then open MiniMax Code again.');
