@@ -10,7 +10,8 @@ concurrency:
   # pull_request run must not share a group with push-to-main, or a newer PR
   # push cancels the main CI run.  cancel-in-progress stays true so a newer
   # push to the same PR branch wins.
-  group: ci-clutch-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
+  # The pr- prefix keeps a PR from a fork branch named main out of the main group.
+  group: ci-clutch-${{ github.event_name == 'pull_request' && format('pr-{0}', github.head_ref) || 'main' }}
   cancel-in-progress: true
 
 jobs:
