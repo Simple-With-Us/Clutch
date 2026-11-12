@@ -61,16 +61,33 @@ export class DshModelNotOfferedError extends Error {
   /** Providers that declare this model under another route, when any do. */
   readonly elsewhere: readonly string[];
 
-  constructor(model: string, offered: readonly string[], elsewhere: readonly string[] = []) {
+  /** The declared DeepSeek spelling the session offered for this model, when
+   *  the only one it offered is a name the DeepSeek API refuses. */
+  readonly unserved: string | undefined;
+
+  constructor(
+    model: string,
+    offered: readonly string[],
+    elsewhere: readonly string[] = [],
+    unserved?: { declared: string; apiId: string },
+  ) {
     const list = offered.length ? offered.join(", ") : "none";
     // A model declared only under a different provider reads as "not offered"
     // next to a list that contains it, so say which route it is on.
     const hint = elsewhere.length ? `; ${model} is declared only under ${elsewhere.join(", ")}` : "";
-    super(`unknown model ${model}: the installed engine CLI does not offer it (offers: ${list}${hint})`);
+    // An install can declare a spelling of a DeepSeek model that the DeepSeek
+    // API itself refuses ("The supported API model names are ...").  Selecting
+    // it would spend a whole turn on a provider rejection, so say how to fix
+    // the declaration instead.
+    const spelling = unserved
+      ? `; ${unserved.declared} is declared but the DeepSeek API does not serve that name, declare ${unserved.apiId} in llm-deepseek.models instead`
+      : "";
+    super(`unknown model ${model}: the installed engine CLI does not offer it (offers: ${list}${hint}${spelling})`);
     this.name = "DshModelNotOfferedError";
     this.model = model;
     this.offered = offered;
     this.elsewhere = elsewhere;
+    this.unserved = unserved?.declared;
   }
 }
 
@@ -104,6 +121,15 @@ function plainKey(value: string): string {
 function familyOf(model: string): readonly string[] | undefined {
   const key = aliasKey(model);
   return DSH_MODEL_FAMILY_KEYS.find((family) => family.includes(key));
+}
+
+/** The model names the DeepSeek API itself accepts: the first entry of each
+ *  family.  Every other family spelling is a picker id, a display name, or an
+ *  alias, and DeepSeek answers it with "The supported API model names are
+ *  deepseek-flash, deepseek-v4-pro, but you passed ...". */
+function isDeepSeekApiId(id: string): boolean {
+  const key = aliasKey(id);
+  return DSH_MODEL_FAMILIES.some((family) => aliasKey(family[0]!) === key);
 }
 
 function familyPreferredWireId(model: string): string | undefined {
@@ -233,6 +259,39 @@ export function matchAdvertisedDshModel(
   return undefined;
 }
 
+function describeOffered(models: readonly DshAdvertisedModel[]): string[] {
+  return models.map((entry) => {
+    const route = entry.provider ? `${entry.provider}/${entry.id}` : entry.id;
+    return entry.name === entry.id ? route : `${route} (${entry.name})`;
+  });
+}
+
+/** Keep a DeepSeek match on a name the DeepSeek API serves.
+ *
+ *  dsh forwards the declared id to DeepSeek verbatim, so an owner
+ *  `settings.yaml` that declares `deepseek-v4.1-flash` makes every Flash turn
+ *  fail upstream.  When the session also declares the API name
+ *  (`deepseek-flash` / `deepseek-v4-pro`) in the same namespace, send that.
+ *  When it declares only the unserved spelling, refuse before the switch, so
+ *  the caller's fallback chain treats it as a catalog outage instead of
+ *  burning a turn.  Matches outside the DeepSeek families pass through. */
+function servedDeepSeekMatch(
+  model: string,
+  provider: string,
+  match: DshResolvedModel,
+  models: readonly DshAdvertisedModel[],
+): DshResolvedModel {
+  const family = familyOf(match.id);
+  if (!family || isDeepSeekApiId(match.id)) return match;
+  const apiId = familyPreferredWireId(match.id)!;
+  const served = models.find(
+    (entry) =>
+      (entry.provider === match.provider || entry.provider === "") && aliasKey(entry.id) === aliasKey(apiId),
+  );
+  if (served) return { ...served, match: "alias" };
+  throw new DshModelNotOfferedError(model, describeOffered(models), [], { declared: match.id, apiId });
+}
+
 /** Resolve a picker model against a session's advertised config options.
  *
  *  - `undefined`: nothing to resolve against (no `model` option, or one that
@@ -251,7 +310,7 @@ export function resolveDshModelOption(
   const models = parseAdvertisedDshModels(advertised);
   if (!models || models.length === 0) return undefined;
   const match = matchAdvertisedDshModel(model, provider, models);
-  if (match) return match;
+  if (match) return servedDeepSeekMatch(model, provider, match, models);
   // A different provider may declare this very model.  That is a different
   // route (its own credentials, billing and quota), so it is never sent
   // silently in place of the one this bot routes through; it is named in the

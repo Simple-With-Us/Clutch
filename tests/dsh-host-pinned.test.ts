@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
   DSH_HOST_API_PATH,
+  DSH_HOST_ENDPOINT_NAMESPACES,
   DSH_HOST_EVENT_RESULT_ENDPOINT,
   DSH_HOST_EVENT_STREAM_ENDPOINT,
   DSH_HOST_MUX_PATH,
@@ -26,14 +27,64 @@ import {
 // =============================================================================
 
 const DSH_ROOT = resolve("node_modules/@deepseek-ai/dsh");
-const BUNDLED = join(DSH_ROOT, "node_modules/@deepseek-ai");
-const GATEWAY_TYPES = join(BUNDLED, "dsh-api-gateway/lib/types/stream-protocol.d.ts");
-const CONNECTION_TYPES = join(BUNDLED, "dsh-client-connection/lib/types/rpc.d.ts");
 
-/** Read an installed type file, failing loudly when the layout moved. */
+/**
+ * The version of the dsh build Clutch ships.
+ *
+ * Every `@deepseek-ai/*` package is released in lockstep with dsh, so the dsh
+ * version is the one that identifies the matching copy of a package.
+ */
+function installedDshVersion(): string {
+  const manifest = join(DSH_ROOT, "package.json");
+  if (!existsSync(manifest)) {
+    throw new Error(
+      "The installed dsh package is gone. The native client contract is asserted against " +
+        "the build Clutch ships, so a dsh bump that moves it must be reviewed by hand.",
+    );
+  }
+  return (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? "";
+}
+
+/**
+ * Every directory that may hold an installed `@deepseek-ai` package.
+ *
+ * The layout depends on the installer. npm nests a package's dependencies
+ * under it; pnpm keeps them in a content-addressed store and links to them.
+ * The contract is asserted against the build Clutch ships either way, so the
+ * test looks in both places and takes the copy whose version matches dsh's.
+ */
+function packageRoots(): string[] {
+  const roots = [
+    join(DSH_ROOT, "node_modules/@deepseek-ai"),
+    join("node_modules/@deepseek-ai"),
+  ];
+  const store = "node_modules/.pnpm";
+  if (existsSync(store)) {
+    for (const entry of readdirSync(store)) {
+      roots.push(join(store, entry, "node_modules/@deepseek-ai"));
+    }
+  }
+  return roots;
+}
+
+/** The installed directory of one `@deepseek-ai` package, or null. */
+function locatePackage(name: string): string | null {
+  const version = installedDshVersion();
+  for (const root of packageRoots()) {
+    const manifest = join(root, name, "package.json");
+    if (!existsSync(manifest)) continue;
+    const found = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version;
+    if (found === version) return join(root, name);
+  }
+  return null;
+}
+
+/** Read one file out of an installed `@deepseek-ai` package, failing loudly. */
 function readInstalled(relative: string): string {
-  const path = join(DSH_ROOT, "node_modules/@deepseek-ai", relative);
-  if (!existsSync(path)) {
+  const [name, ...rest] = relative.split("/");
+  const root = locatePackage(name);
+  const path = root ? join(root, ...rest) : "";
+  if (!root || !existsSync(path)) {
     throw new Error(
       `The installed dsh package no longer ships ${relative}. ` +
         "The native client contract is asserted against this file, so a dsh bump that " +
@@ -49,13 +100,62 @@ function declaredString(source: string, name: string): string | null {
   return match?.[1] ?? null;
 }
 
+/**
+ * The wire keys one session descriptor takes its parameters under.
+ *
+ * The installed build's descriptors look like
+ *
+ *     { id: '…#session/list', namespace: 'session', method: 'list',
+ *       parameters: [ { name: '_request', wire: '_request', source: 'json', … } ] }
+ *
+ * so the descriptor is found by its id and the wire keys are read from the
+ * parameter list.  An endpoint that declares no parameters at all has no
+ * wire key, and that is a contract of its own.  A layout this reader does not
+ * recognise fails with a message that says so, rather than passing on an
+ * empty answer.
+ */
+function descriptorWireKeys(source: string, method: string): string[] {
+  const blocks = source.split(/(?=\n\s*id: ')/);
+  const block = blocks.find((part) => part.includes(`#session/${method}'`));
+  if (!block) {
+    throw new Error(
+      `The installed dsh build no longer declares the session/${method} descriptor. ` +
+        "The host's argument envelope is asserted against that descriptor, so a dsh bump " +
+        "that renames or moves it must be reviewed by hand.",
+    );
+  }
+  if (!/namespace: 'session'/.test(block) || !block.includes(`method: '${method}'`)) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor no longer reads the way this ` +
+        "test reads it, so the wire key it declares cannot be asserted.",
+    );
+  }
+  const parameters = block.indexOf("parameters: [");
+  if (parameters < 0) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor declares no parameters, so the ` +
+        "wire key it takes cannot be asserted.",
+    );
+  }
+  const result = block.indexOf("result:", parameters);
+  const slice = block.slice(parameters, result < 0 ? undefined : result);
+  const wires = [...slice.matchAll(/wire: '([^']*)'/g)].map((match) => match[1]);
+  if (wires.length > 1) {
+    throw new Error(
+      `The installed dsh build's session/${method} descriptor declares ${wires.length} wire ` +
+        "keys, where this test expects exactly one.",
+    );
+  }
+  return wires;
+}
+
 describe("dsh host contract — pinned to the installed dsh build", () => {
   it("finds the bundled gateway types", () => {
-    expect(existsSync(GATEWAY_TYPES)).toBe(true);
+    expect(locatePackage("dsh-api-gateway")).not.toBeNull();
   });
 
   it("finds the bundled client-connection types", () => {
-    expect(existsSync(CONNECTION_TYPES)).toBe(true);
+    expect(locatePackage("dsh-client-connection")).not.toBeNull();
   });
 
   it("uses the mux path the installed gateway declares", () => {
@@ -86,5 +186,111 @@ describe("dsh host contract — pinned to the installed dsh build", () => {
     const source = readInstalled("dsh-client-connection/lib/types/rpc.d.ts");
     expect(source).toMatch(/type:\s*'server-response'/);
     expect(source).toMatch(/result:\s*ConnectionRpcResult/);
+  });
+
+  it("declares the endpoint namespaces the installed build dispatches", () => {
+    const source = readInstalled("dsh-api-remotes/lib/client.js");
+    const namespaces = new Set<string>();
+    for (const match of source.matchAll(/namespace:\s*"([A-Za-z0-9_$-]+)"/g)) {
+      namespaces.add(match[1]);
+    }
+    expect(namespaces.size).toBeGreaterThan(0);
+    expect([...namespaces].sort()).toEqual([...DSH_HOST_ENDPOINT_NAMESPACES].sort());
+  });
+
+  it("declares no namespace the host cannot dispatch", () => {
+    // A terminal, a job and a remotes namespace are all fiction: the terminal
+    // is a tool card, and jobs ride the session controller.
+    for (const fictional of ["terminal", "job", "remotes"]) {
+      expect(DSH_HOST_ENDPOINT_NAMESPACES as readonly string[]).not.toContain(fictional);
+    }
+  });
+
+  it("declares the mux frame union the native client decodes", () => {
+    const source = readInstalled("dsh-api-gateway/lib/types/stream-protocol.d.ts");
+    for (const frame of ["'open'", "'cancel'", "'item'", "'error'", "'end'"]) {
+      expect(source).toContain(frame);
+    }
+  });
+
+  it("declares the remote-event frames the approval relay reads", () => {
+    const source = readInstalled("dsh-api-gateway/lib/types/stream-protocol.d.ts");
+    // The relay reads the opening frame, the questions and the
+    // cancellations; a dsh bump that renames one of them has to be reviewed
+    // by hand before the sidecar is rebuilt.
+    for (const frame of ["'ready'", "'emit'", "'waterfall'", "'cancel'"]) {
+      expect(source).toContain(frame);
+    }
+    expect(source).toMatch(/type:\s*'waterfall'/);
+    expect(source).toMatch(/eventId:\s*RemoteEventId/);
+    expect(source).toMatch(/agentId:\s*RemoteEventAgentId/);
+  });
+
+  it("declares the remote-event answer the relay sends", () => {
+    const source = readInstalled("dsh-api-gateway/lib/types/stream-protocol.d.ts");
+    expect(source).toMatch(/clientId:\s*RemoteEventClientId/);
+    expect(source).toMatch(/kind:\s*'result'/);
+    expect(source).toMatch(/kind:\s*'next'/);
+    expect(source).toMatch(/kind:\s*'rejected'/);
+  });
+
+  it("declares the approval outcomes the host accepts", () => {
+    const source = readInstalled("dsh-user-approval/lib/types/index.js");
+    for (const outcome of ["allowed-once", "rejected", "cancelled", "unavailable"]) {
+      expect(source).toContain(`'${outcome}'`);
+    }
+  });
+
+  it("declares the approval event the relay answers", () => {
+    const source = readInstalled("dsh-api-remotes/lib/types/remote-events.js");
+    // The approval is forwarded as a waterfall, which is the shape the relay
+    // answers: the host waits for a decision instead of only telling.
+    expect(source).toMatch(/event:\s*['"]approval\/request['"]/);
+    expect(source).toMatch(/event:\s*['"]approval\/request['"],\s*mode:\s*['"]waterfall['"]/);
+  });
+
+  it("declares the endpoints the host turn drives", () => {
+    const source = readInstalled("dsh-api-session-controller/lib/typert.host.js");
+    for (const endpoint of ["selectModel", "modelCatalog", "prompt", "follow"]) {
+      expect(source).toContain(`'${endpoint}'`);
+    }
+    // The model selection is a provider and a model, and the host resolves
+    // the pair, so the sidecar sends both.
+    expect(source).toMatch(/'provider':\s*z\.string\(\)/);
+    expect(source).toMatch(/'model':\s*z\.string\(\)/);
+  });
+
+  it("declares the wire key every host argument rides in", () => {
+    const source = readInstalled("dsh-api-session-controller/lib/typert.host.js");
+    // The list is the one endpoint whose own argument is `_request`; every
+    // other argument the sidecar sends rides `request`.  The gateway refuses
+    // an argument set that does not match the descriptor exactly, so a dsh
+    // bump that renames one of these keys fails here instead of on a phone.
+    const expected: Record<string, string> = {
+      list: "_request",
+      create: "request",
+      selectModel: "request",
+      prompt: "request",
+      follow: "request",
+    };
+    for (const [method, wire] of Object.entries(expected)) {
+      expect(descriptorWireKeys(source, method)).toEqual([wire]);
+    }
+  });
+
+  it("declares the model catalog as an endpoint that takes no parameters", () => {
+    // The catalog is the one endpoint the sidecar asks for without a
+    // business object: the host publishes its own providers and models, so
+    // the request carries nothing at all.  The gateway refuses an argument
+    // set that does not match the descriptor exactly, so a dsh bump that
+    // gave the catalog a parameter would break the sidecar's call, and one
+    // that took it away would break it the other way.  Both installed faces
+    // are read: the sidecar is the client and the host is the server.
+    for (const face of [
+      "dsh-api-session-controller/lib/typert.host.js",
+      "dsh-api-session-controller/lib/typert.remote-client.js",
+    ]) {
+      expect(descriptorWireKeys(readInstalled(face), "modelCatalog")).toEqual([]);
+    }
   });
 });

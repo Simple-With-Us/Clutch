@@ -2,13 +2,13 @@
 
 ## Executive Summary
 
-To maximize developer ergonomics, protect local hardware, and optimize fleet economics, **all compute-intensive workloads for public repositories must be offloaded to free cloud infrastructure** — primarily GitHub Actions hosted runners (`ubuntu-latest` and `macos-15` / `macos-14`).  Local machines and local guest VMs should only perform fast pre-flight validation or handle tasks strictly requiring local resources.
+To maximize developer ergonomics, protect local hardware, and optimize fleet economics, **all compute-intensive workloads for public repositories must be offloaded to free cloud infrastructure** — primarily GitHub Actions hosted runners (`ubuntu-latest` and `macos-15` / `macos-14`).  Local machines and local guest VMs should only perform fast pre-flight validation or handle tasks strictly requiring local resources.
 
 ---
 
 ## 1. The Core Policy
 
-> **Standing Fleet Rule:** If a repository is **public**, all heavy build, compilation, test matrix, and visual verification workloads default to GitHub Actions hosted runners.&nbsp; Do not burn local CPU cycles, heat, or battery on long-running test suites or multi-architecture Xcode builds when GitHub provides free cloud compute.
+> **Standing Fleet Rule:** If a repository is **public**, all heavy build, compilation, test matrix, and visual verification workloads default to GitHub Actions hosted runners.  Do not burn local CPU cycles, heat, or battery on long-running test suites or multi-architecture Xcode builds when GitHub provides free cloud compute.
 
 ---
 
@@ -28,16 +28,16 @@ To maximize developer ergonomics, protect local hardware, and optimize fleet eco
 ## 3. Why Offloading Compute to GitHub Matters
 
 1. **Free for Public Repositories:**  
-   GitHub provides unlimited standard Linux (`ubuntu-latest`) runner minutes and free Apple Silicon macOS runners (`macos-14`, `macos-15`) for all public open-source repositories.&nbsp; Leveraging this compute costs \$0.00.
+   GitHub provides unlimited standard Linux (`ubuntu-latest`) runner minutes and free Apple Silicon macOS runners (`macos-14`, `macos-15`) for all public open-source repositories.  Leveraging this compute costs \$0.00.
 
 2. **Operator Focus & Zero Desktop Contention:**  
-   Running end-to-end tests or iOS Simulator tests locally inevitably risks popping up windows, stealing active keystrokes, or intercepting mouse events while the operator is coding or chatting.&nbsp; Offloading to GitHub cloud runners guarantees 100% uninterrupted local desktop focus.
+   Running end-to-end tests or iOS Simulator tests locally inevitably risks popping up windows, stealing active keystrokes, or intercepting mouse events while the operator is coding or chatting.  Offloading to GitHub cloud runners guarantees 100% uninterrupted local desktop focus.
 
 3. **Hardware Longevity & Battery Life:**  
-   Compiling large Swift or C++ targets, indexing DerivedData, and running headless browser clusters consumes substantial memory, spins thermal fans, and rapidly drains laptop battery.&nbsp; Cloud runners absorb this wear and tear.
+   Compiling large Swift or C++ targets, indexing DerivedData, and running headless browser clusters consumes substantial memory, spins thermal fans, and rapidly drains laptop battery.  Cloud runners absorb this wear and tear.
 
 4. **Guaranteed Clean-Room Reproducibility:**  
-   GitHub runners spin up ephemeral virtual machines for every single run.&nbsp; There is zero risk of stale caches, leftover temporary files, or environment drift masking build failures.
+   GitHub runners spin up ephemeral virtual machines for every single run.  There is zero risk of stale caches, leftover temporary files, or environment drift masking build failures.
 
 ---
 
@@ -83,7 +83,7 @@ Beyond GitHub Actions, the operator has access to three dedicated external agent
 
 ### The Offloading Threshold Rule (Avoid Coordination Overhead)
 
-> **The 2x Coordination Rule:** Never spend more time formatting, briefing, and babysitting an external offloaded agent than it would take to execute the task locally or on GitHub Actions.&nbsp; Small, interactive, or tightly coupled 1-step edits must stay in the local workspace.
+> **The 2x Coordination Rule:** Never spend more time formatting, briefing, and babysitting an external offloaded agent than it would take to execute the task locally or on GitHub Actions.  Small, interactive, or tightly coupled 1-step edits must stay in the local workspace.
 >
 > **When to Offload:**
 > - Batch media transcoding or large-scale file processing (>10GB).
@@ -98,11 +98,11 @@ Beyond GitHub Actions, the operator has access to three dedicated external agent
 Understanding provider billing structures and tiers is critical to maximize value without burning monthly resource budgets:
 
 - **Unmetered Cloud VMs (Meta Muse, Grok Bot, Instinct):**
-  These platforms decouple LLM token pricing from VM CPU runtime.&nbsp; Once a long-running process (e.g. ffmpeg, curl, python batch script) is spawned, the VM runs for hours or weeks at zero additional compute cost.&nbsp; They are the optimal target for massive background batch jobs.
+  These platforms decouple LLM token pricing from VM CPU runtime.  Once a long-running process (e.g. ffmpeg, curl, python batch script) is spawned, the VM runs for hours or weeks at zero additional compute cost.  They are the optimal target for massive background batch jobs.
 
 - **Cursor Cloud & Ultra Tier Utilization (Owner Preference):**
   - **Non-Coding Compute Warning:** Never route pure background batch tasks (e.g. video transcoding, heavy log crunching) through Cursor Cloud, as extra VM compute credits rapidly drain the monthly allocation.
-  - **Agentic Coding Workloads (Composer 2.5):** For agentic coding tasks, the owner subscribes to Cursor's **Ultra tier** with substantial monthly quota.&nbsp; The fleet has ample coding work to fully utilize this entire tier each month.
+  - **Agentic Coding Workloads (Composer 2.5):** For agentic coding tasks, the owner subscribes to Cursor's **Ultra tier** with substantial monthly quota.  The fleet has ample coding work to fully utilize this entire tier each month.
   - **Model Directive:** **Always select Composer 2.5 (or the newest available Composer model)** in Cursor to ensure maximum reasoning and coding capability while exhausting the monthly Ultra quota effectively.
 
 ---

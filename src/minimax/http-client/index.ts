@@ -13,7 +13,7 @@
 
 export const MINIMAX_DEFAULT_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_CHAT_COMPLETIONS_PATH = "/chat/completions";
-export const MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7-highspeed";
+export const MINIMAX_DEFAULT_MODEL = "MiniMax-M3.1-Flash";
 export const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
 export const MINIMAX_API_KEY_NAME_ENV = "CLUTCH_MINIMAX_API_KEY_NAME";
 

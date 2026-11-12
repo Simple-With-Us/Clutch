@@ -1,0 +1,17 @@
+# Native Session Workspace
+
+Clicking a Muse thread previews its recorded transcript without loading it into ACP or sending a prompt.  Choose Resume This Thread beside the composer to attach it for sending.  A missing or unsupported preview leaves an explicit Resume action available; it never silently takes ownership.  Renaming changes Clutch's sidebar title override and leaves the engine's session log untouched.
+
+The folder menu includes All Folders and ancestors of the selected working directory.  A chosen folder includes sessions in its descendants, using path-segment boundaries.  Load More expands the displayed page up to 1,000 rows; the sidecar bounds its discovery to 5,000 sessions.  Selecting another thread while a turn runs opens its preview in a separate Mac window.  Each window keeps its own transcript, selected host, draft and stream.  Open In New Window and New Thread In New Window are also available in the sidebar.  The app and sidecar prevent simultaneous sends to the same native thread, while independent threads can run concurrently with compatible host launch options.
+
+Muse model, provider and usage come from validated engine metadata and bounded reads of that host user's session logs.  Input, output and cached token counters are cumulative observations of unique provider usage records.  Partial reads are labelled as recorded totals, rather than complete lifetime totals.  Response tokens per second divides the engine's reported output count by its whole response duration, including provider and network latency.  Missing values remain unknown.
+
+Context occupancy is separate: only ACP's reported used-token count and context-window size populate it.  Cumulative token counts never fill the context meter.  Compact Context appears only after the resumed Muse thread advertises its compact command.  Optional early compaction asks Muse to compact before the next message at the selected reported threshold.  A failed compaction leaves the message unsent.  Muse still controls its own automatic compaction during a turn.
+
+Diagnostics correlate each Clutch turn with its native session ID.  Session snapshots use custom nonbilling attributes; they are not emitted as new per-call token usage.  Compaction records contain status only.  Prompts, tool arguments, transcript text and compaction summaries are excluded from telemetry.  Local retention and receiver acceptance do not prove Sentry receipt or Usage Monitor ledger ingestion; those delivery boundaries require separate verification.
+
+## Server Connections
+
+The native app connects to the server's Clutch HTTP sidecar, which owns a local stdio ACP connection to Muse.  A bare server URL does not provide the native chat credential.  Import the existing code-server pairing link from the sidecar service user's `$CLUTCH_HOME/server-pairing-link.txt` through the app's pairing flow.  The link contains a secret and must not be printed, posted or placed in a command argument.  Pairing and browsing do not send a model prompt.
+
+The sidecar service user's home determines which Muse sessions are visible.  A Mac's local session directory and a Linux user's session directory are independent.  Select the paired server host, select Muse Code, then choose a server working-directory path.  The HTTP sidecar's health and session-list routes must both pass authenticated checks before the connection is considered usable.

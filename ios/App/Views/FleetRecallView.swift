@@ -46,7 +46,10 @@ public struct FleetRecallView: View {
                 if recall.stats.isPlaceholder {
                     // No stats method is confirmed on this endpoint, so say that
                     // instead of showing invented counts.
-                    Text("Corpus counts are unavailable.  This endpoint doesn't serve a stats call.")
+                    Text(Copy.gap(
+                        "Corpus counts are unavailable.",
+                        "This endpoint doesn't serve a stats call."
+                    ))
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 } else {
@@ -108,7 +111,10 @@ public struct FleetRecallView: View {
                 ContentUnavailableView {
                     Label("No Lessons Matched", systemImage: "magnifyingglass")
                 } description: {
-                    Text("The corpus has nothing for this query.  Try different words or a narrower phrase.")
+                    Text(Copy.gap(
+                        "The corpus has nothing for this query.",
+                        "Try different words or a narrower phrase."
+                    ))
                 }
             }
             .listRowInsets(EdgeInsets())
@@ -330,7 +336,10 @@ struct ContributeRecallSheet: View {
     }
 
     private var lengthSummary: String {
-        "\(content.count) of \(RecallContributionDraft.maxTextLength) characters.  At least \(RecallContributionDraft.minTextLength) required."
+        Copy.gap(
+            "\(content.count) of \(RecallContributionDraft.maxTextLength) characters.",
+            "At least \(RecallContributionDraft.minTextLength) required."
+        )
     }
 
     private func submit() async {

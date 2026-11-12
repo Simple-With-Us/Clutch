@@ -40,12 +40,13 @@ export interface SanitizeOptions {
  * Known multimodal models in the fleet that natively accept image inputs.
  *
  * Matching is a case-insensitive substring test, so entries are discriminators
- * rather than exact ids.  `minimax-m3` also matches the M3.1 preview, which is
+ * rather than exact ids.  `minimax-m3` also matches the M3.1 rows, which are
  * multimodal too; it deliberately does not match the M2.7 family, which the
  * installed pi-ai catalog declares text-only.
  */
 export const MULTIMODAL_MODELS: readonly string[] = [
   "deepseek-v4.1-flash",
+  "minimax-m3.1-flash",
   "minimax-m3.1-flash-preview",
   "minimax-m3",
   "gpt-4o",

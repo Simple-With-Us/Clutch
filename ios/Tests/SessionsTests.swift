@@ -2,6 +2,151 @@ import XCTest
 @testable import Clutch
 
 final class AcpSessionTests: XCTestCase {
+    func testMuseLaunchPreferencesDefaultOnAndStayScopedToTheirHost() throws {
+        XCTAssertEqual(MuseLaunchOptions.defaults, MuseLaunchOptions(yolo: true, contributorMode: true))
+
+        let firstHost = MuseLaunchPreferences.setting(
+            MuseLaunchOptions(yolo: false, contributorMode: true),
+            hostKey: "host-a",
+            preferencesJSON: nil
+        )
+        XCTAssertEqual(
+            MuseLaunchPreferences.options(hostKey: "host-a", preferencesJSON: firstHost),
+            MuseLaunchOptions(yolo: false, contributorMode: true)
+        )
+        XCTAssertEqual(MuseLaunchPreferences.options(hostKey: "host-b", preferencesJSON: firstHost), .defaults)
+
+        let bothHosts = MuseLaunchPreferences.setting(
+            MuseLaunchOptions(yolo: false, contributorMode: false),
+            hostKey: "host-b",
+            preferencesJSON: firstHost
+        )
+        XCTAssertEqual(
+            MuseLaunchPreferences.options(hostKey: "host-a", preferencesJSON: bothHosts),
+            MuseLaunchOptions(yolo: false, contributorMode: true)
+        )
+        XCTAssertEqual(
+            MuseLaunchPreferences.options(hostKey: "host-b", preferencesJSON: bothHosts),
+            MuseLaunchOptions(yolo: false, contributorMode: false)
+        )
+    }
+
+    func testMuseOptionsAreSentOnlyForMuseRequests() throws {
+        let host = ClutchHost(name: "Test Host", origin: try XCTUnwrap(URL(string: "https://example.test")))
+        let options = MuseLaunchOptions(yolo: true, contributorMode: false)
+        let museClient = ChatSessionClient(
+            host: host,
+            model: "",
+            relayReceiverUid: "",
+            engine: "muse",
+            museOptions: options
+        )
+        let museBody = museClient.requestPayload(prompt: "hello")
+        let museOptions = try XCTUnwrap(museBody["museOptions"] as? [String: Bool])
+        XCTAssertEqual(museOptions, ["yolo": true, "contributorMode": false])
+        XCTAssertEqual(museBody["model"] as? String, "muse-spark-1.3-contributor")
+        var resumed = museClient
+        resumed.sessionId = "existing-session"
+        XCTAssertEqual(resumed.requestPayload(prompt: "hello")["model"] as? String, "")
+        var selected = museClient
+        selected.model = "muse-wonder-1.0-contributor"
+        XCTAssertEqual(selected.requestPayload(prompt: "hello")["model"] as? String, selected.model)
+
+        let otherClient = ChatSessionClient(
+            host: host,
+            model: "",
+            relayReceiverUid: "",
+            engine: "mcode",
+            museOptions: options
+        )
+        XCTAssertNil(otherClient.requestPayload(prompt: "hello")["museOptions"])
+    }
+
+    func testSessionLoadFailurePreservesLoginAndConflictReasons() throws {
+        for message in [
+            "Log in to Muse before opening a session.",
+            "This Muse thread is open in another process; choose another thread or wait until it is released."
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: ["error": message])
+            XCTAssertEqual(SessionsClient.loadFailure(status: 502, data: data).localizedDescription, message)
+        }
+        let invalid = SessionsClient.loadFailure(status: 502, data: Data("not JSON".utf8))
+        XCTAssertEqual(invalid.localizedDescription, ChatClientError.http(502).localizedDescription)
+        let unauthorized = try JSONSerialization.data(withJSONObject: ["error": "not logged in"])
+        XCTAssertEqual(SessionsClient.loadFailure(status: 401, data: unauthorized).localizedDescription, ChatClientError.http(401).localizedDescription)
+    }
+
+    func testMuseAuthenticationOnlyAcceptsSafeBrowserURLs() throws {
+        let valid = EngineAuthenticationAttempt(attemptId: "a", state: "waiting", url: "https://auth.meta.ai/device", message: "Enter the code", error: nil)
+        XCTAssertEqual(valid.verificationURL?.host, "auth.meta.ai")
+        for address in ["file:///etc/passwd", "javascript:alert(1)", "http://example.com", "https://user:password@example.com"] {
+            var attempt = valid
+            attempt.url = address
+            XCTAssertNil(attempt.verificationURL)
+        }
+        let payload = Data(#"{"attemptId":"a","state":"complete"}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(EngineAuthenticationAttempt.self, from: payload).state, "complete")
+        XCTAssertTrue(EngineAuthenticationAttempt.isRequired("log in to Muse before opening a session"))
+        XCTAssertTrue(EngineAuthenticationAttempt.isRequired(String(repeating: "x", count: 600) + " log in to Muse"))
+        XCTAssertTrue(EngineAuthenticationAttempt.isRequired("LOG IN TO MUSE"))
+        XCTAssertFalse(EngineAuthenticationAttempt.isRequired("Session already open"))
+    }
+
+    func testDecodesAPermissionRequestFromTheStream() throws {
+        let payload = """
+        {"requestId":"perm-7","title":"Run rm -rf build","toolName":"bash",
+         "options":[{"optionId":"allow-once","kind":"allow_once","name":"Allow once"},
+                    {"optionId":"reject-once","kind":"reject_once","name":"Reject"}]}
+        """
+        let event = ChatSessionClient.decode(event: "permission", payload: payload)
+        guard case .permission(let request) = event else {
+            return XCTFail("expected a permission event, got \(String(describing: event))")
+        }
+        XCTAssertEqual(request.requestId, "perm-7")
+        XCTAssertEqual(request.headline, "Run rm -rf build")
+        XCTAssertEqual(request.options.count, 2)
+        XCTAssertTrue(request.options[0].allows)
+        XCTAssertFalse(request.options[1].allows)
+    }
+
+    func testDecodesThePlanFromTheStream() throws {
+        let payload = """
+        {"entries":[{"content":"Read the failing test","priority":"high","status":"in_progress"},
+                    {"content":"Fix it","priority":"medium","status":"pending"}]}
+        """
+        let event = ChatSessionClient.decode(event: "plan", payload: payload)
+        guard case .plan(let entries) = event else {
+            return XCTFail("expected a plan event, got \(String(describing: event))")
+        }
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries[0].content, "Read the failing test")
+        XCTAssertTrue(entries[0].isActive)
+        XCTAssertFalse(entries[0].isDone)
+        XCTAssertFalse(entries[1].isActive)
+    }
+
+    func testDecodesRuntimeSteeringCapabilityFromTheStream() {
+        XCTAssertEqual(
+            ChatSessionClient.decode(event: "capabilities", payload: #"{"supportsSteering":true}"#),
+            .capabilities(supportsSteering: true)
+        )
+        XCTAssertEqual(
+            ChatSessionClient.decode(event: "capabilities", payload: #"{"supportsSteering":false}"#),
+            .capabilities(supportsSteering: false)
+        )
+        XCTAssertNil(ChatSessionClient.decode(event: "capabilities", payload: #"{}"#))
+    }
+
+    func testPermissionHeadlineFallsBackToTheToolName() {
+        let request = AcpPermissionRequest(
+            requestId: "perm-1",
+            title: "  ",
+            toolName: "write_file",
+            options: []
+        )
+        XCTAssertEqual(request.headline, "write_file")
+    }
+
     func testDecodesSidecarSessionPayload() throws {
         let json = """
         {"sessions":[{"sessionId":"s-1","cwd":"/Users/jay/lanes/foo","title":"Fix the flaky test","updatedAt":"2026-10-16T09:41:07.412Z"}]}
@@ -15,6 +160,56 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertEqual(session.title, "Fix the flaky test")
         XCTAssertEqual(session.id, "s-1")
         XCTAssertNotNil(session.updated)
+    }
+
+    func testMuseDetailsResponseRequiresReadOnlyAndMatchingSessionIdentity() throws {
+        let data = Data(#"{"readOnly":true,"sessionId":"muse-1","cwd":"/srv/work","title":"Thread","model":"muse-spark-1.3-contributor","provider":"meta","usage":{"model":"muse-spark-1.3-contributor","provider":"meta","inputTokens":10,"outputTokens":2,"totalTokens":12,"responseTokensPerSecond":12.5,"contextWindow":1000,"contextUsedTokens":400}}"#.utf8)
+        let details = try SessionsClient.decodeDetailsResponse(data, expectedSessionId: "muse-1")
+
+        XCTAssertEqual(details.sessionId, "muse-1")
+        XCTAssertEqual(details.cwd, "/srv/work")
+        XCTAssertEqual(details.model, "muse-spark-1.3-contributor")
+        XCTAssertEqual(details.provider, "meta")
+        XCTAssertEqual(details.usage?.responseTokensPerSecond, 12.5)
+
+        let wrongIdentity = Data(#"{"readOnly":true,"sessionId":"other"}"#.utf8)
+        XCTAssertThrowsError(try SessionsClient.decodeDetailsResponse(wrongIdentity, expectedSessionId: "muse-1"))
+
+        let notReadOnly = Data(#"{"readOnly":false,"sessionId":"muse-1"}"#.utf8)
+        XCTAssertThrowsError(try SessionsClient.decodeDetailsResponse(notReadOnly, expectedSessionId: "muse-1"))
+    }
+
+    func testMuseDetailsMergeUsesDetailsAndKeepsSummaryFallbacks() throws {
+        let summary = AcpSessionInfo(
+            sessionId: "muse-1",
+            cwd: "/srv/summary",
+            title: "Summary title",
+            updatedAt: "2026-11-03T12:00:00Z",
+            provider: "summary-provider",
+            model: "summary-model",
+            usage: AcpSessionUsage(inputTokens: 9, outputTokens: 2),
+            projectId: "project-1",
+            archived: false
+        )
+        let details = AcpSessionInfo(
+            sessionId: "muse-1",
+            title: "Detailed title",
+            model: "detail-model"
+        )
+
+        let merged = try XCTUnwrap(SessionsClient.mergeDetails(details, into: summary))
+        XCTAssertEqual(merged.title, "Detailed title")
+        XCTAssertEqual(merged.cwd, "/srv/summary")
+        XCTAssertEqual(merged.model, "detail-model")
+        XCTAssertEqual(merged.provider, "summary-provider")
+        XCTAssertEqual(merged.usage?.outputTokens, 2)
+        XCTAssertEqual(merged.usage?.inputTokens, 9)
+        XCTAssertEqual(merged.usage?.model, "detail-model")
+        XCTAssertEqual(merged.projectId, "project-1")
+        XCTAssertEqual(merged.archived, false)
+        XCTAssertEqual(merged.updatedAt, summary.updatedAt)
+
+        XCTAssertNil(SessionsClient.mergeDetails(AcpSessionInfo(sessionId: "other"), into: summary))
     }
 
     func testDisplayTitleFallsBackToWorkspaceThenUntitled() {
@@ -31,15 +226,26 @@ final class AcpSessionTests: XCTestCase {
     func testUpdatedDateToleratesBothISO8601Forms() {
         let fractional = AcpSessionInfo.updatedDate("2026-10-16T09:41:07.412Z")
         let plain = AcpSessionInfo.updatedDate("2026-10-16T09:41:07Z")
+        let offset = AcpSessionInfo.updatedDate("2026-10-16T11:41:07.412+02:00")
         XCTAssertNotNil(fractional)
         XCTAssertNotNil(plain)
+        XCTAssertNotNil(offset)
         // Both forms name the same wall-clock second, and the fractional one
         // simply carries the extra precision, so they land well inside a
         // second of each other rather than in different minutes or days.
         XCTAssertEqual(fractional?.timeIntervalSince1970 ?? 0, plain?.timeIntervalSince1970 ?? -1, accuracy: 1.0)
+        XCTAssertEqual(fractional?.timeIntervalSince1970 ?? 0, offset?.timeIntervalSince1970 ?? -1, accuracy: 0.001)
         XCTAssertNil(AcpSessionInfo.updatedDate(nil))
         XCTAssertNil(AcpSessionInfo.updatedDate(""))
         XCTAssertNil(AcpSessionInfo.updatedDate("not a date"))
+    }
+
+    func testUpdatedDateCacheUsesCurrentTimestampAfterMutation() throws {
+        var session = AcpSessionInfo(sessionId: "s", updatedAt: "2026-10-15T09:00:00Z")
+        let first = try XCTUnwrap(session.updated)
+        session.updatedAt = "2026-10-16T09:00:00Z"
+        let second = try XCTUnwrap(session.updated)
+        XCTAssertEqual(second.timeIntervalSince(first), 86_400, accuracy: 0.001)
     }
 
     func testHistoryVisibilityKeepsConversationAndDropsToolChatter() {
@@ -52,6 +258,364 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(entry("thought").isVisible)
         XCTAssertTrue(entry("user_message").isUser)
         XCTAssertFalse(entry("assistant_message").isUser)
+    }
+
+    /// The sidecar replays ACP chunk kinds; if those are filtered out the
+    /// phone transcript renders blank even though the thread loaded.
+    func testHistoryVisibilityAcceptsReplayedChunkKinds() {
+        func entry(_ kind: String) -> AcpHistoryEntry {
+            AcpHistoryEntry(sessionId: "s", kind: kind, text: "t")
+        }
+        XCTAssertTrue(entry("user_message_chunk").isVisible)
+        XCTAssertTrue(entry("agent_message_chunk").isVisible)
+        XCTAssertTrue(entry("user_message_chunk").isUser)
+        XCTAssertFalse(entry("agent_message_chunk").isUser)
+        XCTAssertFalse(entry("agent_thought_chunk").isVisible)
+    }
+
+    func testFilteredMatchesTitleCwdAndIdCaseInsensitively() {
+        let a = AcpSessionInfo(sessionId: "s-1", cwd: "/srv/Clutch", title: "Fix Login")
+        let b = AcpSessionInfo(sessionId: "s-2", cwd: "/srv/other", title: "Write Docs")
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "login").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "CLUTCH").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "s-2").map(\.sessionId), ["s-2"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "  ").count, 2)
+        XCTAssertTrue(AcpSessionInfo.filtered([a, b], query: "nope").isEmpty)
+    }
+
+    func testFilteredAlsoMatchesModelProviderAndProject() {
+        let a = AcpSessionInfo(
+            sessionId: "s-1",
+            title: "One",
+            usage: AcpSessionUsage(provider: "minimax", model: "MiniMax-M3"),
+            projectId: "proj-clutch"
+        )
+        let b = AcpSessionInfo(sessionId: "s-2", title: "Two")
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "m3").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "MINIMAX").map(\.sessionId), ["s-1"])
+        XCTAssertEqual(AcpSessionInfo.filtered([a, b], query: "proj-clutch").map(\.sessionId), ["s-1"])
+    }
+
+    func testToolHistoryEntriesAreMarkedForCards() {
+        let entry = AcpHistoryEntry(sessionId: "s", kind: "tool_call", text: "Read file", toolCallId: "t1", toolStatus: "completed")
+        XCTAssertTrue(entry.isTool)
+        XCTAssertFalse(entry.isVisible)
+        let plain = AcpHistoryEntry(sessionId: "s", kind: "agent_message_chunk", text: "hi")
+        XCTAssertFalse(plain.isTool)
+        XCTAssertNil(plain.toolCallId)
+    }
+
+    func testGroupedFloatsPinnedAboveDateBuckets() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let pinned = AcpSessionInfo(sessionId: "old-but-pinned", updatedAt: "2026-09-01T12:00:00Z")
+        let today = AcpSessionInfo(sessionId: "today", updatedAt: "2026-10-16T08:00:00Z")
+        let now = try XCTUnwrap(AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z"))
+        // The calendar is pinned, so the bucket this thread lands in does not
+        // depend on the timezone of the machine running the test.
+        let groups = AcpSessionInfo.grouped([pinned, today], pinned: ["old-but-pinned"], now: now, calendar: calendar)
+        XCTAssertEqual(groups.map(\.title), ["Pinned", "Today"])
+        XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["old-but-pinned"])
+    }
+
+    func testTranscriptExportRendersRolesAndTools() {
+        let markdown = TranscriptExport.markdown(
+            title: "Fix Login",
+            cwd: "/srv/app",
+            entries: [
+                TranscriptExport.Entry(role: .user, text: "Fix it"),
+                TranscriptExport.Entry(role: .tool, text: "Read file"),
+                TranscriptExport.Entry(role: .assistant, text: "Done"),
+            ],
+            exportedAt: Date(timeIntervalSince1970: 0)
+        )
+        XCTAssertTrue(markdown.contains("# Fix Login"))
+        XCTAssertTrue(markdown.contains("## You"))
+        XCTAssertTrue(markdown.contains("**Tool:** Read file"))
+        XCTAssertTrue(markdown.contains("## Assistant"))
+    }
+
+    func testGroupedBucketsByRecencyAndSinksUndated() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let now = try XCTUnwrap(AcpSessionInfo.updatedDate("2026-10-16T12:00:00Z"))
+        func session(_ id: String, _ stamp: String?) -> AcpSessionInfo {
+            AcpSessionInfo(sessionId: id, updatedAt: stamp)
+        }
+        let groups = AcpSessionInfo.grouped([
+            session("older", "2026-09-01T12:00:00Z"),
+            session("today", "2026-10-16T08:00:00Z"),
+            session("undated", nil),
+            session("week", "2026-10-12T12:00:00Z"),
+            session("yesterday", "2026-10-15T12:00:00Z"),
+        ], now: now, calendar: calendar)
+        XCTAssertEqual(groups.map(\.title), ["Today", "Yesterday", "Previous 7 Days", "Older", "Undated"])
+        XCTAssertEqual(groups.first?.sessions.map(\.sessionId), ["today"])
+        XCTAssertEqual(groups.last?.sessions.map(\.sessionId), ["undated"])
+    }
+
+    func testEngineCatalogDecodesTheSidecarCatalog() throws {
+        let json = """
+        {"engines":[
+          {"id":"muse","label":"Muse Code","available":true,
+           "models":[{"id":"muse-wonder-1.0","label":"Muse Wonder 1.0","value":"muse-wonder-1.0","contextWindow":1007997}],
+           "effortLevels":["none","high","max"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
+          {"id":"mcode","label":"MiniMax Code","available":false,"models":[],"effortLevels":[],"effortConfigId":"thinkingEffort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        XCTAssertEqual(catalog.engines.count, 2)
+        XCTAssertEqual(catalog.availableEngines.map(\.id), ["muse"])
+        XCTAssertEqual(catalog.defaultEngineId, "muse")
+
+        let muse = try XCTUnwrap(catalog.descriptor("muse"))
+        XCTAssertTrue(muse.supportsThreads)
+        let contributorIDs = [
+            "muse-spark-1.3-contributor",
+            "muse-wonder-1.0-contributor",
+            "muse-wonder-full-1.0-contributor",
+        ]
+        XCTAssertEqual(muse.models.map(\.id), contributorIDs)
+        XCTAssertEqual(muse.models.map(\.value), contributorIDs)
+        XCTAssertEqual(muse.models.map(\.displayLabel), [
+            "Muse Spark 1.3 Contributor",
+            "Muse Wonder 1.0 Contributor",
+            "Muse Wonder Full 1.0 Contributor",
+        ])
+        XCTAssertNil(catalog.model(engineId: "muse", modelId: "muse-wonder-1.0"))
+        XCTAssertNotNil(catalog.model(engineId: "muse", modelId: "muse-wonder-1.0-contributor"))
+        XCTAssertEqual(muse.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
+        XCTAssertEqual(muse.effortConfigId, "reasoningEffort")
+
+        let emptyCatalogJSON = #"{"engines":[{"id":"muse","label":"Muse Code","available":true,"models":[],"effortLevels":[],"effortConfigId":"reasoningEffort","modelConfigId":"model"}]}"#
+        let emptyMuse = try XCTUnwrap(JSONDecoder().decode(EngineCatalog.self, from: Data(emptyCatalogJSON.utf8)).descriptor("muse"))
+        // The model list still falls back to the documented contributor ids, but
+        // a host that advertises no effort levels keeps the effort control
+        // hidden, so the menu stays empty (see docs/muse-contributor-options.md).
+        XCTAssertEqual(emptyMuse.models.map(\.id), contributorIDs)
+        XCTAssertEqual(emptyMuse.effortLevels, [])
+
+        let mcode = try XCTUnwrap(catalog.descriptor("mcode"))
+        XCTAssertFalse(mcode.available)
+        XCTAssertTrue(mcode.supportsThreads)
+    }
+
+    func testEngineCatalogPreservesMetadataForExactMuseContributorModels() throws {
+        let json = """
+        {"engines":[
+          {"id":"muse","label":"Muse Code","available":true,
+           "models":[
+             {"id":"muse-spark-1.3-contributor","label":"Old label","value":"muse-model:[\\"meta\\",\\"tbh\\",\\"muse-spark-1.3-contributor\\"]","contextWindow":1007997,"images":true},
+             {"id":"muse-wonder-1.0","label":"Muse Wonder 1.0","value":"muse-wonder-1.0","contextWindow":999999}
+           ],
+           "effortLevels":["max"],"effortConfigId":"reasoningEffort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        let muse = try XCTUnwrap(catalog.descriptor("muse"))
+        let spark = try XCTUnwrap(muse.models.first { $0.id == "muse-spark-1.3-contributor" })
+        XCTAssertEqual(spark.label, "Muse Spark 1.3 Contributor")
+        XCTAssertEqual(spark.value, "muse-spark-1.3-contributor")
+        XCTAssertEqual(spark.contextWindow, 1_007_997)
+        XCTAssertEqual(spark.images, true)
+        XCTAssertNil(muse.models.first { $0.id == "muse-wonder-1.0" })
+        XCTAssertEqual(muse.models.map(\.id).count, 3)
+        XCTAssertEqual(muse.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
+    }
+
+    func testEngineCatalogReadsThePublishedThreadCapability() throws {
+        // The sidecar publishes which engines list their threads, so the app
+        // never hardcodes it.
+        let json = """
+        {"engines":[
+          {"id":"deepseek","label":"DeepSeek","available":true,"supportsThreads":true,
+           "models":[],"effortLevels":["high"],"effortConfigId":"reasoning_effort","modelConfigId":"model"},
+          {"id":"minimax","label":"MiniMax","available":true,"supportsThreads":false,
+           "models":[],"effortLevels":[],"effortConfigId":"reasoning_effort","modelConfigId":"model"}
+        ]}
+        """
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+        let deepseek = try XCTUnwrap(catalog.descriptor("deepseek"))
+        XCTAssertTrue(deepseek.supportsThreads)
+        let minimax = try XCTUnwrap(catalog.descriptor("minimax"))
+        XCTAssertFalse(minimax.supportsThreads)
+    }
+
+    func testEngineCatalogNormalizesEffortChoicesAndKeepsMaxForNonContributors() throws {
+        let json = #"""
+        {"engines":[
+          {"id":"muse","label":"Muse Code","available":true,"models":[],"effortLevels":["none","ultra","max"],"effortConfigId":"reasoningEffort","modelConfigId":"model"},
+          {"id":"deepseek","label":"DeepSeek","available":true,"models":[],"effortLevels":["none","low","ultra","max"],"effortConfigId":"reasoning_effort","modelConfigId":"model"},
+          {"id":"minimax","label":"MiniMax","available":true,"models":[],"effortLevels":[],"effortConfigId":"reasoning_effort","modelConfigId":"model"}
+        ]}
+        """#
+        let catalog = try JSONDecoder().decode(EngineCatalog.self, from: Data(json.utf8))
+
+        XCTAssertEqual(catalog.descriptor("muse")?.effortLevels, ["minimal", "low", "medium", "high", "xhigh"])
+        XCTAssertEqual(catalog.descriptor("deepseek")?.effortLevels, ["minimal", "low", "medium", "high", "xhigh", "max"])
+        XCTAssertEqual(catalog.descriptor("minimax")?.effortLevels, [])
+    }
+
+    func testModelVisibilityDefaultsMuseToContributorModelsAndOtherEnginesToAll() {
+        let models = [
+            EngineModel(id: "muse-spark-1.3", label: "Spark", value: "wire-spark"),
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
+            EngineModel(id: "provider/muse-spark-1.3-contributor", label: "Qualified", value: "wire-qualified"),
+        ]
+
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: nil).map(\.id),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: models, engineID: "minimax", hostKey: "host-a", preferencesJSON: nil),
+            models
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: nil).map(\.value),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: [], engineID: "muse", hostKey: "empty-host", preferencesJSON: nil).map(\.id),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+        let legacyPreferences = #"{"hosts":{"old-host":{"muse":["muse-wonder-1.0","provider/muse-spark-1.3-contributor"]}}}"#
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: [models[0]], engineID: "muse", hostKey: "old-host", preferencesJSON: legacyPreferences).map(\.id),
+            ["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+    }
+
+    func testModelVisibilityPreferencesAreIsolatedAndCanPersistAnEmptySelection() {
+        let models = [
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
+        ]
+        var preferences: String? = nil
+        for model in models {
+            preferences = ModelVisibilityPreferences.settingVisible(
+                false,
+                modelID: model.id,
+                all: models,
+                engineID: "muse",
+                hostKey: "host-a",
+                preferencesJSON: preferences
+            )
+        }
+
+        XCTAssertEqual(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences), Set<String>())
+        XCTAssertEqual(ModelVisibilityPreferences.visibleModels(all: models, engineID: "muse", hostKey: "host-a", preferencesJSON: preferences), [])
+        XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-b", preferencesJSON: preferences))
+        XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "minimax", hostKey: "host-a", preferencesJSON: preferences))
+    }
+
+    func testModelVisibilityMutationRetainsUnavailableModelIDs() {
+        let currentModels = [
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
+        ]
+        var preferences = ModelVisibilityPreferences.settingVisible(
+            true,
+            modelID: "muse-future-contributor",
+            all: currentModels,
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: nil
+        )
+        preferences = ModelVisibilityPreferences.settingVisible(
+            false,
+            modelID: "muse-spark-1.3-contributor",
+            all: currentModels,
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+
+        XCTAssertEqual(
+            ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences),
+            Set(["muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor", "muse-future-contributor"])
+        )
+        XCTAssertEqual(
+            ModelVisibilityPreferences.visibleModels(all: currentModels, engineID: "muse", hostKey: "host-a", preferencesJSON: preferences).map(\.id),
+            ["muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"]
+        )
+    }
+
+    func testModelVisibilityRestoreDefaultsRemovesOnlyTheRequestedScope() {
+        let models = [
+            EngineModel(id: "muse-spark-1.3-contributor", label: "Spark Contributor", value: "wire-spark-contributor"),
+            EngineModel(id: "muse-wonder-1.0-contributor", label: "Wonder Contributor", value: "wire-wonder-contributor"),
+            EngineModel(id: "muse-wonder-full-1.0-contributor", label: "Wonder Full Contributor", value: "wire-wonder-full-contributor"),
+        ]
+        var preferences: String? = nil
+        preferences = ModelVisibilityPreferences.settingVisible(
+            false,
+            modelID: "muse-spark-1.3-contributor",
+            all: models,
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+        preferences = ModelVisibilityPreferences.settingVisible(
+            true,
+            modelID: "muse-spark-1.3-contributor",
+            all: models,
+            engineID: "muse",
+            hostKey: "host-b",
+            preferencesJSON: preferences
+        )
+        preferences = ModelVisibilityPreferences.settingVisible(
+            false,
+            modelID: "muse-spark-1.3-contributor",
+            all: models,
+            engineID: "minimax",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+
+        preferences = ModelVisibilityPreferences.restoringDefaultsJSON(
+            engineID: "muse",
+            hostKey: "host-a",
+            preferencesJSON: preferences
+        )
+
+        XCTAssertNil(ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-a", preferencesJSON: preferences))
+        XCTAssertEqual(
+            ModelVisibilityPreferences.selectedModelIDs(engineID: "muse", hostKey: "host-b", preferencesJSON: preferences),
+            Set(["muse-spark-1.3-contributor", "muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"])
+        )
+        // The other engine's own scope on the same host is untouched by the
+        // muse reset: it keeps every model the user did not hide there.
+        XCTAssertEqual(
+            ModelVisibilityPreferences.selectedModelIDs(engineID: "minimax", hostKey: "host-a", preferencesJSON: preferences),
+            Set(["muse-wonder-1.0-contributor", "muse-wonder-full-1.0-contributor"])
+        )
+    }
+
+    func testEngineLabelsCoverEveryEngine() {
+        XCTAssertEqual(EngineLabels.label(for: "deepseek"), "DeepSeek")
+        XCTAssertEqual(EngineLabels.label(for: "minimax"), "MiniMax")
+        XCTAssertEqual(EngineLabels.label(for: "mcode"), "MiniMax Code")
+        XCTAssertEqual(EngineLabels.label(for: "muse"), "Muse Code")
+        XCTAssertEqual(EngineLabels.label(for: "something-new"), "something-new")
+    }
+
+    func testPinStoreTogglesPerHost() {
+        let name = "PinStoreTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        let hostA = UUID()
+        let hostB = UUID()
+        XCTAssertFalse(ThreadPinStore.isPinned("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertTrue(ThreadPinStore.toggle("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertTrue(ThreadPinStore.isPinned("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertFalse(ThreadPinStore.isPinned("s-1", forHost: hostB, defaults: defaults))
+        XCTAssertFalse(ThreadPinStore.toggle("s-1", forHost: hostA, defaults: defaults))
+        XCTAssertTrue(ThreadPinStore.pinnedIDs(forHost: hostA, defaults: defaults).isEmpty)
     }
 
     /// The Mac rail and the iOS sidebar share this ordering, so a thread must

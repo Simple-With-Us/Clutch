@@ -8,9 +8,8 @@ import Observation
 /// pairing a device already has is all the authorization this panel needs: the
 /// bearer token never leaves the device and never reaches a log here.
 ///
-/// A client secret passed to `saveIdentity` is forwarded once and dropped.  It
-/// is never logged, never put in an error message, and never read back — the
-/// server answers with `hasClientSecret` and a client-id hint instead.
+/// Service tokens passed to `saveCredentials` are forwarded once and dropped.
+/// They are never logged or read back — the server reports presence only.
 public struct InfisicalSettingsClient {
     public var host: ClutchHost
 
@@ -20,7 +19,7 @@ public struct InfisicalSettingsClient {
 
     private static let path = "/clutch/v1/infisical"
 
-    /// Reads the redacted identity summary and the managed-key inventory.
+    /// Reads the redacted service-token summary and the managed-key inventory.
     public func fetch() async throws -> InfisicalSettingsSnapshot {
         let request = try authorized(url())
         let (data, response) = try await send(request)
@@ -28,19 +27,20 @@ public struct InfisicalSettingsClient {
         return try decodeSnapshot(data)
     }
 
-    /// Saves the machine identity to `$CLUTCH_HOME/infisical.json`.  An empty
-    /// `clientSecret` keeps the stored secret; the Mac merges it.
+    /// Saves service tokens to `$CLUTCH_HOME/infisical.json`.  Empty token
+    /// fields keep their stored values; the Mac merges them.
     @discardableResult
-    public func saveIdentity(
+    public func saveCredentials(
         projectId: String,
-        clientId: String,
-        clientSecret: String
+        readToken: String,
+        writeToken: String,
+        clearWriteToken: Bool
     ) async throws -> InfisicalSettingsSnapshot {
-        // Built as a dictionary so an omitted-or-empty secret is simply absent
-        // rather than a value the Mac might take literally.
-        var identity: [String: String] = ["projectId": projectId, "clientId": clientId]
-        if !clientSecret.isEmpty { identity["clientSecret"] = clientSecret }
-        return try await put(["identity": identity])
+        var credentials: [String: Any] = ["projectId": projectId]
+        if !readToken.isEmpty { credentials["readToken"] = readToken }
+        if !writeToken.isEmpty { credentials["writeToken"] = writeToken }
+        if clearWriteToken { credentials["clearWriteToken"] = true }
+        return try await put(["credentials": credentials])
     }
 
     /// Writes one managed setting through to Infisical.
@@ -144,23 +144,24 @@ public struct InfisicalSettingsClient {
 final class InfisicalSettingsModel {
     private(set) var snapshot: InfisicalSettingsSnapshot?
     private(set) var isLoading = false
-    private(set) var isSavingIdentity = false
+    private(set) var isSavingCredentials = false
     private(set) var isSavingSetting = false
     /// Set when the first load failed and there is nothing to show yet.
     private(set) var loadErrorText: String?
     /// Set by the most recent save that failed.
     private(set) var actionErrorText: String?
     private(set) var statusText: String?
-    /// True once an identity save came back needing a restart.  Managed-setting
+    /// True once a credential save came back needing a restart.  Managed-setting
     /// writes stay blocked until the operator reloads after restarting the Mac,
     /// because the running process is still holding the old credentials.
     private(set) var needsRestart = false
 
-    // Machine identity editor.  The secret is only ever what the operator just
-    // typed; it is cleared as soon as it has been saved.
+    // Service-token editor. Values are only what the operator just typed and
+    // are cleared as soon as they have been saved.
     var projectId = ""
-    var clientId = ""
-    var clientSecret = ""
+    var readToken = ""
+    var writeToken = ""
+    var clearWriteToken = false
 
     // Managed setting editor.
     var selectedKey = ""
@@ -180,41 +181,45 @@ final class InfisicalSettingsModel {
         return !token.isEmpty
     }
 
-    var identity: InfisicalIdentity? { snapshot?.identity }
+    var credentials: InfisicalCredentialsSummary? { snapshot?.credentials }
 
-    var hasStoredClientSecret: Bool { identity?.hasClientSecret ?? false }
+    var hasStoredReadToken: Bool { credentials?.hasReadToken ?? false }
+    var hasStoredWriteToken: Bool { credentials?.hasWriteToken ?? false }
 
     var selectedSetting: InfisicalManagedKey? {
         guard let keys = snapshot?.keys else { return nil }
         return keys.first { $0.key == selectedKey }
     }
 
-    var isIdentityDirty: Bool {
-        guard let identity else { return !(projectId.isEmpty && clientId.isEmpty && clientSecret.isEmpty) }
-        return projectId.trimmed != identity.projectId
-            || clientId.trimmed != identity.clientId
-            || !clientSecret.trimmed.isEmpty
+    var isCredentialsDirty: Bool {
+        guard let credentials else { return !(projectId.isEmpty && readToken.isEmpty && writeToken.isEmpty) }
+        return projectId.trimmed != credentials.projectId
+            || !readToken.trimmed.isEmpty
+            || !writeToken.trimmed.isEmpty
+            || clearWriteToken
     }
 
-    /// The Mac merges an empty secret, so this only needs a new one when there
-    /// is no stored secret to keep.
-    var canSaveIdentity: Bool {
-        guard !isSavingIdentity, identity != nil else { return false }
-        guard !projectId.trimmed.isEmpty, !clientId.trimmed.isEmpty else { return false }
-        if clientSecret.trimmed.isEmpty && !hasStoredClientSecret { return false }
-        return isIdentityDirty
+    var canSaveCredentials: Bool {
+        guard !isSavingCredentials, credentials != nil else { return false }
+        guard !projectId.trimmed.isEmpty else { return false }
+        if readToken.trimmed.isEmpty && !hasStoredReadToken { return false }
+        return isCredentialsDirty
     }
 
     var canSaveSetting: Bool {
-        guard !isSavingSetting, !needsRestart, let entry = selectedSetting else { return false }
+        guard !isSavingSetting, !needsRestart, credentials?.hasWriteToken == true, let entry = selectedSetting else { return false }
         // An empty secret is a real value to the Mac, not a no-op, so saving one
         // would wipe the key.  A non-secret may be cleared deliberately.
         if entry.kind == .secret && settingValue.trimmed.isEmpty { return false }
         return !settingValue.isEmpty || entry.kind != .secret
     }
 
-    var clientSecretPlaceholder: String {
-        hasStoredClientSecret ? "Saved — Enter to Replace" : "Enter Client Secret"
+    var readTokenPlaceholder: String {
+        hasStoredReadToken ? "Saved — Enter to Replace" : "Enter Read Service Token"
+    }
+
+    var writeTokenPlaceholder: String {
+        hasStoredWriteToken ? "Saved — Enter to Replace" : "Enter Separate Write Token"
     }
 
     func secretValuePlaceholder(for entry: InfisicalManagedKey) -> String {
@@ -255,25 +260,28 @@ final class InfisicalSettingsModel {
         await load()
     }
 
-    func saveIdentity() async {
-        guard hasHost, canSaveIdentity else { return }
-        isSavingIdentity = true
+    func saveCredentials() async {
+        guard hasHost, canSaveCredentials else { return }
+        isSavingCredentials = true
         actionErrorText = nil
         statusText = nil
-        defer { isSavingIdentity = false }
+        defer { isSavingCredentials = false }
         do {
-            let snapshot = try await InfisicalSettingsClient(host: host!).saveIdentity(
+            let snapshot = try await InfisicalSettingsClient(host: host!).saveCredentials(
                 projectId: projectId.trimmed,
-                clientId: clientId.trimmed,
-                clientSecret: clientSecret.trimmed
+                readToken: readToken.trimmed,
+                writeToken: writeToken.trimmed,
+                clearWriteToken: clearWriteToken
             )
-            // The secret now lives on the Mac; keep no copy of it here.
-            clientSecret = ""
+            // The tokens now live on the Mac; keep no copy in this view model.
+            readToken = ""
+            writeToken = ""
+            clearWriteToken = false
             apply(snapshot, replaceEditor: false)
             needsRestart = snapshot.restartRequired
             statusText = snapshot.restartRequired
-                ? Copy.gap("Machine identity saved on the Mac.", "Clutch must restart there to use the new credentials.")
-                : "Machine identity saved on the Mac."
+                ? Copy.gap("Service tokens saved on the Mac.", "Clutch must restart there to use the new tokens.")
+                : "Service tokens saved on the Mac."
         } catch {
             actionErrorText = Self.message(for: error)
         }
@@ -316,8 +324,7 @@ final class InfisicalSettingsModel {
         self.snapshot = snapshot
 
         if replaceEditor {
-            projectId = snapshot.identity.projectId
-            clientId = snapshot.identity.clientId
+            projectId = snapshot.credentials.projectId
         }
 
         let keys = snapshot.keys

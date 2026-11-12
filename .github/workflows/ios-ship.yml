@@ -23,9 +23,11 @@ name: iOS TestFlight ship (GitHub-hosted macOS)
 #
 # NOT EVERY TICK SHIPS.  A cron carries no `paths:` filter, so the scheduled
 # path is guarded twice:
-#   1. scripts/ios-fleet/scheduled-ship-gate.sh refuses to try unless ios/
-#      actually changed between the last successful ship's sha and HEAD.  It
-#      reads that sha from ~/.cache/ios-fleet, which a hosted runner starts
+#   1. scripts/ios-fleet/scheduled-ship-gate.sh replays the on.push.paths set
+#      below (passed as one --path-prefix each, pinned equal by
+#      tests/ios-ship-workflow.test.ts) and refuses to try unless one of those
+#      paths actually changed between the last successful ship's sha and HEAD.
+#      It reads that sha from ~/.cache/ios-fleet, which a hosted runner starts
 #      without, so the cache restore/save steps below carry it between runs.  No
 #      recorded ship means the tick skips; a first ship is a push or a dispatch.
 #   2. ship-testflight.sh rate-limits successful uploads per app and skips when
@@ -41,9 +43,12 @@ on:
       - 'assets/clutch-icon-1024.png'
       - 'scripts/ios-fleet/**'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/ios-appstore-gm-prepare.sh'
       - 'scripts/ios-install-appstore-profiles.sh'
       - 'scripts/ios-xcodegen-post.sh'
+      - 'scripts/ios-ui-tests.sh'
       - 'ios/appstore-profiles.json'
       - '.github/workflows/ios-ship.yml'
   workflow_dispatch:
@@ -58,14 +63,36 @@ on:
       - 'assets/clutch-icon-1024.png'
       - 'scripts/ios-fleet/**'
       - 'scripts/ios-ship-testflight.sh'
+      - 'scripts/ios-observe-ship.mjs'
+      - 'scripts/ios-recheck-tf-ready.sh'
       - 'scripts/build-ios.sh'
+      - 'scripts/ios-ui-tests.sh'
       - '.github/workflows/ios-ship.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ios-ship-clutch
+  # The group MUST separate pull_request runs from main runs.
+  #
+  # This workflow is triggered by push, schedule AND pull_request, and the
+  # ship job is skipped on pull_request, so a PR run contributes nothing to
+  # TestFlight.  While PR runs shared one group with the push-to-main ship,
+  # they silently destroyed it: when a newer run enters a concurrency group,
+  # GitHub cancels the run already pending in it, so a PR run evicted the
+  # pending main ship and that merge never reached TestFlight.
+  #
+  # 2026-10-24, twice in 70 minutes:
+  #   - PR #195 (merge 6b3487f2) ship run 40075066124 was cancelled at
+  #     07:48:58Z by PR run 40075616002 on another branch (jobs: [], never
+  #     dispatched).
+  #   - push ed510c85 ship run 40070842392 was cancelled the same way.
+  #
+  # Keying the group on the event keeps every PR dry-run in its own group and
+  # leaves push + schedule serialised against each other in the 'main' group,
+  # so a cron tick and a push can never upload two builds for the same HEAD.
+  # Same shape as Usage-Monitor's mac-release.yml.
+  group: ios-ship-clutch-${{ github.event_name == 'pull_request' && github.head_ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
@@ -73,6 +100,10 @@ jobs:
     name: TestFlight archive + upload
     if: github.event.repository.fork == false && github.event_name != 'pull_request'
     runs-on: xcode-27
+    outputs:
+      # The one build number this release carries, planned once by the
+      # plan-build step below and handed to every platform ship of the release.
+      build: ${{ steps.plan.outputs.build }}
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
@@ -91,16 +122,32 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ios-fleet
-          key: ios-fleet-clutch-${{ github.run_id }}
+          key: ios-fleet-clutch-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            ios-fleet-clutch-${{ github.run_id }}-
             ios-fleet-clutch-
 
-      - name: Scheduled ship gate (skip unless iOS code changed)
+      - name: Scheduled ship gate (skip unless a push path changed)
         id: gate
         run: |
+          # Every entry mirrors on.push.paths above: the cron has no paths
+          # filter of its own, so the gate replays the same set and a merge
+          # whose push run never fired still ships.  tests/ios-ship-workflow.test.ts
+          # pins the two lists to each other.
           bash "$GITHUB_WORKSPACE/scripts/ios-fleet/scheduled-ship-gate.sh" \
             --event "${{ github.event_name }}" \
-            --path-prefix 'ios/' \
+            --path-prefix 'ios/**' \
+            --path-prefix 'assets/clutch-icon-1024.png' \
+            --path-prefix 'scripts/ios-fleet/**' \
+            --path-prefix 'scripts/ios-ship-testflight.sh' \
+            --path-prefix 'scripts/ios-observe-ship.mjs' \
+            --path-prefix 'scripts/ios-recheck-tf-ready.sh' \
+            --path-prefix 'scripts/ios-appstore-gm-prepare.sh' \
+            --path-prefix 'scripts/ios-install-appstore-profiles.sh' \
+            --path-prefix 'scripts/ios-xcodegen-post.sh' \
+            --path-prefix 'scripts/ios-ui-tests.sh' \
+            --path-prefix 'ios/appstore-profiles.json' \
+            --path-prefix '.github/workflows/ios-ship.yml' \
             --repo-root "$GITHUB_WORKSPACE" \
             clutch
 
@@ -129,8 +176,8 @@ jobs:
         env:
           INFISICAL_PROJECT_ID: 077fd6f3-9f9b-438e-9b6f-5c69076cf36c
           INFISICAL_ASC_PROJECT_ID: 8dae6d03-8f12-48b2-adf3-e5c1b881c8c5
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_ID || secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET || secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_TOKEN: ${{ secrets.INFISICAL_CLUTCH_CI_READ_TOKEN }}
+          INFISICAL_ASC_TOKEN: ${{ secrets.INFISICAL_CLUTCH_ASC_READ_TOKEN }}
         run: |
           npm install zod@4.4.3 --no-save --no-audit --no-fund
           node scripts/ios-signing-fetch.mjs
@@ -139,17 +186,33 @@ jobs:
         if: steps.gate.outputs.should_ship == '1'
         run: |
           if [ -z "${APPLE_API_KEY_ID:-}" ]; then
-            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Check Fleet-OPS prod /asc, Clutch prod /, and the CI machine identity read access to both.  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
+            echo "::error::APPLE_API_KEY_ID empty after Infisical export.  Check Fleet-OPS prod /asc and Clutch prod / service-token read access.  Confirm codes.clutch.ios (Apple ID 6817951255) exists in App Store Connect before shipping."
             exit 1
           fi
           bash "$GITHUB_WORKSPACE/scripts/ios-appstore-gm-prepare.sh"
 
+      - name: Plan release build (once per release)
+        id: plan
+        if: steps.gate.outputs.should_ship == '1'
+        run: |
+          build="$(bash scripts/ios-ship-testflight.sh --plan-build-only)"
+          case "$build" in
+            [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+            *)
+              echo "::error::plan-build-only printed no 12-digit build number"
+              exit 1
+              ;;
+          esac
+          echo "planned build for this release: ${build}"
+          echo "build=${build}" >>"$GITHUB_OUTPUT"
+
       - name: Ship Clutch to TestFlight
+        id: ship
         if: steps.gate.outputs.should_ship == '1'
         env:
           IOS_TF_RELEASE_NOTES: "1"
           IOS_MANUAL_SIGN: "1"
-        run: bash scripts/ios-ship-testflight.sh
+        run: node scripts/ios-observe-ship.mjs bash scripts/ios-ship-testflight.sh --build "${{ steps.plan.outputs.build }}"
 
       - name: Sync standing TestFlight testers
         if: success() && steps.gate.outputs.should_ship == '1'
@@ -176,6 +239,41 @@ jobs:
             echo "::warning title=TestFlight standing testers::tester sync exited ${rc}; see the standing-testers lines above.  The TestFlight upload itself succeeded."
           fi
 
+      # The in-ship ensure-tf-ready runs before standing-tester sync, so rc=5
+      # can clear after sync assigns the external group.  Re-check read-only
+      # after sync so the job summary reflects post-sync installability (OPS-1052).
+      - name: Re-check TestFlight readiness after tester sync
+        id: recheck_tf
+        if: success() && steps.gate.outputs.should_ship == '1' && steps.ship.outputs.uploaded == 'true'
+        continue-on-error: true
+        env:
+          IOS_TF_READY_TIMEOUT_SEC: "300"
+        run: |
+          set -euo pipefail
+          build="${{ steps.plan.outputs.build }}"
+          if ! [[ "$build" =~ ^[1-9][0-9]{11}$ ]]; then
+            echo "::warning::missing planned build for post-sync recheck; skipping"
+            exit 0
+          fi
+          bash "$GITHUB_WORKSPACE/scripts/ios-recheck-tf-ready.sh" clutch "$build"
+
+      - name: iOS ship summary (TestFlight readiness after sync)
+        if: always() && steps.gate.outputs.should_ship == '1'
+        run: |
+          set -euo pipefail
+          {
+            echo "## TestFlight readiness (after standing-tester sync)"
+            if [ "${{ steps.ship.outcome }}" = "success" ] && [ "${{ steps.ship.outputs.uploaded }}" = "true" ] && [ -n "${{ steps.recheck_tf.outputs.tf_ready_summary }}" ]; then
+              echo "- Clutch (${{ steps.recheck_tf.outputs.tf_ready_bundle }} build ${{ steps.recheck_tf.outputs.tf_ready_build }}): rc=${{ steps.recheck_tf.outputs.tf_ready_rc }} — ${{ steps.recheck_tf.outputs.tf_ready_summary }}"
+            elif [ "${{ steps.ship.outputs.uploaded }}" = "true" ]; then
+              echo "- Clutch: post-sync readiness check did not run or produced no summary"
+            elif [ "${{ steps.ship.outputs.uploaded }}" = "unknown" ]; then
+              echo "- Clutch: ship exited 0 but upload was not confirmed in the ship log (recheck skipped)"
+            else
+              echo "- Clutch: no upload this run (gate skip or ship failure)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Saved even when the ship step failed after it recorded the upload, but
       # only on ticks that tried to ship.
       - name: Save iOS ship state
@@ -183,7 +281,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ios-fleet
-          key: ios-fleet-clutch-${{ github.run_id }}
+          key: ios-fleet-clutch-${{ github.run_id }}-${{ github.run_attempt }}
 
   pr-build-only:
     name: iOS archive dry-run (PR)

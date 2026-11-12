@@ -69,7 +69,7 @@ public final class TranscriptionService {
             } else if !openRouterApiKey.isEmpty {
                 return try await transcribeViaOpenRouter(audioData: audioData)
             } else {
-                throw NSError(domain: "TranscriptionService", code: 503, userInfo: [NSLocalizedDescriptionKey: "Host offline and no OpenRouter API key configured.  Connect a host or add an API key in Settings."])
+                throw NSError(domain: "TranscriptionService", code: 503, userInfo: [NSLocalizedDescriptionKey: Copy.gap("Host offline and no OpenRouter API key configured.", "Connect a host or add an API key in Settings.")])
             }
         }
     }
@@ -113,7 +113,7 @@ public final class TranscriptionService {
 
     private func transcribeViaOpenRouter(audioData: Data) async throws -> String {
         guard !openRouterApiKey.isEmpty else {
-            throw NSError(domain: "TranscriptionService", code: 401, userInfo: [NSLocalizedDescriptionKey: "OpenRouter API key is missing.  Please enter it in Settings to transcribe in the cloud."])
+            throw NSError(domain: "TranscriptionService", code: 401, userInfo: [NSLocalizedDescriptionKey: Copy.gap("OpenRouter API key is missing.", "Please enter it in Settings to transcribe in the cloud.")])
         }
 
         guard let url = URL(string: "https://openrouter.ai/api/v1/audio/transcriptions") else {

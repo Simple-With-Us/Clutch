@@ -110,11 +110,12 @@ const DSH_EFFORT_LEVELS = ["none", "high", "max"] as const satisfies readonly Ef
  *  gets its own levels instead of the engine-wide `DSH_EFFORT_LEVELS`; every
  *  other row keeps the engine-wide list.
  *
- *  MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
- *  (BF-2494 / minimax/drop-m31-flash-preview).  The per-model effort row that
- *  used to live here is gone with the model; do not re-add it without a
- *  verified stable replacement. */
+ *  MiniMax-M3.1-Flash carries its own list: the model forces thinking on, so
+ *  there is no `none` level, and the provider documents low through max.
+ *  The retired MiniMax-M3.1-Flash-Preview id (2026-10-18, BF-2494) must not
+ *  come back. */
 export const DSH_PER_MODEL_EFFORT_LEVELS: Readonly<Record<string, readonly EffortLevel[]>> = {
+  "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /** dsh-acp's `reasoning_effort` value for "the provider's own default".  It
@@ -308,6 +309,7 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
   options: [
     { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash", images: true },
     { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro", images: false },
+    { id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", contextWindow: 1_000_000, images: true },
     { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_048_576, images: true },
     { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800, images: false },
   ],
@@ -323,11 +325,15 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
  *  rather than the engine-wide {@link dshSupport.images} answer, which is
  *  only the fallback for a model the catalog does not list.
  *
- *  MiniMax-M3.1-Flash-Preview was retired on the MiniMax side on 2026-10-18
- *  (BF-2494 / minimax/drop-m31-flash-preview); its row here is gone. */
+ *  MiniMax-M3.1-Flash is the stable successor to the retired
+ *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
+ *  the direct route, and it declares `input: [text, image, video]`.  The
+ *  Preview id was retired on 2026-10-18 (BF-2494 /
+ *  minimax/drop-m31-flash-preview) and must not come back. */
 export const DSH_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
   "DeepSeek-V4.1-Flash": true,
   "DeepSeek-V4.1-Pro": false,
+  "MiniMax-M3.1-Flash": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
 };
