@@ -7,7 +7,7 @@ import CometChatSDK
 /// send path so prompts travel to the Mac sidecar (`POST /clutch/v1/chat`)
 /// instead of CometChat's cloud send, and the sidecar relays the turn back
 /// into the thread.  The engine, model and effort strip and the
-/// hold-to-record voice stay native.
+/// tap-to-dictate voice stay native.
 ///
 /// The pickers come from the host's catalog (`GET /clutch/v1/engines`), so
 /// a provider model shows up without an app release, and every turn names
@@ -116,7 +116,7 @@ public struct ChatView: View {
                     HStack(spacing: 8) {
                         ProgressView()
                             .scaleEffect(0.8)
-                        Text(Copy.gap("Listening…", "Tap The Mic Again To Stop."))
+                        Text(Copy.gap("Listening…", "Tap the mic again to stop."))
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                         Spacer()
@@ -187,6 +187,7 @@ public struct ChatView: View {
                             ChatInputBar(
                                 draft: $draft,
                                 sending: sending,
+                                isDictating: dictation.isRecording,
                                 onSend: { send(draft) },
                                 onVoice: { startVoice() }
                             )
@@ -659,6 +660,7 @@ struct AgentThreadView: UIViewControllerRepresentable {
 struct ChatInputBar: View {
     @Binding var draft: String
     var sending: Bool
+    var isDictating: Bool = false
     var onSend: () -> Void
     var onVoice: () -> Void
 
@@ -669,18 +671,20 @@ struct ChatInputBar: View {
                 .disabled(sending)
                 .onSubmit(onSend)
             Button(action: onVoice) {
-                Image(systemName: "mic.fill")
+                Image(systemName: isDictating ? "mic.fill" : "mic")
+                    .frame(minWidth: 44, minHeight: 44)
             }
             .disabled(sending)
-            .accessibilityLabel("Hold To Talk")
+            .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
             Button(action: onSend) {
                 if sending {
                     ProgressView()
                 } else {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 24))
+                        .font(.system(size: 22))
                 }
             }
+            .frame(minWidth: 44, minHeight: 44)
             .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send Message")
         }
