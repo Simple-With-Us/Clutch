@@ -123,7 +123,7 @@ Plans, designs, reviews, handoffs, rollouts, and completion notes also go to App
 
 ## Copy Rules (owner — ALL agents, ALL surfaces)
 
-The sentence gap (a real U+00A0 plus a normal space) between sentences in every paragraph a human reads: product UI, App Store fields, docs, PR bodies, commit messages, Zulip posts, Apple Notes, this file (a real U+00A0 plus a space, as below).  Title Case headings.  Light theme is the first-visit default.  The product word is "clutch" (lowercase), not "Clutch" except as a brand.  No agent seat names on public surfaces.  Timestamps in Central Time.  Canonical: `/Users/jay/apps/FLEET-UI-COPY.md`.
+The sentence gap (a real U+00A0 plus a normal space) between sentences in every paragraph a human reads: product UI, App Store fields, docs, PR bodies, commit messages, Zulip posts, Apple Notes, this file (a real U+00A0 plus a space, as below).  Title Case headings.  Light theme is the first-visit default.  The product word is "clutch" (lowercase), not "Clutch" except as a brand.  No agent seat names on public surfaces.  Owner-facing timestamps use America/Chicago 12-hour `h:mm AM/PM` form, with no zone or adjacent UTC.  Canonical: `/Users/jay/apps/FLEET-UI-COPY.md`.
 
 **HOW to emit it (owner ruling 2026-10-23, the same on every surface):**  between sentences, write a real U+00A0 (no-break space) followed by a normal space.  This covers Zulip, GitHub PR and issue text, Linear, Slack, commit messages, repo docs, UI copy, skills and agent instructions.  Never add the gap after a non-terminal abbreviation (e.g., i.e., Dr., v1.2.3), or inside a URL, email address, filename, version string or a brand name that contains a period.
 
