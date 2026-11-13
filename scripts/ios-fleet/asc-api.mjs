@@ -252,10 +252,9 @@ const AGENT_MARKER = new RegExp(`\\[\\s*(?:ag|${AGENT_NAMES})\\s*\\]`, "gi");
 const AGENT_NAME_DENY = new RegExp(`(?:\\b(?:${AGENT_NAMES})\\b|\\[\\s*ag\\s*\\])`, "i");
 
 function centralTimestamp(now = new Date()) {
-  // FLEET-PROTOCOL template: "Wed, Aug 12, 2026 at 1:15am" -- the owner's clock
-  // (America/Chicago, so DST is automatic), 12-hour, lower-case am or pm, and
-  // NO timezone abbreviation.  Intl yields "1:15 PM" with a space or a narrow
-  // no-break space (U+202F) before the meridiem, so fold both into "1:15pm".
+  // Owner-facing TestFlight copy uses the owner's America/Chicago clock, 12-hour
+  // h:mm AM/PM with one ordinary space, and no timezone abbreviation.  Intl may
+  // use ASCII space, NBSP or narrow NBSP before the meridiem; normalize all three.
   const d = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
     weekday: "short", month: "short", day: "numeric", year: "numeric"
@@ -263,7 +262,7 @@ function centralTimestamp(now = new Date()) {
   const t = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/Chicago",
     hour: "numeric", minute: "2-digit", hour12: true
-  }).format(now).replace(/\s*([AP])M$/i, (_m, x) => `${x.toLowerCase()}m`);
+  }).format(now).replace(/[ \u00a0\u202f]*([AP])M$/i, (_m, x) => ` ${x.toUpperCase()}M`);
   return `${d} at ${t}`;
 }
 
