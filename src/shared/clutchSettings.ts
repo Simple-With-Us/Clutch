@@ -7,7 +7,7 @@
 // This module implements the fleet canonical pattern (see INFISICAL.md):
 //
 //   - initClutchSettings() loads the full settings set at startup into an
-//     in-memory cache.  When universal-auth credentials are present it loads
+//     in-memory cache.  When a scoped service token is present it loads
 //     from Infisical; otherwise it seeds the cache from process.env with a
 //     loud warning (local dev / offline fallback — never silent).
 //   - After a successful Infisical load, owned keys that are NOT already set
@@ -37,7 +37,14 @@
 // here: the bash layer (scripts/lib/clutch-env.sh) needs them before Node
 // starts.  See scripts/lib/clutch-infisical-env.sh, which backfills the
 // managed keys from Infisical for the always-on bash path (pm2).
+//
+// The service tokens that unlock Infisical are NOT managed here either — they
+// live in a per-host mode-0600 file or explicit environment variables.  See
+// infisicalCredentials.ts.
 
+import {
+  resolveInfisicalCredentials,
+} from "./infisicalCredentials.ts";
 import {
   createInfisicalSettings,
   InfisicalWriteError,
@@ -70,7 +77,7 @@ export const CLUTCH_SETTINGS_SCHEMA: ClutchSettingDef[] = [
   { key: "META_API_KEY", kind: "secret", defaultValue: "", description: "Meta API key (Muse Code engine auth; the keychain credential is not readable by a spawned host)" },
   { key: "CLUTCH_MINIMAX_API_KEY_NAME", kind: "config", defaultValue: "MINIMAX_API_KEY", description: "Env var name holding the MiniMax key" },
   { key: "CLUTCH_MINIMAX_BASE_URL", kind: "config", defaultValue: "https://api.minimax.io/v1", description: "MiniMax API base URL" },
-  { key: "CLUTCH_MINIMAX_MODEL", kind: "config", defaultValue: "MiniMax-M2.7-highspeed", description: "Default MiniMax model" },
+  { key: "CLUTCH_MINIMAX_MODEL", kind: "config", defaultValue: "MiniMax-M3.1-Flash", description: "Default MiniMax model" },
   { key: "CLUTCH_MINIMAX_PROFILE", kind: "config", defaultValue: "minimax-headless", description: "Default MiniMax cordis profile" },
   { key: "CLUTCH_WEB_HOST", kind: "config", defaultValue: "127.0.0.1", description: "Clutch web bind host" },
   { key: "CLUTCH_WEB_PORT", kind: "config", defaultValue: "3180", description: "Clutch web port" },
@@ -78,11 +85,19 @@ export const CLUTCH_SETTINGS_SCHEMA: ClutchSettingDef[] = [
   { key: "CLUTCH_TAILNET_IPV4", kind: "config", defaultValue: "", description: "Optional Tailscale IPv4 to trust for /api" },
   { key: "CLUTCH_TRUSTED_HOSTS", kind: "config", defaultValue: "", description: "Extra comma-separated trusted Host values for /api" },
   { key: "CLUTCH_SETTINGS_REFRESH_MS", kind: "knob", defaultValue: "300000", description: "Background settings refresh interval (ms)" },
+  { key: "CLUTCH_TELEMETRY_ENDPOINT", kind: "config", defaultValue: "", description: "Authenticated telemetry hub OTLP traces URL (restart the sidecar after changing)" },
+  { key: "CLUTCH_TELEMETRY_AUTHORIZATION", kind: "secret", defaultValue: "", description: "Clutch producer Authorization header for the telemetry hub (restart the sidecar after changing)" },
   { key: "COMETCHAT_APP_ID", kind: "config", defaultValue: "", description: "CometChat App ID (native chat coordinates)" },
   { key: "COMETCHAT_REGION", kind: "config", defaultValue: "", description: "CometChat region (us, eu, or in)" },
   { key: "COMETCHAT_AUTH_KEY", kind: "secret", defaultValue: "", description: "CometChat Auth Key served to the paired phone (dev-grade; server-minted tokens are the follow-up)" },
   { key: "COMETCHAT_REST_API_KEY", kind: "secret", defaultValue: "", description: "CometChat REST key, backend-only (sidecar relay auth)" },
   { key: "COMETCHAT_AGENT_UID", kind: "config", defaultValue: "clutch-agent", description: "Agent user uid the relay speaks on behalf of" },
+  { key: "CLUTCH_AGENT_PROXY_ENABLED", kind: "knob", defaultValue: "false", description: "Enable routing agent network requests through Infisical Agent Proxy" },
+  { key: "CLUTCH_AGENT_PROXY_ADDRESS", kind: "config", defaultValue: "127.0.0.1:17322", description: "Address of the local Infisical Agent Proxy (host:port)" },
+  { key: "CLUTCH_AGENT_PROXY_PROJECT_ID", kind: "config", defaultValue: "", description: "Infisical Project ID for Agent Proxy (defaults to Clutch project)" },
+  { key: "CLUTCH_AGENT_PROXY_ENV", kind: "config", defaultValue: "prod", description: "Infisical environment for Agent Proxy secrets" },
+  { key: "CLUTCH_AGENT_PROXY_PATH", kind: "config", defaultValue: "/", description: "Infisical secret path folder scope for Agent Proxy" },
+  { key: "CLUTCH_AGENT_PROXY_CA_CERT_PATH", kind: "config", defaultValue: "", description: "Optional CA certificate file path for Infisical Agent Proxy TLS MITM" },
 ];
 
 const SCHEMA_BY_KEY = new Map(CLUTCH_SETTINGS_SCHEMA.map((d) => [d.key, d]));
@@ -94,6 +109,17 @@ const LOG_PREFIX = "[clutch-settings]";
 function isSecretKey(key: string): boolean {
   return SCHEMA_BY_KEY.get(key)?.kind === "secret";
 }
+
+function isAgentProxyKey(key: string): boolean {
+  return key.startsWith("CLUTCH_AGENT_PROXY_");
+}
+
+/**
+ * Agent proxy setting values Clutch itself wrote into process.env (from
+ * Infisical or from set()), so a refresh can tell them apart from a value the
+ * operator set and keep them current.
+ */
+const backfilledAgentProxySettings = new Map<string, string>();
 
 /** Names only — never log values, especially secrets. */
 function describeKeys(keys: Iterable<string>): string {
@@ -168,13 +194,17 @@ class ClutchSettingsImpl implements ClutchSettings {
     if (this.client === undefined) {
       throw new InfisicalWriteError(
         key,
-        "Infisical is not configured (no universal-auth credentials); refusing to save to process.env only — configure Infisical or edit the Infisical UI directly",
+        "Infisical is not configured (no scoped service token); refusing to save to process.env only — configure a service token or edit the Infisical UI directly",
       );
     }
     // Write-through: Infisical FIRST, then cache (inside client.set), then
     // the process backfill so child processes inherit the new value.
     await this.client.set(key, value);
     process.env[key] = value;
+    if (isAgentProxyKey(key)) {
+      backfilledAgentProxySettings.set(key, value);
+      applyAgentProxyToProcessEnv();
+    }
   }
 
   async refresh(): Promise<void> {
@@ -189,27 +219,110 @@ class ClutchSettingsImpl implements ClutchSettings {
 }
 
 /**
+ * Proxy variables Clutch itself wrote into process.env (name -> value), so a
+ * later disable or address change can undo exactly those and never touch a
+ * value the operator set.
+ */
+const injectedProxyEnv = new Map<string, string>();
+
+function removeInjectedProxyEnv(): void {
+  for (const [name, value] of injectedProxyEnv) {
+    // Only remove what we wrote: a value changed since then belongs to the operator.
+    if (process.env[name] === value) delete process.env[name];
+  }
+  injectedProxyEnv.clear();
+}
+
+/** Fill `names` with `value` unless the operator already set any of them. */
+function injectProxyEnv(names: readonly string[], value: string): void {
+  if (!value || names.some((name) => process.env[name])) return;
+  for (const name of names) {
+    process.env[name] = value;
+    injectedProxyEnv.set(name, value);
+  }
+}
+
+/**
+ * Reconciles the agent proxy variables in process.env with the current
+ * CLUTCH_AGENT_PROXY_* settings: when CLUTCH_AGENT_PROXY_ENABLED is "true",
+ * "1" or "yes" it injects them (only where unset), and otherwise it removes
+ * the ones it injected earlier.  A changed address, project, environment,
+ * path or CA path re-points the injected values the same way.
+ * Downstream child processes (ACP drivers, engines, Python bridges)
+ * inherit process.env directly.
+ */
+export function applyAgentProxyToProcessEnv(): void {
+  // Undo our earlier injection first, so a disable or an address change never
+  // leaves a stale value behind; operator-set variables are left alone.
+  removeInjectedProxyEnv();
+  const rawEnabled = process.env.CLUTCH_AGENT_PROXY_ENABLED ?? SCHEMA_BY_KEY.get("CLUTCH_AGENT_PROXY_ENABLED")?.defaultValue ?? "false";
+  const enabled = rawEnabled.trim().toLowerCase();
+  if (enabled !== "true" && enabled !== "1" && enabled !== "yes") {
+    return;
+  }
+  const address = (process.env.CLUTCH_AGENT_PROXY_ADDRESS || SCHEMA_BY_KEY.get("CLUTCH_AGENT_PROXY_ADDRESS")?.defaultValue || "127.0.0.1:17322").trim();
+  const proxyUrl = `http://${address}`;
+  const projectId = (process.env.CLUTCH_AGENT_PROXY_PROJECT_ID || CLUTCH_INFISICAL_PROJECT_ID).trim();
+  const env = (process.env.CLUTCH_AGENT_PROXY_ENV || SCHEMA_BY_KEY.get("CLUTCH_AGENT_PROXY_ENV")?.defaultValue || "prod").trim();
+  const path = (process.env.CLUTCH_AGENT_PROXY_PATH || SCHEMA_BY_KEY.get("CLUTCH_AGENT_PROXY_PATH")?.defaultValue || "/").trim();
+  const caCertPath = (process.env.CLUTCH_AGENT_PROXY_CA_CERT_PATH || "").trim();
+
+  injectProxyEnv(["HTTP_PROXY", "http_proxy"], proxyUrl);
+  injectProxyEnv(["HTTPS_PROXY", "https_proxy"], proxyUrl);
+  injectProxyEnv(["ALL_PROXY", "all_proxy"], proxyUrl);
+  injectProxyEnv(["NO_PROXY", "no_proxy"], "localhost,127.0.0.1");
+  injectProxyEnv(["INFISICAL_AGENT_PROXY_ADDRESS"], address);
+  injectProxyEnv(["INFISICAL_PROJECT_ID"], projectId);
+  injectProxyEnv(["INFISICAL_ENVIRONMENT"], env);
+  injectProxyEnv(["INFISICAL_SECRET_PATH"], path);
+  injectProxyEnv(["SSL_CERT_FILE"], caCertPath);
+  injectProxyEnv(["NODE_EXTRA_CA_CERTS"], caCertPath);
+}
+
+/**
  * Copy Infisical-sourced values into process.env for managed keys that are
  * not already set.  Explicitly-set env vars always win (local override).
  * This is the delivery mechanism: downstream readers — ACP driver env
  * params, Python bridges, spawned child processes — see Infisical values
  * with zero code churn, and nothing fetches per-request.
+ *
+ * The agent proxy keys are the exception to "fill once": a value Clutch
+ * itself wrote follows later Infisical changes (and is removed when the key
+ * is deleted there), so a refresh can re-point or switch off the proxy.  A
+ * value the operator set is still left alone.
  */
 function backfillProcessEnv(client: InfisicalSettings): void {
   const filled: string[] = [];
+  const removed: string[] = [];
   for (const def of CLUTCH_SETTINGS_SCHEMA) {
     const current = process.env[def.key];
-    if (current !== undefined && current.length > 0) continue; // explicit env wins
     const cached = client.get(def.key);
-    if (cached !== undefined && cached.length > 0) {
-      process.env[def.key] = cached;
+    const next = cached !== undefined && cached.length > 0 ? cached : undefined;
+    if (current !== undefined && current.length > 0) {
+      const wroteIt = isAgentProxyKey(def.key) && backfilledAgentProxySettings.get(def.key) === current;
+      if (!wroteIt) continue; // explicit env wins
+      if (next === current) continue;
+      if (next === undefined) {
+        delete process.env[def.key];
+        backfilledAgentProxySettings.delete(def.key);
+        removed.push(def.key);
+        continue;
+      }
+    }
+    if (next !== undefined) {
+      process.env[def.key] = next;
+      if (isAgentProxyKey(def.key)) backfilledAgentProxySettings.set(def.key, next);
       filled.push(def.key);
     }
   }
+  // Names only — never values.
   if (filled.length > 0) {
-    // Names only — never values.
     console.error(`${LOG_PREFIX} backfilled from Infisical: ${describeKeys(filled)}`);
   }
+  if (removed.length > 0) {
+    console.error(`${LOG_PREFIX} removed from process.env (deleted in Infisical): ${describeKeys(removed)}`);
+  }
+  applyAgentProxyToProcessEnv();
 }
 
 function seedFromProcessEnv(): Map<string, string> {
@@ -253,24 +366,27 @@ function resolveInfisicalEnvironment(): string {
  * load.
  */
 export async function initClutchSettings(): Promise<ClutchSettings> {
-  const clientId = process.env.INFISICAL_CLIENT_ID;
-  const clientSecret = process.env.INFISICAL_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
+  // Explicit env wins, then $CLUTCH_HOME/infisical.json, then the canonical project ID.
+  const credentials = resolveInfisicalCredentials({ projectId: CLUTCH_INFISICAL_PROJECT_ID });
+  if (!credentials.readToken) {
     console.error(
-      `${LOG_PREFIX} INFISICAL_CLIENT_ID/INFISICAL_CLIENT_SECRET not set — seeding settings from process.env. ` +
-        `Set the credentials to make Infisical the source of truth (see INFISICAL.md).`,
+      `${LOG_PREFIX} no Infisical service token — seeding settings from process.env. ` +
+        `Set INFISICAL_TOKEN, or save one to ` +
+        `$CLUTCH_HOME/infisical.json, to make Infisical the source of truth (see INFISICAL.md).`,
     );
+    applyAgentProxyToProcessEnv();
     return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   }
   const environment = resolveInfisicalEnvironment();
-  const client = createInfisicalSettings({
-    projectId: CLUTCH_INFISICAL_PROJECT_ID,
-    environment,
-    refreshIntervalMs: refreshIntervalMs(),
-    clientId,
-    clientSecret,
-  });
+  let client: InfisicalSettings | undefined;
   try {
+    client = createInfisicalSettings({
+      projectId: credentials.projectId,
+      environment,
+      refreshIntervalMs: refreshIntervalMs(),
+      readToken: credentials.readToken,
+      ...(credentials.writeToken ? { writeToken: credentials.writeToken } : {}),
+    });
     await client.init();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -278,9 +394,11 @@ export async function initClutchSettings(): Promise<ClutchSettings> {
       `${LOG_PREFIX} Infisical load failed (${message}) — seeding settings from process.env instead. ` +
         `Fix Infisical access and restart for Infisical-sourced settings.`,
     );
-    client.stop();
+    client?.stop();
+    applyAgentProxyToProcessEnv();
     return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   }
+  if (!client) return new ClutchSettingsImpl(undefined, seedFromProcessEnv());
   backfillProcessEnv(client);
   return new ClutchSettingsImpl(client, new Map());
 }

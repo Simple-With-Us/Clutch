@@ -2,6 +2,7 @@
   "teamId": "",
   "apps": {
     "clutch": {
+      "fixedMarketingVersion": "0.1.0",
       "displayName": "Clutch",
       "bundleId": "codes.clutch.ios",
       "appleId": 6817951255,
@@ -11,7 +12,7 @@
       "xcodegenDir": "ios",
       "worktreeHint": "~/apps/clutch-runtime",
       "marketingVersionDefault": "1.0.0",
-      "notes": "Clutch iOS companion (codes.clutch.ios).  AppleId 6817951255 on App Store Connect.  Internal TestFlight testers only today.  Marketing train is 1.0.N; build is UTC YYYYMMDDHHMM.  Hosted ships use APPLE_API_* and IOS_CERT_* with manual App Store profiles (ios/appstore-profiles.json)."
+      "notes": "Clutch iOS companion (codes.clutch.ios).  AppleId 6817951255 on App Store Connect.  Internal TestFlight testers only today.  The marketing version is the next patch on the app's train (1.0.<P+1>, P from App Store Connect) and the build number is independent of it (the repo commit count, raised above the App Store Connect floor); UTC build stamps are retired.  Hosted ships use APPLE_API_* and IOS_CERT_* with manual App Store profiles (ios/appstore-profiles.json)."
     }
   }
 }

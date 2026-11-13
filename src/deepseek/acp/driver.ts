@@ -110,21 +110,12 @@ const DSH_EFFORT_LEVELS = ["none", "high", "max"] as const satisfies readonly Ef
  *  gets its own levels instead of the engine-wide `DSH_EFFORT_LEVELS`; every
  *  other row keeps the engine-wide list.
  *
- *  MiniMax-M3.1-Flash-Preview is newer than the pi-ai catalog dsh installs,
- *  so dsh only knows it from the `llm-pi-ai.providers.minimax.models` entry in
- *  `settings.yaml`.  That entry declares `reasoningEfforts` low through max
- *  and `compat.forceAdaptiveThinking: true`, which makes pi-ai send
- *  `thinking: {type: "adaptive"}` plus `output_config.effort` to MiniMax's
- *  Anthropic-compatible endpoint.  dsh then advertises exactly these five
- *  `reasoning_effort` ids plus the provider-default value, and no `off`, so
- *  `none` is deliberately absent: dsh would refuse the `off` it maps to.  An
- *  install whose settings entry lacks `reasoningEfforts` refuses every level
- *  here, and one that lacks the adaptive flag accepts them but collapses
- *  xhigh and max into high, so a consumer that can read the install's
- *  settings.yaml should use `dshInstalledEffortLevels`, which narrows this map
- *  to what the file declares. */
+ *  MiniMax-M3.1-Flash carries its own list: the model forces thinking on, so
+ *  there is no `none` level, and the provider documents low through max.
+ *  The retired MiniMax-M3.1-Flash-Preview id (2026-10-18, BF-2494) must not
+ *  come back. */
 export const DSH_PER_MODEL_EFFORT_LEVELS: Readonly<Record<string, readonly EffortLevel[]>> = {
-  "MiniMax-M3.1-Flash-Preview": ["low", "medium", "high", "xhigh", "max"],
+  "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /** dsh-acp's `reasoning_effort` value for "the provider's own default".  It
@@ -308,10 +299,6 @@ function currentConfigValue(result: unknown, configId: string): unknown {
  * stable so saved selections keep working; `dshModelOptionValue` translates
  * each one to the session's advertised value at send time.
  *
- * The vision variant is deliberately
- * absent: `images: false` disables image attachment for the whole engine, so
- * shipping a vision model here offered a capability the composer refused.
- *
  * Each row's `images` agrees with the modality the route actually declares, so
  * a consumer that reads the catalog never offers an attachment the model would
  * refuse.  `deepseek-flash` declares `inputModalities: [text, image]` and the
@@ -322,7 +309,7 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
   options: [
     { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash", images: true },
     { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro", images: false },
-    { id: "MiniMax-M3.1-Flash-Preview", label: "MiniMax-M3.1-Flash-Preview", contextWindow: 1_000_000, images: true },
+    { id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", contextWindow: 1_000_000, images: true },
     { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_048_576, images: true },
     { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800, images: false },
   ],
@@ -332,15 +319,21 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
  *  `images` answer would be wrong.
  *
  *  These are facts about the provider, not preferences: the installed pi-ai
- *  catalog declares MiniMax-M3 and the M3.1 Flash preview as text+image and
- *  the M2.7 family as text-only, and DeepSeek's own catalog declares Flash
- *  text+image and Pro text-only.  A consumer that resolves one model reads its
- *  own row here rather than the engine-wide {@link dshSupport.images} gate,
- *  which stays closed until that consumer lands. */
+ *  catalog declares MiniMax-M3 as text+image and the M2.7 family as
+ *  text-only, and DeepSeek's own catalog declares Flash text+image and Pro
+ *  text-only.  A consumer that resolves one model reads its own row here
+ *  rather than the engine-wide {@link dshSupport.images} answer, which is
+ *  only the fallback for a model the catalog does not list.
+ *
+ *  MiniMax-M3.1-Flash is the stable successor to the retired
+ *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
+ *  the direct route, and it declares `input: [text, image, video]`.  The
+ *  Preview id was retired on 2026-10-18 (BF-2494 /
+ *  minimax/drop-m31-flash-preview) and must not come back. */
 export const DSH_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
   "DeepSeek-V4.1-Flash": true,
   "DeepSeek-V4.1-Pro": false,
-  "MiniMax-M3.1-Flash-Preview": true,
+  "MiniMax-M3.1-Flash": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
 };
@@ -411,12 +404,13 @@ export function classifyDshError(error: unknown): ProviderErrorCode | undefined 
 export const dshSupport: AcpSupport = {
   driverKind: "dshAgent",
   displayName: "Clutch",
-  // Keep the engine-wide gate closed until BotFleet consumes per-model image
-  // support.  Its current composer reads only this flag, so opening it now
-  // would accept attachments even for non-vision DeepSeek V4.1 Pro.  Flip to
-  // true only after that consumer lands and deploys; the catalog retains
-  // Flash's images: true and Pro's images: false for that future gate.
-  images: false,
+  // Engine-wide fallback, not the per-model answer: every row in the catalog
+  // above carries its own exact `images`, and a consumer that resolves one
+  // model reads that row (BotFleet folds the map in as
+  // `model?.images ?? capabilities?.images`).  Flash and both MiniMax M3 rows
+  // take images, so this matches the documented AcpSupport default of yes,
+  // which is what a model absent from the catalog would inherit anyway.
+  images: true,
   models: STATIC_DSH_MODELS,
   resolveModels: () => STATIC_DSH_MODELS,
   perModelImages: DSH_PER_MODEL_IMAGES,

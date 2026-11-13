@@ -4,13 +4,15 @@
 **Status:** Accepted
 **Author:** [CLAUDE]
 
+> **Later note (2026-11-11):** The repo has since moved to `Simple-With-Us/Clutch`.  The text below keeps the slug as it was on the decision date.
+
 ## Context
 
 The product was named Harness.  The owner chose Clutch (clutch.codes) as its name, registered the App Store Connect record as Clutch.Codes, and renamed the GitHub repo to `jaywedgeworth22/Clutch`.  The old name also collided with the upstream engine's name ("DeepSeek Harness") and with unrelated generic uses of the word across the fleet.
 
 ## Decisions
 
-- **Naming:** the product is "Clutch" wherever it names itself, "clutch" in running prose per the copy rule, and "Clutch.Codes" only on store and catalog listings.  The fleet acronym is `CK`, the Slack tag is `repo: clutch`, the board slug is `clutch`, and new lanes are `~/apps/clutch-<seat>[-<lane>]`.
+- **Naming:** the product is "Clutch" wherever it names itself, "clutch" in running prose per the copy rule, and "Clutch.Codes" only on store and catalog listings.  The fleet acronym is `C`, the Slack tag is `repo: clutch`, the board slug is `clutch`, and new lanes are `~/apps/clutch-<seat>[-<lane>]`.
 - **Package and CLI:** the npm package is `clutch` (0.4.0).  The CLI is `clutch`, installed as a real wrapper file at `~/.local/bin/clutch`.  Bins, exports (`clutch/dsh/acp`, `clutch/dsh/mcp-patch`, `clutch/minimax/acp`) and env vars follow: every variable this repo owns uses the `CLUTCH_` prefix.  Variables the upstream engine reads (`DSH_HOME`, `DSH_SESSION_ID`, `DSH_PERMISSION_MODE`, and the other upstream-read names) keep their names.
 - **MiniMax acronym:** `mmh` becomes `minimax` everywhere in the repo.  `dsh` names stay, because they name the upstream engine.
 - **No shims:** there are no compatibility aliases, symlinks, re-exports or fallback paths for the old names.  Anything still using the old name fails loudly so the remaining references get found and fixed.  The root-level shell shims were deleted.

@@ -33,7 +33,7 @@
 const MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY";
 const MINIMAX_API_KEY_NAME_ENV = "CLUTCH_MINIMAX_API_KEY_NAME";
 const MINIMAX_DEFAULT_BASE_URL = "https://api.minimax.io/v1";
-const MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7-highspeed";
+const MINIMAX_DEFAULT_MODEL = "MiniMax-M3.1-Flash";
 
 /** Engine-wide effort levels.  M3 overrides this with its own list; every other
  *  row keeps the driver default of `none` because the provider takes the level
@@ -42,18 +42,24 @@ const MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7-highspeed";
 const EFFORT_LEVELS = ["none"];
 
 /** Per-model effort overrides.  MiniMax-M3 advertises the full reasoning range;
- *  the M2.7 family stays on `none` by falling back to {@link EFFORT_LEVELS}. */
+ *  MiniMax-M3.1-Flash forces thinking on, so its list starts at `low`; the
+ *  M2.7 family stays on `none` by falling back to {@link EFFORT_LEVELS}. */
 const PER_MODEL_EFFORT_LEVELS = {
   "MiniMax-M3": ["none", "low", "medium", "high", "max"],
+  "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /** Per-model image support.  These are provider facts, not preferences: the
  *  installed pi-ai catalog declares MiniMax-M3 as `input: [text, image]` and the
- *  whole M2.7 family as text-only.  M3.1 Flash is newer than that catalog, so it
- *  is absent from it; MiniMax ships it as a frontier multimodal model, so it is
- *  image-capable here. */
+ *  whole M2.7 family as text-only.
+ *
+ *  MiniMax-M3.1-Flash is the stable successor to the retired
+ *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
+ *  the direct route, and it declares `input: [text, image, video]`.  The
+ *  Preview id was retired on 2026-10-18 (BF-2494 /
+ *  minimax/drop-m31-flash-preview) and must not come back. */
 const PER_MODEL_IMAGES = {
-  "MiniMax-M3.1-Flash-Preview": true,
+  "MiniMax-M3.1-Flash": true,
   "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
@@ -63,12 +69,9 @@ const MODELS = {
   default: MINIMAX_DEFAULT_MODEL,
   options: [
     {
-      id: "MiniMax-M3.1-Flash-Preview",
-      label: "MiniMax M3.1 Flash Preview",
+      id: "MiniMax-M3.1-Flash",
+      label: "MiniMax M3.1 Flash",
       contextWindow: 1_000_000,
-      badge: "Preview",
-      badgeTitle:
-        "Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.",
       images: true,
     },
     { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
@@ -158,10 +161,11 @@ function classifyError(error) {
 export const support = {
   driverKind: "minimaxAgent",
   displayName: "Clutch (MiniMax)",
-  // Closed at the engine level until a consumer folds perModelImages onto the
-  // catalog: a consumer reading only this flag must not offer an attachment the
-  // M2.7 family would refuse.
-  images: false,
+  // Engine-wide fallback, not the per-model answer: every row in MODELS carries
+  // its own exact `images` and PER_MODEL_IMAGES restates it.  M3 and M3.1 Flash
+  // take images, so this matches the documented AcpSupport default of yes,
+  // which is what a row absent from the catalog would inherit anyway.
+  images: true,
   perModelImages: PER_MODEL_IMAGES,
   models: MODELS,
   resolveModels: () => MODELS,

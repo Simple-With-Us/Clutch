@@ -896,10 +896,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           //     image/video model; its image tokens bill at the same rate as
           //     text, so there is one row, not two.
           //   deepseek-v4-pro  DeepSeek V4.1 Pro (reasoning-capable)
-          //   MiniMax-M3.1-Flash-Preview  Preview  Token Plan / MiniMax Code
-          //     only, so it needs a Token Plan key to be callable.
           //   MiniMax-M2.7-highspeed  2x Cost  same 204,800 context as M2.7 at
           //     exactly twice M3's $0.30 / $1.20.
+          //
+          // MiniMax-M3.1-Flash is the stable successor to the retired
+          // MiniMax-M3.1-Flash-Preview (retired on the MiniMax side on
+          // 2026-10-18, BF-2494 / minimax/drop-m31-flash-preview).  The
+          // Preview id must not come back.
           const MODEL_ROWS = [
             {
               ids: ['deepseek-flash', 'deepseek-v4-flash', 'DeepSeek-V41-Flash', 'DeepSeek-V4.1-Flash', 'DeepSeek V4.1 Flash', 'DeepSeek V4 Flash'],
@@ -912,10 +915,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               label: 'DeepSeek-V4.1-Pro',
             },
             {
-              ids: ['MiniMax-M3.1-Flash-Preview', 'MiniMax M3.1 Flash Preview'],
-              label: 'MiniMax-M3.1-Flash-Preview',
-              badge: 'Preview',
-              badgeTitle: 'Frontier multimodal coding model with a 1M context window. MiniMax offers it through Token Plan and MiniMax Code, so it needs a Token Plan key.',
+              ids: ['MiniMax-M3.1-Flash', 'MiniMax M3.1 Flash'],
+              label: 'MiniMax-M3.1-Flash',
             },
             {
               ids: ['MiniMax-M3', 'MiniMax M3'],
@@ -970,12 +971,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
           };
 
           // Enforce reasoning effort level only for models where it is applicable:
-          // Applicable: DeepSeek-V4.1-Pro, MiniMax-M3.
-          // Not applicable: DeepSeek-V4.1-Flash, MiniMax-M3.1-Flash-Preview, MiniMax-M2.7-highspeed.
+          // Applicable: DeepSeek-V4.1-Pro, MiniMax-M3, MiniMax-M3.1-Flash.
+          // Not applicable: DeepSeek-V4.1-Flash, MiniMax-M2.7-highspeed.
           const fixEffortOption = () => {
             const triggerLabel = document.querySelector('[class*="triggerLabel"]');
             const activeModel = text(triggerLabel?.textContent || '').trim();
-            const isReasoning = /(pro|reasoner)/i.test(activeModel) || activeModel === 'MiniMax-M3';
+            const isReasoning = /(pro|reasoner)/i.test(activeModel) || activeModel === 'MiniMax-M3' || activeModel === 'MiniMax-M3.1-Flash';
 
             const triggerEffort = document.querySelector('[class*="triggerEffort"]');
             if (triggerEffort) {

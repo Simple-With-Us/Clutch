@@ -56,7 +56,7 @@ export default defineConfig({
     },
     {
       name: "chromium",
-      testMatch: /web-visual\.spec\.ts/,
+      testMatch: /(web-visual|sidebar-toggle)\.spec\.ts/,
       dependencies: ["setup"],
       use: {
         ...devices["Desktop Chrome"],

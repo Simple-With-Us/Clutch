@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  applyAgentProxyToProcessEnv,
   initClutchSettings,
   CLUTCH_SETTINGS_SCHEMA,
   isSecretSetting,
@@ -17,7 +18,8 @@ import { createInfisicalSettings } from "../src/shared/infisicalSettings.ts";
 
 const MANAGED_KEYS = CLUTCH_SETTINGS_SCHEMA.map((d) => d.key);
 
-const LOGIN_URL = "https://app.infisical.com/api/v1/auth/universal-auth/login";
+const READ_TOKEN = "st.fixture-read-token-value-123456789";
+const WRITE_TOKEN = "st.fixture-write-token-value-123456789";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -31,14 +33,16 @@ interface Scenario {
   fetchMock: (input: unknown, init?: RequestInit) => Promise<Response>;
   serverSecrets: Array<{ secretKey: string; secretValue: string }>;
   calls: string[];
-  failLogin: boolean;
+  failList: boolean;
+  metadataEnvironment: string;
 }
 
 function makeScenario(): Scenario {
   const calls: string[] = [];
   const scenario: Scenario = {
     calls,
-    failLogin: false,
+    failList: false,
+    metadataEnvironment: "prod",
     serverSecrets: [
       { secretKey: "CLUTCH_WEB_PORT", secretValue: "3199" },
       { secretKey: "MINIMAX_API_KEY", secretValue: "test-key-value" },
@@ -47,13 +51,19 @@ function makeScenario(): Scenario {
       const url = String(input);
       const method = (init?.method ?? "GET").toUpperCase();
       calls.push(`${method} ${url}`);
-      if (url === LOGIN_URL && method === "POST") {
-        return scenario.failLogin
-          ? jsonResponse({ message: "unauthorized" }, 401)
-          : jsonResponse({ accessToken: "test-access-token" });
+      if (url.endsWith("/api/v2/service-token") && method === "GET") {
+        const authorization = (init?.headers as Record<string, string>)?.Authorization;
+        const permission = authorization === `Bearer ${READ_TOKEN}` ? "read" : authorization === `Bearer ${WRITE_TOKEN}` ? "write" : undefined;
+        if (!permission) return jsonResponse({}, 401);
+        return jsonResponse({
+          projectId: "077fd6f3-9f9b-438e-9b6f-5c69076cf36c",
+          workspace: "077fd6f3-9f9b-438e-9b6f-5c69076cf36c",
+          scopes: [{ secretPath: "/", environment: scenario.metadataEnvironment }],
+          permissions: [permission],
+        });
       }
       if (url.includes("/api/v3/secrets/raw?") && method === "GET") {
-        return jsonResponse({ secrets: scenario.serverSecrets });
+        return scenario.failList ? jsonResponse({ message: "unauthorized" }, 401) : jsonResponse({ secrets: scenario.serverSecrets });
       }
       if (url.includes("/api/v3/secrets/raw/") && method === "PATCH") {
         return jsonResponse({ secret: { secretKey: "x" } });
@@ -67,9 +77,26 @@ function makeScenario(): Scenario {
 let savedEnv: Record<string, string | undefined>;
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+  "NO_PROXY",
+  "no_proxy",
+  "INFISICAL_AGENT_PROXY_ADDRESS",
+  "INFISICAL_PROJECT_ID",
+  "INFISICAL_ENVIRONMENT",
+  "INFISICAL_SECRET_PATH",
+  "SSL_CERT_FILE",
+  "NODE_EXTRA_CA_CERTS",
+];
+
 beforeEach(() => {
   savedEnv = {};
-  for (const key of [...MANAGED_KEYS, "INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET", "CLUTCH_INFISICAL_ENV"]) {
+  for (const key of [...MANAGED_KEYS, ...PROXY_ENV_KEYS, "INFISICAL_TOKEN", "INFISICAL_WRITE_TOKEN", "CLUTCH_INFISICAL_ENV"]) {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
@@ -106,6 +133,22 @@ describe("clutchSettings", () => {
     expect(new Set(m?.[1]?.split(" "))).toEqual(new Set(MANAGED_KEYS));
   });
 
+  it("INFISICAL.md key inventory matches the schema exactly", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const md = readFileSync(join(root, "INFISICAL.md"), "utf8").split("\n");
+    for (const def of CLUTCH_SETTINGS_SCHEMA) {
+      const row = md.find((line) => line.startsWith(`| \`${def.key}\` |`));
+      expect(row, `INFISICAL.md has no inventory row for ${def.key}`).toBeTruthy();
+      // | Key | Kind | Default | Notes | — cells shift by one for the leading pipe.
+      const [, , kind, value] = row!.split("|").map((cell) => cell.trim());
+      expect(kind, `INFISICAL.md kind for ${def.key}`).toBe(def.kind);
+      // The doc renders defaults in backticks and uses — for an empty default.
+      expect(value!.replace(/`/g, ""), `INFISICAL.md default for ${def.key}`).toBe(
+        def.defaultValue === "" ? "—" : def.defaultValue,
+      );
+    }
+  });
+
   it("seeds from process.env with a loud warning when Infisical is unconfigured", async () => {
     process.env.CLUTCH_WEB_PORT = "4000";
     const settings = await initClutchSettings();
@@ -115,7 +158,7 @@ describe("clutchSettings", () => {
       // Schema default applies when neither env nor Infisical provides it.
       expect(settings.get("CLUTCH_WEB_HOST")).toBe("127.0.0.1");
       expect(consoleErrorSpy).toHaveBeenCalled();
-      const warned = consoleErrorSpy.mock.calls.some((c) => String(c[0]).includes("INFISICAL_CLIENT_ID"));
+      const warned = consoleErrorSpy.mock.calls.some((c) => String(c[0]).includes("INFISICAL_TOKEN"));
       expect(warned).toBe(true);
     } finally {
       settings.stop();
@@ -125,8 +168,8 @@ describe("clutchSettings", () => {
   it("loads from Infisical and backfills process.env without clobbering explicit env", async () => {
     const scenario = makeScenario();
     vi.stubGlobal("fetch", scenario.fetchMock);
-    process.env.INFISICAL_CLIENT_ID = "test-id";
-    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
     process.env.CLUTCH_WEB_HOST = "0.0.0.0"; // explicit env wins over Infisical
 
     const settings: ClutchSettings = await initClutchSettings();
@@ -141,7 +184,7 @@ describe("clutchSettings", () => {
       // Secret from Infisical is readable via get() but backfilled into env.
       expect(settings.get("MINIMAX_API_KEY")).toBe("test-key-value");
       // Schema default for a key present nowhere.
-      expect(settings.get("CLUTCH_MINIMAX_MODEL")).toBe("MiniMax-M2.7-highspeed");
+      expect(settings.get("CLUTCH_MINIMAX_MODEL")).toBe("MiniMax-M3.1-Flash");
     } finally {
       settings.stop();
     }
@@ -150,8 +193,8 @@ describe("clutchSettings", () => {
   it("reads the prod environment by default", async () => {
     const scenario = makeScenario();
     vi.stubGlobal("fetch", scenario.fetchMock);
-    process.env.INFISICAL_CLIENT_ID = "test-id";
-    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
 
     const settings = await initClutchSettings();
     try {
@@ -168,8 +211,8 @@ describe("clutchSettings", () => {
     async (requested) => {
       const scenario = makeScenario();
       vi.stubGlobal("fetch", scenario.fetchMock);
-      process.env.INFISICAL_CLIENT_ID = "test-id";
-      process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+      process.env.INFISICAL_TOKEN = READ_TOKEN;
+      process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
       process.env.CLUTCH_INFISICAL_ENV = requested;
 
       const settings = await initClutchSettings();
@@ -191,10 +234,10 @@ describe("clutchSettings", () => {
 
   it("falls back to env seeding when the Infisical load fails", async () => {
     const scenario = makeScenario();
-    scenario.failLogin = true;
+    scenario.failList = true;
     vi.stubGlobal("fetch", scenario.fetchMock);
-    process.env.INFISICAL_CLIENT_ID = "test-id";
-    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
     process.env.CLUTCH_WEB_PORT = "4001";
 
     const settings = await initClutchSettings();
@@ -210,8 +253,8 @@ describe("clutchSettings", () => {
   it("set() writes through to Infisical before updating process.env", async () => {
     const scenario = makeScenario();
     vi.stubGlobal("fetch", scenario.fetchMock);
-    process.env.INFISICAL_CLIENT_ID = "test-id";
-    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
 
     const settings = await initClutchSettings();
     try {
@@ -241,8 +284,8 @@ describe("clutchSettings", () => {
   it("refresh() is a no-op in env-seed mode and re-backfills after Infisical refresh", async () => {
     const scenario = makeScenario();
     vi.stubGlobal("fetch", scenario.fetchMock);
-    process.env.INFISICAL_CLIENT_ID = "test-id";
-    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
 
     const settings = await initClutchSettings();
     try {
@@ -273,8 +316,8 @@ describe("clutchSettings", () => {
       return scenario.fetchMock(input, init);
     }) as typeof fetch;
     vi.stubGlobal("fetch", countingFetch);
-    process.env.INFISICAL_CLIENT_ID = "test-id";
-    process.env.INFISICAL_CLIENT_SECRET = "test-secret";
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
 
     const settings = await initClutchSettings();
     try {
@@ -294,12 +337,13 @@ describe("clutchSettings", () => {
 
   it("vendored client is the fleet reference implementation", async () => {
     const scenario = makeScenario();
+    scenario.metadataEnvironment = "dev";
     const client = createInfisicalSettings({
       projectId: "077fd6f3-9f9b-438e-9b6f-5c69076cf36c",
       environment: "dev",
       refreshIntervalMs: 0,
-      clientId: "test-id",
-      clientSecret: "test-secret",
+      readToken: READ_TOKEN,
+      writeToken: WRITE_TOKEN,
       fetchImpl: scenario.fetchMock as typeof fetch,
     });
     await client.init();
@@ -307,6 +351,185 @@ describe("clutchSettings", () => {
       expect(client.get("CLUTCH_WEB_PORT")).toBe("3199");
     } finally {
       client.stop();
+    }
+  });
+
+  it("injects proxy environment variables when CLUTCH_AGENT_PROXY_ENABLED is true", async () => {
+    process.env.CLUTCH_AGENT_PROXY_ENABLED = "true";
+    process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:17322";
+    process.env.CLUTCH_AGENT_PROXY_PROJECT_ID = "custom-project";
+    process.env.CLUTCH_AGENT_PROXY_ENV = "prod";
+    process.env.CLUTCH_AGENT_PROXY_PATH = "/scope";
+    process.env.CLUTCH_AGENT_PROXY_CA_CERT_PATH = "/tmp/ca.crt";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.HTTPS_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.ALL_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1");
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:17322");
+      expect(process.env.INFISICAL_PROJECT_ID).toBe("custom-project");
+      expect(process.env.INFISICAL_ENVIRONMENT).toBe("prod");
+      expect(process.env.INFISICAL_SECRET_PATH).toBe("/scope");
+      expect(process.env.SSL_CERT_FILE).toBe("/tmp/ca.crt");
+      expect(process.env.NODE_EXTRA_CA_CERTS).toBe("/tmp/ca.crt");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("removes the proxy variables it injected when the agent proxy is disabled, and keeps operator-set ones", async () => {
+    process.env.CLUTCH_AGENT_PROXY_ENABLED = "true";
+    process.env.CLUTCH_AGENT_PROXY_CA_CERT_PATH = "/tmp/ca.crt";
+    process.env.HTTPS_PROXY = "http://operator-proxy.invalid:8080";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.http_proxy).toBe("http://127.0.0.1:17322");
+      expect(process.env.HTTPS_PROXY).toBe("http://operator-proxy.invalid:8080");
+      expect(process.env.https_proxy).toBeUndefined();
+
+      process.env.CLUTCH_AGENT_PROXY_ENABLED = "false";
+      applyAgentProxyToProcessEnv();
+
+      for (const key of PROXY_ENV_KEYS.filter((k) => k !== "HTTPS_PROXY")) {
+        expect(process.env[key], key).toBeUndefined();
+      }
+      expect(process.env.HTTPS_PROXY).toBe("http://operator-proxy.invalid:8080");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("re-points injected proxy variables when the address changes, and leaves operator-set ones alone", async () => {
+    process.env.CLUTCH_AGENT_PROXY_ENABLED = "true";
+    process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:17322";
+    process.env.ALL_PROXY = "socks5://operator-proxy.invalid:1080";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+      expect(process.env.ALL_PROXY).toBe("socks5://operator-proxy.invalid:1080");
+
+      process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:18000";
+      applyAgentProxyToProcessEnv();
+
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:18000");
+      expect(process.env.https_proxy).toBe("http://127.0.0.1:18000");
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:18000");
+      expect(process.env.ALL_PROXY).toBe("socks5://operator-proxy.invalid:1080");
+      expect(process.env.all_proxy).toBeUndefined();
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("set() on the agent proxy keys applies, re-points, and then tears down the proxy variables", async () => {
+    const scenario = makeScenario();
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+
+      await settings.set("CLUTCH_AGENT_PROXY_ENABLED", "true");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+
+      await settings.set("CLUTCH_AGENT_PROXY_ADDRESS", "127.0.0.1:18000");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:18000");
+
+      await settings.set("CLUTCH_AGENT_PROXY_ENABLED", "false");
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBeUndefined();
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("refresh() re-points and then removes the proxy variables when Infisical changes, but not an operator-set key", async () => {
+    const scenario = makeScenario();
+    scenario.serverSecrets.push(
+      { secretKey: "CLUTCH_AGENT_PROXY_ENABLED", secretValue: "true" },
+      { secretKey: "CLUTCH_AGENT_PROXY_ADDRESS", secretValue: "127.0.0.1:19001" },
+    );
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19001");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19001");
+
+      const setServer = (key: string, value: string | undefined) => {
+        const rest = scenario.serverSecrets.filter((s) => s.secretKey !== key);
+        scenario.serverSecrets.length = 0;
+        scenario.serverSecrets.push(...rest);
+        if (value !== undefined) scenario.serverSecrets.push({ secretKey: key, secretValue: value });
+      };
+
+      setServer("CLUTCH_AGENT_PROXY_ADDRESS", "127.0.0.1:19002");
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19002");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19002");
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19002");
+
+      setServer("CLUTCH_AGENT_PROXY_ENABLED", "false");
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ENABLED).toBe("false");
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.https_proxy).toBeUndefined();
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBeUndefined();
+
+      // A key deleted in Infisical drops back to its default.
+      setServer("CLUTCH_AGENT_PROXY_ENABLED", "true");
+      await settings.refresh();
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19002");
+      setServer("CLUTCH_AGENT_PROXY_ADDRESS", undefined);
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBeUndefined();
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:17322");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("refresh() never overrides an operator-set CLUTCH_AGENT_PROXY_ADDRESS", async () => {
+    const scenario = makeScenario();
+    scenario.serverSecrets.push(
+      { secretKey: "CLUTCH_AGENT_PROXY_ENABLED", secretValue: "true" },
+      { secretKey: "CLUTCH_AGENT_PROXY_ADDRESS", secretValue: "127.0.0.1:19101" },
+    );
+    vi.stubGlobal("fetch", scenario.fetchMock);
+    process.env.INFISICAL_TOKEN = READ_TOKEN;
+    process.env.INFISICAL_WRITE_TOKEN = WRITE_TOKEN;
+    process.env.CLUTCH_AGENT_PROXY_ADDRESS = "127.0.0.1:19100";
+
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19100");
+      const address = scenario.serverSecrets.find((s) => s.secretKey === "CLUTCH_AGENT_PROXY_ADDRESS");
+      if (address) address.secretValue = "127.0.0.1:19102";
+      await settings.refresh();
+      expect(process.env.CLUTCH_AGENT_PROXY_ADDRESS).toBe("127.0.0.1:19100");
+      expect(process.env.HTTP_PROXY).toBe("http://127.0.0.1:19100");
+    } finally {
+      settings.stop();
+    }
+  });
+
+  it("leaves proxy environment untouched when agent proxy is disabled", async () => {
+    const settings = await initClutchSettings();
+    try {
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.HTTPS_PROXY).toBeUndefined();
+      expect(process.env.INFISICAL_AGENT_PROXY_ADDRESS).toBeUndefined();
+    } finally {
+      settings.stop();
     }
   });
 });

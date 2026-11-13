@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,4 +67,23 @@ describe("update-mac-app.sh", () => {
     expect(code).not.toBe(0); // the fixture checkout is not a git repo
     expect(existsSync(lock)).toBe(false);
   }, 30000);
+
+  it("proceeds past an installed native app instead of skipping it (C-86)", () => {
+    const app = join(home, "Applications", "Clutch.app");
+    mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+    writeFileSync(
+      join(app, "Contents", "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>` +
+        `<key>CFBundleIdentifier</key><string>codes.clutch.macos</string>` +
+        `<key>DTXcodeBuild</key><string>27A9275</string>` +
+        `</dict></plist>\n`,
+    );
+    writeFileSync(join(app, "Contents", "MacOS", "Clutch"), "fake-macho-binary\n");
+    // C-78 exited 0 here, refusing to touch an install it could not rebuild
+    // correctly.  C-86 is that pipeline, so the run continues and fails later,
+    // on the fixture checkout not being a git repo.  What matters is that the
+    // failure is the checkout and not a guard, and that the lock is released.
+    expect(() => runUpdate()).toThrow();
+    expect(existsSync(join(home, ".clutch", "auto-update.lock"))).toBe(false);
+  });
 });

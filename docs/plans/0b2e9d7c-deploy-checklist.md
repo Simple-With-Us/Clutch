@@ -1,12 +1,12 @@
 # Deploy checklist — CometChat iOS Chat tab (0b2e9d7c)
 
 Run in order once the live CometChat proof passes. Key names only — values
-live in Infisical and the handoff file, never here.
+live in Infisical (Fleet-OPS `/comet-chat`), never here.
 
 ## 1. Live relay proof (needs Jay first)
 
 - Jay adds numeric `COMETCHAT_APP_ID` and `COMETCHAT_REGION` (us|eu|in)
-  to the comet-chat handoff file alongside the existing keys.
+  to Infisical Fleet-OPS `/comet-chat` alongside the existing keys.
 - Provision the agent user (`COMETCHAT_AGENT_UID`, default `clutch-agent`)
   and this device's login user in the CometChat app.
 - Re-run the relay verification: send, streaming edits, tool card.

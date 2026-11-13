@@ -16,7 +16,8 @@
 #   5. npm run sync, which copies profiles and agent presets into ~/.clutch/dsh;
 #   6. smoke-test the engine (node_modules/.bin/dsh --version);
 #   7. restart pm2 clutch-web when code the running server loads moved, then wait
-#      for the port to answer and roll back if it never does;
+#      for the port to answer (up to CLUTCH_AUTO_UPDATE_HEALTH_WAIT_SECONDS,
+#      default 600: a cold dsh boot needs minutes) and roll back if it never does;
 #   8. rebuild the Dock app only when its own sources moved.
 #   A failure after the fast-forward rolls the checkout back to the previous
 #   commit, re-syncs, and remembers the bad sha, so a broken main never bricks
@@ -37,6 +38,7 @@ CLUTCH_HOME_DIR="${CLUTCH_HOME:-$HOME/.clutch}"
 STATE_DIR="$CLUTCH_HOME_DIR"
 LOG="${CLUTCH_AUTO_UPDATE_LOG:-$HOME/apps/logs/clutch-auto-update.log}"
 LOCK_DIR="${CLUTCH_AUTO_UPDATE_LOCK:-$STATE_DIR/auto-update.lock}"
+LOCK_BEAT_SECONDS="${CLUTCH_AUTO_UPDATE_LOCK_BEAT_SECONDS:-60}"
 PAUSE_FILE="${CLUTCH_AUTO_UPDATE_PAUSE:-$STATE_DIR/auto-update.pause}"
 BAD_FILE="${CLUTCH_AUTO_UPDATE_BAD_SHA:-$STATE_DIR/auto-update.bad-sha}"
 SELF_STABLE="${CLUTCH_AUTO_UPDATE_SELF:-$HOME/apps/clutch-auto-update.sh}"
@@ -49,6 +51,13 @@ ECOSYSTEM="${CLUTCH_AUTO_UPDATE_ECOSYSTEM:-$HOME/apps/pm2-ecosystem.config.cjs}"
 WEB_PORT="${CLUTCH_WEB_PORT:-3180}"
 HEALTH_URL="${CLUTCH_AUTO_UPDATE_HEALTH_URL:-http://127.0.0.1:$WEB_PORT/}"
 HEALTH_ENABLED="${CLUTCH_AUTO_UPDATE_HEALTH:-1}"
+# How long the engine gets to answer after a restart, and how often to ask.
+# The dsh engine cold-boots the whole cordis tree before it binds the port.
+# On a memory-pressured Mac that takes minutes, not seconds: a short window
+# rolls back every good update and freezes the deployment (2026-10-19, four
+# advances rolled back and the checkout stuck for hours).
+HEALTH_WAIT_SECONDS="${CLUTCH_AUTO_UPDATE_HEALTH_WAIT_SECONDS:-600}"
+HEALTH_POLL_SECONDS="${CLUTCH_AUTO_UPDATE_HEALTH_POLL_SECONDS:-2}"
 CURL_BIN="${CLUTCH_AUTO_UPDATE_CURL:-/usr/bin/curl}"
 PKILL_BIN="${CLUTCH_AUTO_UPDATE_PKILL:-pkill}"
 
@@ -63,8 +72,29 @@ CMD_RESTART="${CLUTCH_AUTO_UPDATE_RESTART_CMD:-}"
 # Paths whose change means the running web server must be restarted, and paths
 # that mean the Dock app bundle must be rebuilt.  Docs, tests, CI config, the
 # iOS app and image assets are none of the running Mac engine's business.
+# The two filters are deliberately different.  CODE_EXCLUDE_RE keeps ios/ out of
+# the *web server* restart decision: an iOS view tweak must not bounce the
+# engine.  DOCK_RE is about the Mac app bundle, which is BUILT from ios/Mac,
+# ios/App, ios/Resources and ios/Assets.xcassets, so a change to any of those
+# does have to refresh it.  C-86 widened this from the old dock-only scope,
+# which could not see the native target at all and so never shipped one.
+# Every path here is also in mac-app-build.yml's filter, so a change that
+# triggers a refresh has a CI-built app to fetch;  the retired shell's inputs
+# (src/web/dock-app/, the icon PNG) and update-mac-app.sh are in no bundle and
+# publish nothing, so matching them would force a local native build for
+# nothing.  tests/mac-release-pipeline.test.ts pins this.
 CODE_EXCLUDE_RE='^(docs/|tests/|e2e/|ios/|assets/|\.github/|[^/]+\.md$)'
-DOCK_RE='^(src/web/dock-app/|assets/clutch-icon-1024\.png$|scripts/install-dock-app\.sh$)'
+DOCK_RE='^(ios/(Mac|App|Resources|Assets\.xcassets)/|ios/(project\.yml|Clutch\.xcodeproj/)|native/muse-gui-helper/|scripts/(install-dock-app|build-mac-app|build-muse-gui-helper)\.sh$|scripts/lib/clutch-build-lock\.sh$)'
+
+# C-78: the deprecated WKWebView shell and the native app install to the same
+# path.  The native app keeps codes.clutch.macos; the shell is
+# codes.clutch.macos.dock (see build-mac-app.sh).  A pre-fix shell still
+# reports the native id, and both binaries link WebKit (the native target
+# compiles its own Mac/WebViewMac.swift), so neither tells them apart.  What
+# does: Xcode injects DT* build keys into the native Info.plist at build time,
+# and the hand-rolled shell plist never has them.
+NATIVE_APP_ID="codes.clutch.macos"
+MAC_APP="${CLUTCH_MAC_APP:-$HOME/Applications/Clutch.app}"
 
 OLD=""
 NEW=""
@@ -101,7 +131,47 @@ try_fetch_mac_app() {
 }
 do_dock() {
   if try_fetch_mac_app; then return 0; fi
-  if [ -n "$CMD_DOCK" ]; then bash -c "$CMD_DOCK"; else (cd "$RUNTIME" && bash scripts/install-dock-app.sh); fi
+  # The local rebuild is the fallback for a commit whose CI build does not exist
+  # yet (the updater usually runs minutes after a merge, well before the release
+  # is published).  C-86 made it build the native target, so replacing an
+  # installed native app is exactly its job here;  install-dock-app.sh keeps its
+  # refuse-to-pave guard for an operator running it by hand, and without this
+  # override the fallback would refuse the very app it exists to refresh and
+  # then never retry that commit.
+  #
+  # That rebuild is a full xcodebuild, and the stale-lock rule in main() (a lock
+  # older than 30 minutes belongs to a dead run) was written for npm ci.  Keep
+  # the lock fresh while it runs so a slow build on a loaded Mac is never taken
+  # for a dead run by the next tick, which would start a second updater against
+  # the same checkout.
+  local beat rc=0
+  lock_heartbeat "$$" &
+  beat=$!
+  if [ -n "$CMD_DOCK" ]; then
+    CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash -c "$CMD_DOCK" || rc=$?
+  else
+    (cd "$RUNTIME" && CLUTCH_DOCK_OVERWRITE_NATIVE=1 bash scripts/install-dock-app.sh) || rc=$?
+  fi
+  kill "$beat" 2>/dev/null || true
+  wait "$beat" 2>/dev/null || true
+  return "$rc"
+}
+# Refresh the run lock's mtime for as long as the updater (pid $1) is alive.
+# The loop ends on its own when that process is gone, so an updater killed
+# without a chance to clean up (SIGKILL, a launchd timeout) cannot leave an
+# orphaned heartbeat keeping the lock fresh forever;  the lock then ages past the
+# 30-minute dead-run threshold in main() and a later tick takes it over.
+#
+# The trailing slash on the touch target makes touch fail rather than create a
+# plain file where rmdir expects a directory, if the lock is removed between the
+# -d test and the touch.
+lock_heartbeat() {
+  local parent="$1"
+  while kill -0 "$parent" 2>/dev/null; do
+    sleep "$LOCK_BEAT_SECONDS"
+    kill -0 "$parent" 2>/dev/null || break
+    if [ -d "$LOCK_DIR" ]; then touch "$LOCK_DIR/" 2>/dev/null || true; fi
+  done
 }
 do_restart() {
   if [ -n "$CMD_RESTART" ]; then bash -c "$CMD_RESTART"; return $?; fi
@@ -122,17 +192,37 @@ web_up() {
 }
 
 wait_web_up() {
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  # Keep asking until the engine answers or the window closes.  The window is
+  # generous on purpose: a cold dsh boot under memory pressure needs minutes,
+  # and rolling back a good commit because the engine was still starting is how
+  # the checkout got stuck in the first place.
+  local deadline
+  deadline=$(( $(date +%s) + HEALTH_WAIT_SECONDS ))
+  while :; do
     web_up && return 0
-    sleep 2
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep "$HEALTH_POLL_SECONDS"
   done
-  return 1
 }
 
 code_paths_changed() { printf '%s\n' "$CHANGED" | grep -Ev "$CODE_EXCLUDE_RE" | grep -q .; }
 dock_paths_changed() { printf '%s\n' "$CHANGED" | grep -Eq "$DOCK_RE"; }
 changed_contains() { printf '%s\n' "$CHANGED" | grep -qx "$1"; }
+
+installed_is_native() {
+  # An Xcode-built native app reports the shipping id and carries Xcode's
+  # DT* build keys; the hand-rolled shell has neither (post-fix shells report
+  # the .dock id instead).
+  [ -d "$MAC_APP" ] && python3 -c '
+import plistlib, sys
+try:
+    d = plistlib.load(open(sys.argv[1], "rb"))
+except Exception:
+    sys.exit(1)
+ok = d.get("CFBundleIdentifier") == "codes.clutch.macos" and "DTXcodeBuild" in d
+sys.exit(0 if ok else 1)
+' "$MAC_APP/Contents/Info.plist" 2>/dev/null
+}
 
 # Return the checkout to the last known-good commit and remember the bad one, so
 # the next run does not retry it and a broken main never keeps the Mac down.
@@ -272,8 +362,20 @@ main() {
   fi
 
   if dock_paths_changed; then
+    # C-78 skipped this whole block when a native Clutch.app was installed,
+    # because the only thing this path could build was the deprecated shell and
+    # refreshing would have paved the native app with it.  C-86 makes this path
+    # build the native `Clutch macOS` target, so a native install is now exactly
+    # what should be refreshed here rather than protected from it.  The
+    # discriminator decides the log line, not the action.
+    was_native=false
+    installed_is_native && was_native=true
     if do_dock; then
-      log "DOCK-REBUILT  ~/Applications/Clutch.app relaunched"
+      if [ "$was_native" = true ]; then
+        log "DOCK-REBUILT  native Clutch.app refreshed and relaunched"
+      else
+        log "DOCK-REBUILT  ~/Applications/Clutch.app relaunched"
+      fi
     else
       log "DOCK-FAILED  CI fetch and install-dock-app.sh failed; the Dock app is stale, the web is fine"
     fi

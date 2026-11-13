@@ -43,27 +43,32 @@ describe("the shipped MiniMax plugin", () => {
     const support = await loadMinimax();
     const ids = support.models.options.map((option) => option.id);
     expect(ids).toContain(support.models.default);
-    expect(support.models.default).toBe("MiniMax-M2.7-highspeed");
+    expect(support.models.default).toBe("MiniMax-M3.1-Flash");
   });
 
-  it("leaves the engine-wide image gate closed and states per-model truth", async () => {
+  it("opens the engine-wide image gate and keeps per-model truth exact", async () => {
     const support = await loadMinimax();
-    // A consumer reading only `images` must not offer an attachment the M2.7
-    // family would refuse; the per-model map is what a mixed catalog uses.
-    expect(support.images).toBe(false);
+    // The gate is only the fallback for a row the catalog does not list, and
+    // M3 really does take images.  The per-model map is what stops a
+    // consumer offering an attachment the M2.7 family would refuse.
+    // MiniMax-M3.1-Flash is the stable successor to the retired
+    // MiniMax-M3.1-Flash-Preview (2026-10-18, BF-2494) and is multimodal
+    // too, so it carries its own row here.
+    expect(support.images).toBe(true);
     expect(support.perModelImages).toEqual({
-      "MiniMax-M3.1-Flash-Preview": true,
+      "MiniMax-M3.1-Flash": true,
       "MiniMax-M3": true,
       "MiniMax-M2.7-highspeed": false,
       "MiniMax-M2.7": false,
     });
   });
 
-  it("gives MiniMax-M3 the full effort range and leaves the rest on the default", async () => {
+  it("gives MiniMax-M3 and MiniMax-M3.1-Flash their own effort ranges", async () => {
     const support = await loadMinimax();
     expect(support.effortLevels).toEqual(["none"]);
     expect(support.perModelEffortLevels).toEqual({
       "MiniMax-M3": ["none", "low", "medium", "high", "max"],
+      "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
     });
   });
 
@@ -91,7 +96,7 @@ describe("the shipped MiniMax plugin", () => {
     const fresh: Record<string, string | undefined> = {};
     support.transformEnv!(fresh);
     expect(fresh.CLUTCH_MINIMAX_BASE_URL).toBe("https://api.minimax.io/v1");
-    expect(fresh.CLUTCH_MINIMAX_MODEL).toBe("MiniMax-M2.7-highspeed");
+    expect(fresh.CLUTCH_MINIMAX_MODEL).toBe("MiniMax-M3.1-Flash");
     expect(fresh.CLUTCH_MINIMAX_API_KEY_NAME).toBe("MINIMAX_API_KEY");
 
     const chosen: Record<string, string | undefined> = {

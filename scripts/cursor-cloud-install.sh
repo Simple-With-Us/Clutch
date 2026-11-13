@@ -6,7 +6,9 @@
 
 set -euo pipefail
 
-# Two ASCII spaces after periods and colons (fleet copy rule).
+# Sentence gap: AGENTS.md § Copy Rules (a real U+00A0 plus a normal space
+# between sentences in prose a human reads;  code, identifiers and
+# machine-readable config never take a U+00A0).
 REPO_NAME="Clutch"
 NODE_MAJOR_MIN=22
 ENV_FILE_REL=".cursor/infisical.env"

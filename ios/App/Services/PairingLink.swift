@@ -8,6 +8,10 @@ import Foundation
 public struct PairingPayload: Equatable {
     public var name: String
     public var origin: URL
+    /// `.codeServer` for a server host paired with `kind=mcode` or
+    /// `kind=muse` (chat sidecar only, no clutch web).  Nil keeps whatever a
+    /// re-pair refreshes.
+    public var kind: HostKind? = nil
     public var launchToken: String?
     /// The chat-bridge auth token (`&chat=`), minted by the SSE sidecar and
     /// renewed on re-pair. Unlike the launch token it is long-lived: the
@@ -81,16 +85,20 @@ public enum PairingLink {
             return nil
         }
         let name = value("name") ?? (isMiniMax ? "MiniMax Remote" : nil)
+        let kind = Self.hostKind(value("kind", "mode"))
 
         if let inner = value("url") {
-            return parseWebURL(inner, name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init))
+            return parseWebURL(inner, name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init), kind: kind)
         }
 
         guard let host = value("host", "h") else { return .failure(.missingHost) }
         // `minimax://` remains a compatibility alias for old pairing links,
         // but the retired MiniMax companion port is gone.  Both schemes now
         // target the Clutch host unless the link names a port explicitly.
-        let port = value("port", "p").flatMap(Int.init) ?? defaultPort
+        // A MiniMax Code server host has no web port at all, so its origin
+        // port is the chat port: that is the only port behind the name.
+        let chatPort = value("chatPort").flatMap(Int.init)
+        let port = value("port", "p").flatMap(Int.init) ?? (kind == .codeServer ? chatPort : nil) ?? defaultPort
         let tlsRaw = (value("tls") ?? "0").lowercased()
         let useTLS = tlsRaw == "1" || tlsRaw == "true"
         var origin = URLComponents()
@@ -98,10 +106,24 @@ public enum PairingLink {
         origin.host = host
         origin.port = port
         guard let url = origin.url else { return .failure(.invalidURL) }
-        return build(origin: url, token: value("token", "t"), name: name, chatToken: value("chat"), chatPort: value("chatPort").flatMap(Int.init))
+        return build(origin: url, token: value("token", "t"), name: name, chatToken: value("chat"), chatPort: chatPort, kind: kind)
     }
 
-    private static func parseWebURL(_ raw: String, name: String?, chatToken: String? = nil, chatPort: Int? = nil) -> Result<PairingPayload, PairingLinkError> {
+    /// The `kind=` / `mode=` pairing value as a host kind, when it names one.
+    ///
+    /// `mcode`, `muse` and `zcode` all mean a code server: the sidecar behind
+    /// them decides which engines it actually runs, and the app reads that
+    /// from the host's engine catalog.
+    static func hostKind(_ raw: String?) -> HostKind? {
+        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "mcode", "muse", "zcode", "minimax-code", "minimaxcode", "muse-code", "musecode":
+            return .codeServer
+        case "web": return .web
+        default: return nil
+        }
+    }
+
+    private static func parseWebURL(_ raw: String, name: String?, chatToken: String? = nil, chatPort: Int? = nil, kind: HostKind? = nil) -> Result<PairingPayload, PairingLinkError> {
         guard let comps = URLComponents(string: raw),
               let scheme = comps.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
@@ -114,7 +136,7 @@ public enum PairingLink {
         origin.port = comps.port
         guard let url = origin.url else { return .failure(.invalidURL) }
         let token = comps.queryItems?.first(where: { $0.name == "token" })?.value
-        return build(origin: url, token: token, name: name, chatToken: chatToken, chatPort: chatPort)
+        return build(origin: url, token: token, name: name, chatToken: chatToken, chatPort: chatPort, kind: kind)
     }
 
     private static func parseBareAddress(_ raw: String) -> Result<PairingPayload, PairingLinkError> {
@@ -125,7 +147,7 @@ public enum PairingLink {
         return parseWebURL("\(scheme)://\(withPort)", name: nil)
     }
 
-    private static func build(origin: URL, token: String?, name: String?, chatToken: String? = nil, chatPort: Int? = nil) -> Result<PairingPayload, PairingLinkError> {
+    private static func build(origin: URL, token: String?, name: String?, chatToken: String? = nil, chatPort: Int? = nil, kind: HostKind? = nil) -> Result<PairingPayload, PairingLinkError> {
         func cleaned(_ raw: String?) -> String? {
             let t = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
             return (t?.isEmpty == false) ? t : nil
@@ -133,6 +155,7 @@ public enum PairingLink {
         return .success(PairingPayload(
             name: (name?.isEmpty == false ? name! : defaultName(for: origin)),
             origin: origin,
+            kind: kind,
             launchToken: cleaned(token),
             chatToken: cleaned(chatToken),
             chatPort: chatPort

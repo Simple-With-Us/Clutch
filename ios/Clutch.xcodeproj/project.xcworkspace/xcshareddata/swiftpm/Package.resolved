@@ -1,5 +1,5 @@
 {
-  "originHash" : "84196e4f11c2439893d10e5c1773074e22eb2c59e93dc70480b7b6336a12efc0",
+  "originHash" : "4d42a798cefb1e7a8ca9b83c0307b161cf6a31f1f7d4bb7fed51c75de97f4e2f",
   "pins" : [
     {
       "identity" : "cards-sdk-ios",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "eeff8ec54d40cd355092f2e105058973e2aaa2e0",
         "version" : "5.2.3"
+      }
+    },
+    {
+      "identity" : "sentry-cocoa",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/getsentry/sentry-cocoa.git",
+      "state" : {
+        "revision" : "f196cbb98e0388381d57908f2f5a9bdc385cde68",
+        "version" : "8.58.4"
       }
     }
   ],

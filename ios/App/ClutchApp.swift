@@ -6,6 +6,10 @@ struct ClutchApp: App {
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
 
     init() {
+        #if os(iOS)
+        // Sentry is linked into the iOS targets only; this file is shared with macOS.
+        SentryTelemetry.start()
+        #endif
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
             HostStore.resetPersistedHosts()
@@ -18,6 +22,13 @@ struct ClutchApp: App {
             RootView()
                 .preferredColorScheme(colorScheme)
         }
+        #if os(macOS)
+        WindowGroup("Thread", for: MacThreadWindowRequest.self) { $request in
+            MacThreadWindow(request: $request)
+                .preferredColorScheme(colorScheme)
+        }
+        .defaultSize(width: 1040, height: 760)
+        #endif
     }
 
     private var colorScheme: ColorScheme? {

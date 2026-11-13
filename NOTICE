@@ -13,7 +13,7 @@ derived from, the DeepSeek Harness (DSH) open-source project:
 
     DeepSeek Harness
     https://github.com/deepseek-ai/deepseek-harness
-    npm package: @deepseek-ai/dsh (currently pinned at 0.1.5-rc.2)
+    npm package: @deepseek-ai/dsh (currently pinned at 0.1.5-rc.3)
     Copyright DeepSeek AI and contributors
     Licensed under the terms published by the upstream project.
 
@@ -24,6 +24,15 @@ in this repository reads, extends, and configures the upstream
 this repository were ported from prior BotFleet and Fleet-OPS work that
 itself wrapped DSH.  No source from the upstream repository is vendored
 into this one; the upstream binary is loaded at runtime via npm.
+
+The native dsh client contract in src/shared/dshHostContract.ts, and its
+mirror in ios/App/Models/DshHostModels.swift and
+ios/App/Services/DshHostClient.swift, are Clutch's own implementation of the
+wire format that upstream's MIT-licensed dsh-client-connection and
+dsh-api-gateway packages define.  They were written from upstream's
+published type definitions and are checked against the installed package by
+tests/dsh-host-pinned.test.ts; no upstream source file is copied into this
+repository.  See docs/dsh-native-clients.md.
 
 Specific derivations (each noted with the path in this repository):
 

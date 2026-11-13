@@ -198,10 +198,40 @@ describe("clutch CLI wrapper", () => {
 });
 
 describe("per-model image support", () => {
-  it("keeps the engine gate closed until BotFleet consumes per-model flags", () => {
-    // BotFleet currently gates image intake by engine alone.  Do not offer
-    // attachments on non-vision Pro before the per-model consumer deploys.
-    expect(dshSupport.images).toBe(false);
+  it("opens the engine gate now that consumers read per-model flags", () => {
+    // BotFleet folds the map in as `model?.images ?? capabilities?.images`, so
+    // the engine-wide answer is no longer the only thing a composer can see.
+    // Holding it closed was what told every model on the engine it refused
+    // images, which is how M3 and M3.1 Flash lost their attach button.
+    expect(dshSupport.images).toBe(true);
+  });
+
+  it("resolves every model the way a consumer folds the map, not the gate", () => {
+    // The exact fold a consumer runs: `model?.images ?? (capabilities?.images
+    // === true)`.  This is the bug the owner hit -- the closed engine gate,
+    // not the catalog, is what told the composer M3 and M3.1 Flash could not
+    // take an image.  Guard the fold itself so a future gate flip cannot
+    // silently re-disable every multimodal row at once.
+    const fold = (support: typeof dshSupport, modelId: string) => {
+      const row = support.models.options.find((option) => option.id === modelId);
+      return row?.images ?? (support.images === true);
+    };
+
+    // Multimodal rows resolve to true on every engine that lists them.
+    // MiniMax-M3.1-Flash is the stable successor to the retired
+    // MiniMax-M3.1-Flash-Preview (2026-10-18, BF-2494) and is multimodal.
+    expect(fold(dshSupport, "MiniMax-M3")).toBe(true);
+    expect(fold(dshSupport, "MiniMax-M3.1-Flash")).toBe(true);
+    expect(fold(dshSupport, "DeepSeek-V4.1-Flash")).toBe(true);
+    expect(fold(minimaxSupport, "MiniMax-M3")).toBe(true);
+    expect(fold(minimaxSupport, "MiniMax-M3.1-Flash")).toBe(true);
+
+    // Text-only rows still resolve to false, so opening the gate never turns
+    // into "offer an attachment the provider would refuse".
+    expect(fold(dshSupport, "MiniMax-M2.7-highspeed")).toBe(false);
+    expect(fold(dshSupport, "DeepSeek-V4.1-Pro")).toBe(false);
+    expect(fold(minimaxSupport, "MiniMax-M2.7-highspeed")).toBe(false);
+    expect(fold(minimaxSupport, "MiniMax-M2.7")).toBe(false);
   });
 
   it("marks the multimodal model and not the reasoning one", () => {
@@ -230,12 +260,13 @@ describe("per-model image support", () => {
   });
 
   it("routes MiniMax image support by the provider's own modality declaration", () => {
-    // The installed pi-ai catalog declares M3 (and the newer M3.1 preview) as
-    // text+image and the M2.7 family as text-only.  Offering an attachment to a
-    // text-only row is what produced the refusal the owner hit.
+    // The installed pi-ai catalog declares M3 as text+image and the M2.7
+    // family as text-only.  Offering an attachment to a text-only row is
+    // what produced the refusal the owner hit.  MiniMax-M3.1-Flash is the
+    // stable successor to the retired Preview id and is multimodal.
     const byId = new Map(STATIC_MINIMAX_MODELS.options.map((o) => [o.id, o]));
-    expect(byId.get("MiniMax-M3.1-Flash-Preview")?.images).toBe(true);
     expect(byId.get("MiniMax-M3")?.images).toBe(true);
+    expect(byId.get("MiniMax-M3.1-Flash")?.images).toBe(true);
     expect(byId.get("MiniMax-M2.7-highspeed")?.images).toBe(false);
     expect(byId.get("MiniMax-M2.7")?.images).toBe(false);
     for (const option of STATIC_MINIMAX_MODELS.options) {

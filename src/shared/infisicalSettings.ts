@@ -5,8 +5,8 @@
 // This module is the fleet-wide reference implementation of the Infisical
 // sole-source-of-truth pattern (see INFISICAL.md at the repo root).  It is a
 // generic client: TypeScript apps import it, point it at their own Infisical
-// project, and get the canonical cache/refresh/write-through contract with
-// zero new runtime dependencies (global `fetch` only).
+// project, and get the canonical cache/refresh/write-through contract.  It
+// uses the repository's existing Zod dependency for untrusted API responses.
 //
 // Contract summary:
 //   - init()     loads every secret for the project+environment into an
@@ -21,15 +21,18 @@
 //                cache and Infisical are never allowed to diverge silently.
 //   - stop()     clears the background refresh timer.
 //
-// Auth: Infisical universal auth.  The clientId/clientSecret come from the
-// options, falling back to the INFISICAL_CLIENT_ID / INFISICAL_CLIENT_SECRET
-// environment variables.  Secret VALUES are never printed, echoed, or logged —
+// Auth: scoped Infisical service tokens.  The read token comes from the options,
+// falling back to INFISICAL_TOKEN; writes use INFISICAL_WRITE_TOKEN when set.
+// Secret VALUES are never printed, echoed, or logged —
 // names and metadata only.
 //
 // Added as an explicit owner-directed exception (2026-10-03) to this repo's
 // "do not add app runtime code here" rule: the library itself holds no
 // secrets, but it is the home of the reusable pattern for the whole fleet.
 // See the Infisical section in AGENTS.md.
+
+import { isIP } from "node:net";
+import { z } from "zod";
 
 export interface InfisicalSettingsOptions {
   /** Infisical project ID (the workspaceId), e.g. "6a953a29-8397-4a9d-a5a5-7d1b61e4a5e7". */
@@ -44,10 +47,10 @@ export interface InfisicalSettingsOptions {
   refreshIntervalMs?: number;
   /** Infisical instance base URL.  Defaults to "https://app.infisical.com". */
   infisicalUrl?: string;
-  /** Universal-auth client ID.  Defaults to the INFISICAL_CLIENT_ID env var. */
-  clientId?: string;
-  /** Universal-auth client secret.  Defaults to the INFISICAL_CLIENT_SECRET env var. */
-  clientSecret?: string;
+  /** Scoped read token. Defaults to the INFISICAL_TOKEN env var. */
+  readToken?: string;
+  /** Optional, separate scoped write token. Defaults to INFISICAL_WRITE_TOKEN; never uses readToken. */
+  writeToken?: string;
   /**
    * fetch implementation.  Defaults to globalThis.fetch.  Inject a mock in
    * tests; pass a custom fetch if you need proxies or retries.
@@ -89,18 +92,65 @@ const DEFAULT_INFISICAL_URL = "https://app.infisical.com";
 const DEFAULT_SECRET_PATH = "/";
 const LOG_PREFIX = "[infisical-settings]";
 
-interface RawSecret {
-  secretKey: string;
-  secretValue: string;
+const RawSecretsResponseSchema = z.object({
+  secrets: z.array(z.object({
+    secretKey: z.string().min(1),
+    secretValue: z.string().optional(),
+  }).passthrough()),
+}).passthrough();
+
+const ServiceTokenMetadataSchema = z.object({
+  projectId: z.string().min(1),
+  workspace: z.string().optional(),
+  expiresAt: z.string().nullable().optional(),
+  permissions: z.array(z.string()),
+  scopes: z.array(z.object({
+    secretPath: z.string(),
+    environment: z.string(),
+  }).strict()),
+}).passthrough();
+
+const ServiceTokenMetadataResponseSchema = z.union([
+  ServiceTokenMetadataSchema.refine((data) => !("serviceTokenData" in data)),
+  z.object({ serviceTokenData: ServiceTokenMetadataSchema }).passthrough().superRefine((response, context) => {
+    for (const key of ["projectId", "workspace", "expiresAt", "permissions", "scopes"] as const) {
+      if (key in response && JSON.stringify(response[key]) !== JSON.stringify(response.serviceTokenData[key])) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "outer and wrapped service-token metadata conflict",
+        });
+      }
+    }
+  }),
+]);
+
+const SERVICE_TOKEN_PREFIX = "st.";
+const MIN_SERVICE_TOKEN_LENGTH = 20;
+const MAX_SERVICE_TOKEN_LENGTH = 2048;
+
+function validateInfisicalUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("createInfisicalSettings: infisicalUrl must be a valid base URL");
+  }
+  if (url.username || url.password || url.search || url.hash || (url.pathname !== "" && url.pathname !== "/")) {
+    throw new Error("createInfisicalSettings: infisicalUrl must be a base origin without credentials, path, query, or fragment");
+  }
+  if (url.protocol === "https:") return url.origin;
+  const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  const loopback = (isIP(hostname) === 4 && hostname.startsWith("127.")) || hostname === "::1";
+  if (url.protocol === "http:" && loopback) return url.origin;
+  throw new Error("createInfisicalSettings: infisicalUrl must use HTTPS (HTTP is allowed only for literal loopback test servers)");
 }
 
-interface RawSecretsResponse {
-  secrets: RawSecret[];
-}
-
-interface LoginResponse {
-  accessToken: string;
-  expiresIn?: number;
+function isServiceToken(token: string): boolean {
+  return token.startsWith(SERVICE_TOKEN_PREFIX) &&
+    token.length >= MIN_SERVICE_TOKEN_LENGTH &&
+    token.length <= MAX_SERVICE_TOKEN_LENGTH &&
+    !/\s/.test(token);
 }
 
 /**
@@ -152,13 +202,12 @@ class InfisicalSettingsClient implements InfisicalSettings {
   private readonly environment: string;
   private readonly refreshIntervalMs: number;
   private readonly infisicalUrl: string;
-  private readonly clientId: string;
-  private readonly clientSecret: string;
+  private readonly readToken: string;
+  private readonly writeToken: string | undefined;
   private readonly fetchImpl: typeof fetch;
   private readonly onRefreshError?: (error: Error) => void;
 
   private cache = new Map<string, string>();
-  private accessToken: string | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
   private initialized = false;
 
@@ -169,12 +218,15 @@ class InfisicalSettingsClient implements InfisicalSettings {
     if (!options.environment) {
       throw new Error("createInfisicalSettings: environment is required");
     }
-    const clientId = envOr(options.clientId, "INFISICAL_CLIENT_ID");
-    const clientSecret = envOr(options.clientSecret, "INFISICAL_CLIENT_SECRET");
-    if (!clientId || !clientSecret) {
+    const readToken = envOr(options.readToken, "INFISICAL_TOKEN");
+    const writeToken = envOr(options.writeToken, "INFISICAL_WRITE_TOKEN");
+    if (!readToken || !isServiceToken(readToken)) {
       throw new Error(
-        "createInfisicalSettings: universal-auth credentials are required — pass clientId/clientSecret or set INFISICAL_CLIENT_ID and INFISICAL_CLIENT_SECRET",
+        "createInfisicalSettings: a valid scoped service token is required — pass readToken or set INFISICAL_TOKEN",
       );
+    }
+    if (writeToken && !isServiceToken(writeToken)) {
+      throw new Error("createInfisicalSettings: INFISICAL_WRITE_TOKEN must be a valid scoped service token");
     }
     this.projectId = options.projectId;
     this.environment = options.environment;
@@ -182,16 +234,16 @@ class InfisicalSettingsClient implements InfisicalSettings {
       options.refreshIntervalMs === undefined
         ? DEFAULT_REFRESH_INTERVAL_MS
         : options.refreshIntervalMs;
-    this.infisicalUrl = (options.infisicalUrl ?? DEFAULT_INFISICAL_URL).replace(/\/+$/, "");
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
+    this.infisicalUrl = validateInfisicalUrl(options.infisicalUrl ?? DEFAULT_INFISICAL_URL);
+    this.readToken = readToken;
+    this.writeToken = writeToken;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     // Guarded assignment: this repo compiles with exactOptionalPropertyTypes.
     if (options.onRefreshError !== undefined) this.onRefreshError = options.onRefreshError;
   }
 
   async init(): Promise<void> {
-    await this.login();
+    await this.verifyReadToken();
     await this.loadIntoCache();
     this.initialized = true;
     if (this.refreshIntervalMs > 0) {
@@ -234,15 +286,15 @@ class InfisicalSettingsClient implements InfisicalSettings {
 
   async set(key: string, value: string): Promise<void> {
     this.assertInitialized();
-    await this.ensureToken();
     // Write-through: Infisical FIRST, cache only after the write succeeds.
+    await this.verifyWriteToken(key);
     await this.persistSecret(key, value);
     this.cache.set(key, value);
   }
 
   async refresh(): Promise<void> {
     this.assertInitialized();
-    await this.ensureToken();
+    await this.verifyReadToken();
     await this.loadIntoCache();
   }
 
@@ -275,39 +327,68 @@ class InfisicalSettingsClient implements InfisicalSettings {
     }
   }
 
-  private async login(): Promise<void> {
-    const url = `${this.infisicalUrl}/api/v1/auth/universal-auth/login`;
+  private authHeaders(token: string): Record<string, string> {
+    return { Authorization: `Bearer ${token}` };
+  }
+
+  private async verifyServiceToken(
+    token: string,
+    permission: "read" | "write",
+  ): Promise<void> {
     let response: Response;
     try {
-      response = await this.fetchImpl(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: this.clientId, clientSecret: this.clientSecret }),
+      response = await this.fetchImpl(`${this.infisicalUrl}/api/v2/service-token`, {
+        headers: this.authHeaders(token),
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
       });
-    } catch (error) {
-      throw new InfisicalLoadError(`universal-auth login request failed for ${this.infisicalUrl}`, {
-        cause: error,
-      });
+    } catch {
+      throw new Error("metadata request failed");
     }
-    if (!response.ok) {
-      throw new InfisicalLoadError(
-        `universal-auth login failed with HTTP ${response.status} for ${this.infisicalUrl} — check client ID/secret`,
-      );
+    if (!response.ok) throw new Error(`metadata endpoint returned HTTP ${response.status}`);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error("metadata response was invalid");
     }
-    const data = (await response.json()) as LoginResponse;
-    if (!data.accessToken) {
-      throw new InfisicalLoadError("universal-auth login response did not include an accessToken");
+    const parsed = ServiceTokenMetadataResponseSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new Error("metadata does not match the configured project and exact scope");
     }
-    this.accessToken = data.accessToken;
+    const metadata: z.infer<typeof ServiceTokenMetadataSchema> =
+      "serviceTokenData" in parsed.data
+        ? ServiceTokenMetadataSchema.parse(parsed.data.serviceTokenData)
+        : parsed.data;
+    if (
+      metadata.projectId !== this.projectId ||
+      (metadata.workspace !== undefined && metadata.workspace !== this.projectId) ||
+      metadata.permissions.length !== 1 || metadata.permissions[0] !== permission ||
+      (metadata.expiresAt !== undefined && metadata.expiresAt !== null &&
+        (!Number.isFinite(Date.parse(metadata.expiresAt)) || Date.parse(metadata.expiresAt) <= Date.now())) ||
+      metadata.scopes.length !== 1 ||
+      metadata.scopes[0]?.secretPath !== DEFAULT_SECRET_PATH ||
+      metadata.scopes[0]?.environment !== this.environment
+    ) throw new Error("metadata does not match the configured project and exact scope");
   }
 
-  private authHeaders(): Record<string, string> {
-    return { Authorization: `Bearer ${this.accessToken}` };
+  private async verifyReadToken(): Promise<void> {
+    try {
+      await this.verifyServiceToken(this.readToken, "read");
+    } catch {
+      throw new InfisicalLoadError("read service token scope verification failed");
+    }
   }
 
-  private async ensureToken(): Promise<void> {
-    if (!this.accessToken) {
-      await this.login();
+  private async verifyWriteToken(key: string): Promise<void> {
+    const writeToken = this.writeToken;
+    if (!writeToken) {
+      throw new InfisicalWriteError(key, "a separate scoped INFISICAL_WRITE_TOKEN is required for writes");
+    }
+    try {
+      await this.verifyServiceToken(writeToken, "write");
+    } catch {
+      throw new InfisicalWriteError(key, "write service token scope verification failed");
     }
   }
 
@@ -317,15 +398,23 @@ class InfisicalSettingsClient implements InfisicalSettings {
       workspaceId: this.projectId,
       environment: this.environment,
       secretPath: DEFAULT_SECRET_PATH,
+      recursive: "false",
+      include_imports: "false",
+      expandSecretReferences: "false",
     });
     const url = `${this.infisicalUrl}/api/v3/secrets/raw?${params.toString()}`;
-    let response = await this.getWithReauth(url);
+    const response = await this.getWithServiceToken(url);
     if (!response.ok) {
       throw new InfisicalLoadError(
         `GET ${this.describeSecretsEndpoint()} returned HTTP ${response.status}`,
       );
     }
-    const data = (await response.json()) as RawSecretsResponse;
+    let data: z.infer<typeof RawSecretsResponseSchema>;
+    try {
+      data = RawSecretsResponseSchema.parse(await response.json());
+    } catch {
+      throw new InfisicalLoadError("Infisical secrets response was invalid");
+    }
     const next = new Map<string, string>();
     for (const secret of data.secrets ?? []) {
       if (secret.secretKey !== undefined) {
@@ -335,19 +424,15 @@ class InfisicalSettingsClient implements InfisicalSettings {
     this.cache = next;
   }
 
-  /** GET with a single re-login + retry on 401. */
-  private async getWithReauth(url: string): Promise<Response> {
+  /** GET with the scoped read token; rejected tokens are never replaced by a login. */
+  private async getWithServiceToken(url: string): Promise<Response> {
     let response: Response;
     try {
-      response = await this.fetchImpl(url, { headers: this.authHeaders() });
+      response = await this.fetchImpl(url, { headers: this.authHeaders(this.readToken), redirect: "error" });
     } catch (error) {
       throw new InfisicalLoadError(`GET ${this.describeSecretsEndpoint()} request failed`, {
         cause: error,
       });
-    }
-    if (response.status === 401) {
-      await this.login();
-      response = await this.fetchImpl(url, { headers: this.authHeaders() });
     }
     return response;
   }
@@ -362,12 +447,16 @@ class InfisicalSettingsClient implements InfisicalSettings {
    * the caller updates the cache only after this resolves.
    */
   private async persistSecret(key: string, value: string): Promise<void> {
+    const writeToken = this.writeToken;
+    if (!writeToken) {
+      throw new InfisicalWriteError(key, "a separate scoped INFISICAL_WRITE_TOKEN is required for writes");
+    }
     const encodedKey = encodeURIComponent(key);
     const url = `${this.infisicalUrl}/api/v3/secrets/raw/${encodedKey}`;
     const write = async (method: "PATCH" | "POST"): Promise<Response> => {
       return this.fetchImpl(url, {
         method,
-        headers: { ...this.authHeaders(), "Content-Type": "application/json" },
+        headers: { ...this.authHeaders(writeToken), "Content-Type": "application/json" },
         body: JSON.stringify({
           workspaceId: this.projectId,
           environment: this.environment,
@@ -375,6 +464,7 @@ class InfisicalSettingsClient implements InfisicalSettings {
           secretValue: value,
           type: "shared",
         }),
+        redirect: "error",
       });
     };
 
@@ -383,15 +473,6 @@ class InfisicalSettingsClient implements InfisicalSettings {
       response = await write("PATCH");
     } catch (error) {
       throw new InfisicalWriteError(key, "PATCH request failed", { cause: error });
-    }
-    if (response.status === 401) {
-      // Token may have expired mid-flight: re-login once and retry the PATCH.
-      await this.login();
-      try {
-        response = await write("PATCH");
-      } catch (error) {
-        throw new InfisicalWriteError(key, "PATCH request failed after re-login", { cause: error });
-      }
     }
     if (response.status === 404) {
       // Secret does not exist yet — create it.

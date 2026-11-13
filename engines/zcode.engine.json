@@ -1,0 +1,35 @@
+{
+  "$schema": "clutch.engine/v1",
+  "id": "zcode",
+  "driverKind": "zcodeAgent",
+  "displayName": "Z Code",
+  "defaultCli": "zcode",
+  "nativeSource": "zcode.acp",
+  "loginNote": "Z Code needs a sign-in.\u00A0 Run zcode login as the user this sidecar runs as, or add ZAI_API_KEY in Clutch settings.",
+
+  "images": false,
+  "mcpServers": true,
+
+  "models": {
+    "default": "glm-5.3",
+    "options": [
+      {
+        "id": "glm-5.3",
+        "label": "GLM 5.3",
+        "badge": "declared catalog",
+        "badgeTitle": "This is the declared catalog.\u00A0 A live Z Code session replaces it with the engine's own list on the first successful probe."
+      }
+    ]
+  },
+
+  "errorRules": [
+    { "pattern": "not (logged in|authenticated)|login required|unauthoriz|invalid api key|invalid_credentials", "code": "invalid_credentials" },
+    { "pattern": "quota|rate.?limit|too many requests|insufficient", "code": "quota_or_region_restriction" },
+    { "pattern": "overloaded|capacity|service unavailable|bad gateway|upstream", "code": "upstream_outage" },
+    { "pattern": "unknown model|model not found|no such model|invalid model", "code": "model_catalog_outage" }
+  ],
+
+  "credentialEnv": ["ZAI_API_KEY", "CLUTCH_ZCODE_CLI", "CLUTCH_CHAT_LAUNCHER_ZCODE"],
+  "authenticatedWhen": { "anyEnv": ["ZAI_API_KEY"] },
+  "authFailure": "continue"
+}

@@ -36,7 +36,7 @@ edit it in BotFleet.
 ## ai-fleet-coordinator
 
 AFC does not npm-install Clutch.  It registers the app in
-`fleet-apps.json` (acronym `CK`), points pm2 `clutch-web` at
+`fleet-apps.json` (acronym `C`), points pm2 `clutch-web` at
 `~/apps/clutch-runtime/scripts/start-web.sh` (a standalone clone of this repo),
 and keeps `scripts/dsh-runtime/` as a fallback copy of the live-install
 scripts.  Canonical scripts live here.

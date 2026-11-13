@@ -17,7 +17,7 @@ ids an install declares:
 
 | Picker id / alias | Stock dsh 0.1.5-rc.x declares | An owner `settings.yaml` override may declare |
 |---|---|---|
-| `DeepSeek-V4.1-Flash` | `deepseek-flash` (display name "DeepSeek-V4.1-Flash") | `deepseek-v4.1-flash` |
+| `DeepSeek-V4.1-Flash` | `deepseek-flash` (display name "DeepSeek-V4.1-Flash") | refused: `deepseek-v4.1-flash` is not a DeepSeek API name (see below) |
 | `deepseek-flash` (nice alias / stock wire id) | `deepseek-flash` | `deepseek-v4.1-flash` (via alias fold) |
 | `deepseek-v4.1-flash` (Jay's settings.yaml spelling) | `deepseek-flash` (via alias fold) | `deepseek-v4.1-flash` |
 | `DeepSeek-V4.1-Pro` | `deepseek-v4-pro` (display name "DeepSeek-V4.1-Pro") | `deepseek-v4-pro` |
@@ -41,7 +41,15 @@ within the model's own provider namespace.  First hit wins, strongest first:
    `deepseek-flash`, `deepseek-v4-flash`, `deepseek-v4.1-flash`; Pro: `DeepSeek-V4.1-Pro`,
    `deepseek-v4-pro`, `deepseek-pro`)
 
-The declared value is what gets sent.  The picker id is never rewritten, so saved
+The declared value is what gets sent, with one guard: dsh forwards the
+declared id to DeepSeek verbatim, and DeepSeek only serves `deepseek-flash` and
+`deepseek-v4-pro`.  When a DeepSeek match lands on another spelling, the
+resolver sends the API name if the same provider also declares it, and
+otherwise throws `DshModelNotOfferedError` (a catalog outage, so the caller
+fails over) naming the fix: declare `deepseek-flash` in `llm-deepseek.models`.
+An install that declares only `deepseek-v4.1-flash` used to fail every Flash
+turn upstream with "The supported API model names are deepseek-flash,
+deepseek-v4-pro" (BOTFLEET-4A).  The picker id is never rewritten, so saved
 selections keep their id and only the wire value is translated.
 
 - No `model` option in the reply, or one that lists no model: the value is built
