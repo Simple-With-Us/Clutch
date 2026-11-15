@@ -137,7 +137,15 @@ function lastUsageRecord(text: string, skipFirstLine: boolean): unknown | null {
 
 async function readTail(handle: Awaited<ReturnType<typeof open>>, size: number, window: number): Promise<string> {
   const buffer = Buffer.alloc(window);
-  await handle.read(buffer, 0, window, size - window);
+  // A read is allowed to come back short, so the tail is filled in a loop:
+  // stopping early would leave the newest record outside the buffer and the
+  // reader would report an older one as the latest.
+  let read = 0;
+  while (read < window) {
+    const { bytesRead } = await handle.read(buffer, read, window - read, size - window + read);
+    if (bytesRead === 0) break;
+    read += bytesRead;
+  }
   return buffer.toString("utf8");
 }
 
