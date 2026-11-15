@@ -21,9 +21,8 @@
 # commit.  A local build needs a full Xcode (see the preflight below).
 #
 # Seams, all optional:
-#   CLUTCH_MAC_REGENERATE_PROJECT=1  run `xcodegen generate` first so the build
-#                                    comes from ios/project.yml, not the committed
-#                                    pbxproj (the release workflow sets this)
+#   CLUTCH_MAC_XCODEPROJ            an Xcode project outside this tree; it is
+#                                    built as it is, and never regenerated
 #   CLUTCH_MAC_DERIVED_DATA          DerivedData directory; default is stable, so
 #                                    dependency and incremental state survive
 #   CLUTCH_MAC_BUILD_LOCK_WAIT       seconds to wait for another build on the same
@@ -64,13 +63,17 @@ if ! xcodebuild -version >/dev/null 2>&1; then
   exit 1
 fi
 
-# ios/Clutch.xcodeproj is generated from ios/project.yml by XcodeGen.  The
-# committed copy is fine for a local rebuild, but the release path must ship what
-# project.yml says, the way ci.yml and build-ios.sh do: a Swift file added or a
-# setting changed in project.yml without a regenerated pbxproj would otherwise
-# silently miss the shipped app.  A clone with no project at all gets one too,
-# rather than failing with a bare "cannot find scheme".
-if [[ "${CLUTCH_MAC_REGENERATE_PROJECT:-0}" == "1" || ! -d "$PROJECT" ]]; then
+# ios/Clutch.xcodeproj is generated from ios/project.yml by XcodeGen, and it is
+# regenerated here every time.  This script installs the app, so it is a
+# shipping path like the release one: a Swift file added in project.yml without
+# a regenerated pbxproj would otherwise be missing from the app that gets
+# installed.  The committed copy has drifted that way - it named a Swift file
+# that no longer exists, and a build from it failed on the file it could not
+# find - so the committed copy is a convenience for opening the project in
+# Xcode, never the thing the build trusts.  ci.yml and build-ios.sh regenerate
+# the same way.  A project outside this tree is the caller's own, and is built
+# as it is.
+if [[ "$PROJECT" == "${IOS_DIR}/Clutch.xcodeproj" ]]; then
   if ! command -v xcodegen >/dev/null 2>&1; then
     echo "xcodegen is needed to generate ${PROJECT} and is not installed" >&2
     echo "install it with: bash ${LIVE}/scripts/ios-install-xcodegen.sh" >&2
