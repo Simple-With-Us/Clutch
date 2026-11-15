@@ -152,7 +152,11 @@ describe("Muse session location index", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+    // This test creates twenty thousand directories and then scans them, so
+    // it is far slower than a unit test and needs a budget of its own.  The
+    // default five second limit is not enough on a loaded machine, and the
+    // failure looks like a broken reader rather than a slow fixture.
+  }, 30_000);
 });
 
 describe("Muse session log path replacement", () => {
