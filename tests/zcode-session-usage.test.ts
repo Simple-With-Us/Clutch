@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,38 @@ import {
   zcodeSessionUsage,
   zcodeSessionsRoot,
 } from "../src/web/zcode-session-usage.ts";
+
+/**
+ * Every byte the reader pulls off disk, so a test can see how much of the log
+ * a poll actually read.
+ */
+const reads = vi.hoisted(() => ({ bytes: [] as number[] }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      return new Proxy(handle, {
+        get(target, property) {
+          if (property === "read") {
+            return async (...readArgs: unknown[]) => {
+              const read = target.read as unknown as (
+                ...a: unknown[]
+              ) => Promise<{ bytesRead: number }>;
+              const result = await read.apply(target, readArgs);
+              reads.bytes.push(result.bytesRead);
+              return result;
+            };
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+});
 
 /**
  * Z Code session usage, read from the engine's own log.
@@ -261,6 +293,47 @@ describe("reading a Z Code session's usage", () => {
     const usage = await readZcodeSessionUsage("sess_a.b", { root });
 
     expect(usage?.outputTokens).toBe(447);
+  });
+
+  it("reads only the bytes the engine appended", async () => {
+    const path = writeLog(`model-io-${SESSION_ID}.jsonl`, [record({ outputTokens: 1_395, durationMs: 50_538 })]);
+    reads.bytes.length = 0;
+
+    const first = await readZcodeSessionUsage(SESSION_ID, { root });
+    const firstRead = reads.bytes.reduce((sum, count) => sum + count, 0);
+
+    const appended = `${record({ outputTokens: 447, durationMs: 18_356 })}\n`;
+    appendFileSync(path, appended);
+    reads.bytes.length = 0;
+
+    const second = await readZcodeSessionUsage(SESSION_ID, { root });
+    const secondRead = reads.bytes.reduce((sum, count) => sum + count, 0);
+
+    expect(first?.outputTokens).toBe(1_395);
+    expect(second?.outputTokens).toBe(447);
+    // The poll read the bytes that arrived, not the whole log again:  a poll
+    // every second and a half would otherwise re-read the whole tail each time.
+    expect(secondRead).toBe(Buffer.byteLength(appended));
+    expect(secondRead).toBeLessThan(firstRead);
+  });
+
+  it("keeps a half-written record for the next poll", async () => {
+    const path = writeLog(`model-io-${SESSION_ID}.jsonl`, [record({ outputTokens: 1_395, durationMs: 50_538 })]);
+    const first = await readZcodeSessionUsage(SESSION_ID, { root });
+    expect(first?.outputTokens).toBe(1_395);
+
+    // The engine writes the next record in two pieces.
+    const whole = record({ outputTokens: 447, durationMs: 18_356 });
+    appendFileSync(path, whole.slice(0, 40));
+    const partial = await readZcodeSessionUsage(SESSION_ID, { root });
+    // Half a record is not a record, so the last real one stands.
+    expect(partial?.outputTokens).toBe(1_395);
+
+    appendFileSync(path, `${whole.slice(40)}\n`);
+    const complete = await readZcodeSessionUsage(SESSION_ID, { root });
+    // The record that arrived in two pieces is read whole on the next poll.
+    expect(complete?.outputTokens).toBe(447);
+    expect(complete?.responseTokensPerSecond).toBeCloseTo(447 / 18.356, 6);
   });
 });
 

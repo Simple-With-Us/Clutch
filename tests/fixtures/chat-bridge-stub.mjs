@@ -20,6 +20,26 @@ const RpcParamsSchema = z.object({
   expectedTurnId: z.string().optional().catch(undefined),
 }).catch({});
 
+/**
+ * One JSON-RPC message, as the sidecar sends it.
+ *
+ * The message is the boundary object, so it is read through a schema:  an
+ * invalid id or method is refused at the door instead of reaching the
+ * dispatch below.
+ */
+const RpcMessageSchema = z.object({
+  jsonrpc: z.string().optional().catch(undefined),
+  id: z.union([z.number(), z.string()]).nullish().catch(undefined),
+  method: z.string().optional().catch(undefined),
+  params: z.unknown().optional().catch(undefined),
+  result: z.object({
+    outcome: z.object({
+      optionId: z.string().nullish().catch(null),
+      outcome: z.string().nullish().catch(null),
+    }).optional().catch(undefined),
+  }).optional().catch(undefined),
+}).catch({});
+
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 let pendingPermission = null;
@@ -75,13 +95,14 @@ rl.on("line", (line) => {
   } catch {
     return;
   }
-  const { id, method } = msg;
-  // The message comes over stdio from the sidecar, so its params are parsed
-  // with a schema before anything reads a field out of them.
-  const params = RpcParamsSchema.parse(msg.params ?? {});
+  // The message comes over stdio from the sidecar, so it is read through a
+  // schema before anything reads a field out of it.
+  const parsed = RpcMessageSchema.parse(msg);
+  const { id, method } = parsed;
+  const params = RpcParamsSchema.parse(parsed.params ?? {});
   if (!method && id === 900 && pendingPermission) {
-    const optionId = msg.result?.outcome?.optionId ?? null;
-    const outcome = msg.result?.outcome?.outcome ?? null;
+    const optionId = parsed.result?.outcome?.optionId ?? null;
+    const outcome = parsed.result?.outcome?.outcome ?? null;
     record({ event: "permission-answered", optionId, outcome });
     if (outcome !== "selected" || optionId !== "allow-once") {
       send({ jsonrpc: "2.0", id: pendingPermission.id, error: { message: "permission was not allowed once" } });

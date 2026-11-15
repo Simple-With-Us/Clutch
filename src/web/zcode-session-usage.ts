@@ -21,7 +21,7 @@ import { z } from "zod";
 
 import type { SessionUsage } from "./session-usage.ts";
 
-/** How much of the tail of a log file is read. */
+/** How much of the tail of a log file is read the first time. */
 const TAIL_BYTES = 1 << 20;
 /**
  * The largest log file that is read whole when its tail holds no record.
@@ -39,6 +39,8 @@ const SESSION_ID = /^(?:sess|session)_[A-Za-z0-9._-]+$/;
 /** The longest id this reader looks for.  The engine cuts its file names at 80
  *  characters anyway, so a longer id cannot name a different file. */
 const MAX_SESSION_ID_LENGTH = 200;
+/** The byte that ends a record. */
+const NEWLINE = 0x0a;
 
 /** The directory Z Code writes its model I/O logs in. */
 export function zcodeSessionsRoot(home = homedir()): string {
@@ -143,16 +145,15 @@ export function zcodeSessionUsage(record: unknown): SessionUsage | null {
 }
 
 /**
- * The newest usage in a chunk of the log.
+ * The newest usage among a block of complete records.
  *
- * The engine appends to the file while it runs, so the last line can be half
- * written.  A line that does not parse is skipped, and the scan keeps going
- * back.  A record whose usage carries no real token count is skipped as well,
- * so an empty newer record cannot hide the counters in an older one.
+ * The scan walks backwards from the end and stops at the first record that
+ * carries usage, so it reads and parses only the records it has to.  A record
+ * whose usage carries no real token count is skipped, so an empty newer
+ * record cannot hide the counters in an older one.
  */
-function lastUsageRecord(text: string, skipFirstLine: boolean): SessionUsage | null {
-  const lines = text.split("\n");
-  for (let index = lines.length - 1; index >= (skipFirstLine ? 1 : 0); index -= 1) {
+function usageFromLines(lines: readonly string[], skipFirst: boolean): SessionUsage | null {
+  for (let index = lines.length - 1; index >= (skipFirst ? 1 : 0); index -= 1) {
     const line = lines[index]?.trim();
     if (!line) continue;
     let parsed: unknown;
@@ -167,32 +168,69 @@ function lastUsageRecord(text: string, skipFirstLine: boolean): SessionUsage | n
   return null;
 }
 
-async function readTail(handle: Awaited<ReturnType<typeof open>>, size: number, window: number): Promise<string> {
-  const buffer = Buffer.alloc(window);
-  // A read is allowed to come back short, so the tail is filled in a loop:
-  // stopping early would leave the newest record outside the buffer and the
-  // reader would report an older one as the latest.
+/** Read exactly `length` bytes at `position`, as far as the file holds. */
+async function readAt(
+  handle: Awaited<ReturnType<typeof open>>,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
   let read = 0;
-  while (read < window) {
-    const { bytesRead } = await handle.read(buffer, read, window - read, size - window + read);
+  while (read < length) {
+    // A read is allowed to come back short, so the buffer is filled in a loop:
+    // stopping early would leave the newest record outside it.
+    const { bytesRead } = await handle.read(buffer, read, length - read, position + read);
     if (bytesRead === 0) break;
     read += bytesRead;
   }
-  return buffer.toString("utf8");
+  return read === length ? buffer : buffer.subarray(0, read);
 }
 
-async function readLastUsage(path: string, size: number): Promise<SessionUsage | null> {
+interface LogRead {
+  usage: SessionUsage | null;
+  /** Bytes up to the end of the last complete record line. */
+  consumed: number;
+}
+
+/**
+ * Read the log, from the end of what was read before when there is one.
+ *
+ * The engine appends to the file, so a poll only needs the bytes that arrived
+ * since the last one.  A record that was still being written is left for the
+ * next poll rather than read as a broken line.
+ */
+async function readLog(path: string, size: number, consumed: number): Promise<LogRead> {
   const handle = await open(path, "r");
   try {
+    if (consumed > 0 && consumed <= size) {
+      const appended = await readAt(handle, consumed, size - consumed);
+      const lastNewline = appended.lastIndexOf(NEWLINE);
+      if (lastNewline < 0) return { usage: null, consumed };
+      const complete = appended.subarray(0, lastNewline).toString("utf8");
+      return {
+        usage: usageFromLines(complete.split("\n"), false),
+        consumed: consumed + lastNewline + 1,
+      };
+    }
+    // The first read:  the newest record is near the end of the file.
     const window = Math.min(size, TAIL_BYTES);
-    const text = await readTail(handle, size, window);
-    const usage = lastUsageRecord(text, size > window);
-    if (usage) return usage;
-    if (size <= window) return null;
+    const start = size - window;
+    const tail = await readAt(handle, start, window);
+    const lastNewline = tail.lastIndexOf(NEWLINE);
+    const complete = (lastNewline < 0 ? tail : tail.subarray(0, lastNewline)).toString("utf8");
+    const usage = usageFromLines(complete.split("\n"), size > window);
+    if (usage) return { usage, consumed: start + lastNewline + 1 };
+    if (size <= window) return { usage: null, consumed: start + Math.max(lastNewline + 1, 0) };
     // The last record is bigger than the tail window, so more of the file is
     // read, up to a cap:  a log this large is not a session transcript.
-    if (size > MAX_WHOLE_FILE_BYTES) return null;
-    return lastUsageRecord(await readTail(handle, size, size), false);
+    if (size > MAX_WHOLE_FILE_BYTES) return { usage: null, consumed: 0 };
+    const whole = await readAt(handle, 0, size);
+    const wholeNewline = whole.lastIndexOf(NEWLINE);
+    const wholeComplete = (wholeNewline < 0 ? whole : whole.subarray(0, wholeNewline)).toString("utf8");
+    return {
+      usage: usageFromLines(wholeComplete.split("\n"), false),
+      consumed: wholeNewline + 1,
+    };
   } finally {
     await handle.close();
   }
@@ -202,6 +240,8 @@ interface CachedUsage {
   size: number;
   mtimeMs: number;
   usage: SessionUsage | null;
+  /** Bytes of the file already read, so a poll reads only what is new. */
+  consumed: number;
 }
 
 const cache = new Map<string, CachedUsage>();
@@ -211,7 +251,8 @@ const cache = new Map<string, CachedUsage>();
  * any for it.
  *
  * The file grows as the session runs, so the answer is cached against the
- * file's size and mtime:  an unchanged file is not read again.
+ * file's size and mtime:  an unchanged file is not read again, and a grown
+ * file is read only from where the last read stopped.
  */
 export async function readZcodeSessionUsage(
   sessionId: string,
@@ -231,12 +272,18 @@ export async function readZcodeSessionUsage(
   const cached = cache.get(path);
   if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.usage;
   let usage: SessionUsage | null = null;
+  let consumed = 0;
   try {
-    usage = await readLastUsage(path, info.size);
+    // The engine only appends, so a file that grew is read from where the
+    // last read stopped.  A file that did not grow is read whole.
+    const incremental = cached && info.size > cached.size ? cached.consumed : 0;
+    const read = await readLog(path, info.size, incremental);
+    usage = read.usage ?? (incremental > 0 ? cached?.usage ?? null : null);
+    consumed = read.consumed;
   } catch {
     usage = null;
   }
-  cache.set(path, { size: info.size, mtimeMs: info.mtimeMs, usage });
+  cache.set(path, { size: info.size, mtimeMs: info.mtimeMs, usage, consumed });
   return usage;
 }
 
