@@ -4,6 +4,21 @@
 // session/new/load, session/prompt, and session/cancel.
 import readline from "node:readline";
 import { appendFileSync, readFileSync } from "node:fs";
+import { z } from "zod";
+
+/** The params of one JSON-RPC request, as the sidecar sends them. */
+const RpcParamsSchema = z.object({
+  cwd: z.string().optional().catch(undefined),
+  sessionId: z.string().optional().catch(undefined),
+  protocolVersion: z.number().optional().catch(undefined),
+  clientCapabilities: z.unknown().optional().catch(undefined),
+  // The prompt keeps its own shape:  the stub reads the text and whether it
+  // is a list of parts, and the schema must not flatten either.
+  prompt: z.unknown().optional().catch(undefined),
+  // The steering call carries the turn it means to join, and the stub relays
+  // the whole call, so the schema has to keep it.
+  expectedTurnId: z.string().optional().catch(undefined),
+}).catch({});
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -60,7 +75,10 @@ rl.on("line", (line) => {
   } catch {
     return;
   }
-  const { id, method, params } = msg;
+  const { id, method } = msg;
+  // The message comes over stdio from the sidecar, so its params are parsed
+  // with a schema before anything reads a field out of them.
+  const params = RpcParamsSchema.parse(msg.params ?? {});
   if (!method && id === 900 && pendingPermission) {
     const optionId = msg.result?.outcome?.optionId ?? null;
     const outcome = msg.result?.outcome?.outcome ?? null;
@@ -100,6 +118,10 @@ rl.on("line", (line) => {
     // two turns apart when it routes a permission request to its owner.
     const sessionId = params?.cwd === "/tmp/engine-collision"
       ? "shared-engine-session"
+      : params?.cwd === "/tmp/zcode-session"
+      // Z Code names its own sessions, and the reader that looks for the
+      // engine's log only finds it under the engine's own id shape.
+      ? "sess_c5b7367c-f9da-4882-abbc-f381ddcec9d7"
       : `stub-session-${sessionCounter += 1}`;
     record({ event: "session-new", sessionId });
     send({ jsonrpc: "2.0", id, result: {
