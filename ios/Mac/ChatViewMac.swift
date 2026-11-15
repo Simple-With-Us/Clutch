@@ -1124,9 +1124,9 @@ public struct ChatView: View {
                 }
             }
 
-            if engine == .mcode {
+            if ThreadMetricPresentation.showsUsageStrip(engineID: engine.rawValue) {
                 HStack(spacing: 8) {
-                    if !mcodeAvailable {
+                    if engine == .mcode && !mcodeAvailable {
                         Label("MiniMax Code Not Found On Host", systemImage: "exclamationmark.triangle")
                             .font(.system(size: 11))
                             .foregroundStyle(.orange)
@@ -1232,24 +1232,22 @@ public struct ChatView: View {
     /// derived from a character count.
     @ViewBuilder
     private var usageStrip: some View {
-        if ThreadMetricPresentation.showsUsageStrip(engineID: engine.rawValue) {
-            let rateLabel = ThreadMetricPresentation.usageStripRateLabel(
-                engineID: engine.rawValue,
-                usage: activeUsage
-            )
-            let occupancy = currentContextOccupancyLabel
-            HStack(spacing: 8) {
-                if let rateLabel {
-                    metric(icon: "speedometer", value: rateLabel)
-                }
-                if let occupancy {
-                    metric(icon: "chart.pie.fill", value: occupancy)
-                }
-                if rateLabel == nil && occupancy == nil {
-                    Text("Context and response rate not reported yet")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
+        let rateLabel = ThreadMetricPresentation.usageStripRateLabel(
+            engineID: engine.rawValue,
+            usage: activeUsage
+        )
+        let occupancy = currentContextOccupancyLabel
+        HStack(spacing: 8) {
+            if let rateLabel {
+                metric(icon: "speedometer", value: rateLabel)
+            }
+            if let occupancy {
+                metric(icon: "chart.pie.fill", value: occupancy)
+            }
+            if rateLabel == nil && occupancy == nil {
+                Text("Context and response rate not reported yet")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
             }
         }
     }

@@ -89,6 +89,15 @@ final class ThreadSidebarMetricsTests: XCTestCase {
         XCTAssertFalse(ThreadMetricPresentation.showsUsageStrip(engineID: "minimax"))
     }
 
+    func testUsageStripRowRendersForMuseAsWellAsMiniMaxCode() {
+        // The Mac header renders the strip row under this same predicate, so
+        // Muse threads get the strip the metrics work always intended for
+        // them, and Z Code threads get it too.
+        XCTAssertTrue(ThreadMetricPresentation.showsUsageStrip(engineID: "muse"))
+        XCTAssertTrue(ThreadMetricPresentation.showsUsageStrip(engineID: "mcode"))
+        XCTAssertTrue(ThreadMetricPresentation.showsUsageStrip(engineID: "zcode"))
+    }
+
     func testZCodeOccupancyStaysAbsentWithoutAContextWindow() {
         // Z Code's log carries no window, so the strip shows the rate and no
         // percentage, rather than a guessed one.
