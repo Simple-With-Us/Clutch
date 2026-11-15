@@ -44,6 +44,8 @@ interface Fixture {
   /** A named interpreter that is not on PATH. */
   named: string;
   home: string;
+  /** The runtime root the launcher resolves bridge paths in. */
+  runtimeRoot: string;
 }
 
 function fixture(): Fixture {
@@ -52,6 +54,7 @@ function fixture(): Fixture {
   const bin = join(root, "bin");
   const log = join(root, "python3.log");
   const home = join(root, "home");
+  const runtimeRoot = join(root, "runtime");
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
   const stub = (label: string): string => {
@@ -62,7 +65,18 @@ function fixture(): Fixture {
   };
   const python3 = stub("python3");
   const named = stub("named-python");
-  return { bin, log, python3, named, home };
+  // The launcher resolves its bridge under CLUTCH_RUNTIME_ROOT, so the fixture
+  // ships a fake one there and the shipped bridge never runs.  The fake has to
+  // be a real Python file: the launcher prefers /opt/homebrew/bin/python3 over
+  // the PATH stub, so on a Mac with Homebrew Python the stub is never execed
+  // and the fake bridge is what records the call.  Without it the test would
+  // run the shipped bridge, which is the opposite of what it is checking.
+  for (const { bridge } of LAUNCHERS) {
+    const path = join(runtimeRoot, bridge);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `import sys\nwith open(${JSON.stringify(log)}, "a", encoding="utf-8") as handle:\n    handle.write(sys.argv[0] + "\\n")\n`);
+  }
+  return { bin, log, python3, named, home, runtimeRoot };
 }
 
 /** Run a launcher with the fixture's environment. */
@@ -75,6 +89,7 @@ function run(script: string, fx: Fixture, env: Record<string, string>): { status
       PATH: path,
       HOME: fx.home,
       CLUTCH_HOME: join(fx.home, ".clutch"),
+      CLUTCH_RUNTIME_ROOT: fx.runtimeRoot,
       ...env,
     },
     encoding: "utf8",

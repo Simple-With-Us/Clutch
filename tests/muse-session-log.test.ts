@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -181,8 +181,12 @@ describe("Muse session log parser", () => {
 });
 
 describe("Muse session log filesystem reader", () => {
+  // The reader resolves the sessions root with realpath, so the fixture root is
+  // physical too: on macOS tmpdir() is /var/folders, which is a symlink to
+  // /private/var/folders, and an unresolved root makes every expected path
+  // differ from the one the reader returns.
   function makeRoot(): { root: string; file: string } {
-    const root = mkdtempSync(join(tmpdir(), "clutch-muse-session-log-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "clutch-muse-session-log-")));
     const folder = join(root, "2026", "10", "21", SESSION_ID);
     mkdirSync(folder, { recursive: true });
     const file = join(folder, "session.jsonl");
@@ -249,7 +253,7 @@ describe("Muse session log filesystem reader", () => {
   it("rejects symlinked session directories and symlinked session files", async () => {
     const { root } = makeRoot();
     const dateDir = join(root, "2026", "10", "21");
-    const outside = mkdtempSync(join(tmpdir(), "clutch-muse-session-outside-"));
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "clutch-muse-session-outside-")));
     const outsideFile = join(outside, "session.jsonl");
     writeFileSync(outsideFile, userRecord("Must not be read", 1));
     try {
