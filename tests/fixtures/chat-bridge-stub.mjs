@@ -100,6 +100,10 @@ rl.on("line", (line) => {
     // two turns apart when it routes a permission request to its owner.
     const sessionId = params?.cwd === "/tmp/engine-collision"
       ? "shared-engine-session"
+      : params?.cwd === "/tmp/zcode-session"
+      // Z Code names its own sessions, and the reader that looks for the
+      // engine's log only finds it under the engine's own id shape.
+      ? "sess_c5b7367c-f9da-4882-abbc-f381ddcec9d7"
       : `stub-session-${sessionCounter += 1}`;
     record({ event: "session-new", sessionId });
     send({ jsonrpc: "2.0", id, result: {

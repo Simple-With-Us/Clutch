@@ -353,6 +353,52 @@ it("serves Z Code usage for a thread from the engine's own model I/O log", async
   }
 });
 
+it("pushes Z Code usage live while the turn runs", async () => {
+  const zcodeSessionId = "sess_c5b7367c-f9da-4882-abbc-f381ddcec9d7";
+  const rolloutDir = join(dirname(tokenFile), ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+  writeFileSync(join(rolloutDir, `model-io-${zcodeSessionId}.jsonl`), [
+    JSON.stringify({
+      type: "model_io",
+      sessionId: zcodeSessionId,
+      turnId: "turn_645abdb6-e829-467c-88cd-be97edef774d",
+      startedAt: "2026-11-11T02:31:21.233Z",
+      completedAt: "2026-11-11T02:32:11.771Z",
+      durationMs: 50_538,
+      model: { modelId: "GLM-5.3-Flash", providerId: "account:zai-individual-coding-plan" },
+      response: {
+        usage: {
+          inputTokens: 154_644,
+          outputTokens: 1_395,
+          totalTokens: 156_039,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+    }),
+  ].join("\n") + "\n");
+  try {
+    const result = await postChat({ prompt: "zcode-live-usage", engine: "zcode", cwd: "/tmp/zcode-session" });
+    expect(result.status).toBe(200);
+    // The live event carries the engine's own record, not an estimate.
+    const event = /event: usage\ndata: (\{[^\n]*\})\n\n/.exec(result.text);
+    expect(event, "the turn pushed a usage event").not.toBeNull();
+    const payload = JSON.parse(event![1]!) as { sessionId: string; usage: Record<string, unknown> };
+    expect(payload.sessionId).toBe(zcodeSessionId);
+    expect(payload.usage).toMatchObject({
+      basis: "latest-response",
+      model: "GLM-5.3-Flash",
+      provider: "account:zai-individual-coding-plan",
+      inputTokens: 154_644,
+      outputTokens: 1_395,
+      totalTokens: 156_039,
+    });
+    expect((payload.usage as { responseTokensPerSecond: number }).responseTokensPerSecond).toBeCloseTo(1_395 / 50.538, 6);
+  } finally {
+    rmSync(join(dirname(tokenFile), ".zcode"), { recursive: true, force: true });
+  }
+});
+
 it("filters folder trees by path segment while retaining the all-folder view", async () => {
   const root = `http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse`;
   const all = await fetch(root, { headers: chatHeaders() });
