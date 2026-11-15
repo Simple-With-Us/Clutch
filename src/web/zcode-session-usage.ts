@@ -17,12 +17,20 @@ import { lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { z } from "zod";
+
 import type { SessionUsage } from "./session-usage.ts";
 
 /** How much of the tail of a log file is read. */
 const TAIL_BYTES = 1 << 20;
-/** The largest log file that is read whole when its tail holds no record. */
-const MAX_WHOLE_FILE_BYTES = 32 << 20;
+/**
+ * The largest log file that is read whole when its tail holds no record.
+ *
+ * The read happens for at most a few sessions at a time, so this is the peak
+ * transient cost of one sessions request.  A model I/O record that does not
+ * fit in eight megabytes is not a record this reader can use.
+ */
+const MAX_WHOLE_FILE_BYTES = 8 << 20;
 /**
  * A session id, as Z Code writes it.  This is the engine's own rule:  a
  * `sess_` id, or the legacy `session_` form, followed by the id body.
@@ -55,15 +63,42 @@ export function zcodeSessionFileName(sessionId: string): string {
   return `model-io-${safe || "no-session"}.jsonl`;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
+/**
+ * An optional fact the engine may omit, write as `null`, or fill with a
+ * non-number.  Only a real value is read;  anything else counts as "not
+ * reported" for that one field, so one bad counter cannot hide the rest.
+ */
+const reportedNumber = z.number().finite().nonnegative().optional().catch(undefined);
+const reportedString = z.string().optional().catch(undefined);
 
-function numberOr(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
+/** The provider's own counters for one response. */
+const UsageSchema = z.object({
+  inputTokens: reportedNumber,
+  outputTokens: reportedNumber,
+  totalTokens: reportedNumber,
+  cacheReadTokens: reportedNumber,
+  cacheWriteTokens: reportedNumber,
+});
+
+/**
+ * One model I/O record, as Z Code writes it.
+ *
+ * The log is a file the engine appends to, so every field is optional:  a
+ * record in flight carries no response yet.  Parsing with zod means a
+ * malformed record is skipped rather than half-believed.
+ */
+const RecordSchema = z.object({
+  durationMs: reportedNumber,
+  completedAt: reportedString,
+  model: z.object({
+    modelId: reportedString,
+    providerId: reportedString,
+  }).optional().catch(undefined),
+  response: z.object({
+    modelId: reportedString,
+    usage: UsageSchema,
+  }).optional().catch(undefined),
+});
 
 /**
  * The usage a Z Code record reports, or null when it reports none.
@@ -73,23 +108,20 @@ function numberOr(value: unknown): number | undefined {
  * cached read, so it must not be added again.
  */
 export function zcodeSessionUsage(record: unknown): SessionUsage | null {
-  const row = asRecord(record);
-  if (!row) return null;
-  const response = asRecord(row.response);
-  const usage = asRecord(response?.usage);
+  const parsed = RecordSchema.safeParse(record);
+  if (!parsed.success) return null;
+  const row = parsed.data;
+  const usage = row.response?.usage;
   if (!usage) return null;
-  const inputTokens = numberOr(usage.inputTokens);
-  const outputTokens = numberOr(usage.outputTokens);
+  const inputTokens = usage.inputTokens;
+  const outputTokens = usage.outputTokens;
   if (inputTokens === undefined && outputTokens === undefined) return null;
-  const totalTokens = numberOr(usage.totalTokens);
-  const cacheReadTokens = numberOr(usage.cacheReadTokens);
-  const durationMs = numberOr(row.durationMs);
-  const model = asRecord(row.model);
-  const modelId = typeof model?.modelId === "string" ? model.modelId
-    : typeof response?.modelId === "string" ? response.modelId
-    : undefined;
-  const providerId = typeof model?.providerId === "string" ? model.providerId : undefined;
-  const completedAt = typeof row.completedAt === "string" ? Date.parse(row.completedAt) : Number.NaN;
+  const totalTokens = usage.totalTokens;
+  const cacheReadTokens = usage.cacheReadTokens;
+  const durationMs = row.durationMs;
+  const modelId = row.model?.modelId ?? row.response?.modelId;
+  const providerId = row.model?.providerId;
+  const completedAt = row.completedAt === undefined ? Number.NaN : Date.parse(row.completedAt);
   const rate = outputTokens !== undefined && durationMs !== undefined && durationMs > 0
     ? outputTokens / (durationMs / 1_000)
     : undefined;
@@ -111,13 +143,14 @@ export function zcodeSessionUsage(record: unknown): SessionUsage | null {
 }
 
 /**
- * The last record in a chunk of the log that carries usage.
+ * The newest usage in a chunk of the log.
  *
  * The engine appends to the file while it runs, so the last line can be half
- * written.  A line that does not parse is skipped, and the search keeps going
- * back until a record with usage is found.
+ * written.  A line that does not parse is skipped, and the scan keeps going
+ * back.  A record whose usage carries no real token count is skipped as well,
+ * so an empty newer record cannot hide the counters in an older one.
  */
-function lastUsageRecord(text: string, skipFirstLine: boolean): unknown | null {
+function lastUsageRecord(text: string, skipFirstLine: boolean): SessionUsage | null {
   const lines = text.split("\n");
   for (let index = lines.length - 1; index >= (skipFirstLine ? 1 : 0); index -= 1) {
     const line = lines[index]?.trim();
@@ -128,9 +161,8 @@ function lastUsageRecord(text: string, skipFirstLine: boolean): unknown | null {
     } catch {
       continue;
     }
-    const row = asRecord(parsed);
-    if (!row) continue;
-    if (asRecord(row.response)?.usage) return parsed;
+    const usage = zcodeSessionUsage(parsed);
+    if (usage) return usage;
   }
   return null;
 }
@@ -149,19 +181,18 @@ async function readTail(handle: Awaited<ReturnType<typeof open>>, size: number, 
   return buffer.toString("utf8");
 }
 
-async function readLastUsageRecord(path: string, size: number): Promise<unknown | null> {
+async function readLastUsage(path: string, size: number): Promise<SessionUsage | null> {
   const handle = await open(path, "r");
   try {
     const window = Math.min(size, TAIL_BYTES);
     const text = await readTail(handle, size, window);
-    const record = lastUsageRecord(text, size > window);
-    if (record) return record;
+    const usage = lastUsageRecord(text, size > window);
+    if (usage) return usage;
     if (size <= window) return null;
-    // The last record is bigger than the tail window, so the whole file is
+    // The last record is bigger than the tail window, so more of the file is
     // read, up to a cap:  a log this large is not a session transcript.
     if (size > MAX_WHOLE_FILE_BYTES) return null;
-    const whole = await readTail(handle, size, size);
-    return lastUsageRecord(whole, false);
+    return lastUsageRecord(await readTail(handle, size, size), false);
   } finally {
     await handle.close();
   }
@@ -201,7 +232,7 @@ export async function readZcodeSessionUsage(
   if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) return cached.usage;
   let usage: SessionUsage | null = null;
   try {
-    usage = zcodeSessionUsage(await readLastUsageRecord(path, info.size));
+    usage = await readLastUsage(path, info.size);
   } catch {
     usage = null;
   }

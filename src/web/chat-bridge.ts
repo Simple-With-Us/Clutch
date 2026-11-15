@@ -1002,6 +1002,25 @@ interface AcpSessionInfo {
   archived?: boolean;
 }
 
+/**
+ * Whether two readings of an engine's log are the same record.
+ *
+ * The engine's timestamp is optional, so it cannot be the only thing compared:
+ * two different records without one would look identical.  The counters and
+ * the duration are what change when the engine writes again.
+ */
+export function sameUsageReading(left: SessionUsage, right: SessionUsage): boolean {
+  return left.updatedAtMs === right.updatedAtMs
+    && left.inputTokens === right.inputTokens
+    && left.outputTokens === right.outputTokens
+    && left.totalTokens === right.totalTokens
+    && left.cacheReadTokens === right.cacheReadTokens
+    && left.responseTokensPerSecond === right.responseTokensPerSecond
+    && left.completionDurationMs === right.completionDurationMs
+    && left.model === right.model
+    && left.provider === right.provider;
+}
+
 /** Read every session's real usage in one pass.  `readSessionUsage` caches per
  *  log mtime, so a refresh that finds nothing new costs nothing. */
 export function attachUsage(sessions: readonly AcpSessionInfo[]): AcpSessionInfo[] {
@@ -3828,7 +3847,9 @@ async function main(): Promise<void> {
               const fresh = await readZcodeSessionUsage(sessionIdForUsage);
               if (!fresh || settled) return;
               // Only re-announce when the engine actually wrote something new.
-              if (lastUsage && fresh.updatedAtMs === lastUsage.updatedAtMs) return;
+              // The timestamp is optional, so the counters decide: a record
+              // without one must not freeze the strip at the first reading.
+              if (lastUsage && sameUsageReading(lastUsage, fresh)) return;
               lastUsage = fresh;
               turnDiagnostics.record("context", { ...fresh, basis: "latest-response" });
               sseSend(res, "usage", { sessionId: sessionIdForUsage, usage: fresh });

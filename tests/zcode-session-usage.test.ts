@@ -169,6 +169,37 @@ describe("reading a Z Code session's usage", () => {
     expect(usage?.responseTokensPerSecond).toBeCloseTo(24.35, 2);
   });
 
+  it("skips a newer record with no token counts and takes the older one", async () => {
+    writeLog(`model-io-${SESSION_ID}.jsonl`, [
+      record({ outputTokens: 1_395, durationMs: 50_538 }),
+      // A newer record whose usage carries no real counters.
+      JSON.stringify({
+        type: "model_io",
+        sessionId: SESSION_ID,
+        durationMs: 900,
+        model: { modelId: "GLM-5.3-Flash", providerId: "account:zai-individual-coding-plan" },
+        response: { usage: { inputTokens: null, outputTokens: null } },
+      }),
+    ]);
+
+    const usage = await readZcodeSessionUsage(SESSION_ID, { root });
+
+    // The empty newer record must not hide the real counters below it.
+    expect(usage?.outputTokens).toBe(1_395);
+    expect(usage?.responseTokensPerSecond).toBeCloseTo(1_395 / 50.538, 6);
+  });
+
+  it("skips a malformed record and takes the one before it", async () => {
+    writeLog(`model-io-${SESSION_ID}.jsonl`, [
+      record({ outputTokens: 447, durationMs: 18_356 }),
+      '{"type":"model_io","response":{"usage":{"inputTokens":"many"',
+    ]);
+
+    const usage = await readZcodeSessionUsage(SESSION_ID, { root });
+
+    expect(usage?.outputTokens).toBe(447);
+  });
+
   it("refuses a session id that is not Z Code's", async () => {
     writeLog(`model-io-${SESSION_ID}.jsonl`, [record({ outputTokens: 69, durationMs: 8_399 })]);
 
