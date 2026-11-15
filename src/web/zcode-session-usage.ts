@@ -215,10 +215,15 @@ async function readLog(path: string, size: number, consumed: number): Promise<Lo
     // The first read:  the newest record is near the end of the file.
     const window = Math.min(size, TAIL_BYTES);
     const start = size - window;
+    // The window may begin in the middle of a record, and the byte before it
+    // says whether it does.  A window that begins on a record boundary holds
+    // a complete first line, so skipping that line would lose a record.
+    const boundary = start > 0 ? await readAt(handle, start - 1, 1) : Buffer.alloc(0);
+    const leadingIsPartial = boundary.length > 0 && boundary[0] !== NEWLINE;
     const tail = await readAt(handle, start, window);
     const lastNewline = tail.lastIndexOf(NEWLINE);
     const complete = (lastNewline < 0 ? tail : tail.subarray(0, lastNewline)).toString("utf8");
-    const usage = usageFromLines(complete.split("\n"), size > window);
+    const usage = usageFromLines(complete.split("\n"), leadingIsPartial);
     if (usage) return { usage, consumed: start + lastNewline + 1 };
     if (size <= window) return { usage: null, consumed: start + Math.max(lastNewline + 1, 0) };
     // The last record is bigger than the tail window, so more of the file is
@@ -226,7 +231,8 @@ async function readLog(path: string, size: number, consumed: number): Promise<Lo
     if (size > MAX_WHOLE_FILE_BYTES) {
       // The log is too big to read whole, so what is before this tail is out
       // of reach.  The bytes that were read are still consumed, so the next
-      // poll reads only what arrived instead of the tail all over again.
+      // poll reads only what arrived instead of the tail all over again, and
+      // the record at the window's edge has already been read above.
       return { usage: null, consumed: start + Math.max(lastNewline + 1, 0) };
     }
     const whole = await readAt(handle, 0, size);

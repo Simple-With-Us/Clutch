@@ -328,8 +328,9 @@ describe("reading a Z Code session's usage", () => {
     const first = await readZcodeSessionUsage(SESSION_ID, { root });
 
     expect(first).toBeNull();
-    // Only the tail was read:  the file is over the cap on a whole-file read.
-    expect(reads.bytes.reduce((sum, count) => sum + count, 0)).toBeLessThanOrEqual(1024 * 1024);
+    // Only the tail was read, plus the byte that says where the window
+    // begins:  the file is over the cap on a whole-file read.
+    expect(reads.bytes.reduce((sum, count) => sum + count, 0)).toBeLessThanOrEqual(1024 * 1024 + 1);
 
     // The engine appends a record.
     const appended = `${record({ outputTokens: 447, durationMs: 18_356 })}\n`;
@@ -341,6 +342,33 @@ describe("reading a Z Code session's usage", () => {
     expect(second?.outputTokens).toBe(447);
     // The poll read the bytes that arrived, not the tail all over again.
     expect(reads.bytes.reduce((sum, count) => sum + count, 0)).toBe(Buffer.byteLength(appended));
+  });
+
+  it("finds a record at the leading edge of the tail window", async () => {
+    const path = join(root, `model-io-${SESSION_ID}.jsonl`);
+    // A log over the whole-file cap whose tail window begins exactly on a
+    // record, and that record is the only one in the window with a usage.
+    const block = 128;
+    const filler = (text: string) => {
+      // The padding goes inside the record, so every block ends with the
+      // newline that ends a record.
+      if (text.length > block - 1) throw new Error("the fixture record does not fit the block");
+      return `${text.padEnd(block - 1, " ")}\n`;
+    };
+    const plain = filler(JSON.stringify({ type: "model_io", sessionId: SESSION_ID, response: {} }));
+    const counted = filler(JSON.stringify({
+      durationMs: 18_356,
+      response: { usage: { inputTokens: 163_245, outputTokens: 447, totalTokens: 163_692 } },
+    }));
+    const headLines = (8 * 1024 * 1024) / block;
+    const tailLines = (9 * 1024 * 1024 - 8 * 1024 * 1024 - block) / block;
+    writeFileSync(path, plain.repeat(headLines) + counted + plain.repeat(tailLines));
+
+    const usage = await readZcodeSessionUsage(SESSION_ID, { root });
+
+    // The record at the window's edge is a whole record, so it is read.
+    expect(usage?.outputTokens).toBe(447);
+    expect(usage?.responseTokensPerSecond).toBeCloseTo(447 / 18.356, 6);
   });
 
   it("keeps a half-written record for the next poll", async () => {
