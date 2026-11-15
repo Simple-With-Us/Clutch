@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -94,12 +95,20 @@ const PROXY_ENV_KEYS = [
   "NODE_EXTRA_CA_CERTS",
 ];
 
+let isolatedHome = "";
+
 beforeEach(() => {
   savedEnv = {};
-  for (const key of [...MANAGED_KEYS, ...PROXY_ENV_KEYS, "INFISICAL_TOKEN", "INFISICAL_WRITE_TOKEN", "CLUTCH_INFISICAL_ENV"]) {
+  for (const key of [...MANAGED_KEYS, ...PROXY_ENV_KEYS, "INFISICAL_TOKEN", "INFISICAL_WRITE_TOKEN", "CLUTCH_INFISICAL_ENV", "CLUTCH_HOME", "HOME"]) {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
+  // The settings layer reads its Infisical credentials from $CLUTCH_HOME, so a
+  // test that does not point that at a temporary directory reads the
+  // operator's real credential file and writes to the real project.
+  isolatedHome = mkdtempSync(join(tmpdir(), "clutch-settings-"));
+  process.env.CLUTCH_HOME = isolatedHome;
+  process.env.HOME = isolatedHome;
   consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -110,6 +119,7 @@ afterEach(() => {
   }
   consoleErrorSpy.mockRestore();
   vi.unstubAllGlobals();
+  if (isolatedHome) rmSync(isolatedHome, { recursive: true, force: true });
 });
 
 describe("clutchSettings", () => {

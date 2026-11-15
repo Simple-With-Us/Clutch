@@ -306,13 +306,16 @@ def driver(broker_path: str, record_path: str, scenario: str) -> int:
                     str(helper_app),
                     verify_integrity=lambda path: verified.append(path) is None and verifier_result,
                 )
-                result = {"valid": True, "pathMatches": valid_path == str(helper_app)}
+                # The broker canonicalizes before it checks, so the comparison is
+                # against the resolved path: on macOS tmpdir() is /var/folders,
+                # a symlink to /private/var/folders.
+                result = {"valid": True, "pathMatches": valid_path == str(helper_app.resolve())}
             except BrokerFailure as failure:
                 result = {"valid": False, "stage": failure.stage}
             finally:
                 Path.lstat = original_lstat
             result["integrityChecks"] = len(verified)
-            result["integrityOuterApp"] = bool(verified and verified[0] == str(app))
+            result["integrityOuterApp"] = bool(verified and verified[0] == str(app.resolve()))
             with open(record_path, "w", encoding="utf-8") as target:
                 json.dump(result, target)
         return 0

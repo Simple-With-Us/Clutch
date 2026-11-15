@@ -438,6 +438,15 @@ export interface EngineAvailabilityContext {
    * environment check in a test.
    */
   fleetSecretPresent?: (name: string) => Promise<boolean>;
+  /**
+   * The interpreter paths to try, in order, after `PYTHON`.
+   *
+   * The default is the launcher's own order: `/opt/homebrew/bin/python3`
+   * first, then `python3` on PATH.  A caller that answers for a different
+   * machine's layout supplies its own list, so the answer never depends on
+   * what the host happens to have installed.
+   */
+  interpreterCandidates?: readonly string[];
 }
 
 /**
@@ -479,10 +488,17 @@ function settingValue(
  * them answers every turn with "bridge exited", which is why the interpreter
  * is checked here and not left to the turn.
  */
-function pythonInterpreter(env: Record<string, string | undefined>): string | null {
+const DEFAULT_INTERPRETER_CANDIDATES: readonly string[] = ["/opt/homebrew/bin/python3"];
+
+function pythonInterpreter(
+  env: Record<string, string | undefined>,
+  candidates: readonly string[] = DEFAULT_INTERPRETER_CANDIDATES,
+): string | null {
   const named = (env.PYTHON ?? "").trim();
   if (named && executableFile(named)) return named;
-  if (executableFile("/opt/homebrew/bin/python3")) return "/opt/homebrew/bin/python3";
+  for (const candidate of candidates) {
+    if (executableFile(candidate)) return candidate;
+  }
   for (const dir of (env.PATH ?? "").split(":")) {
     if (!dir) continue;
     const candidate = join(dir, "python3");
@@ -697,7 +713,7 @@ export async function engineAvailability(
   // interpreter is a requirement of the fallback path alone: a host that
   // answers must not lose the engine from the picker over a bridge it will
   // never run.
-  if (!context.hostReachable && !pythonInterpreter(env)) {
+  if (!context.hostReachable && !pythonInterpreter(env, context.interpreterCandidates)) {
     return { available: false, note: `${label} needs Python 3 to run its bridge.` };
   }
   const credentialFile = context.credentialFile ?? dshCredentialFile(env);

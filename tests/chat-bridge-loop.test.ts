@@ -12,7 +12,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -130,8 +130,16 @@ beforeAll(async () => {
 }, 60000);
 
 function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
+  // The sidecar must not read the operator's real Clutch home: the launch URL
+  // file there points at the live dsh host, so a dsh-hosted turn would run on
+  // it for real.  An isolated home and an absent launch URL keep the loop on
+  // the stub launcher.
+  const isolatedHome = dirname(tokenFile);
   return {
     ...process.env,
+    HOME: isolatedHome,
+    CLUTCH_HOME: isolatedHome,
+    CLUTCH_LAUNCH_URL_FILE: join(isolatedHome, "absent-launch-url"),
     XDG_DATA_HOME: museDataRoot,
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
