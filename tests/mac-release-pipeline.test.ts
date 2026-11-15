@@ -190,10 +190,12 @@ describe("build-mac-app.sh protects the installed app and the build", () => {
     expect(body).toContain("clutch_build_lock_release");
   });
 
-  it("regenerates the project from project.yml when asked, or when it is missing", () => {
-    expect(body).toContain('"${CLUTCH_MAC_REGENERATE_PROJECT:-0}" == "1"');
-    expect(body).toContain('! -d "$PROJECT"');
+  it("regenerates the project from project.yml every time, so the build ships what project.yml says", () => {
+    expect(body).toContain('if [[ "$PROJECT" == "${IOS_DIR}/Clutch.xcodeproj" ]]; then');
     expect(body).toContain("xcodegen generate");
+    // The seam is gone: the committed pbxproj has drifted into naming a file
+    // that no longer exists, and a build from it failed on the missing file.
+    expect(body).not.toContain("CLUTCH_MAC_REGENERATE_PROJECT");
   });
 });
 
@@ -350,7 +352,7 @@ describe("the release workflow can see the native Mac sources", () => {
       const end = rest.findIndex((l) => /^ {2}[a-z0-9-]+:$/.test(l));
       const body = rest.slice(0, end === -1 ? undefined : end).join("\n");
       expect(body, job).toContain("bash scripts/ios-install-xcodegen.sh");
-      expect(body, job).toContain('CLUTCH_MAC_REGENERATE_PROJECT: "1"');
+      expect(body, job).not.toContain("CLUTCH_MAC_REGENERATE_PROJECT");
     }
   });
 
