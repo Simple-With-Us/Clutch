@@ -17,6 +17,40 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+/** The shape the sessions route answers with. */
+const SessionsResponseSchema = z.object({
+  sessions: z.array(z.object({
+    sessionId: z.string(),
+    model: z.string().optional(),
+    provider: z.string().optional(),
+    usage: z.object({
+      basis: z.string().optional(),
+      model: z.string().optional(),
+      provider: z.string().optional(),
+      inputTokens: z.number(),
+      outputTokens: z.number(),
+      totalTokens: z.number(),
+      responseTokensPerSecond: z.number().optional(),
+      completionDurationMs: z.number().optional(),
+    }).optional(),
+  })),
+});
+
+/** The shape the live usage event carries. */
+const UsageEventSchema = z.object({
+  sessionId: z.string(),
+  usage: z.object({
+    basis: z.string().optional(),
+    model: z.string().optional(),
+    provider: z.string().optional(),
+    inputTokens: z.number(),
+    outputTokens: z.number(),
+    totalTokens: z.number(),
+    responseTokensPerSecond: z.number().optional(),
+    completionDurationMs: z.number().optional(),
+  }),
+});
+
 interface CcCall {
   method: string;
   path: string;
@@ -331,7 +365,7 @@ it("serves Z Code usage for a thread from the engine's own model I/O log", async
 
     const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=zcode`, { headers: chatHeaders() });
     expect(response.status).toBe(200);
-    const { sessions } = await response.json() as { sessions: Array<Record<string, unknown>> };
+    const { sessions } = SessionsResponseSchema.parse(await response.json());
     const row = sessions.find((entry) => entry.sessionId === zcodeSessionId);
     expect(row).toBeDefined();
     // The numbers are the engine's own, not an estimate.
@@ -383,7 +417,7 @@ it("pushes Z Code usage live while the turn runs", async () => {
     // The live event carries the engine's own record, not an estimate.
     const event = /event: usage\ndata: (\{[^\n]*\})\n\n/.exec(result.text);
     expect(event, "the turn pushed a usage event").not.toBeNull();
-    const payload = JSON.parse(event![1]!) as { sessionId: string; usage: Record<string, unknown> };
+    const payload = UsageEventSchema.parse(JSON.parse(event![1]!));
     expect(payload.sessionId).toBe(zcodeSessionId);
     expect(payload.usage).toMatchObject({
       basis: "latest-response",
