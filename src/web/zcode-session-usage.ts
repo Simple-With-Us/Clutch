@@ -223,7 +223,12 @@ async function readLog(path: string, size: number, consumed: number): Promise<Lo
     if (size <= window) return { usage: null, consumed: start + Math.max(lastNewline + 1, 0) };
     // The last record is bigger than the tail window, so more of the file is
     // read, up to a cap:  a log this large is not a session transcript.
-    if (size > MAX_WHOLE_FILE_BYTES) return { usage: null, consumed: 0 };
+    if (size > MAX_WHOLE_FILE_BYTES) {
+      // The log is too big to read whole, so what is before this tail is out
+      // of reach.  The bytes that were read are still consumed, so the next
+      // poll reads only what arrived instead of the tail all over again.
+      return { usage: null, consumed: start + Math.max(lastNewline + 1, 0) };
+    }
     const whole = await readAt(handle, 0, size);
     const wholeNewline = whole.lastIndexOf(NEWLINE);
     const wholeComplete = (wholeNewline < 0 ? whole : whole.subarray(0, wholeNewline)).toString("utf8");

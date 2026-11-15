@@ -317,6 +317,32 @@ describe("reading a Z Code session's usage", () => {
     expect(secondRead).toBeLessThan(firstRead);
   });
 
+  it("does not re-read the tail of a log that is over the whole-file cap", async () => {
+    const path = join(root, `model-io-${SESSION_ID}.jsonl`);
+    // A log bigger than the cap on a whole-file read, whose tail holds
+    // records that carry no usage.
+    const line = `${JSON.stringify({ type: "model_io", sessionId: SESSION_ID, response: {} })}\n`;
+    writeFileSync(path, line.repeat(Math.ceil((9 * 1024 * 1024) / line.length)));
+    reads.bytes.length = 0;
+
+    const first = await readZcodeSessionUsage(SESSION_ID, { root });
+
+    expect(first).toBeNull();
+    // Only the tail was read:  the file is over the cap on a whole-file read.
+    expect(reads.bytes.reduce((sum, count) => sum + count, 0)).toBeLessThanOrEqual(1024 * 1024);
+
+    // The engine appends a record.
+    const appended = `${record({ outputTokens: 447, durationMs: 18_356 })}\n`;
+    appendFileSync(path, appended);
+    reads.bytes.length = 0;
+
+    const second = await readZcodeSessionUsage(SESSION_ID, { root });
+
+    expect(second?.outputTokens).toBe(447);
+    // The poll read the bytes that arrived, not the tail all over again.
+    expect(reads.bytes.reduce((sum, count) => sum + count, 0)).toBe(Buffer.byteLength(appended));
+  });
+
   it("keeps a half-written record for the next poll", async () => {
     const path = writeLog(`model-io-${SESSION_ID}.jsonl`, [record({ outputTokens: 1_395, durationMs: 50_538 })]);
     const first = await readZcodeSessionUsage(SESSION_ID, { root });
