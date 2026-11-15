@@ -1232,7 +1232,7 @@ public struct ChatView: View {
     /// derived from a character count.
     @ViewBuilder
     private var usageStrip: some View {
-        if engine == .mcode || engine == .muse {
+        if ThreadMetricPresentation.showsUsageStrip(engineID: engine.rawValue) {
             let rateLabel = ThreadMetricPresentation.usageStripRateLabel(
                 engineID: engine.rawValue,
                 usage: activeUsage

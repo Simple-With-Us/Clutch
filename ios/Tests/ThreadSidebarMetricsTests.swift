@@ -71,4 +71,37 @@ final class ThreadSidebarMetricsTests: XCTestCase {
 
         XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "mcode", usage: usage), "Interval 22.0 tok/s")
     }
+
+    func testUsageStripIsShownForZCode() {
+        let usage = AcpSessionUsage(responseTokensPerSecond: 27.6)
+
+        XCTAssertTrue(ThreadMetricPresentation.showsUsageStrip(engineID: "zcode"))
+        XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "zcode", usage: usage), "Response 27.6 tok/s")
+    }
+
+    func testUsageStripIsShownForTheEnginesThatReportUsage() {
+        XCTAssertTrue(ThreadMetricPresentation.showsUsageStrip(engineID: "mcode"))
+        XCTAssertTrue(ThreadMetricPresentation.showsUsageStrip(engineID: "muse"))
+    }
+
+    func testUsageStripIsNotShownForAnEngineThatNeverReportsUsage() {
+        XCTAssertFalse(ThreadMetricPresentation.showsUsageStrip(engineID: "deepseek"))
+        XCTAssertFalse(ThreadMetricPresentation.showsUsageStrip(engineID: "minimax"))
+    }
+
+    func testZCodeOccupancyStaysAbsentWithoutAContextWindow() {
+        // Z Code's log carries no window, so the strip shows the rate and no
+        // percentage, rather than a guessed one.
+        let usage = AcpSessionUsage(
+            inputTokens: 699_542,
+            outputTokens: 424,
+            totalTokens: 699_966,
+            basis: "latest-response",
+            responseTokensPerSecond: 30.8
+        )
+
+        XCTAssertNil(usage.contextUsedPercent)
+        XCTAssertNil(ThreadMetricPresentation.contextOccupancyLabel(usage))
+        XCTAssertEqual(ThreadMetricPresentation.usageStripRateLabel(engineID: "zcode", usage: usage), "Response 30.8 tok/s")
+    }
 }

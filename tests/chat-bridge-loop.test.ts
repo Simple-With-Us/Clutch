@@ -151,6 +151,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MUSE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CLUTCH_CHAT_LAUNCHER_ZCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CHAT_BRIDGE_STUB_LOG: stubLogFile,
     CHAT_BRIDGE_STUB_SESSIONS_FILE: stubSessionsFile,
     COMETCHAT_APP_ID: "loop",
@@ -293,6 +294,62 @@ it("bounds list enrichment while reading details for an older row without acquir
   } finally {
     rmSync(stubSessionsFile, { force: true });
     for (const directory of created) rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("serves Z Code usage for a thread from the engine's own model I/O log", async () => {
+  const zcodeSessionId = "sess_c5b7367c-f9da-4882-abbc-f381ddcec9d7";
+  // The sidecar runs with an isolated HOME, so the engine's own log root
+  // points inside the test's own directory and never at the developer's real
+  // Z Code sessions.
+  const rolloutDir = join(dirname(tokenFile), ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+  writeFileSync(join(rolloutDir, `model-io-${zcodeSessionId}.jsonl`), [
+    JSON.stringify({
+      type: "model_io",
+      sessionId: zcodeSessionId,
+      turnId: "turn_645abdb6-e829-467c-88cd-be97edef774d",
+      startedAt: "2026-11-11T02:31:21.233Z",
+      completedAt: "2026-11-11T02:32:11.771Z",
+      durationMs: 50_538,
+      model: { modelId: "GLM-5.3-Flash", providerId: "account:zai-individual-coding-plan" },
+      response: {
+        usage: {
+          inputTokens: 154_644,
+          outputTokens: 1_395,
+          totalTokens: 156_039,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+    }),
+  ].join("\n") + "\n");
+  try {
+    writeFileSync(stubSessionsFile, JSON.stringify([
+      { sessionId: zcodeSessionId, cwd: "/tmp/zcode-project", title: "Z Code thread", updatedAt: "2026-11-11T02:32:11.771Z" },
+    ]));
+
+    const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=zcode`, { headers: chatHeaders() });
+    expect(response.status).toBe(200);
+    const { sessions } = await response.json() as { sessions: Array<Record<string, unknown>> };
+    const row = sessions.find((entry) => entry.sessionId === zcodeSessionId);
+    expect(row).toBeDefined();
+    // The numbers are the engine's own, not an estimate.
+    expect(row?.usage).toMatchObject({
+      basis: "latest-response",
+      model: "GLM-5.3-Flash",
+      provider: "account:zai-individual-coding-plan",
+      inputTokens: 154_644,
+      outputTokens: 1_395,
+      totalTokens: 156_039,
+      completionDurationMs: 50_538,
+    });
+    expect((row?.usage as { responseTokensPerSecond: number }).responseTokensPerSecond).toBeCloseTo(1_395 / 50.538, 6);
+    // The log carries no window, so none is invented.
+    expect((row?.usage as { contextWindow?: number }).contextWindow).toBeUndefined();
+  } finally {
+    rmSync(stubSessionsFile, { force: true });
+    rmSync(join(dirname(tokenFile), ".zcode"), { recursive: true, force: true });
   }
 });
 
