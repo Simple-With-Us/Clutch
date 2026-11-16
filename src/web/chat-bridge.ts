@@ -63,6 +63,7 @@ import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
+import { readZcodeSessionUsage } from "./zcode-session-usage.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
@@ -438,6 +439,15 @@ export interface EngineAvailabilityContext {
    * environment check in a test.
    */
   fleetSecretPresent?: (name: string) => Promise<boolean>;
+  /**
+   * The interpreter paths to try, in order, after `PYTHON`.
+   *
+   * The default is the launcher's own order: `/opt/homebrew/bin/python3`
+   * first, then `python3` on PATH.  A caller that answers for a different
+   * machine's layout supplies its own list, so the answer never depends on
+   * what the host happens to have installed.
+   */
+  interpreterCandidates?: readonly string[];
 }
 
 /**
@@ -479,10 +489,17 @@ function settingValue(
  * them answers every turn with "bridge exited", which is why the interpreter
  * is checked here and not left to the turn.
  */
-function pythonInterpreter(env: Record<string, string | undefined>): string | null {
+const DEFAULT_INTERPRETER_CANDIDATES: readonly string[] = ["/opt/homebrew/bin/python3"];
+
+function pythonInterpreter(
+  env: Record<string, string | undefined>,
+  candidates: readonly string[] = DEFAULT_INTERPRETER_CANDIDATES,
+): string | null {
   const named = (env.PYTHON ?? "").trim();
   if (named && executableFile(named)) return named;
-  if (executableFile("/opt/homebrew/bin/python3")) return "/opt/homebrew/bin/python3";
+  for (const candidate of candidates) {
+    if (executableFile(candidate)) return candidate;
+  }
   for (const dir of (env.PATH ?? "").split(":")) {
     if (!dir) continue;
     const candidate = join(dir, "python3");
@@ -697,7 +714,7 @@ export async function engineAvailability(
   // interpreter is a requirement of the fallback path alone: a host that
   // answers must not lose the engine from the picker over a bridge it will
   // never run.
-  if (!context.hostReachable && !pythonInterpreter(env)) {
+  if (!context.hostReachable && !pythonInterpreter(env, context.interpreterCandidates)) {
     return { available: false, note: `${label} needs Python 3 to run its bridge.` };
   }
   const credentialFile = context.credentialFile ?? dshCredentialFile(env);
@@ -983,6 +1000,25 @@ interface AcpSessionInfo {
   /** Clutch-side Project assignment and archive state. */
   projectId?: string;
   archived?: boolean;
+}
+
+/**
+ * Whether two readings of an engine's log are the same record.
+ *
+ * The engine's timestamp is optional, so it cannot be the only thing compared:
+ * two different records without one would look identical.  The counters and
+ * the duration are what change when the engine writes again.
+ */
+export function sameUsageReading(left: SessionUsage, right: SessionUsage): boolean {
+  return left.updatedAtMs === right.updatedAtMs
+    && left.inputTokens === right.inputTokens
+    && left.outputTokens === right.outputTokens
+    && left.totalTokens === right.totalTokens
+    && left.cacheReadTokens === right.cacheReadTokens
+    && left.responseTokensPerSecond === right.responseTokensPerSecond
+    && left.completionDurationMs === right.completionDurationMs
+    && left.model === right.model
+    && left.provider === right.provider;
 }
 
 /** Read every session's real usage in one pass.  `readSessionUsage` caches per
@@ -2939,8 +2975,10 @@ async function main(): Promise<void> {
           ...knownModelMetadata.get(modelMetadataKey(listEngine, row.sessionId)),
           ...row,
         }));
+        const enrichedHead = withKnownMetadata.slice(0, USAGE_ENRICH_CAP);
+        const enrichedTail = withKnownMetadata.slice(USAGE_ENRICH_CAP);
         const sessions = listEngine === "muse"
-          ? await mapWithConcurrency(withKnownMetadata.slice(0, USAGE_ENRICH_CAP), 4, async (row) => {
+          ? await mapWithConcurrency(enrichedHead, 4, async (row) => {
             const log = await readMuseSessionSummary(row.sessionId);
             if (!log) return row;
             const usage = museSessionUsage(log);
@@ -2950,8 +2988,21 @@ async function main(): Promise<void> {
               ...(log.providerId ? { provider: log.providerId } : {}),
               ...(usage ? { usage } : {}),
             };
-          }).then((enriched) => enriched.concat(withKnownMetadata.slice(USAGE_ENRICH_CAP)))
-          : attachUsage(withKnownMetadata.slice(0, USAGE_ENRICH_CAP)).concat(withKnownMetadata.slice(USAGE_ENRICH_CAP));
+          }).then((enriched) => enriched.concat(enrichedTail))
+          : listEngine === "zcode"
+          // Z Code keeps its own model I/O log, not a dsh session log, so the
+          // usage comes from the engine's own record.
+          ? await mapWithConcurrency(enrichedHead, 4, async (row) => {
+            const usage = await readZcodeSessionUsage(row.sessionId);
+            if (!usage) return row;
+            return {
+              ...row,
+              ...(usage.model ? { model: usage.model } : {}),
+              ...(usage.provider ? { provider: usage.provider } : {}),
+              usage,
+            };
+          }).then((enriched) => enriched.concat(enrichedTail))
+          : attachUsage(enrichedHead).concat(enrichedTail);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions, hasMore: visible.length > limit || listed.length >= fetchLimit }));
       } catch (err) {
         if (listEngine === "muse") log("muse list failed");
@@ -3781,6 +3832,36 @@ async function main(): Promise<void> {
             turnDiagnostics.record("context", { ...measured, basis: "latest-response" });
             if (!settled) sseSend(res, "usage", { sessionId: sessionIdForUsage, usage: measured });
           }, 1500);
+          usageTimer.unref?.();
+        }
+        if (engine === "zcode" && active.bridgeSessionId) {
+          const sessionIdForUsage = active.bridgeSessionId;
+          // Z Code appends to its own model I/O log as the turn runs, so the
+          // log is re-read on a timer and only real records are pushed.  The
+          // read is guarded, so a slow file never piles up behind itself.
+          let reading = false;
+          const publishZcodeUsage = async (): Promise<void> => {
+            if (reading || settled) return;
+            reading = true;
+            try {
+              const fresh = await readZcodeSessionUsage(sessionIdForUsage);
+              if (!fresh || settled) return;
+              // Only re-announce when the engine actually wrote something new.
+              // The timestamp is optional, so the counters decide: a record
+              // without one must not freeze the strip at the first reading.
+              if (lastUsage && sameUsageReading(lastUsage, fresh)) return;
+              lastUsage = fresh;
+              turnDiagnostics.record("context", { ...fresh, basis: "latest-response" });
+              sseSend(res, "usage", { sessionId: sessionIdForUsage, usage: fresh });
+            } catch {
+              log("zcode usage read failed");
+            } finally {
+              reading = false;
+            }
+          };
+          await publishZcodeUsage();
+          if (settled) return;
+          usageTimer = setInterval(() => { void publishZcodeUsage(); }, 1500);
           usageTimer.unref?.();
         }
         let publishMuseState: ((fresh?: boolean) => Promise<void>) | null = null;

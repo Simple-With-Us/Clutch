@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { Bridge, compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf, zcodeAvailable } from "../src/web/chat-bridge.ts";
+import { Bridge, compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sameUsageReading, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf, zcodeAvailable } from "../src/web/chat-bridge.ts";
 import { engineCatalog, parseAcpMessage, readMuseProviderCatalog, resetEngineCatalogCache } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
@@ -676,5 +676,37 @@ describe("sliceThreadHistory", () => {
   it("keeps the tail when over budget", () => {
     expect(sliceThreadHistory([1, 2, 3, 4], 2)).toEqual([3, 4]);
     expect(sliceThreadHistory([1, 2], 5)).toEqual([1, 2]);
+  });
+});
+
+describe("sameUsageReading", () => {
+  it("treats two readings without a timestamp as different when the counters differ", () => {
+    // The engine's timestamp is optional, so a record without one must not
+    // look identical to the record before it.
+    const first = { basis: "latest-response" as const, inputTokens: 10, outputTokens: 2, totalTokens: 12 };
+    const second = { basis: "latest-response" as const, inputTokens: 20, outputTokens: 4, totalTokens: 24 };
+
+    expect(sameUsageReading(first, first)).toBe(true);
+    expect(sameUsageReading(first, second)).toBe(false);
+  });
+
+  it("treats a new reading as different when only the rate moved", () => {
+    const first = {
+      basis: "latest-response" as const, inputTokens: 10, outputTokens: 2, totalTokens: 12,
+      responseTokensPerSecond: 1, completionDurationMs: 2_000,
+    };
+    const second = { ...first, responseTokensPerSecond: 2 };
+
+    expect(sameUsageReading(first, second)).toBe(false);
+  });
+
+  it("treats a new reading as different when only the timestamp moved", () => {
+    const first = {
+      basis: "latest-response" as const, inputTokens: 10, outputTokens: 2, totalTokens: 12,
+      updatedAtMs: 1,
+    };
+    const second = { ...first, updatedAtMs: 2 };
+
+    expect(sameUsageReading(first, second)).toBe(false);
   });
 });

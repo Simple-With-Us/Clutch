@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,6 +33,14 @@ import { findMuseSessionLog, readMuseSessionLog } from "../src/web/muse-session-
 
 const SESSION_ID = "8ec48d4a-e48d-4a49-ae87-f710d028e20c";
 
+/// macOS resolves /var to /private/var, and the reader resolves the sessions
+/// root with realpath before it looks for a session, so a fixture root has to
+/// be physical as well.  Otherwise every expected path is off by that symlink:
+/// the suite is red on a Mac while it stays green on Linux.
+function makeTempRoot(prefix: string): string {
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
 function event(payload_type: string, payload: Record<string, unknown>, sequence: number): string {
   return JSON.stringify({ record_type: "event", payload_type, payload, sequence });
 }
@@ -52,7 +60,7 @@ function syntheticSessionId(index: number): string {
 
 describe("Muse session location index", () => {
   it("shares concurrent misses and refreshes new sessions after its short negative cache expires", async () => {
-    const root = mkdtempSync(join(tmpdir(), "clutch-muse-location-cache-"));
+    const root = makeTempRoot("clutch-muse-location-cache-");
     const day = join(root, "2026", "11", "03");
     const foundSession = join(day, SESSION_ID);
     const newlyCreatedId = "a1111111-a111-4111-8111-a11111111111";
@@ -91,7 +99,7 @@ describe("Muse session location index", () => {
   });
 
   it("keeps validated paths when an expired index refresh fails, then discovers new sessions on retry", async () => {
-    const root = mkdtempSync(join(tmpdir(), "clutch-muse-location-refresh-failure-"));
+    const root = makeTempRoot("clutch-muse-location-refresh-failure-");
     const day = join(root, "2026", "11", "03");
     const knownDirectory = join(day, SESSION_ID);
     const newId = "d4444444-d444-4444-8444-d44444444444";
@@ -126,7 +134,7 @@ describe("Muse session location index", () => {
   });
 
   it("visits recent date directories first when the location scan reaches its entry cap", async () => {
-    const root = mkdtempSync(join(tmpdir(), "clutch-muse-location-cap-"));
+    const root = makeTempRoot("clutch-muse-location-cap-");
     const olderDay = join(root, "2026", "01", "01");
     const newerDay = join(root, "2026", "01", "02");
     const recentId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
@@ -144,12 +152,16 @@ describe("Muse session location index", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+    // This test creates twenty thousand directories and then scans them, so
+    // it is far slower than a unit test and needs a budget of its own.  The
+    // default five second limit is not enough on a loaded machine, and the
+    // failure looks like a broken reader rather than a slow fixture.
+  }, 30_000);
 });
 
 describe("Muse session log path replacement", () => {
   it("does not cache a false empty transcript when the log grows before open", async () => {
-    const root = mkdtempSync(join(tmpdir(), "clutch-muse-growth-"));
+    const root = makeTempRoot("clutch-muse-growth-");
     const dir = join(root, "2026", "11", "03", SESSION_ID);
     const file = join(dir, "session.jsonl");
     mkdirSync(dir, { recursive: true });
@@ -171,8 +183,8 @@ describe("Muse session log path replacement", () => {
   });
 
   it("rejects a checked file when its date directory becomes a symlink before open", async () => {
-    const root = mkdtempSync(join(tmpdir(), "clutch-muse-race-root-"));
-    const outsideRoot = mkdtempSync(join(tmpdir(), "clutch-muse-race-outside-"));
+    const root = makeTempRoot("clutch-muse-race-root-");
+    const outsideRoot = makeTempRoot("clutch-muse-race-outside-");
     const dayDir = join(root, "2026", "10", "21");
     const savedDayDir = `${dayDir}.checked`;
     const outsideDayDir = join(outsideRoot, "2026", "10", "21");
