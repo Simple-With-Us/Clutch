@@ -20,6 +20,35 @@ const RpcParamsSchema = z.object({
   expectedTurnId: z.string().optional().catch(undefined),
 }).catch({});
 
+/**
+ * One JSON-RPC message, as the sidecar sends it.
+ *
+ * The message is the boundary object, so it is read through a schema.  There
+ * is no fallback here on purpose:  a message that does not match the
+ * protocol is refused at the door instead of being turned into an empty
+ * message and dispatched anyway.
+ */
+const RpcMessageSchema = z.object({
+  jsonrpc: z.string().optional(),
+  id: z.union([z.number(), z.string()]).nullish(),
+  method: z.string().optional(),
+  params: z.unknown().optional(),
+  result: z.unknown().optional(),
+});
+
+/**
+ * The answer to a permission request, as the sidecar sends it.
+ *
+ * An answer that does not match is not an answer, so it is never taken for
+ * permission to run.
+ */
+const RpcOutcomeSchema = z.object({
+  outcome: z.object({
+    optionId: z.string().nullish(),
+    outcome: z.string().nullish(),
+  }).optional(),
+});
+
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 let pendingPermission = null;
@@ -75,13 +104,17 @@ rl.on("line", (line) => {
   } catch {
     return;
   }
-  const { id, method } = msg;
-  // The message comes over stdio from the sidecar, so its params are parsed
-  // with a schema before anything reads a field out of them.
-  const params = RpcParamsSchema.parse(msg.params ?? {});
+  // The message comes over stdio from the sidecar, so it is read through a
+  // schema before anything reads a field out of it.  A message that does not
+  // match the protocol is dropped here, at the door.
+  const parsed = RpcMessageSchema.safeParse(msg);
+  if (!parsed.success) return;
+  const { id, method } = parsed.data;
+  const params = RpcParamsSchema.parse(parsed.data.params ?? {});
   if (!method && id === 900 && pendingPermission) {
-    const optionId = msg.result?.outcome?.optionId ?? null;
-    const outcome = msg.result?.outcome?.outcome ?? null;
+    const answer = RpcOutcomeSchema.safeParse(parsed.data.result);
+    const optionId = answer.success ? answer.data.outcome?.optionId ?? null : null;
+    const outcome = answer.success ? answer.data.outcome?.outcome ?? null : null;
     record({ event: "permission-answered", optionId, outcome });
     if (outcome !== "selected" || optionId !== "allow-once") {
       send({ jsonrpc: "2.0", id: pendingPermission.id, error: { message: "permission was not allowed once" } });
