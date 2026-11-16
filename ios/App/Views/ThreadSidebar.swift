@@ -831,6 +831,16 @@ struct ThreadDetailsCard: View {
 }
 
 enum ThreadMetricPresentation {
+    /// The engines whose threads carry a live usage strip.
+    ///
+    /// The strip reads the engine's own accounting, so it is engine-agnostic
+    /// once a record arrives:  Z Code reports the same response rate the other
+    /// engines do.  An engine that reports nothing says so instead of showing
+    /// a placeholder.
+    static func showsUsageStrip(engineID: String) -> Bool {
+        engineID == "mcode" || engineID == "muse" || engineID == "zcode"
+    }
+
     static func usageStripRateLabel(engineID: String, usage: AcpSessionUsage?) -> String? {
         guard let usage else { return nil }
         if let rate = usage.responseTokensPerSecond, rate.isFinite, rate >= 0 {

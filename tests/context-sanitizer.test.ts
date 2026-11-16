@@ -14,6 +14,12 @@ describe("context-sanitizer", () => {
     // MiniMax-M3.1-Flash, the stable successor to the retired Preview id.
     // (`input: [text, image]`), so it must not be sanitized either.
     expect(isMultimodalModel("MiniMax-M3")).toBe(true);
+    // Muse Spark 1.3 has native multimodal perception (images, video,
+    // documents) per Meta, and the pi-ai catalog declares the family
+    // `input: [text, image]` — the web canvas must not strip images for it.
+    expect(isMultimodalModel("muse-spark-1.3-contributor")).toBe(true);
+    expect(isMultimodalModel("muse-spark-1.3")).toBe(true);
+    expect(isMultimodalModel("muse-glimmer-30b")).toBe(true);
     expect(isMultimodalModel("MiniMax-M3.1-Flash")).toBe(true);
     expect(isMultimodalModel("claude-3-5-sonnet")).toBe(true);
     expect(isMultimodalModel("gpt-4o")).toBe(true);

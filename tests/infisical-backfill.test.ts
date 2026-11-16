@@ -213,7 +213,12 @@ describe("clutch-infisical-env backfill", () => {
     } finally {
       metadataFixture = VALID_METADATA;
     }
-  });
+    // This test runs the backfill ten times, once for every metadata shape
+    // that must be refused, so it is far slower than a unit test and needs a
+    // budget of its own.  The default five second limit is not enough on a
+    // loaded machine, and the failure looks like a broken reader rather than
+    // a slow fixture.
+  }, 30_000);
 
   it("rejects metadata redirects without forwarding the token or reading secrets", async () => {
     metadataRedirect = true;
