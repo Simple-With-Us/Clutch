@@ -236,15 +236,17 @@ describe("ios-ship.yml auto-ship contract", () => {
 });
 
 describe("TestFlight What to Test uses the owner clock", () => {
-  it("renders a 12-hour lower-case am or pm and no timezone abbreviation", () => {
+  it("renders spaced uppercase AM/PM and no timezone abbreviation", () => {
     const src = read("scripts/ios-fleet/asc-api.mjs");
     const fn = src.match(/function centralTimestamp[\s\S]*?\n}\n/)?.[0];
     expect(fn, "centralTimestamp is present").toBeTruthy();
     const centralTimestamp = new Function(`${fn}; return centralTimestamp;`)() as (d: Date) => string;
-    // 8:35pm on Oct 17 in Chicago is 01:35 UTC on Oct 18 (CDT).
-    expect(centralTimestamp(new Date("2026-10-18T01:35:00Z"))).toBe("Sat, Oct 17, 2026 at 8:35pm");
+    // 8:35 PM on Oct 17 in Chicago is 01:35 UTC on Oct 18 (CDT).
+    expect(centralTimestamp(new Date("2026-10-18T01:35:00Z"))).toBe("Sat, Oct 17, 2026 at 8:35 PM");
     // CST in winter.
-    expect(centralTimestamp(new Date("2026-12-01T18:05:00Z"))).toBe("Tue, Dec 1, 2026 at 12:05pm");
-    expect(centralTimestamp(new Date("2026-08-12T06:15:00Z"))).not.toMatch(/\b(?:CT|CDT|CST)\b|AM|PM/);
+    expect(centralTimestamp(new Date("2026-12-01T18:05:00Z"))).toBe("Tue, Dec 1, 2026 at 12:05 PM");
+    const summerMorning = centralTimestamp(new Date("2026-08-12T06:15:00Z"));
+    expect(summerMorning).toBe("Wed, Aug 12, 2026 at 1:15 AM");
+    expect(summerMorning).not.toMatch(/\b(?:CT|CDT|CST)\b|[\u00a0\u202f]/);
   });
 });

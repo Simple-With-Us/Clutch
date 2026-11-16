@@ -12,10 +12,44 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { z } from "zod";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+/** The shape the sessions route answers with. */
+const SessionsResponseSchema = z.object({
+  sessions: z.array(z.object({
+    sessionId: z.string(),
+    model: z.string().optional(),
+    provider: z.string().optional(),
+    usage: z.object({
+      basis: z.string().optional(),
+      model: z.string().optional(),
+      provider: z.string().optional(),
+      inputTokens: z.number(),
+      outputTokens: z.number(),
+      totalTokens: z.number(),
+      responseTokensPerSecond: z.number().optional(),
+      completionDurationMs: z.number().optional(),
+    }).optional(),
+  })),
+});
+
+/** The shape the live usage event carries. */
+const UsageEventSchema = z.object({
+  sessionId: z.string(),
+  usage: z.object({
+    basis: z.string().optional(),
+    model: z.string().optional(),
+    provider: z.string().optional(),
+    inputTokens: z.number(),
+    outputTokens: z.number(),
+    totalTokens: z.number(),
+    responseTokensPerSecond: z.number().optional(),
+    completionDurationMs: z.number().optional(),
+  }),
+});
 
 interface CcCall {
   method: string;
@@ -130,8 +164,16 @@ beforeAll(async () => {
 }, 60000);
 
 function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
+  // The sidecar must not read the operator's real Clutch home: the launch URL
+  // file there points at the live dsh host, so a dsh-hosted turn would run on
+  // it for real.  An isolated home and an absent launch URL keep the loop on
+  // the stub launcher.
+  const isolatedHome = dirname(tokenFile);
   return {
     ...process.env,
+    HOME: isolatedHome,
+    CLUTCH_HOME: isolatedHome,
+    CLUTCH_LAUNCH_URL_FILE: join(isolatedHome, "absent-launch-url"),
     XDG_DATA_HOME: museDataRoot,
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
@@ -143,6 +185,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_CHAT_LAUNCHER_DEEPSEEK: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CLUTCH_CHAT_LAUNCHER_MUSE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
+    CLUTCH_CHAT_LAUNCHER_ZCODE: join(process.cwd(), "tests", "fixtures", "chat-bridge-stub.mjs"),
     CHAT_BRIDGE_STUB_LOG: stubLogFile,
     CHAT_BRIDGE_STUB_SESSIONS_FILE: stubSessionsFile,
     COMETCHAT_APP_ID: "loop",
@@ -285,6 +328,108 @@ it("bounds list enrichment while reading details for an older row without acquir
   } finally {
     rmSync(stubSessionsFile, { force: true });
     for (const directory of created) rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+it("serves Z Code usage for a thread from the engine's own model I/O log", async () => {
+  const zcodeSessionId = "sess_c5b7367c-f9da-4882-abbc-f381ddcec9d7";
+  // The sidecar runs with an isolated HOME, so the engine's own log root
+  // points inside the test's own directory and never at the developer's real
+  // Z Code sessions.
+  const rolloutDir = join(dirname(tokenFile), ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+  writeFileSync(join(rolloutDir, `model-io-${zcodeSessionId}.jsonl`), [
+    JSON.stringify({
+      type: "model_io",
+      sessionId: zcodeSessionId,
+      turnId: "turn_645abdb6-e829-467c-88cd-be97edef774d",
+      startedAt: "2026-11-11T02:31:21.233Z",
+      completedAt: "2026-11-11T02:32:11.771Z",
+      durationMs: 50_538,
+      model: { modelId: "GLM-5.3-Flash", providerId: "account:zai-individual-coding-plan" },
+      response: {
+        usage: {
+          inputTokens: 154_644,
+          outputTokens: 1_395,
+          totalTokens: 156_039,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+    }),
+  ].join("\n") + "\n");
+  try {
+    writeFileSync(stubSessionsFile, JSON.stringify([
+      { sessionId: zcodeSessionId, cwd: "/tmp/zcode-project", title: "Z Code thread", updatedAt: "2026-11-11T02:32:11.771Z" },
+    ]));
+
+    const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=zcode`, { headers: chatHeaders() });
+    expect(response.status).toBe(200);
+    const { sessions } = SessionsResponseSchema.parse(await response.json());
+    const row = sessions.find((entry) => entry.sessionId === zcodeSessionId);
+    expect(row).toBeDefined();
+    // The numbers are the engine's own, not an estimate.
+    expect(row?.usage).toMatchObject({
+      basis: "latest-response",
+      model: "GLM-5.3-Flash",
+      provider: "account:zai-individual-coding-plan",
+      inputTokens: 154_644,
+      outputTokens: 1_395,
+      totalTokens: 156_039,
+      completionDurationMs: 50_538,
+    });
+    expect((row?.usage as { responseTokensPerSecond: number }).responseTokensPerSecond).toBeCloseTo(1_395 / 50.538, 6);
+    // The log carries no window, so none is invented.
+    expect((row?.usage as { contextWindow?: number }).contextWindow).toBeUndefined();
+  } finally {
+    rmSync(stubSessionsFile, { force: true });
+    rmSync(join(dirname(tokenFile), ".zcode"), { recursive: true, force: true });
+  }
+});
+
+it("pushes Z Code usage live while the turn runs", async () => {
+  const zcodeSessionId = "sess_c5b7367c-f9da-4882-abbc-f381ddcec9d7";
+  const rolloutDir = join(dirname(tokenFile), ".zcode", "cli", "rollout");
+  mkdirSync(rolloutDir, { recursive: true });
+  writeFileSync(join(rolloutDir, `model-io-${zcodeSessionId}.jsonl`), [
+    JSON.stringify({
+      type: "model_io",
+      sessionId: zcodeSessionId,
+      turnId: "turn_645abdb6-e829-467c-88cd-be97edef774d",
+      startedAt: "2026-11-11T02:31:21.233Z",
+      completedAt: "2026-11-11T02:32:11.771Z",
+      durationMs: 50_538,
+      model: { modelId: "GLM-5.3-Flash", providerId: "account:zai-individual-coding-plan" },
+      response: {
+        usage: {
+          inputTokens: 154_644,
+          outputTokens: 1_395,
+          totalTokens: 156_039,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+    }),
+  ].join("\n") + "\n");
+  try {
+    const result = await postChat({ prompt: "zcode-live-usage", engine: "zcode", cwd: "/tmp/zcode-session" });
+    expect(result.status).toBe(200);
+    // The live event carries the engine's own record, not an estimate.
+    const event = /event: usage\ndata: (\{[^\n]*\})\n\n/.exec(result.text);
+    expect(event, "the turn pushed a usage event").not.toBeNull();
+    const payload = UsageEventSchema.parse(JSON.parse(event![1]!));
+    expect(payload.sessionId).toBe(zcodeSessionId);
+    expect(payload.usage).toMatchObject({
+      basis: "latest-response",
+      model: "GLM-5.3-Flash",
+      provider: "account:zai-individual-coding-plan",
+      inputTokens: 154_644,
+      outputTokens: 1_395,
+      totalTokens: 156_039,
+    });
+    expect((payload.usage as { responseTokensPerSecond: number }).responseTokensPerSecond).toBeCloseTo(1_395 / 50.538, 6);
+  } finally {
+    rmSync(join(dirname(tokenFile), ".zcode"), { recursive: true, force: true });
   }
 });
 

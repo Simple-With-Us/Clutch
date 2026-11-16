@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/cometchat/cometchat-uikit-ios.git",
       "state" : {
-        "revision" : "eeff8ec54d40cd355092f2e105058973e2aaa2e0",
-        "version" : "5.2.3"
+        "revision" : "147fde5bd8b86b5cd4f651a4f3791530e16a9f74",
+        "version" : "5.2.4"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/getsentry/sentry-cocoa.git",
       "state" : {
-        "revision" : "f196cbb98e0388381d57908f2f5a9bdc385cde68",
-        "version" : "8.58.4"
+        "revision" : "aa91bcf6bd6f383dbc49f38bf785d1d775c4f751",
+        "version" : "9.34.0"
       }
     }
   ],

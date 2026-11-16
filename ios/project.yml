@@ -26,7 +26,7 @@ packages:
     from: "9.33.0"
   CometChatUIKitSwift:
     url: https://github.com/cometchat/cometchat-uikit-ios.git
-    from: 5.2.3
+    from: 5.2.4
 targets:
   Clutch:
     type: application

@@ -90,6 +90,10 @@ function fixture(options: { python?: boolean } = {}): Fixture {
         muse: { command: process.execPath, args: [] },
       },
       credentialFile,
+      // The interpreter candidates are empty on purpose: the fixture's own PATH
+      // is then the only place a python3 can come from, so the answer never
+      // depends on what the host happens to have installed.
+      interpreterCandidates: [],
     },
   };
 }
