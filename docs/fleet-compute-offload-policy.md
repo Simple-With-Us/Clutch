@@ -111,10 +111,14 @@ Understanding provider billing structures and tiers is critical to maximize valu
 
 When connecting cloud agents or external tools across the fleet, use the designated HTTPS MCP endpoints:
 
-1. **Grok / Shared Fleet Agents MCP:**
-   `https://agents.jays.services/mcp`
-   Provides unified access to shared fleet memory (recall search, stats, contribute), fleet coordination manifests, and agent services.
+1. **Fleet Recall MCP (recall search, stats, contribute):**
+   `https://recall.jays.services/mcp`
+   Provides shared fleet memory: recall search, stats and contribute.
 
-2. **BotFleet Admin MCP:**
+2. **Grok / Shared Fleet Agents MCP (older fallback for cloud seats):**
+   `https://agents.jays.services/mcp`
+   The older fallback for cloud seats, per the recall access check doc; also serves fleet coordination manifests and agent services.
+
+3. **BotFleet Admin MCP:**
    `https://botfleetadmin.jays.services/mcp`
    Provides administrative control, bot orchestration, session inspection, and container/mount dispatch across BotFleet.
