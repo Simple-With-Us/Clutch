@@ -32,7 +32,14 @@ public final class FleetRecallClient {
 
     public init() {
         if let saved = UserDefaults.standard.string(forKey: endpointKey) {
-            self.endpoint = saved
+            if saved == "https://agents.jays.services/mcp" {
+                // A stored copy of the retired default must not pin an existing
+                //  install to the old host.  An explicitly chosen custom endpoint
+                //  is left alone.
+                UserDefaults.standard.removeObject(forKey: endpointKey)
+            } else {
+                self.endpoint = saved
+            }
         }
     }
 
