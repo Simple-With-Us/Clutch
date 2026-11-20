@@ -11,7 +11,7 @@ public final class FleetRecallClient {
     ///  come back as a redirect or a sign-in page.  That surfaces as a readable
     ///  error rather than as silent fake data; wiring credentials in is a separate
     ///  change, and guessing a header here would only hide the gap.
-    public var endpoint: String = "https://agents.jays.services/mcp"
+    public var endpoint: String = "https://recall.jays.services/mcp"
     public var query: String = ""
     public var searchResults: [RecallHit] = []
     public var isSearching: Bool = false
