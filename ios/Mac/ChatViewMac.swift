@@ -1,7 +1,6 @@
 import SwiftUI
 import Foundation
 import AppKit
-import UniformTypeIdentifiers
 
 /// Stable device UID for this Mac's 1:1 agent thread (the relay receiver).
 /// iOS uses the vendor id; macOS has none, so one is minted once and kept.
@@ -737,10 +736,12 @@ public struct ChatView: View {
                     dictation.toggle()
                 },
                 attachments: attachments,
-                onAttach: { attachImage() },
+                onAttach: { attachFiles() },
                 onRemoveAttachment: { attachment in
                     attachments.removeAll { $0.id == attachment.id }
-                }
+                },
+                onPaste: { pasteClipboard() },
+                onProviders: { handlePasteProviders($0) }
             )
             .disabled(previewSession != nil || previewLoadingId != nil || previewError != nil)
         }
@@ -985,21 +986,56 @@ public struct ChatView: View {
         }
     }
 
-    /// Attach an image to the next turn, the way the web canvas attaches a
-    /// file.  The bytes travel with the prompt, because the server has no
-    /// access to this Mac's filesystem.
-    private func attachImage() {
+    /// Attach files to the next turn, the way the web canvas attaches a
+    /// file.  Images travel with the prompt as attachments, because the
+    /// server has no access to this Mac's filesystem; text files inline
+    /// into the draft instead.  Any file is pickable — what Clutch cannot
+    /// use is refused out loud rather than greyed out.
+    private func attachFiles() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.png, .jpeg, .gif, UTType(filenameExtension: "webp") ?? .image]
         panel.prompt = "Attach"
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            guard let attachment = ChatAttachment.from(data: data, name: url.lastPathComponent) else { continue }
-            attachments.append(attachment)
+        let outcome = AttachmentPaste.outcomeForFileURLs(panel.urls)
+        Task { @MainActor in applyOutcome(outcome) }
+    }
+
+    /// Take providers from a paste command or a drop: Finder copies keep
+    /// their names, image data becomes attachments, text files inline.
+    private func handlePasteProviders(_ providers: [NSItemProvider]) {
+        Task { @MainActor in
+            applyOutcome(await AttachmentPaste.outcomeForProviders(providers))
+        }
+    }
+
+    /// Paste whatever the clipboard holds: screenshots and copied pictures
+    /// attach as images, copied files attach or inline by type.
+    private func pasteClipboard() {
+        Task { @MainActor in
+            applyOutcome(await AttachmentPaste.pasteFromClipboard())
+        }
+    }
+
+    /// Fold a paste, drop, or pick into the composer: images join the next
+    /// turn, text files splice into the draft, failures say so out loud.
+    @MainActor
+    private func applyOutcome(_ outcome: PasteOutcome) {
+        if !outcome.images.isEmpty {
+            attachments.append(contentsOf: outcome.images)
+        }
+        for insert in outcome.textInserts {
+            if draft.isEmpty {
+                draft = insert
+            } else {
+                draft += "\n\n" + insert
+            }
+        }
+        if !outcome.errors.isEmpty {
+            sendError = outcome.errors.joined(separator: " ")
+        } else if !outcome.images.isEmpty || !outcome.textInserts.isEmpty {
+            sendError = nil
         }
     }
 
