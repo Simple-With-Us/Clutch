@@ -1,11 +1,15 @@
 """Exercise the MiniMax ACP entrypoint with synthetic local credentials."""
 
+import http.server
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.parse
+import uuid
 from pathlib import Path
 
 
@@ -21,6 +25,8 @@ class MiniMaxBridgeCredentialTests(unittest.TestCase):
         key_name: str = "MINIMAX_API_KEY",
         dsh_file_text: str | None = None,
         expected_key: str = "",
+        managed_secret_path: str | None = None,
+        request_paths: list[str] | None = None,
     ) -> tuple[str, str, str, Path]:
         temp = tempfile.TemporaryDirectory(prefix="clutch-minimax-bridge-")
         self.addCleanup(temp.cleanup)
@@ -61,8 +67,55 @@ class MiniMaxBridgeCredentialTests(unittest.TestCase):
         if environment_key:
             env[key_name] = environment_key
 
+        command = [sys.executable, str(BRIDGE)]
+        if managed_secret_path is not None:
+            project = str(uuid.uuid4())
+            token = f"st.{uuid.uuid4().hex}"
+
+            class FixtureInfisical(http.server.BaseHTTPRequestHandler):
+                def do_GET(self) -> None:
+                    if request_paths is not None:
+                        request_paths.append(self.path)
+                    if self.headers.get("Authorization") != f"Bearer {token}":
+                        self.send_error(401)
+                        return
+                    path = urllib.parse.urlsplit(self.path).path
+                    if path == "/api/v2/service-token":
+                        payload = {
+                            "projectId": project,
+                            "workspace": project,
+                            "permissions": ["read"],
+                            "scopes": [{"environment": "prod", "secretPath": managed_secret_path}],
+                            "expiresAt": "2099-01-01T00:00:00Z",
+                        }
+                    elif path == "/api/v3/secrets/raw":
+                        payload = {"secrets": [{"secretKey": "MINIMAX_API_KEY", "secretValue": expected_key}]}
+                    else:
+                        self.send_error(404)
+                        return
+                    body = json.dumps(payload).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_args: object) -> None:
+                    pass
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FixtureInfisical)
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            credentials = home / ".clutch" / "infisical.json"
+            credentials.write_text(json.dumps({"projectId": project, "serviceToken": token}), encoding="utf-8")
+            credentials.chmod(0o600)
+            env["CLUTCH_INFISICAL_URL"] = f"http://127.0.0.1:{server.server_port}"
+            env["PYTHON"] = sys.executable
+            command = ["/bin/bash", str(ROOT / "scripts" / "minimax-acp.sh")]
+
         process = subprocess.Popen(
-            [sys.executable, str(BRIDGE)],
+            command,
             cwd=ROOT,
             env=env,
             stdin=subprocess.PIPE,
@@ -150,6 +203,37 @@ class MiniMaxBridgeCredentialTests(unittest.TestCase):
         )
         self.assertFalse(marker.exists())
         self.assertIn("MINIMAX_API_KEY is not configured", reply)
+
+    def test_supported_launcher_loads_its_own_infisical_binding_before_prompt(self) -> None:
+        key = "fixture-managed"
+        requests: list[str] = []
+        stdout, stderr, reply, marker = self._run_bridge(
+            expected_key=key,
+            managed_secret_path="/",
+            request_paths=requests,
+        )
+        self.assertEqual(marker.read_text(encoding="utf-8"), "match")
+        self.assertIn('"stopReason": "endTurn"', reply)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0], "/api/v2/service-token")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(requests[1]).query)
+        self.assertEqual(query["environment"], ["prod"])
+        self.assertEqual(query["secretPath"], ["/"])
+        for flag in ("recursive", "include_imports", "expandSecretReferences"):
+            self.assertEqual(query[flag], ["false"])
+        self.assertNotIn(key, stdout + stderr)
+
+    def test_supported_launcher_refuses_wrong_scope_before_values_or_child(self) -> None:
+        requests: list[str] = []
+        stdout, stderr, reply, marker = self._run_bridge(
+            expected_key="fixture-managed",
+            managed_secret_path="/other",
+            request_paths=requests,
+        )
+        self.assertEqual(requests, ["/api/v2/service-token"])
+        self.assertFalse(marker.exists())
+        self.assertIn("MINIMAX_API_KEY is not configured", reply)
+        self.assertNotIn("fixture-managed", stdout + stderr)
 
 
 if __name__ == "__main__":
