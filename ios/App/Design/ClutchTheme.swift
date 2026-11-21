@@ -60,7 +60,11 @@ public enum ClutchColor {
 
     public static let textPrimary = Color.primary
     public static let textSecondary = Color.secondary
-    public static let textTertiary = Color.tertiary
+    #if canImport(UIKit)
+    public static let textTertiary = Color(uiColor: .tertiaryLabel)
+    #else
+    public static let textTertiary = Color(nsColor: .tertiaryLabelColor)
+    #endif
 
     public static let accent = Color.accentColor
     /// A light wash of the accent behind content that belongs to it.
