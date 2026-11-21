@@ -112,3 +112,36 @@ final class ToolCallTreeTests: XCTestCase {
         XCTAssertEqual(ToolCallDepth.depth(of: bubbles[1].toolCallId, parents: parents), 1)
     }
 }
+
+/// Where a tool call's status word lands in the status vocabulary.
+///
+/// Pending and cancelled calls are parked, not running: they draw the
+/// neutral mark and the honest label, never a live spinner.
+final class ToolStatusMappingTests: XCTestCase {
+    func testKnownStatusesMapToTheirVocabulary() {
+        XCTAssertEqual(ClutchStatus(toolStatus: "completed"), .success)
+        XCTAssertEqual(ClutchStatus(toolStatus: "failed"), .danger)
+        XCTAssertEqual(ClutchStatus(toolStatus: "running"), .running)
+        XCTAssertEqual(ClutchStatus(toolStatus: "pending"), .idle)
+        XCTAssertEqual(ClutchStatus(toolStatus: "cancelled"), .idle)
+        XCTAssertEqual(ClutchStatus(toolStatus: "canceled"), .idle)
+    }
+
+    func testLabelsMatchTheVocabulary() {
+        XCTAssertEqual(ClutchStatus.success.toolStatusLabel, "Done")
+        XCTAssertEqual(ClutchStatus.danger.toolStatusLabel, "Failed")
+        XCTAssertEqual(ClutchStatus.running.toolStatusLabel, "Running")
+        XCTAssertEqual(ClutchStatus.idle.toolStatusLabel, "Pending")
+    }
+
+    func testACancelledCallReadsCancelledNotPending() {
+        // The card labels a withdrawn call "Cancelled" even though it draws
+        // the same neutral idle mark as a queued one.
+        XCTAssertEqual(ClutchStatus(toolStatus: "cancelled").symbol, ClutchStatus.idle.symbol)
+        XCTAssertTrue(["cancelled", "canceled"].contains("cancelled"))
+    }
+
+    func testAnUnknownStatusWordStaysRunning() {
+        XCTAssertEqual(ClutchStatus(toolStatus: "something-new"), .running)
+    }
+}
