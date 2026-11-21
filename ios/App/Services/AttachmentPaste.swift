@@ -186,10 +186,10 @@ public enum AttachmentPaste {
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
             // Metadata is queried inside the access grant: outside it the
-            // query can fail, and a file whose size cannot be verified is
-            // refused rather than read unbounded.
-            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]),
-                  let size = values.fileSize else {
+            // query can fail.  Folders are refused before the size check —
+            // a directory reports no file size — and a file whose size
+            // cannot be verified is refused rather than read unbounded.
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]) else {
                 outcome.errors.append("Could not read \(url.lastPathComponent).")
                 continue
             }
@@ -198,6 +198,10 @@ public enum AttachmentPaste {
                     "\(url.lastPathComponent) is a folder.",
                     "Open it and pick files inside."
                 ))
+                continue
+            }
+            guard let size = values.fileSize else {
+                outcome.errors.append("Could not read \(url.lastPathComponent).")
                 continue
             }
             if size > maxFileBytes {
