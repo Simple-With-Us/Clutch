@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Prepare a GitHub-hosted macOS runner to archive BotFleet for TestFlight.
-# Maps the existing Actions secret names onto the fleet ASC_* names (exported
+# Prepare a GitHub-hosted macOS runner to archive for TestFlight.
+# Maps the existing Infisical-synced exports onto the fleet ASC_* names (exported
 # through $GITHUB_ENV for later steps), then imports the iOS Distribution
 # identity.  Staging is runner temp only;  nothing is written to the home dir.
 # Never prints secret values.  Fail closed on a beta macOS host.
@@ -20,53 +20,35 @@ if echo "$build" | grep -Eq '[0-9][a-z]$'; then
   die "beta macOS host ${os} (${build}).  App Store review rejects these as INVALID_BINARY.  Use GitHub-hosted macos-latest (GM)."
 fi
 
-# Fleet names (ASC_*) if a sibling copy is ever mapped; otherwise the
-# six Plumber-set BotFleet names.  APPLE_API_KEY_P8_BASE64 is base64 of
-# the p8 body (the retired ios-testflight.yml decoded it the same way).
-if [[ -z "${ASC_KEY_ID:-}" && -n "${APPLE_API_KEY_ID:-}" ]]; then
+# Complete Infisical-synced tuples only; no field borrows from another source.
+KEY_PEM=""
+if [[ -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" && -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
   ASC_KEY_ID="$APPLE_API_KEY_ID"
-fi
-if [[ -z "${ASC_ISSUER_ID:-}" && -n "${APPLE_API_ISSUER_ID:-}" ]]; then
   ASC_ISSUER_ID="$APPLE_API_ISSUER_ID"
+  case "$APPLE_API_KEY_P8_BASE64" in
+    *BEGIN*) KEY_PEM="$APPLE_API_KEY_P8_BASE64" ;;
+    *) KEY_PEM="$(printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode 2>/dev/null)" \
+      || die "APPLE_API_KEY_P8_BASE64 must encode a PEM private key" ;;
+  esac
+elif [[ -n "${ASC_KEY_ID:-}" && -n "${ASC_ISSUER_ID:-}" && -n "${ASC_KEY_P8:-}" ]]; then
+  KEY_PEM="$ASC_KEY_P8"
+else
+  die "require complete APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_API_KEY_P8_BASE64 or ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8 from the signing export"
 fi
-if [[ -z "${IOS_DIST_P12_BASE64:-}" && -n "${IOS_CERT_P12_BASE64:-}" ]]; then
+[[ "$ASC_KEY_ID" =~ ^[A-Za-z0-9]+$ && "$ASC_ISSUER_ID" =~ [^[:space:]] ]] \
+  || die "require alphanumeric ASC_KEY_ID or APPLE_API_KEY_ID and a nonempty ASC_ISSUER_ID or APPLE_API_ISSUER_ID"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+node "${SCRIPT_DIR}/ios-fleet/asc-key.mjs" validate >/dev/null 2>&1 <<< "$KEY_PEM" \
+  || die "ASC_KEY_P8 or APPLE_API_KEY_P8_BASE64 must hold a PEM private key"
+
+if [[ -n "${IOS_DIST_P12_BASE64:-}" && -n "${IOS_DIST_P12_PASSWORD:-}" ]]; then
+  : # Existing complete direct certificate tuple.
+elif [[ -n "${IOS_CERT_P12_BASE64:-}" && -n "${IOS_CERT_PASSWORD:-}" ]]; then
   IOS_DIST_P12_BASE64="$IOS_CERT_P12_BASE64"
-fi
-if [[ -z "${IOS_DIST_P12_PASSWORD:-}" && -n "${IOS_CERT_PASSWORD:-}" ]]; then
   IOS_DIST_P12_PASSWORD="$IOS_CERT_PASSWORD"
+else
+  die "require complete IOS_CERT_P12_BASE64, IOS_CERT_PASSWORD or IOS_DIST_P12_BASE64, IOS_DIST_P12_PASSWORD from the signing export"
 fi
-
-# Off a hosted runner (an owner Mac), fall back to Infisical Fleet-OPS through
-# `fleet-secrets get`: /asc (ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8) for App Store
-# Connect, /authkey-<key id>-p8 for a different key, /mac-certs for the
-# distribution identity.  Environment first;  values are never printed.
-FLEET_SECRETS_BIN="${FLEET_SECRETS_BIN:-${HOME}/.local/bin/fleet-secrets}"
-infisical_fill() {
-  local name="$1" folder="$2" v
-  [[ -z "${!name:-}" && -x "$FLEET_SECRETS_BIN" ]] || return 0
-  v="$("$FLEET_SECRETS_BIN" get "$name" --path "$folder" 2>/dev/null </dev/null)" || return 0
-  printf -v "$name" '%s' "$v"
-}
-infisical_fill ASC_KEY_ID /asc
-infisical_fill ASC_ISSUER_ID /asc
-if [[ -z "${ASC_KEY_P8:-}" && -z "${APPLE_API_KEY_P8_BASE64:-}" && -n "${ASC_KEY_ID:-}" && -x "$FLEET_SECRETS_BIN" ]]; then
-  if [[ "$ASC_KEY_ID" == "$("$FLEET_SECRETS_BIN" get ASC_KEY_ID --path /asc 2>/dev/null </dev/null || true)" ]]; then
-    ASC_KEY_P8="$("$FLEET_SECRETS_BIN" get ASC_KEY_P8 --path /asc 2>/dev/null </dev/null)" || ASC_KEY_P8=""
-  fi
-fi
-if [[ -z "${ASC_KEY_P8:-}" && -z "${APPLE_API_KEY_P8_BASE64:-}" && -n "${ASC_KEY_ID:-}" ]]; then
-  _kid_lower="$(printf '%s' "$ASC_KEY_ID" | tr 'A-Z' 'a-z')"
-  if [[ -x "$FLEET_SECRETS_BIN" ]]; then
-    ASC_KEY_P8="$("$FLEET_SECRETS_BIN" get "AUTHKEY_${ASC_KEY_ID}" --path "/authkey-${_kid_lower}-p8" 2>/dev/null </dev/null)" || ASC_KEY_P8=""
-  fi
-fi
-infisical_fill IOS_DIST_P12_BASE64 /mac-certs
-infisical_fill IOS_DIST_P12_PASSWORD /mac-certs
-
-: "${ASC_KEY_ID:?APPLE_API_KEY_ID (or ASC_KEY_ID, or Infisical /asc) required}"
-: "${ASC_ISSUER_ID:?APPLE_API_ISSUER_ID (or ASC_ISSUER_ID, or Infisical /asc) required}"
-: "${IOS_DIST_P12_BASE64:?IOS_CERT_P12_BASE64 (or IOS_DIST_P12_BASE64, or Infisical /mac-certs) required}"
-: "${IOS_DIST_P12_PASSWORD:?IOS_CERT_PASSWORD (or IOS_DIST_P12_PASSWORD, or Infisical /mac-certs) required}"
 
 umask 077
 # Runner temp (a throwaway VM on hosted CI).  Both files stay for the later
@@ -76,22 +58,9 @@ mkdir -p "$STAGE_DIR"
 chmod 700 "$STAGE_DIR"
 
 KEY_PATH="${STAGE_DIR}/AuthKey_${ASC_KEY_ID}.p8"
-# Write the p8 without echoing.  Command substitution would strip the
-# trailing newline PEM files need, so decode straight to disk.
-if [[ -n "${ASC_KEY_P8:-}" ]]; then
-  printf '%s\n' "$ASC_KEY_P8" > "$KEY_PATH"
-elif [[ -n "${APPLE_API_KEY_P8_BASE64:-}" ]]; then
-  case "$APPLE_API_KEY_P8_BASE64" in
-    *BEGIN*)
-      printf '%s\n' "$APPLE_API_KEY_P8_BASE64" > "$KEY_PATH"
-      ;;
-    *)
-      printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
-      ;;
-  esac
-else
-  die "APPLE_API_KEY_P8_BASE64 (or ASC_KEY_P8, or Infisical /asc) required"
-fi
+# Write the validated p8 without echoing and restore its trailing newline.
+printf '%s\n' "$KEY_PEM" > "$KEY_PATH"
+KEY_PEM=""
 chmod 600 "$KEY_PATH"
 if ! grep -q "BEGIN " "$KEY_PATH"; then
   die "ASC p8 did not decode to a PEM private key"

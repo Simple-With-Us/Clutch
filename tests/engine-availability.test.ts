@@ -87,14 +87,38 @@ describe("engine availability", () => {
     expect(minimax.note).toContain(host.credentialFile);
   });
 
-  it("counts the dsh credential store the bridge reads as a reachable credential", async () => {
+  it("keeps DeepSeek's legacy file-presence check but rejects unrelated MiniMax contents", async () => {
     const host = fixture();
     mkdirSync(join(host.home, ".clutch", "dsh"), { recursive: true });
-    // The store's presence is the answer; its contents are never read here.
-    writeFileSync(host.credentialFile, "# a credential store lives here\n");
+    writeFileSync(host.credentialFile, "# only a comment\nOTHER_PROVIDER_KEY: fixture\n");
 
     await expect(engineAvailability("deepseek", host.context)).resolves.toMatchObject({ available: true });
+    const minimax = await engineAvailability("minimax", host.context);
+    expect(minimax.available).toBe(false);
+    expect(minimax.note).toContain("MINIMAX_API_KEY");
+  });
+
+  it("requires an exact nonempty MiniMax assignment in the DSH credential file", async () => {
+    const host = fixture();
+    mkdirSync(join(host.home, ".clutch", "dsh"), { recursive: true });
+    const contents = [
+      "# MiniMax key is not configured",
+      "OTHER_MINIMAX_API_KEY: fixture-other",
+      "MINIMAX_API_KEY: \"\"",
+      "DEEPSEEK_API_KEY=fixture-other",
+    ].join("\n");
+    writeFileSync(host.credentialFile, `${contents}\n`);
+    await expect(engineAvailability("minimax", host.context)).resolves.toMatchObject({ available: false });
+
+    writeFileSync(host.credentialFile, "export MINIMAX_API_KEY = 'fixture:x=y'\n");
     await expect(engineAvailability("minimax", host.context)).resolves.toMatchObject({ available: true });
+
+    const alternate = {
+      ...host.context,
+      env: { ...host.context.env, CLUTCH_MINIMAX_API_KEY_NAME: "CUSTOM_MINIMAX_KEY" },
+    };
+    writeFileSync(host.credentialFile, "CUSTOM_MINIMAX_KEY: \"fixture-alt\"\n");
+    await expect(engineAvailability("minimax", alternate)).resolves.toMatchObject({ available: true });
   });
 
   it("counts a key in the environment or in Clutch's own settings as reachable", async () => {
@@ -190,40 +214,18 @@ describe("engine availability", () => {
     expect(existsSync(host.marker)).toBe(false);
   });
 
-  it("counts a key that lives only in fleet-secrets as reachable", async () => {
+  it("fails closed when only the retired secret CLI could supply a key", async () => {
     const host = fixture();
-    const asked: string[] = [];
+    const marker = join(host.home, "fleet-secrets-called");
+    const bin = (host.context.env?.PATH ?? "").split(":")[0]!;
+    executable(join(bin, "fleet-secrets"), `#!/bin/sh\nprintf called > ${JSON.stringify(marker)}\nprintf 'MINIMAX_API_KEY\\n'\n`);
 
-    // The MiniMax bridge's last resort is `fleet-secrets get NAME`, so a host
-    // that keeps its key only there still runs the turn.  The catalog must
-    // not drop the engine there.
-    const minimax = await engineAvailability("minimax", {
-      ...host.context,
-      fleetSecretPresent: async (name) => {
-        asked.push(name);
-        return name === "MINIMAX_API_KEY";
-      },
-    });
+    const minimax = await engineAvailability("minimax", host.context);
 
-    expect(minimax.available).toBe(true);
-    expect(asked).toEqual(["MINIMAX_API_KEY"]);
-  });
-
-  it("asks fleet-secrets only when the cheaper sources found nothing", async () => {
-    const host = fixture();
-    let asked = 0;
-
-    const withKey = { ...host.context, env: { ...host.context.env, MINIMAX_API_KEY: "present" } };
-    const minimax = await engineAvailability("minimax", {
-      ...withKey,
-      fleetSecretPresent: async () => {
-        asked += 1;
-        return false;
-      },
-    });
-
-    expect(minimax.available).toBe(true);
-    expect(asked).toBe(0);
+    expect(minimax.available).toBe(false);
+    expect(minimax.note).toContain("Clutch settings");
+    expect(minimax.note).not.toContain("fleet-secrets");
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("lets the environment name the MiniMax key over Clutch's own settings", async () => {
