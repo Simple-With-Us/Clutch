@@ -1,20 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /**
- * AFC-359: the iOS ship tooling reads App Store Connect credentials from the
- * environment or Infisical (`fleet-secrets get`), never from the old
- * home-directory secrets folder.
+ * C-135: the iOS ship tooling consumes complete Infisical-synced environment
+ * tuples, never the retired reader or home-directory secrets folder.
  *
  * AFC-459: a path on disk is not an approved credential source at all, so a
  * named ASC_KEY_PATH is ignored wherever it appears.  These run the real
- * credential block of scripts/ios-fleet/ship-testflight.sh against a stub
- * fleet-secrets.  The keys are generated here at test time;  values are
- * dummies;  HOME and TMPDIR point at scratch dirs.
+ * credential block of scripts/ios-fleet/ship-testflight.sh.  The retired reader
+ * is only a failure marker, with no credential material.  Keys are generated
+ * here; HOME and TMPDIR point at disposable fixture directories.
  */
 
 const ROOT = join(__dirname, "..");
@@ -30,25 +29,22 @@ const OTHER_PEM = generateKeyPairSync("ec", { namedCurve: "prime256v1" })
   .privateKey.export({ type: "pkcs8", format: "pem" }) as string;
 
 const STUB = `#!/bin/sh
-echo "$@" >> "$STUB_CALLS"
-[ "$1" = "get" ] && [ "$3" = "--path" ] || exit 4
-case "$2:$4" in
-  ASC_KEY_ID:/asc) printf '%s' TESTKEY123 ;;
-  ASC_ISSUER_ID:/asc) printf '%s' 00000000-test-issuer ;;
-  ASC_KEY_P8:/asc) printf '%s' '${PEM}' ;;
-  AUTHKEY_TESTKEY123:/authkey-testkey123-p8) printf '%s' '${OTHER_PEM}' ;;
-  AUTHKEY_OTHERKEY:/authkey-otherkey-p8) printf '%s' '${OTHER_PEM}' ;;
-  *) exit 3 ;;
-esac
+printf '%s\\n' unexpected-reader >> "$STUB_CALLS"
+exit 97
 `;
 
 //  The comparison answers through the exit code only, so a credential is never
 //  expanded into the shell where a trace would show it:  the staged file is
 //  compared with the expected key and only a label is printed.
 const REPORT = `
-load_secrets
+status=0
+load_secrets || status=$?
+echo "status=$status"
 echo "mode=$AUTH_MODE"
+echo "tmpdir=\${ASC_TMP_DIR:-}"
 if [ "$AUTH_MODE" = api_key ]; then
+  echo "keyid=$ASC_KEY_ID"
+  echo "issuer=$ASC_ISSUER_ID"
   echo "path=$ASC_KEY_PATH"
   echo "keysdir=\${API_PRIVATE_KEYS_DIR:-}"
   echo "keyperm=$(perl -e 'printf "%o", (stat shift)[2] & 07777' "$ASC_KEY_PATH")"
@@ -60,6 +56,7 @@ if [ "$AUTH_MODE" = api_key ]; then
     echo "staged=other"
   fi
 fi
+exit "$status"
 `;
 
 const dirs: string[] = [];
@@ -85,7 +82,7 @@ ${tail}
 `;
   return spawnSync("bash", ["-c", script], {
     env: {
-      PATH: process.env.PATH ?? "",
+      PATH: `${env.HOME}:${process.env.PATH ?? ""}`,
       SHIP,
       FLEET_DIR: join(ROOT, "scripts/ios-fleet"),
       ...env,
@@ -97,16 +94,28 @@ ${tail}
 const parse = (out: string): Record<string, string> =>
   Object.fromEntries(out.trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
 
+function expectNoReaderOrStaging(dir: string, calls: string) {
+  expect(existsSync(calls)).toBe(false);
+  expect(readdirSync(dir).filter((name) => name.startsWith("asc-key."))).toEqual([]);
+  expect(existsSync(join(dir, OLD_DIR))).toBe(false);
+}
+
 describe("ASC credentials in ship-testflight.sh", () => {
-  it("stages the Infisical key at mode 0600 in a 0700 dir and removes it on exit", () => {
+  it("stages the complete direct export at mode 0600 in a 0700 dir and removes it on exit", () => {
     const s = scratch();
     const r = runBlock(
-      { HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls, EXPECTED_PEM: PEM },
+      {
+        HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls,
+        ASC_KEY_ID: "TESTKEY123", ASC_ISSUER_ID: "direct-issuer", ASC_KEY_P8: PEM, EXPECTED_PEM: PEM,
+      },
       REPORT,
     );
     expect(r.status, r.stderr).toBe(0);
     const out = parse(r.stdout);
     expect(out.mode).toBe("api_key");
+    expect(out.status).toBe("0");
+    expect(out.keyid).toBe("TESTKEY123");
+    expect(out.issuer).toBe("direct-issuer");
     expect(out.path).toMatch(/\/AuthKey_TESTKEY123\.p8$/);
     expect(out.keysdir).toBe(out.path.replace(/\/[^/]+$/, ""));
     expect(out.keyperm).toBe("600");
@@ -114,30 +123,30 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.pem).toBe("1");
     expect(out.staged).toBe("expected");
     expect(existsSync(out.path)).toBe(false);
-    const calls = readFileSync(s.calls, "utf8");
-    expect(calls).toMatch(/get ASC_KEY_ID --path \/asc/);
-    expect(calls).toMatch(/get ASC_KEY_P8 --path \/asc/);
-    expect(calls).not.toMatch(/authkey-/);
-    expect(existsSync(join(s.dir, OLD_DIR))).toBe(false);
+    expect(r.stdout + r.stderr).not.toContain(PEM.trim());
+    expectNoReaderOrStaging(s.dir, s.calls);
   });
 
-  it("falls back to the per-key copy when the key id differs from the /asc one", () => {
+  it("selects the complete APPLE_API_* export ahead of another complete direct tuple", () => {
     const s = scratch();
     const r = runBlock(
       {
         HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls,
-        ASC_KEY_ID: "OTHERKEY", ASC_ISSUER_ID: "iss", EXPECTED_PEM: OTHER_PEM,
+        ASC_KEY_ID: "DIRECTKEY", ASC_ISSUER_ID: "direct-issuer", ASC_KEY_P8: PEM,
+        APPLE_API_KEY_ID: "CIKEY", APPLE_API_ISSUER_ID: "ci-issuer",
+        APPLE_API_KEY_P8_BASE64: Buffer.from(OTHER_PEM).toString("base64"), EXPECTED_PEM: OTHER_PEM,
       },
       REPORT,
     );
     expect(r.status, r.stderr).toBe(0);
     const out = parse(r.stdout);
     expect(out.mode).toBe("api_key");
-    expect(out.path).toMatch(/\/AuthKey_OTHERKEY\.p8$/);
+    expect(out.keyid).toBe("CIKEY");
+    expect(out.issuer).toBe("ci-issuer");
+    expect(out.path).toMatch(/\/AuthKey_CIKEY\.p8$/);
     expect(out.staged).toBe("expected");
-    const calls = readFileSync(s.calls, "utf8");
-    expect(calls).toMatch(/get AUTHKEY_OTHERKEY --path \/authkey-otherkey-p8/);
-    expect(calls).not.toMatch(/get ASC_KEY_P8/);
+    expect(r.stdout + r.stderr).not.toContain(OTHER_PEM.trim());
+    expectNoReaderOrStaging(s.dir, s.calls);
   });
 
   it("takes the key from the environment and never from a named ASC_KEY_PATH", () => {
@@ -145,7 +154,7 @@ describe("ASC credentials in ship-testflight.sh", () => {
     //  must never decide which key signs the upload (AFC-459, Kody rule 42).
     const s = scratch();
     const named = join(s.dir, "named.p8");
-    writeFileSync(named, OTHER_PEM);
+    writeFileSync(named, OTHER_PEM, { mode: 0o600 });
     const r = runBlock(
       {
         HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls,
@@ -160,39 +169,39 @@ describe("ASC credentials in ship-testflight.sh", () => {
     //  The staged key is the one from the environment, never the named file.
     expect(out.staged).toBe("expected");
     expect(out.path).not.toBe(named);
-    expect(existsSync(s.calls)).toBe(false);
+    expect(r.stderr).toMatch(/ASC_KEY_PATH is not a credential source/);
+    expect(readFileSync(named, "utf8")).toBe(OTHER_PEM);
+    expectNoReaderOrStaging(s.dir, s.calls);
   });
 
-  it("ignores a named ASC_KEY_PATH and says so", () => {
-    //  A path on disk is not an approved credential source at all:  with no
-    //  key in the environment the credential comes from Infisical, and the run
-    //  says that it ignored the named path.
+  it("refuses a path-only binding without staging or calling the retired reader", () => {
     const s = scratch();
     const named = join(s.dir, "named.p8");
-    writeFileSync(named, OTHER_PEM);
+    writeFileSync(named, OTHER_PEM, { mode: 0o600 });
     const r = runBlock(
       {
         HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls,
         ASC_KEY_ID: "TESTKEY123", ASC_ISSUER_ID: "00000000-test-issuer", ASC_KEY_PATH: named,
-        EXPECTED_PEM: PEM,
       },
       REPORT,
     );
-    expect(r.status, r.stderr).toBe(0);
+    expect(r.status, r.stderr).toBe(1);
     const out = parse(r.stdout);
-    expect(out.mode).toBe("api_key");
-    expect(out.staged).toBe("expected");
-    expect(out.path).not.toBe(named);
-    expect(r.stderr).toMatch(/ASC_KEY_PATH is not a credential source/);
-    const calls = readFileSync(s.calls, "utf8");
-    expect(calls).toMatch(/get ASC_KEY_P8 --path \/asc/);
+    expect(out.mode).toBe("none");
+    expect(out.tmpdir).toBe("");
+    for (const name of ["ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8", "APPLE_API_KEY_ID", "APPLE_API_ISSUER_ID", "APPLE_API_KEY_P8_BASE64"]) {
+      expect(r.stderr).toContain(name);
+    }
+    expect(r.stdout + r.stderr).not.toContain(OTHER_PEM.trim());
+    expect(readFileSync(named, "utf8")).toBe(OTHER_PEM);
+    expectNoReaderOrStaging(s.dir, s.calls);
   });
 
-  it("decodes the hosted APPLE_API_* base64 key without calling Infisical for the PEM", () => {
+  it("decodes the complete hosted APPLE_API_* export without calling a reader", () => {
     const s = scratch();
     const r = runBlock(
       {
-        HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: join(s.dir, "absent"), STUB_CALLS: s.calls,
+        HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls,
         APPLE_API_KEY_ID: "CIKEY", APPLE_API_ISSUER_ID: "ciiss",
         APPLE_API_KEY_P8_BASE64: Buffer.from(PEM).toString("base64"),
         EXPECTED_PEM: PEM,
@@ -205,14 +214,42 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.path).toMatch(/\/AuthKey_CIKEY\.p8$/);
     expect(out.pem).toBe("1");
     expect(out.staged).toBe("expected");
+    expectNoReaderOrStaging(s.dir, s.calls);
   });
 
-  it("leaves AUTH_MODE=none and names the Infisical folder when nothing is available", () => {
-    const s = scratch();
-    const r = runBlock({ HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: join(s.dir, "absent"), STUB_CALLS: s.calls }, REPORT);
-    expect(r.status, r.stderr).toBe(0);
-    expect(parse(r.stdout).mode).toBe("none");
-    expect(r.stderr).toMatch(/Infisical \/asc/);
+  it("refuses missing, partial, mixed and malformed preferred exports without reader fallback", () => {
+    const cases: Record<string, string>[] = [
+      {},
+      { ASC_KEY_ID: "DIRECTKEY" },
+      { ASC_KEY_ID: "DIRECTKEY", ASC_ISSUER_ID: "direct-issuer" },
+      { ASC_KEY_P8: PEM },
+      { APPLE_API_KEY_ID: "CIKEY", APPLE_API_ISSUER_ID: "ci-issuer" },
+      { APPLE_API_KEY_P8_BASE64: Buffer.from(PEM).toString("base64") },
+      { ASC_KEY_ID: "DIRECTKEY", APPLE_API_ISSUER_ID: "ci-issuer", ASC_KEY_P8: PEM },
+      {
+        ASC_KEY_ID: "DIRECTKEY", ASC_ISSUER_ID: "direct-issuer", ASC_KEY_P8: PEM,
+        APPLE_API_KEY_ID: "CIKEY", APPLE_API_ISSUER_ID: "ci-issuer", APPLE_API_KEY_P8_BASE64: "not-a-key",
+      },
+    ];
+    for (const tuple of cases) {
+      const s = scratch();
+      const r = runBlock({ HOME: s.dir, TMPDIR: s.dir, FLEET_SECRETS_BIN: s.stub, STUB_CALLS: s.calls, ...tuple }, REPORT);
+      expect(r.status, r.stderr).toBe(1);
+      const out = parse(r.stdout);
+      expect(out.mode).toBe("none");
+      expect(out.tmpdir).toBe("");
+      expect(out.path).toBeUndefined();
+      expect(r.stderr).toContain("ASC_KEY_P8");
+      expect(r.stderr).toContain("APPLE_API_KEY_P8_BASE64");
+      if (!tuple.APPLE_API_KEY_P8_BASE64 || !tuple.ASC_KEY_ID) {
+        expect(r.stderr).toContain("ASC_KEY_ID");
+        expect(r.stderr).toContain("ASC_ISSUER_ID");
+        expect(r.stderr).toContain("APPLE_API_KEY_ID");
+        expect(r.stderr).toContain("APPLE_API_ISSUER_ID");
+      }
+      expect(r.stdout + r.stderr).not.toContain(PEM.trim());
+      expectNoReaderOrStaging(s.dir, s.calls);
+    }
   });
 
   it("no ship script reads the old secrets folder", () => {
