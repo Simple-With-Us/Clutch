@@ -215,6 +215,47 @@ final class FleetRecallClientTests: XCTestCase {
         XCTAssertFalse(stats.isPlaceholder)
     }
 
+    // MARK: - Retired default endpoint migration
+
+    private func freshDefaults(_ name: String = #function) -> UserDefaults {
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    func testMigrationClearsAStoredRetiredDefault() {
+        let defaults = freshDefaults()
+        defaults.set("https://agents.jays.services/mcp", forKey: "endpoint")
+        FleetRecallClient.migrateRetiredDefaultEndpoint(defaults: defaults, endpointKey: "endpoint", migrationKey: "migrated")
+        XCTAssertNil(defaults.string(forKey: "endpoint"))
+    }
+
+    func testMigrationRecognizesWhitespaceAndTrailingSlashVariants() {
+        for variant in ["https://agents.jays.services/mcp/", "  https://agents.jays.services/mcp  ", "https://agents.jays.services/mcp//"] {
+            let defaults = freshDefaults()
+            defaults.set(variant, forKey: "endpoint")
+            FleetRecallClient.migrateRetiredDefaultEndpoint(defaults: defaults, endpointKey: "endpoint", migrationKey: "migrated")
+            XCTAssertNil(defaults.string(forKey: "endpoint"), "variant \(variant) should migrate")
+        }
+    }
+
+    func testMigrationKeepsACustomEndpoint() {
+        let defaults = freshDefaults()
+        defaults.set("https://example.invalid/custom", forKey: "endpoint")
+        FleetRecallClient.migrateRetiredDefaultEndpoint(defaults: defaults, endpointKey: "endpoint", migrationKey: "migrated")
+        XCTAssertEqual(defaults.string(forKey: "endpoint"), "https://example.invalid/custom")
+    }
+
+    func testMigrationRunsOnlyOnce() {
+        let defaults = freshDefaults()
+        FleetRecallClient.migrateRetiredDefaultEndpoint(defaults: defaults, endpointKey: "endpoint", migrationKey: "migrated")
+        // The policy doc keeps the old host as a valid older fallback for cloud
+        //  seats: a deliberate choice saved after the migration is kept.
+        defaults.set("https://agents.jays.services/mcp", forKey: "endpoint")
+        FleetRecallClient.migrateRetiredDefaultEndpoint(defaults: defaults, endpointKey: "endpoint", migrationKey: "migrated")
+        XCTAssertEqual(defaults.string(forKey: "endpoint"), "https://agents.jays.services/mcp")
+    }
+
     // MARK: - Helpers
 
     private func validDraft() -> RecallContributionDraft {
