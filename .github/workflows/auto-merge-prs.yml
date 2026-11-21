@@ -29,8 +29,14 @@ name: Auto-merge PRs
 # runs both events from the PR's merge ref (refs/pull/N/merge), so a
 # same-repo branch that edits this file would execute the edited workflow
 # with the merge App private key before self_guard_paths can block the
-# merge.  Only schedule and workflow_dispatch remain; both run this file
-# from the default branch.  pull_request_target is not used either (it
+# merge.  Only schedule and workflow_dispatch remain.  schedule always runs
+# the default branch's copy, but workflow_dispatch runs the copy on
+# whatever ref the dispatcher picks, so the sweep and rearm jobs also
+# require github.ref to be the default branch.  That in-file guard is
+# defense in depth only: a branch that edits this file can delete the
+# guard too.  The real boundary is moving the App key into a GitHub
+# Environment whose deployment branches are limited to the default
+# branch (not set up yet).  pull_request_target is not used either (it
 # would expose secrets to fork contexts).  Review, label and
 # auto_merge_enabled / auto_merge_disabled transitions are therefore
 # picked up by the 15-minute sweep.
@@ -70,7 +76,7 @@ jobs:
   # a wave running waits, and at most one wave queues (the next 15-min tick
   # recovers anything skipped).
   sweep:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Least privilege: the list step only enumerates open PRs.  Job-level
@@ -127,7 +133,7 @@ jobs:
     # schedule/dispatch sweep with a non-empty list rearms, and the
     # expression falls back to '[]' if the output is ever blank.
     if: >-
-      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)))
       && needs.sweep.result == 'success'
       && needs.sweep.outputs.prs != ''
       && needs.sweep.outputs.prs != '[]'
