@@ -173,6 +173,12 @@ public enum AttachmentPaste {
     public static func outcomeForFileURLs(_ urls: [URL]) -> PasteOutcome {
         var outcome = PasteOutcome()
         for url in urls.prefix(maxItemsPerPaste) {
+            // A provider can vend a web link where a file was expected;
+            // reading it would be a network fetch, not a paste.
+            guard url.isFileURL else {
+                outcome.errors.append("That link is not a file Clutch can attach.")
+                continue
+            }
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
             if values?.isDirectory == true {
                 outcome.errors.append(Copy.gap(
@@ -225,22 +231,32 @@ public enum AttachmentPaste {
     }
 
     /// Build an outcome from paste-command or drop providers.  A provider
-    /// that names a file URL is read as that file (the real name survives);
-    /// otherwise its best image representation is taken.
+    /// that names a file URL is read as that file (the real name survives),
+    /// then whatever its item turns out to be — a file-backed provider
+    /// vends the file itself rather than a file-URL identifier — then its
+    /// best image representation, then its raw data as a last resort.
     public static func outcomeForProviders(_ providers: [NSItemProvider]) async -> PasteOutcome {
         var outcome = PasteOutcome()
         for provider in providers.prefix(maxItemsPerPaste) {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                guard let url = await loadFileURL(from: provider) else {
-                    outcome.errors.append("Could not read that file.")
-                    continue
-                }
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
+               let url = await loadFileURL(from: provider) {
                 outcome.merge(outcomeForFileURLs([url]))
-            } else if let identifier = imageIdentifier(for: provider) {
-                guard let data = await loadData(from: provider, type: identifier) else {
-                    outcome.errors.append("Could not read that image.")
-                    continue
+            } else if let url = await loadItemURL(from: provider) {
+                outcome.merge(outcomeForFileURLs([url]))
+            } else if let identifier = imageIdentifier(for: provider),
+                      let data = await loadData(from: provider, type: identifier) {
+                switch fate(data: data, name: suggestedName(for: identifier)) {
+                case .image(let attachment):
+                    outcome.images.append(attachment)
+                case .text(let insert):
+                    outcome.textInserts.append(insert)
+                case .rejected(let message):
+                    outcome.errors.append(message)
                 }
+            } else if let identifier = provider.registeredTypeIdentifiers.first,
+                      let data = await loadData(from: provider, type: identifier) {
+                // Last resort: unidentified data is still dispatched by its
+                // bytes, so a wrong claim is refused, not mis-sent.
                 switch fate(data: data, name: suggestedName(for: identifier)) {
                 case .image(let attachment):
                     outcome.images.append(attachment)
@@ -301,6 +317,30 @@ public enum AttachmentPaste {
         await withCheckedContinuation { continuation in
             _ = provider.loadDataRepresentation(forTypeIdentifier: type) { data, _ in
                 continuation.resume(returning: data)
+            }
+        }
+    }
+
+    /// The file a file-backed provider vends, when its item is one.
+    ///
+    /// A provider made from a file advertises the file's own type rather
+    /// than a file-URL identifier, and loading that type hands back the
+    /// file's URL — which is what keeps the real name on a drop.
+    static func loadItemURL(from provider: NSItemProvider) async -> URL? {
+        guard let identifier = provider.registeredTypeIdentifiers.first else { return nil }
+        return await withCheckedContinuation { continuation in
+            _ = provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, _ in
+                // Only file URLs count: a web link must fall through to the
+                // image representations instead of shadowing them.
+                if let url = item as? URL, url.isFileURL {
+                    continuation.resume(returning: url)
+                } else if let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil),
+                          url.isFileURL {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(returning: nil)
+                }
             }
         }
     }
