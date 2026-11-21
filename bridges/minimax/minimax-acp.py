@@ -15,9 +15,11 @@ path had no local tools and dropped image attachments, so Shellular MiniMax
 behaved like the MiniMax chat web app.  Coding parity with DeepSeek means
 spawning the dsh engine with MiniMax as the model.
 
-Auth: process env `MINIMAX_API_KEY`, else `$DSH_HOME/.credentials.yaml`, else
-`fleet-secrets get` looked up by CLUTCH_MINIMAX_API_KEY_NAME — never
-from agents.json.
+Auth: process env `MINIMAX_API_KEY`, else `$DSH_HOME/.credentials.yaml`.  The
+supported standalone entrypoint is `scripts/minimax-acp.sh`, which sources
+Clutch's shared Infisical launcher before starting this bridge.  Running this
+Python file directly uses only its process environment and DSH credential file.
+No credential is read from agents.json or an external secret CLI.
 
 Phone clients cannot answer interactive approvals.  Default
 DSH_PERMISSION_MODE (an upstream-read name, so it is not renamed) is
@@ -40,6 +42,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -67,6 +70,7 @@ DEFAULT_HEARTBEAT_SEC = float(
 )
 DEFAULT_PERMISSION_MODE = os.environ.get("DSH_PERMISSION_MODE", "danger-full-access")
 MINIMAX_API_KEY_NAME = os.environ.get("CLUTCH_MINIMAX_API_KEY_NAME", "MINIMAX_API_KEY")
+MINIMAX_KEY_AVAILABLE = False
 
 CLI_PATCH: str | None = None
 for _idx, _arg in enumerate(sys.argv[1:]):
@@ -146,17 +150,17 @@ def _cleanup_patch_file(patch_path: str | None) -> None:
 JsonDict = dict[str, Any]
 
 
-def _load_minimax_key() -> None:
+def _load_minimax_key() -> bool:
     """Ensure MINIMAX_API_KEY (or CLUTCH_MINIMAX_API_KEY_NAME) is in the process env.
 
-    Order: already-set env → $DSH_HOME/.credentials.yaml → `fleet-secrets get`.
-    Never prints or logs the value.
+    Order: already-set env → $DSH_HOME/.credentials.yaml.  Returns whether a
+    key was found.  Never prints or logs the value.
     """
     target = MINIMAX_API_KEY_NAME
     if os.environ.get(target) or os.environ.get("MINIMAX_API_KEY"):
         if not os.environ.get("MINIMAX_API_KEY") and os.environ.get(target):
             os.environ["MINIMAX_API_KEY"] = os.environ[target]
-        return
+        return True
 
     cred = Path(DSH_HOME) / ".credentials.yaml"
     if cred.is_file():
@@ -168,42 +172,25 @@ def _load_minimax_key() -> None:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            if "MINIMAX_API_KEY" not in line and target not in line:
+            match = re.fullmatch(
+                r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.*?)\s*",
+                line,
+            )
+            if not match or match.group(1) not in {target, "MINIMAX_API_KEY"}:
                 continue
-            if ":" in line:
-                _k, val = line.split(":", 1)
-            elif "=" in line:
-                _k, val = line.split("=", 1)
-            else:
+            val = match.group(2).strip()
+            if val[:1] in {"'", '"'}:
+                if len(val) < 2 or val[-1] != val[0]:
+                    continue
+                val = val[1:-1].strip()
+            elif val[-1:] in {"'", '"'}:
                 continue
-            val = val.strip().strip("'").strip('"')
             if val:
                 os.environ["MINIMAX_API_KEY"] = val
                 os.environ[target] = val
-                return
+                return True
 
-    # Last resort on the Mac: `fleet-secrets get NAME` (Infisical Fleet-OPS).
-    # The value is captured, never printed;  a missing binary, a nonzero exit
-    # or an empty answer all mean "absent".
-    for name in dict.fromkeys((target, "MINIMAX_API_KEY")):
-        try:
-            proc = subprocess.run(
-                ["fleet-secrets", "get", name],
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return
-        val = proc.stdout.strip() if proc.returncode == 0 else ""
-        if val:
-            os.environ["MINIMAX_API_KEY"] = val
-            os.environ[target] = val
-            return
-
-
-_load_minimax_key()
+    return False
 
 out_lock = threading.Lock()
 sessions: dict[str, JsonDict] = {}
@@ -572,6 +559,9 @@ def list_dsh_sessions() -> list[JsonDict]:
 
 
 def main() -> None:
+    global MINIMAX_KEY_AVAILABLE
+    MINIMAX_KEY_AVAILABLE = _load_minimax_key()
+
     for raw in sys.stdin:
         line = raw.strip()
         if not line:
@@ -630,6 +620,9 @@ def main() -> None:
             sessions[sess_id] = {"cwd": cwd, "sessionId": sess_id}
             reply(req_id, {"sessionId": sess_id, "modes": modes_block()})
         elif method == "session/prompt":
+            if not MINIMAX_KEY_AVAILABLE:
+                fail(req_id, "MINIMAX_API_KEY is not configured", -32002)
+                continue
             sess_id = str(params.get("sessionId") or "")
             record = sessions.setdefault(sess_id, {"cwd": os.getcwd(), "sessionId": sess_id})
             cwd = str(record.get("cwd") or os.getcwd())

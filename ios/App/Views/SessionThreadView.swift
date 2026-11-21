@@ -237,7 +237,7 @@ final class SessionThreadModel {
                         pendingPermissions.append(request)
                         permissionTick += 1
                         TurnActivity.shared.approvalArrived(sessionId: session.sessionId, title: session.displayTitle)
-                        TurnNotifier.permissionRequest(threadTitle: session.displayTitle, request: request.headline)
+                        TurnNotifier.permissionRequest(threadTitle: session.displayTitle)
                     case .plan(let entries):
                         plan = entries
                     case .done(_, _, let remote):

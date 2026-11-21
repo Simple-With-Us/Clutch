@@ -1087,7 +1087,7 @@ final class NewThreadModel {
                         // answer goes back, so it is held on screen and the
                         // owner is woken for it.
                         pendingPermissions.append(request)
-                        TurnNotifier.permissionRequest(threadTitle: "New Thread", request: request.headline)
+                        TurnNotifier.permissionRequest(threadTitle: "New Thread")
                     case .plan(let entries):
                         plan = entries
                     case .done(_, _, let remote):

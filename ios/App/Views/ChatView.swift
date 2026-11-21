@@ -682,10 +682,7 @@ public struct ChatView: View {
                         // one event a turn-end notification can never cover.
                         pendingPermissions.append(request)
                         permissionTick += 1
-                        TurnNotifier.permissionRequest(
-                            threadTitle: activeHost?.name ?? "Agent",
-                            request: request.headline
-                        )
+                        TurnNotifier.permissionRequest(threadTitle: activeHost?.name ?? "Agent")
                     case .plan:
                         break // the plan panel belongs to the workspace
                     case .done(let stop, let id, _):

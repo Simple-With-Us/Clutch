@@ -61,7 +61,7 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         // Open the stub's one thread.  The row is a selection-driven List
         // row whose combined element carries the thread's name and button
         // semantics, so the query targets that element, not a bare text.
-        let thread = app.buttons["Thread, Fix The Login Redirect"]
+        let thread = app.buttons["Thread, Fix The Login Redirect"].firstMatch
         if !thread.waitForExistence(timeout: 30) {
             snap("ios-workspace-threads-missing")
             dump("ios-workspace-threads-tree")

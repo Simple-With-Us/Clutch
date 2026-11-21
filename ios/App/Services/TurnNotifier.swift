@@ -13,12 +13,10 @@ public enum TurnNotifier {
     /// The engine is blocked on a permission request until it is answered, so
     /// the request is worth waking the owner for the moment it arrives — the
     /// turn-end notification alone would never fire for a stalled approval.
-    public static func permissionRequest(threadTitle: String, request: String) {
-        let summary = request.trimmingCharacters(in: .whitespacesAndNewlines)
-        let body = summary.isEmpty
-            ? (threadTitle.isEmpty ? "The engine needs an approval." : threadTitle)
-            : (threadTitle.isEmpty ? summary : Copy.gap(threadTitle, summary))
-        deliver(title: "Approval Needed", body: body)
+    /// The request text can carry tool commands and paths, so it stays behind
+    /// the tap: the lock screen gets the thread's name only.
+    public static func permissionRequest(threadTitle: String) {
+        deliver(title: "Approval Needed", body: threadTitle.isEmpty ? "The engine needs an approval." : threadTitle)
     }
 
     private static func deliver(title: String, body: String) {
