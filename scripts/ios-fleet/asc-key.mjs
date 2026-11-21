@@ -4,11 +4,8 @@
  * staged for the Apple tools that need a key file.
  *
  * WHY THIS IS ITS OWN MODULE (2026-10-21, Kody rule 42 on PR #271):
- * The private key is a secret, and the fleet's approved secret sources are the
- * process environment, a captured `fleet-secrets get NAME`, and bootstrap-only
- * Keychain credentials.  A caller-supplied local file is not one of them, so
- * nothing here reads a key file:  the only approved sources of the key are
- * process.env.ASC_KEY_P8 and `fleet-secrets get ASC_KEY_P8`.
+ * The private key comes from a complete Infisical-synced environment tuple.
+ * A caller-supplied local file is not a source, so nothing here reads a key file.
  *
  * ASC_KEY_PATH IS NOT A CREDENTIAL SOURCE (2026-10-21, Kody rule 42 on PR
  * #271):  not as a fallback, not as a lower priority, not at all.  A named
@@ -63,7 +60,7 @@ export function normalizePrivateKey(value) {
 // file is created with mode 600 whatever the umask of the caller says.  The
 // file is a staging copy for the Apple tools that need a key on disk, and it
 // is never read back as a credential:  the credential comes from the
-// environment or from fleet-secrets.
+// complete environment tuple.
 export function writePrivateKeyFile(keyPath, value) {
   const pem = normalizePrivateKey(value);
   if (!pem) return { error: "the value is not a PEM private key" };
@@ -81,8 +78,7 @@ export function writePrivateKeyFile(keyPath, value) {
 // wholesale copy hands every credential on the operator's machine to the
 // child, including the ones that have nothing to do with App Store Connect.
 // These are the variables the client reads (see resolveCredential in
-// asc-api.mjs), plus PATH and HOME, which it needs to find fleet-secrets and
-// to reach the bootstrap Keychain.
+// asc-api.mjs), plus the ordinary process paths and locale.
 export const CLIENT_ENV_ALLOWLIST = [
   "PATH",
   "HOME",
@@ -95,9 +91,7 @@ export const CLIENT_ENV_ALLOWLIST = [
   "ASC_ISSUER_ID",
   "APPLE_API_KEY_ID",
   "APPLE_API_ISSUER_ID",
-  "APPLE_API_KEY_P8_BASE64",
-  "FLEET_SECRETS_BIN",
-  "FLEET_SECRETS"
+  "APPLE_API_KEY_P8_BASE64"
 ];
 
 // Builds the environment a child of the key handoff runs with.

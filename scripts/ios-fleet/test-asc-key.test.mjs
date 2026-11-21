@@ -3,22 +3,21 @@
 //
 // AFC-459, revision 2 (Kody rule 42):  a path on disk is not an approved
 // credential source at all, so this module never reads a file.  The approved
-// sources are the process environment, a captured `fleet-secrets get NAME` and
-// bootstrap-only Keychain credentials.  The module therefore validates a key,
+// sources are complete Infisical-synced environment tuples.  The module validates a key,
 // writes a mode-600 staging copy for altool and Xcode, and builds the
 // allowlisted environment a child process runs with.
 //
 // Everything here is synthetic:  the keys are generated at test time and are
-// never committed, and nothing reaches the network.
+// never committed, and HTTP fixtures use literal loopback destinations only.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { after } from "node:test";
 
 import { normalizePrivateKey, writePrivateKeyFile, CLIENT_ENV_ALLOWLIST, clientEnvironment } from "./asc-key.mjs";
 
@@ -26,6 +25,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const helper = join(here, "asc-key.mjs");
 const client = join(here, "asc-api.mjs");
 const root = mkdtempSync(join(tmpdir(), "asc-key-test-"));
+after(() => rmSync(root, { recursive: true, force: true }));
 //  A PATH with node and nothing else:  the fleet reader lives in the operator's
 //  own bin directory, and a test must never reach it or Infisical.
 const safePath = [dirname(process.execPath), "/usr/bin", "/bin"].join(":");
@@ -59,6 +59,12 @@ function run(args, stdin = "", env = undefined) {
 }
 
 function spawnNode(args, env) {
+  if (args[0] === client && args[1] === "GET") {
+    assert.match(args[2], /^http:\/\/127\.0\.0\.1:[0-9]+\//, "fixture GET must name literal loopback before spawning");
+    const target = new URL(args[2]);
+    assert.equal(target.protocol, "http:");
+    assert.equal(target.hostname, "127.0.0.1", "fixture GET must target literal loopback before spawning");
+  }
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -84,6 +90,12 @@ function localServer() {
     }));
   });
 }
+
+test("fixture GET guard refuses relative and non-loopback destinations before spawning", () => {
+  for (const target of ["/v1/apps", "https://api.appstoreconnect.apple.com/v1/apps", "http://example.invalid/v1/apps", "http://2130706433:80/v1/apps"]) {
+    assert.throws(() => spawnNode([client, "GET", target], {}));
+  }
+});
 
 function jwtKeyId(authorization) {
   const token = String(authorization || "").replace(/^Bearer /, "");
@@ -115,8 +127,9 @@ test("a malformed PEM is refused, because the envelope is not a key", () => {
   //  envelope and still fail to parse.  Accepting them would hand the signer
   //  something it cannot use, and the failure would come back as a stack
   //  trace instead of a credential error.
-  assert.equal(normalizePrivateKey("-----BEGIN PRIVATE KEY-----\nnot base64 at all\n-----END PRIVATE KEY-----\n"), null); // gitleaks:allow
-  assert.equal(normalizePrivateKey("-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----\n"), null); // gitleaks:allow
+  const envelope = keyPem.trim().split("\n");
+  assert.equal(normalizePrivateKey([envelope[0], "not base64 at all", envelope.at(-1), ""].join("\n")), null);
+  assert.equal(normalizePrivateKey([envelope[0], envelope.at(-1), ""].join("\n")), null);
   assert.equal(normalizePrivateKey(""), null);
   assert.equal(normalizePrivateKey(undefined), null);
   assert.equal(normalizePrivateKey("hunter2"), null);
@@ -206,12 +219,16 @@ test("the child's environment is an allowlist, never a copy of the parent's", ()
     HOME: "/tmp/home",
     ASC_KEY_ID: "SYNTHETICKEYID1",
     ASC_ISSUER_ID: "synthetic-issuer",
-    SECRET_TOKEN: "not-for-the-child"
+    SECRET_TOKEN: "not-for-the-child",
+    FLEET_SECRETS_BIN: "/untrusted/reader",
+    FLEET_SECRETS: "untrusted-reader"
   });
   assert.equal(child.PATH, "/usr/bin:/bin");
   assert.equal(child.HOME, "/tmp/home");
   assert.equal(child.ASC_KEY_ID, "SYNTHETICKEYID1");
   assert.equal(child.SECRET_TOKEN, undefined, "a credential crossed over to the child");
+  assert.equal(child.FLEET_SECRETS_BIN, undefined);
+  assert.equal(child.FLEET_SECRETS, undefined);
   assert.ok(!Object.keys(child).includes("ASC_KEY_P8"), "the key belongs in no inherited variable");
   assert.ok(!CLIENT_ENV_ALLOWLIST.includes("ASC_KEY_P8"), "the key must not be an inherited variable");
   //  The key is added separately, by the caller that owns it.
@@ -227,7 +244,6 @@ test("the client takes the key from the environment and ignores a named ASC_KEY_
     const result = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
       PATH: safePath,
       HOME: join(root, "home-client"),
-      FLEET_SECRETS_BIN: join(root, "no-fleet-secrets"),
       ASC_API_BASE: server.base,
       ASC_KEY_ID: "SYNTHETICKEYID1",
       ASC_ISSUER_ID: "synthetic-issuer",
@@ -258,7 +274,6 @@ test("a named ASC_KEY_PATH is not a credential for the client either", async () 
   const result = await spawnNode([client, "GET", "http://127.0.0.1:1/v1/apps"], {
     PATH: safePath,
     HOME: join(root, "home-empty"),
-    FLEET_SECRETS_BIN: join(root, "no-fleet-secrets"),
     ASC_API_BASE: "http://127.0.0.1:1",
     ASC_KEY_ID: "SYNTHETICKEYID1",
     ASC_ISSUER_ID: "synthetic-issuer",
@@ -273,4 +288,185 @@ test("the client source never reads a key path", () => {
   const source = readFileSync(client, "utf8");
   assert.doesNotMatch(source, /process\.env\.ASC_KEY_PATH/, "the client reads a named key path");
   assert.doesNotMatch(source, /fromFile/, "the client still has a file reader");
+});
+
+test("real client refuses every incomplete tuple before API access", async () => {
+  const server = await localServer();
+  try {
+    const tuples = [
+      { ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem },
+      { APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer", APPLE_API_KEY_P8_BASE64: Buffer.from(otherPem).toString("base64") }
+    ];
+    for (const tuple of tuples) {
+      const entries = Object.entries(tuple);
+      for (let mask = 0; mask < 7; mask += 1) {
+        const partial = Object.fromEntries(entries.filter((_entry, i) => mask & (1 << i)));
+        const result = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
+          PATH: safePath, HOME: join(root, "empty-client"), ASC_API_BASE: server.base,
+          ASC_KEY_PATH: staged("unused.p8", otherPem), ...partial
+        });
+        assert.equal(result.code, 1, "an incomplete tuple was accepted");
+        for (const name of Object.keys(tuple)) assert.ok(result.stderr.includes(name));
+        assert.ok(!result.stdout.includes(keyPem.trim()) && !result.stderr.includes(otherPem.trim()));
+      }
+    }
+    const mixed = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
+      PATH: safePath, HOME: join(root, "mixed-client"), ASC_API_BASE: server.base,
+      ASC_KEY_ID: "RAWKEY01", APPLE_API_ISSUER_ID: "ci-issuer", ASC_KEY_P8: keyPem
+    });
+    assert.equal(mixed.code, 1);
+    assert.equal(server.seen.length, 0);
+  } finally { server.close(); }
+});
+
+test("real client chooses the producer tuple as a unit and cleans its staging copy", async () => {
+  const server = await localServer();
+  const temp = mkdtempSync(join(root, "client-temp-"));
+  try {
+    const result = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
+      PATH: safePath, HOME: join(root, "producer-client"), TMPDIR: temp, ASC_API_BASE: server.base,
+      ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem,
+      APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer",
+      APPLE_API_KEY_P8_BASE64: Buffer.from(otherPem).toString("base64")
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(jwtKeyId(server.seen[0].authorization), "CIKEY01");
+    const payload = JSON.parse(Buffer.from(server.seen[0].authorization.split(".")[1], "base64url"));
+    assert.equal(payload.iss, "ci-issuer");
+    assert.ok(jwtSignedBy(server.seen[0].authorization, otherPair.publicKey));
+    assert.ok(!jwtSignedBy(server.seen[0].authorization, pair.publicKey));
+    assert.deepEqual(readdirSync(temp), []);
+    assert.ok(!result.stdout.includes(otherPem.trim()) && !result.stderr.includes(otherPem.trim()));
+  } finally { server.close(); }
+});
+
+const prep = join(here, "..", "ios-appstore-gm-prepare.sh");
+const prepBin = join(root, "prep-bin");
+mkdirSync(prepBin);
+for (const [name, body] of Object.entries({
+  sw_vers: 'if [ "$1" = -productVersion ]; then echo 26.1; else echo 25F84; fi',
+  openssl: 'printf "%s\\n" openssl >> "$FAKE_SIGNING_LOG"; printf "%s\\n" fixture-pass',
+  security: 'printf "%s\\n" "$1" >> "$FAKE_SIGNING_LOG"; if [ "$1" = find-identity ]; then echo "Apple Distribution"; fi'
+})) {
+  writeFileSync(join(prepBin, name), `#!/bin/bash\n${body}\n`, { mode: 0o700 });
+}
+
+for (const name of ["xcodebuild", "xcrun", "asc-query"]) {
+  writeFileSync(join(prepBin, name), '#!/bin/bash\nprintf "%s\\n" unexpected-tool >> "$FAKE_SIGNING_LOG"\nexit 99\n', { mode: 0o700 });
+}
+
+async function prepare(extra) {
+  const temp = mkdtempSync(join(root, "prepare-"));
+  const env = {
+    PATH: `${prepBin}:${safePath}`, HOME: join(temp, "home"), TMPDIR: temp, RUNNER_TEMP: temp,
+    GITHUB_ENV: join(temp, "github-env"), FAKE_SIGNING_LOG: join(temp, "tools.log"), ...extra
+  };
+  const result = await new Promise(resolve => {
+    const child = spawn("/bin/bash", [prep], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("close", code => resolve({ code, stdout, stderr }));
+  });
+  assert.ok(!result.stdout.includes(keyPem.trim()) && !result.stderr.includes(keyPem.trim()));
+  assert.ok(!result.stdout.includes(otherPem.trim()) && !result.stderr.includes(otherPem.trim()));
+  return { ...result, temp, env };
+}
+
+test("actual preparation preserves producer and direct tuples in private runner staging", async () => {
+  for (const producer of [true, false]) {
+    const result = await prepare({
+      ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem,
+      ...(producer ? {
+        APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer",
+        APPLE_API_KEY_P8_BASE64: Buffer.from(otherPem).toString("base64"),
+        IOS_CERT_P12_BASE64: Buffer.from("fixture-certificate").toString("base64"), IOS_CERT_PASSWORD: "fixture-pass"
+      } : {
+        IOS_DIST_P12_BASE64: Buffer.from("fixture-certificate").toString("base64"), IOS_DIST_P12_PASSWORD: "fixture-pass"
+      })
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const keyPath = join(result.temp, "ios-signing", `AuthKey_${producer ? "CIKEY01" : "RAWKEY01"}.p8`);
+    assert.ok(readFileSync(keyPath, "utf8").trim() === (producer ? otherPem : keyPem).trim(),
+      "private staging differs from the selected synthetic fixture");
+    assert.equal(statSync(keyPath).mode & 0o777, 0o600);
+    assert.equal(statSync(dirname(keyPath)).mode & 0o777, 0o700);
+    assert.equal(statSync(join(result.temp, "ios-signing", "ios-distribution.p12")).mode & 0o777, 0o600);
+    const exported = readFileSync(result.env.GITHUB_ENV, "utf8");
+    assert.ok(exported.includes(`ASC_KEY_ID=${producer ? "CIKEY01" : "RAWKEY01"}\n`));
+    assert.ok(exported.includes(`ASC_ISSUER_ID=${producer ? "ci-issuer" : "raw-issuer"}\n`));
+    assert.ok(!exported.includes(keyPem.trim()) && !exported.includes(otherPem.trim()));
+    assert.ok(readFileSync(result.env.FAKE_SIGNING_LOG, "utf8").includes("find-identity"));
+  }
+});
+
+test("actual preparation refuses partial, mixed and invalid inputs before signing stores", async () => {
+  const raw = { ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem };
+  const cert = { IOS_CERT_P12_BASE64: Buffer.from("fixture-certificate").toString("base64"), IOS_CERT_PASSWORD: "fixture-pass" };
+  const cases = [
+    [{}, "ASC_KEY_P8"],
+    [{ ASC_KEY_ID: "RAWKEY01", APPLE_API_ISSUER_ID: "ci-issuer", ASC_KEY_P8: keyPem, ...cert }, "ASC_ISSUER_ID"],
+    [{ ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_PATH: staged("ignored-prep.p8"), ...cert }, "ASC_KEY_P8"],
+    [{ ...raw, ...cert, ASC_KEY_P8: "not a private key" }, "ASC_KEY_P8"],
+    [{ ...raw, ...cert, ASC_KEY_ID: "../wrong" }, "ASC_KEY_ID"],
+    [{ ...raw, IOS_CERT_P12_BASE64: cert.IOS_CERT_P12_BASE64, IOS_DIST_P12_PASSWORD: "fixture-pass" }, "IOS_CERT_PASSWORD"],
+    [{ ...raw, ...cert, APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer", APPLE_API_KEY_P8_BASE64: "invalid" }, "APPLE_API_KEY_P8_BASE64"]
+  ];
+  for (const [env, expected] of cases) {
+    const result = await prepare(env);
+    assert.notEqual(result.code, 0);
+    assert.ok(result.stderr.includes(expected), "refusal must name the supported input");
+    assert.equal(existsSync(result.env.FAKE_SIGNING_LOG), false);
+    assert.equal(existsSync(result.env.GITHUB_ENV), false);
+    assert.equal(existsSync(join(result.temp, "ios-signing")), false);
+  }
+});
+
+test("actual ship entry uses producer outputs in dry-run and refuses missing inputs before query or upload", async () => {
+  const ship = join(here, "ship-testflight.sh");
+  for (const [present, planOnly] of [[true, false], [false, false], [false, true]]) {
+    const temp = mkdtempSync(join(root, "ship-entry-"));
+    const ipa = join(temp, "fixture.ipa");
+    writeFileSync(ipa, "fixture");
+    const env = {
+      PATH: `${prepBin}:${safePath}`, HOME: join(temp, "home"), TMPDIR: temp,
+      IOS_FLEET_STATE_DIR: join(temp, "state"), IOS_FLEET_NODE: join(prepBin, "asc-query"),
+      FAKE_SIGNING_LOG: join(temp, "tools.log"),
+      ...(present ? {
+        APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer",
+        APPLE_API_KEY_P8_BASE64: Buffer.from(otherPem).toString("base64")
+      } : {})
+    };
+    const result = await new Promise(resolve => {
+      const child = spawn("/bin/bash", [ship, "clutch", "--repo-root", join(here, "..", ".."),
+        ...(planOnly ? ["--plan-build-only"] : ["--upload-only", ipa, "--dry-run", "--allow-dirty", "--force-ship"])],
+      { env, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", chunk => { stdout += chunk; });
+      child.stderr.on("data", chunk => { stderr += chunk; });
+      child.on("close", code => resolve({ code, stdout, stderr }));
+    });
+    assert.equal(result.code, present ? 0 : 1, result.stderr);
+    assert.ok((result.stdout + result.stderr).includes(present ? "auth=api_key" : "ASC_KEY_P8"));
+    if (present) assert.ok(result.stdout.includes("dry-run: would archive + ship; exiting"));
+    assert.equal(existsSync(env.FAKE_SIGNING_LOG), false, "no query, archive or upload tool may run");
+    assert.equal(readdirSync(temp).some(name => name.startsWith("asc-key.")), false);
+    assert.ok(!result.stdout.includes(otherPem.trim()) && !result.stderr.includes(otherPem.trim()));
+  }
+});
+
+test("malformed preferred tuple never falls back to another complete key", async () => {
+  const server = await localServer();
+  try {
+    for (const invalid of ["invalid", Buffer.from("not a private key").toString("base64")]) {
+      const result = await spawnNode([client, "GET", `${server.base}/v1/apps`], {
+        PATH: safePath, HOME: join(root, "invalid-client"), ASC_API_BASE: server.base,
+        ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem,
+        APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer", APPLE_API_KEY_P8_BASE64: invalid
+      });
+      assert.equal(result.code, 1);
+      assert.ok(result.stderr.includes("APPLE_API_KEY_P8_BASE64"));
+    }
+    assert.equal(server.seen.length, 0);
+  } finally { server.close(); }
 });
