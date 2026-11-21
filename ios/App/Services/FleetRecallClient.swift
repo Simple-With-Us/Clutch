@@ -29,17 +29,40 @@ public final class FleetRecallClient {
     public var contributionSuccessMessage: String?
 
     private let endpointKey = "codes.clutch.fleet_rag_endpoint"
+    /// Set once the retired-default migration has run, so an endpoint
+    ///  deliberately saved afterward is never re-cleared.
+    private let endpointMigrationKey = "codes.clutch.fleet_rag_endpoint_migration_v1"
+    /// The retired default, compared after normalization so whitespace and
+    ///  trailing-slash variants of it are recognized too.
+    private static let retiredDefaultEndpoint = "https://agents.jays.services/mcp"
 
     public init() {
+        FleetRecallClient.migrateRetiredDefaultEndpoint(
+            defaults: UserDefaults.standard,
+            endpointKey: endpointKey,
+            migrationKey: endpointMigrationKey
+        )
         if let saved = UserDefaults.standard.string(forKey: endpointKey) {
-            if saved == "https://agents.jays.services/mcp" {
-                // A stored copy of the retired default must not pin an existing
-                //  install to the old host.  An explicitly chosen custom endpoint
-                //  is left alone.
-                UserDefaults.standard.removeObject(forKey: endpointKey)
-            } else {
-                self.endpoint = saved
-            }
+            self.endpoint = saved
+        }
+    }
+
+    /// One-time migration: a stored endpoint equal to the retired default would
+    ///  pin the install to a dead host, so it is cleared and the new default
+    ///  applies.  The version flag caps it at a single run: the policy doc keeps
+    ///  the old host as a valid older fallback for cloud seats, and an install
+    ///  that deliberately saves it after the migration keeps its choice.
+    static func migrateRetiredDefaultEndpoint(defaults: UserDefaults, endpointKey: String, migrationKey: String) {
+        guard !defaults.bool(forKey: migrationKey) else { return }
+        defaults.set(true, forKey: migrationKey)
+        guard let saved = defaults.string(forKey: endpointKey) else { return }
+        let trimmed = saved.trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = trimmed
+        while normalized.hasSuffix("/") {
+            normalized = String(normalized.dropLast())
+        }
+        if normalized == retiredDefaultEndpoint {
+            defaults.removeObject(forKey: endpointKey)
         }
     }
 
