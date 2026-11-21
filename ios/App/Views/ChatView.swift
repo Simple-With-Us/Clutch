@@ -581,6 +581,10 @@ public struct ChatView: View {
         draft = ""
         sendError = nil
         sending = true
+        // The turn's images ride the request while the composer clears:
+        // what comes back on a transport failure is restored below, so a
+        // send that never left never eats its attachments.
+        let outgoingImages = attachments
         let client = ChatSessionClient(
             host: host,
             model: requestModel,
@@ -594,7 +598,7 @@ public struct ChatView: View {
             // and the owner picked one, so a turn keeps the engine's own
             // effort otherwise.
             effort: requestEffort,
-            images: attachments
+            images: outgoingImages
         )
         attachments = []
         Task {
@@ -644,6 +648,9 @@ public struct ChatView: View {
                 sending = false
                 thoughtLine = nil
                 sendError = error.localizedDescription
+                // The turn never left, so its images come back ahead of
+                // anything attached since.
+                attachments = outgoingImages + attachments
             }
         }
     }

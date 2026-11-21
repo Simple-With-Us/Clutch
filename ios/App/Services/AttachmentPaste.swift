@@ -179,21 +179,30 @@ public enum AttachmentPaste {
                 outcome.errors.append("That link is not a file Clutch can attach.")
                 continue
             }
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-            if values?.isDirectory == true {
+            let accessing = url.startAccessingSecurityScopedResource()
+            // Swift runs this per iteration (unlike Go's function-scoped
+            // defer), so each grant is released before the next file.
+            defer {
+                if accessing { url.stopAccessingSecurityScopedResource() }
+            }
+            // Metadata is queried inside the access grant: outside it the
+            // query can fail, and a file whose size cannot be verified is
+            // refused rather than read unbounded.
+            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]),
+                  let size = values.fileSize else {
+                outcome.errors.append("Could not read \(url.lastPathComponent).")
+                continue
+            }
+            if values.isDirectory == true {
                 outcome.errors.append(Copy.gap(
                     "\(url.lastPathComponent) is a folder.",
                     "Open it and pick files inside."
                 ))
                 continue
             }
-            if let size = values?.fileSize, size > maxFileBytes {
+            if size > maxFileBytes {
                 outcome.errors.append("\(url.lastPathComponent) is too big to attach.")
                 continue
-            }
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer {
-                if accessing { url.stopAccessingSecurityScopedResource() }
             }
             guard let data = try? Data(contentsOf: url) else {
                 outcome.errors.append("Could not read \(url.lastPathComponent).")
@@ -238,26 +247,43 @@ public enum AttachmentPaste {
     public static func outcomeForProviders(_ providers: [NSItemProvider]) async -> PasteOutcome {
         var outcome = PasteOutcome()
         for provider in providers.prefix(maxItemsPerPaste) {
+            // A web link vends where a file was expected: it must not
+            // shadow an image representation, so it is remembered and
+            // reported only when nothing else on the provider was usable.
+            var linkURL: URL?
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
                let url = await loadFileURL(from: provider) {
-                outcome.merge(outcomeForFileURLs([url]))
-            } else if let file = await loadFile(from: provider) {
+                if url.isFileURL {
+                    outcome.merge(outcomeForFileURLs([url]))
+                    continue
+                }
+                linkURL = url
+            }
+            if let file = await loadFile(from: provider) {
                 switch file {
                 case .file(let data, let name):
                     outcome.merge(fateOutcome(data: data, name: name))
                 case .tooLarge(let name):
                     outcome.errors.append("\(name) is too big to attach.")
                 }
-            } else if let identifier = imageIdentifier(for: provider),
-                      let data = await loadData(from: provider, type: identifier) {
+                continue
+            }
+            if let identifier = imageIdentifier(for: provider),
+               let data = await loadData(from: provider, type: identifier) {
                 let name = provider.suggestedName ?? suggestedName(for: identifier)
                 outcome.merge(fateOutcome(data: data, name: name))
-            } else if let identifier = provider.registeredTypeIdentifiers.first,
-                      let data = await loadData(from: provider, type: identifier) {
+                continue
+            }
+            if let identifier = provider.registeredTypeIdentifiers.first,
+               let data = await loadData(from: provider, type: identifier) {
                 // Last resort: unidentified data is still dispatched by its
                 // bytes, so a wrong claim is refused, not mis-sent.
                 let name = provider.suggestedName ?? suggestedName(for: identifier)
                 outcome.merge(fateOutcome(data: data, name: name))
+                continue
+            }
+            if linkURL != nil {
+                outcome.errors.append("That link is not a file Clutch can attach.")
             } else {
                 outcome.errors.append("That item is not an image or file Clutch can attach.")
             }
@@ -304,8 +330,12 @@ public enum AttachmentPaste {
                 defer {
                     if accessing { url.stopAccessingSecurityScopedResource() }
                 }
-                if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
-                   size > maxFileBytes {
+                // A copy whose size cannot be verified is refused rather
+                // than read unbounded.
+                guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
+                    return continuation.resume(returning: nil)
+                }
+                if size > maxFileBytes {
                     return continuation.resume(returning: .tooLarge(name: name))
                 }
                 guard let data = try? Data(contentsOf: url) else {
