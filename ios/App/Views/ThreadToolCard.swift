@@ -108,11 +108,7 @@ public struct ThreadToolCard: View {
     }
 
     private var statusLabel: String {
-        switch status {
-        case "completed": return "Done"
-        case "failed": return "Failed"
-        default: return "Running"
-        }
+        ClutchStatus(toolStatus: status).toolStatusLabel
     }
 }
 

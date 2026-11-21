@@ -276,7 +276,23 @@ public enum ClutchStatus {
         switch toolStatus {
         case "completed": self = .success
         case "failed": self = .danger
+        // A call the engine parked or withdrew is not running: show it as
+        // neutral instead of a live spinner, which is what the generic
+        // default used to draw for pending and cancelled calls.
+        case "pending": self = .idle
+        case "cancelled", "canceled": self = .idle
         default: self = .running
+        }
+    }
+
+    /// The word the tool card shows for where a call stands.
+    public var toolStatusLabel: String {
+        switch self {
+        case .success: return "Done"
+        case .danger: return "Failed"
+        case .idle: return "Pending"
+        case .running: return "Running"
+        case .warning: return "Needs Attention"
         }
     }
 }
