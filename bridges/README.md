@@ -40,9 +40,10 @@ bridges/
 The `dsh-acp.sh`, `minimax-acp.sh`, and `grok-acp.sh` shell wrappers live in
 `scripts/` (Shellular runs them from `~/apps/clutch-runtime/scripts/`).  The
 DeepSeek and MiniMax wrappers source `scripts/lib/clutch-env.sh`, which pins
-`DSH_HOME` to `$CLUTCH_HOME/dsh` (default `~/.clutch/dsh`), then `exec` the
-Python under `/opt/homebrew/bin/python3`.  The Grok wrapper does not, because
-Grok is not the DSH engine.
+`DSH_HOME` to `$CLUTCH_HOME/dsh` (default `~/.clutch/dsh`), then `exec` a Python
+interpreter selected from the environment, Homebrew's path or `PATH`.  The MiniMax wrapper also runs the
+shared Clutch Infisical backfill before starting the bridge.  The Grok wrapper
+does not, because Grok is not the DSH engine.
 
 ## Auth
 
@@ -52,8 +53,14 @@ Bridges never read agent credentials.  Auth comes from:
   for MiniMax).
 - `$DSH_HOME/.credentials.yaml` (Clutch's engine credential store, default
   `~/.clutch/dsh/.credentials.yaml`) for DeepSeek.
-- `$DSH_HOME/.credentials.yaml`, then `fleet-secrets get` for MiniMax
-  (`MINIMAX_API_KEY`, looked up by `CLUTCH_MINIMAX_API_KEY_NAME`).
+- `$DSH_HOME/.credentials.yaml` for MiniMax
+  (`MINIMAX_API_KEY`, optionally named by `CLUTCH_MINIMAX_API_KEY_NAME`).
+
+The supported MiniMax entrypoint is `scripts/minimax-acp.sh`, which sources
+Clutch's shared Infisical launcher and preserves explicitly-set environment
+values.  Running `bridges/minimax/minimax-acp.py` directly does not initialize
+Infisical; it accepts only its process environment or the DSH credential file.
+With neither source, the bridge rejects prompts without starting `dsh`.
 
 The Shellular `agents.json` entry for each agent sets the env vars via the
 `env` block; the agent-facing config never holds a secret value.

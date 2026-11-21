@@ -31,7 +31,7 @@
  *   (mode 600).  The token rides to the phone inside the pairing link.
  * - Logs carry lengths and ids only — never prompt text or tokens.
  */
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
@@ -39,7 +39,6 @@ import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/pr
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 
 import { z } from "zod";
 
@@ -432,14 +431,6 @@ export interface EngineAvailabilityContext {
    */
   hostReachable?: boolean;
   /**
-   * Whether a fleet-secrets secret of that name is reachable.
-   *
-   * The lookup shells out to `fleet-secrets names`, so a caller that knows
-   * better supplies its own answer and the check stays a files-and-
-   * environment check in a test.
-   */
-  fleetSecretPresent?: (name: string) => Promise<boolean>;
-  /**
    * The interpreter paths to try, in order, after `PYTHON`.
    *
    * The default is the launcher's own order: `/opt/homebrew/bin/python3`
@@ -508,38 +499,6 @@ function pythonInterpreter(
   return null;
 }
 
-const execFileAsync = promisify(execFile);
-
-/**
- * Whether a fleet-secrets secret of that name is reachable.
- *
- * The MiniMax bridge's last resort is `fleet-secrets get NAME`
- * (`bridges/minimax/minimax-acp.py`), so a host that keeps its key only
- * there still runs the turn.  `fleet-secrets names` lists the names and
- * never the values, so this check reads no secret and prints none.
- */
-async function fleetSecretPresent(
-  name: string,
-  env: Record<string, string | undefined>,
-): Promise<boolean> {
-  const cli = (env.PATH ?? "")
-    .split(":")
-    .map((dir) => (dir ? join(dir, "fleet-secrets") : ""))
-    .find((path) => path && executableFile(path));
-  if (!cli) return false;
-  try {
-    const { stdout } = await execFileAsync(cli, ["names"], {
-      env: env as NodeJS.ProcessEnv,
-      timeout: 10_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    return stdout.split(/\r?\n/).some((line) => line.trim() === name);
-  } catch {
-    // A host with no fleet-secrets, or no credentials for it, simply does
-    // not have this source.
-    return false;
-  }
-}
 /**
  * The MiniMax Code credential files under a directory.
  *
@@ -622,9 +581,9 @@ function museSignedIn(
  * Two things have to hold: the launcher has to start (the file is there and
  * the interpreter it needs is there), and the credential the engine needs
  * has to be reachable.  The check stays cheap on purpose — files and
- * environment first, so the picker can ask for it on every request.  The one
- * exception is a credential that lives only in fleet-secrets, and that
- * lookup runs only when the cheaper sources have found nothing.
+ * environment first, so the picker can ask for it on every request.  The
+ * supported MiniMax launcher loads Clutch's managed settings before starting
+ * the Python bridge; no external secret CLI is consulted here.
  *
  * The dsh-hosted engines are the one case where the answer depends on more
  * than this machine: the host runs their turns when it answers, and the
@@ -727,24 +686,19 @@ export async function engineAvailability(
     }
   }
   if (engine === "minimax") {
-    // The bridge's own order: the environment (under either name), the dsh
-    // credential store, then `fleet-secrets get`.  A host that keeps the key
-    // only in fleet-secrets runs the turn, so the catalog must not drop the
-    // engine there.
+    // The supported wrapper backfills Clutch-managed settings into the
+    // launch environment.  Direct bridge invocation may instead use the DSH
+    // credential file; these are the only credential sources this path
+    // advertises.
     const keyName = settingValue("CLUTCH_MINIMAX_API_KEY_NAME", env, settings) || "MINIMAX_API_KEY";
     const inEnvironment = Boolean(
       settingValue(keyName, env, settings) || settingValue("MINIMAX_API_KEY", env, settings),
     );
     if (!inEnvironment && !existsSync(credentialFile)) {
-      const inFleetSecrets = context.fleetSecretPresent
-        ? await context.fleetSecretPresent(keyName)
-        : await fleetSecretPresent(keyName, env);
-      if (!inFleetSecrets) {
-        return {
-          available: false,
-          note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings, save it in ${credentialFile}, or keep it in fleet-secrets.`,
-        };
-      }
+      return {
+        available: false,
+        note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings or save it in ${credentialFile}.`,
+      };
     }
   }
   return { available: true };
