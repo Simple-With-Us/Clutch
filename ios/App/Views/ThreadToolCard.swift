@@ -29,29 +29,29 @@ public struct ThreadToolCard: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ClutchSpacing.base) {
             Button {
                 expanded.toggle()
             } label: {
                 header
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(expanded ? "Collapse Tool Details" : "Expand Tool Details")
+            .accessibilityLabel(accessibilitySummary)
             if expanded {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: ClutchSpacing.snug) {
                         // What the tool was asked, before what it answered:
                         // the name says which tool ran, and this says what it
                         // was asked to do.
                         if let input, !input.isEmpty {
                             Text(input)
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(ClutchFont.monoMicro)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         Text(name)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(ClutchFont.monoMicro)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -59,27 +59,35 @@ public struct ThreadToolCard: View {
                 .frame(maxHeight: 220)
             }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
+        .padding(.horizontal, ClutchSpacing.base)
+        .padding(.vertical, ClutchSpacing.snug)
         // The tree: a call that ran other tools holds them under itself.
-        .padding(.leading, 9 + CGFloat(depth) * 14)
-        .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 8))
+        .padding(.leading, ClutchSpacing.base + CGFloat(depth) * 14)
+        .background(ClutchColor.surface, in: RoundedRectangle(cornerRadius: ClutchRadius.control))
+    }
+
+    /// What VoiceOver reads for the header.  The label carries the tool's
+    /// name and where it stands, because a bare "expand" would say nothing
+    /// about which call it expands.
+    private var accessibilitySummary: String {
+        let verb = expanded ? "Collapse Tool Details" : "Expand Tool Details"
+        return "\(verb), \(name), \(statusLabel)"
     }
 
     private var header: some View {
         HStack(spacing: 7) {
             Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
+                .font(ClutchFont.microStrong)
                 .foregroundStyle(.secondary)
             Image(systemName: symbol)
-                .font(.system(size: 10, weight: .semibold))
+                .font(ClutchFont.microStrong)
                 .foregroundStyle(color)
             Text(summary)
-                .font(.system(size: 11, design: .monospaced))
+                .font(ClutchFont.monoMicro)
                 .lineLimit(1)
             Spacer(minLength: 0)
             Text(statusLabel)
-                .font(.system(size: 9, weight: .bold))
+                .font(ClutchFont.sectionLabel)
                 .foregroundStyle(color)
         }
         .contentShape(Rectangle())
@@ -92,19 +100,11 @@ public struct ThreadToolCard: View {
     }
 
     private var symbol: String {
-        switch status {
-        case "completed": return "checkmark.circle.fill"
-        case "failed": return "xmark.octagon.fill"
-        default: return "wrench.and.screwdriver.fill"
-        }
+        ClutchStatus(toolStatus: status).symbol
     }
 
     private var color: Color {
-        switch status {
-        case "completed": return .green
-        case "failed": return .red
-        default: return .orange
-        }
+        ClutchStatus(toolStatus: status).color
     }
 
     private var statusLabel: String {
