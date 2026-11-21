@@ -60,7 +60,10 @@ public enum ClutchColor {
 
     public static let textPrimary = Color.primary
     public static let textSecondary = Color.secondary
-    public static let textTertiary = Color.tertiary
+    /// SwiftUI's `Color` has no `tertiary`; the hierarchy label is a dimmed
+    /// primary so it reads correctly in light and dark without reaching for
+    /// a platform-only label colour.
+    public static let textTertiary = Color.primary.opacity(0.55)
 
     public static let accent = Color.accentColor
     /// A light wash of the accent behind content that belongs to it.

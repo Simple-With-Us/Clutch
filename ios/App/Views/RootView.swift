@@ -20,6 +20,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if let host = store.activeHost {
+                #if os(macOS)
                 tabs(for: host)
                     .sheet(isPresented: $isShowingHosts) {
                         HostsSheet(store: store)
@@ -57,6 +58,33 @@ struct RootView: View {
                             await checkGate(host)
                         }
                     }
+                #else
+                // The phone has no tab bar: one surface, one detail.  The
+                // Host console and Fleet Recall live in Hosts and Settings,
+                // reachable from the home list's gear.
+                gated(SessionsView(host: host), host: host)
+                    .sheet(isPresented: $isShowingHosts) {
+                        HostsSheet(store: store)
+                    }
+                    .onAppear {
+                        // Keep the shared selection state valid even though
+                        // nothing reads it on this platform.
+                        selectedTab = HostTabs.clamp(selectedTab, for: host)
+                    }
+                    .task(id: host.pairingKey) {
+                        await store.refreshStatuses()
+                    }
+                    .task(id: host.pairingKey) {
+                        await checkGate(host)
+                    }
+                    .onChange(of: scenePhase) { _, phase in
+                        guard phase == .active else { return }
+                        Task {
+                            await store.refreshStatuses()
+                            await checkGate(host)
+                        }
+                    }
+                #endif
             } else {
                 PairView { payload in
                     store.pair(payload)
@@ -121,23 +149,23 @@ struct RootView: View {
         #endif
     }
 
-    /// Puts the gate card in place of a surface that needs the sidecar.
+    /// Puts the gate card over a surface that needs the sidecar.
     ///
     /// The Host tab and Fleet Recall do not go through the sidecar, so they
     /// stay reachable while it is down: the owner keeps the tabs that work
     /// and gets a card, not a dead end, on the ones that do not.
     ///
-    /// The card replaces the surface rather than covering it.  A surface
-    /// behind the card keeps asking a host that is down, so the owner would
-    /// watch the workspace and the chat time out at once, and the picker on
-    /// that surface would still say the host is online — the state the web
-    /// canvas got wrong.
+    /// The card is an overlay rather than a replacement now.  Swapping the
+    /// surface out used to destroy the open thread's draft and scroll
+    /// position whenever a 10-second health check timed out on foreground —
+    /// the exact moment a sleeping Mac makes that likely.  The surface stays
+    /// mounted underneath, and the card covers it fully, so nothing behind
+    /// it can be tapped while the host is down.
     @MainActor
     private func gated<Content: View>(_ content: Content, host: ClutchHost) -> some View {
-        Group {
-            if gate.isReady {
-                content
-            } else {
+        ZStack {
+            content
+            if !gate.isReady {
                 HostGateView(
                     host: host,
                     store: store,
@@ -146,6 +174,7 @@ struct RootView: View {
                     onSwitchHost: { isShowingHosts = true },
                     onPaired: { payload in store.pair(payload) }
                 )
+                .transition(.opacity)
             }
         }
     }

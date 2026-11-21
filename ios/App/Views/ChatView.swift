@@ -63,6 +63,21 @@ public struct ChatView: View {
     @State private var cardAlert: String?
     @State private var isTranscribingVoice: Bool = false
     @State private var voiceStatusMessage: String?
+    /// The prompt held back while a turn runs, sent the moment it ends.
+    ///
+    /// The field never closes while a turn streams: text typed then either
+    /// steers the running turn or queues for the next one, so supervising
+    /// from the phone never means waiting idle.
+    @State private var queuedPrompt: String?
+    /// Whether the sidecar reported the running turn accepts steering.
+    @State private var supportsSteering = false
+    /// The in-flight turn's task, cancelled by the stop control.
+    @State private var sendTask: Task<Void, Never>?
+    /// Bumped on turn end and on permission arrival, so haptics have a
+    /// value to fire on.
+    @State private var turnTick = 0
+    @State private var permissionTick = 0
+    @State private var isShowingHosts = false
 
     let activeHost: ClutchHost?
     let transcriptionService = TranscriptionService.shared
@@ -155,6 +170,22 @@ public struct ChatView: View {
                             title: "Chat Unavailable",
                             message: message
                         )
+                        Button("Try Again") {
+                            if let host = activeHost {
+                                Task { await manager.prepare(host: host) }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .padding(.horizontal, 24)
+                        Button("Hosts And Settings") {
+                            isShowingHosts = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .padding(.horizontal, 24)
                         Spacer()
                     case .ready:
                         if let agent = manager.agentUser {
@@ -183,17 +214,28 @@ public struct ChatView: View {
                             // the question the engine is asking is answered
                             // where the turn is written.
                             if let request = pendingPermission {
-                                PermissionCard(request: request) { optionId in
+                                PermissionCard(
+                                    request: request,
+                                    queuedCount: max(pendingPermissions.count - 1, 0),
+                                    canAnswer: sessionId != nil
+                                ) { optionId in
                                     answerPermission(optionId)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.bottom, 8)
+                            }
+                            if let queued = queuedPrompt {
+                                queuedPromptPill(queued)
                             }
                             ChatInputBar(
                                 draft: $draft,
                                 sending: sending,
                                 isDictating: dictation.isRecording,
                                 onSend: { send(draft) },
+                                onStop: { stopTurn() },
+                                onQueue: { queueDraft() },
+                                onSteer: { steerDraft() },
+                                canSteer: supportsSteering && sessionId != nil,
                                 onVoice: { startVoice() },
                                 attachments: $attachments,
                                 onError: { sendError = $0 }
@@ -210,6 +252,13 @@ public struct ChatView: View {
             }
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $isShowingHosts) {
+                HostsSheet(store: store ?? HostStore.shared)
+            }
+            // Haptics keyed on counters, not on state booleans, so the
+            // feedback fires once per event rather than on every layout pass.
+            .sensoryFeedback(.success, trigger: turnTick)
+            .sensoryFeedback(.warning, trigger: permissionTick)
             .task(id: activeHost?.pairingKey) {
                 guard let host = activeHost else { return }
                 // A different host means a different catalog: the old one is
@@ -576,8 +625,18 @@ public struct ChatView: View {
 
     private func send(_ text: String) {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !sending else { return }
-        guard let host = activeHost, let myUid = manager.myUid else { return }
+        guard !prompt.isEmpty else { return }
+        if sending {
+            // A prompt typed while a turn runs queues for the next one;
+            // the composer never has to disable itself for a stream.
+            queueDraft()
+            return
+        }
+        guard let host = activeHost else { return }
+        guard let myUid = manager.myUid else {
+            sendError = "Chat is still connecting — try again in a moment."
+            return
+        }
         draft = ""
         sendError = nil
         sending = true
@@ -601,12 +660,13 @@ public struct ChatView: View {
             images: outgoingImages
         )
         attachments = []
-        Task {
+        sendTask = Task {
+            var didFinish = false
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
-                    case .capabilities:
-                        break
+                    case .capabilities(let steering):
+                        supportsSteering = steering
                     case .started(let id, _):
                         sessionId = id
                     case .message:
@@ -617,21 +677,29 @@ public struct ChatView: View {
                         break
                     case .permission(let request):
                         // The engine is blocked on this request until the
-                        // answer goes back, so it is held on screen.
+                        // answer goes back, so it is held on screen and the
+                        // owner is woken for it: a stalled approval is the
+                        // one event a turn-end notification can never cover.
                         pendingPermissions.append(request)
+                        permissionTick += 1
+                        TurnNotifier.permissionRequest(
+                            threadTitle: activeHost?.name ?? "Agent",
+                            request: request.headline
+                        )
                     case .plan:
                         break // the plan panel belongs to the workspace
                     case .done(let stop, let id, _):
                         sessionId = id
-                        sending = false
                         thoughtLine = nil
                         pendingPermissions.removeAll()
+                        turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         // The host ends a turn with its own name for it, and
                         // the bridge with ACP's, so both are a normal end.
                         if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         }
+                        didFinish = true
                     case .usage:
                         break // live usage strip is Mac-only
                     case .contextControls:
@@ -652,7 +720,91 @@ public struct ChatView: View {
                 // anything attached since.
                 attachments = outgoingImages + attachments
             }
+            // A prompt held back while the turn ran goes out only after this
+            // stream has fully ended: chaining inside the loop would let the
+            // trailing bookkeeping below clobber the new turn's sending
+            // state.
+            if didFinish, let queued = queuedPrompt {
+                queuedPrompt = nil
+                send(queued)
+            }
         }
+    }
+
+    /// Cancels the running turn: the sidecar is told first so the engine
+    /// stops work, then the local stream is dropped.
+    private func stopTurn() {
+        guard sending else { return }
+        if let host = activeHost, let sessionId {
+            let target = sessionId
+            Task { await ChatSessionClient.cancel(host: host, sessionId: target) }
+        }
+        sendTask?.cancel()
+        sendTask = nil
+        thoughtLine = nil
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
+        isSendingStopFeedback()
+        sending = false
+    }
+
+    /// Holds the draft for the next turn.
+    private func queueDraft() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        draft = ""
+        queuedPrompt = prompt
+    }
+
+    /// Injects the draft into the running turn when the sidecar allows it.
+    private func steerDraft() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, sending, supportsSteering, let host = activeHost, let sessionId else { return }
+        draft = ""
+        let target = sessionId
+        Task {
+            do {
+                try await ChatSessionClient.steer(host: host, sessionId: target, text: prompt)
+            } catch {
+                sendError = error.localizedDescription
+            }
+        }
+    }
+
+    private func isSendingStopFeedback() {
+        // Stop is a deliberate destructive-feeling tap; a medium impact
+        // marks it without a notification-grade buzz.
+        turnTick += 1
+    }
+
+    /// The pill naming what is waiting for the running turn to end.
+    @ViewBuilder
+    private func queuedPromptPill(_ queued: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(queued)
+                .font(.system(size: 12))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button {
+                queuedPrompt = nil
+                draft = queued
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Discard Queued Message")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 
     private func startVoice() {
@@ -672,12 +824,19 @@ struct AgentThreadView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: AgentMessagesVC, context: Context) {}
 }
 
-/// Native input bar: the send path the kit never sees.
+/// Native input bar: the send path the kit never sees.  While a turn runs
+/// the field stays open — text goes out as a steer when the turn accepts
+/// one, or queues for the next turn otherwise, and the send button becomes
+/// the stop control.
 struct ChatInputBar: View {
     @Binding var draft: String
     var sending: Bool
     var isDictating: Bool = false
     var onSend: () -> Void
+    var onStop: () -> Void = {}
+    var onQueue: () -> Void = {}
+    var onSteer: () -> Void = {}
+    var canSteer: Bool = false
     var onVoice: () -> Void
     /// Images attached to the next turn.
     @Binding var attachments: [ChatAttachment]
@@ -697,7 +856,6 @@ struct ChatInputBar: View {
                     Image(systemName: "paperclip")
                         .frame(minWidth: 32, minHeight: 44)
                 }
-                .disabled(sending)
                 .accessibilityLabel("Attach Image")
                 Button {
                     showFilePicker = true
@@ -705,7 +863,6 @@ struct ChatInputBar: View {
                     Image(systemName: "folder")
                         .frame(minWidth: 32, minHeight: 44)
                 }
-                .disabled(sending)
                 .accessibilityLabel("Attach File")
                 Button {
                     Task { await pasteClipboard() }
@@ -713,29 +870,38 @@ struct ChatInputBar: View {
                     Image(systemName: "doc.on.clipboard")
                         .frame(minWidth: 32, minHeight: 44)
                 }
-                .disabled(sending)
                 .accessibilityLabel("Paste Image Or File")
                 TextField("Message the agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
-                    .disabled(sending)
-                    .onSubmit(onSend)
                 Button(action: onVoice) {
                     Image(systemName: isDictating ? "mic.fill" : "mic")
                         .frame(minWidth: 44, minHeight: 44)
                 }
-                .disabled(sending)
                 .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
-                Button(action: onSend) {
-                    if sending {
-                        ProgressView()
-                    } else {
+                if sending {
+                    Button(action: onStop) {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.red)
+                    }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel("Stop")
+                    Button(action: canSteer ? onSteer : onQueue) {
+                        Image(systemName: canSteer ? "paperplane.circle.fill" : "tray.and.arrow.down.circle.fill")
+                            .font(.system(size: 22))
+                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel(canSteer ? "Steer" : "Queue")
+                } else {
+                    Button(action: onSend) {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 22))
                     }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Send Message")
                 }
-                .frame(minWidth: 44, minHeight: 44)
-                .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityLabel("Send Message")
             }
         }
         .padding(.horizontal, 12)

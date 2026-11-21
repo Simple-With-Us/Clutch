@@ -20,6 +20,7 @@ struct DshHostView: View {
     @State private var resultText: String = ""
     @State private var errorMessage: String?
     @State private var isCalling = false
+    @State private var isConnecting = false
 
     var body: some View {
         NavigationStack {
@@ -33,7 +34,7 @@ struct DshHostView: View {
                     } label: {
                         Text(client.state == .connected ? "Reconnect" : "Connect")
                     }
-                    .disabled(isBusy)
+                    .disabled(isConnecting || isCalling)
                 }
 
                 Section("Call") {
@@ -52,7 +53,7 @@ struct DshHostView: View {
                             Text("Send")
                         }
                     }
-                    .disabled(isBusy || endpoint.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(isCalling || isConnecting || endpoint.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
 
                 if let errorMessage {
@@ -96,6 +97,8 @@ struct DshHostView: View {
     private func connect() async {
         errorMessage = nil
         resultText = ""
+        isConnecting = true
+        defer { isConnecting = false }
         await client.connect(to: host)
         if case .failed(let reason) = client.state {
             errorMessage = reason
@@ -117,13 +120,6 @@ struct DshHostView: View {
     }
 
     // MARK: - Presentation
-
-    private var isBusy: Bool {
-        switch client.state {
-        case .connecting, .connected: return false
-        case .disconnected, .failed: return false
-        }
-    }
 
     private var stateLabel: String {
         switch client.state {
