@@ -49,7 +49,7 @@ Ten more P1/P2 findings — silent no-ops on send, a 10-second health check that
 
 > Clutch is not a window onto a log.  It is the answer to one question — **what needs me right now** — with every answer one tap from the Lock Screen.
 
-That sentence decides the roadmap.  It justifies deleting two tabs, promoting approvals to a first-class surface, building a Lock Screen presence, and refusing a large class of requests (a diff viewer, a terminal, a browser pane) that the harness already serves better.  Every competitor is a place to *do* work.  Clutch can be the place that tells you *where you are needed*, because it is native, on your person, and connected to a machine you own.
+That sentence drives the roadmap.  It justifies deleting two tabs, promoting approvals to a first-class surface, building a Lock Screen presence, and refusing a large class of requests (a diff viewer, a terminal, a browser pane) that the engines already serve better.  Every competitor is a place to *do* work.  Clutch can be the place that tells you *where you are needed*, because it is native, on your person, and connected to a machine you own.
 
 ## The design system: `ClutchTheme`
 
@@ -181,7 +181,7 @@ Before Phase 2, add a `ClutchMacUITests` target using the stub sidecar the iOS s
 
 ## Non-goals
 
-A diff viewer, an integrated terminal, and an in-app browser.  Every competitor built them and every competitor reports the friction; the harness already serves them better.  The phone should route to depth, not reimplement it.  Likewise: no skeletons, gradients, or custom illustration until the type scale, contrast, and icon are right — those would only add a fourth visual language to the three already fighting.
+A diff viewer, an integrated terminal, and an in-app browser.  Every competitor built them and every competitor reports the friction; the engines already serve them better.  The phone should route to depth, not reimplement it.  Likewise: no skeletons, gradients, or custom illustration until the type scale, contrast, and icon are right — those would only add a fourth visual language to the three already fighting.
 
 ## Appendix: specialist reports
 
