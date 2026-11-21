@@ -30,6 +30,8 @@
 		2C2578083CD85C72C8338998 /* EngineCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25E5918CD8EB83C254B0421E /* EngineCatalogTests.swift */; };
 		2E4908CF873F4B9D273B329A /* ChatTurnBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416C7B86B6F6E79F9F79FF09 /* ChatTurnBuffer.swift */; };
 		2EB3D4AF4BA6870A7E75A604 /* ChatTurnBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 416C7B86B6F6E79F9F79FF09 /* ChatTurnBuffer.swift */; };
+		7A3C1E92B4D5F608A1C2D3E4 /* ClutchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5E3014D6F7B820C3E4F5A6 /* ClutchTheme.swift */; };
+		8B4D2F03C5E6A719B2D3E4F5 /* ClutchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5E3014D6F7B820C3E4F5A6 /* ClutchTheme.swift */; };
 		30C7AF3E27CFE5AF8E203755 /* InfisicalSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132E63075DFF396CB0A55FCA /* InfisicalSettingsSection.swift */; };
 		33C88EF82FEDB14FE9322F70 /* MacWorkspacePanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C910843DC03E7CBEA53E81 /* MacWorkspacePanels.swift */; };
 		3ADE9E54A378CE4B84200073 /* MacThreadWindowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E39F98A0050BB314B11D0AC /* MacThreadWindowTests.swift */; };
@@ -254,6 +256,7 @@
 		F7C910843DC03E7CBEA53E81 /* MacWorkspacePanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspacePanels.swift; sourceTree = "<group>"; };
 		F81457A11AE35E90469E20EF /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
+		9C5E3014D6F7B820C3E4F5A6 /* ClutchTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchTheme.swift; sourceTree = "<group>"; };
 		FB8B087893FF01FA2CD9BF4C /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
 		FCFC52CD4695F04BEDCB607E /* ChatViewMac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewMac.swift; sourceTree = "<group>"; };
 		FED98C7FFAEA49E7BD86886F /* TurnNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnNotifier.swift; sourceTree = "<group>"; };
@@ -437,6 +440,7 @@
 		F344D7851E3E06908319557A /* App */ = {
 			isa = PBXGroup;
 			children = (
+				AD6F4125E708C931D4F5A6B7 /* Design */,
 				79CEDCB4D7EB91EC998E0E5D /* Models */,
 				7836463DA2F0A84913D802BF /* Services */,
 				CB81A7C826A3522BA7947A21 /* Views */,
@@ -448,8 +452,15 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		AD6F4125E708C931D4F5A6B7 /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				9C5E3014D6F7B820C3E4F5A6 /* ClutchTheme.swift */,
+			);
+			path = Design;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
-
 /* Begin PBXNativeTarget section */
 		699429E887F279DE55CCB707 /* Clutch */ = {
 			isa = PBXNativeTarget;
@@ -612,6 +623,7 @@
 				7B7CE37DB68A99719369B7F0 /* ChatMessage.swift in Sources */,
 				0052618044571AFA352AAC9A /* ChatSessionClient.swift in Sources */,
 				2E4908CF873F4B9D273B329A /* ChatTurnBuffer.swift in Sources */,
+				7A3C1E92B4D5F608A1C2D3E4 /* ClutchTheme.swift in Sources */,
 				C98833B27EF97136742BC786 /* ChatView.swift in Sources */,
 				218A167CAF93CB70A5F65247 /* ClutchApp.swift in Sources */,
 				85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */,
@@ -676,6 +688,7 @@
 				FAEC962DC8DD35B89069B8AB /* ChatMessage.swift in Sources */,
 				BCF5B6E6848DA3059F9A713C /* ChatSessionClient.swift in Sources */,
 				2EB3D4AF4BA6870A7E75A604 /* ChatTurnBuffer.swift in Sources */,
+				8B4D2F03C5E6A719B2D3E4F5 /* ClutchTheme.swift in Sources */,
 				74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */,
 				B2B00BC850F55C4E250BA2CE /* ClutchApp.swift in Sources */,
 				8F2E011FE99CABF8C774B69D /* ClutchHost.swift in Sources */,
