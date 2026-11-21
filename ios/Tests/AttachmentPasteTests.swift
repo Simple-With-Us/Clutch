@@ -174,12 +174,10 @@ final class AttachmentPasteTests: XCTestCase {
     // MARK: - Providers (paste command + drop)
 
     func testImageProvidersBecomeAttachments() async {
-        guard let provider = NSItemProvider(
+        let provider = NSItemProvider(
             item: pngBytes(size: 64) as NSData,
             typeIdentifier: UTType.png.identifier
-        ) else {
-            return XCTFail("PNG data should make a provider")
-        }
+        )
         let outcome = await AttachmentPaste.outcomeForProviders([provider])
         XCTAssertEqual(outcome.images.count, 1)
         XCTAssertTrue(outcome.errors.isEmpty)
