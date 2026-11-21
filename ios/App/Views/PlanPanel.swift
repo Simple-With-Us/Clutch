@@ -16,22 +16,22 @@ struct PlanPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ClutchSpacing.base) {
             Button {
-                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                expanded.toggle()
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: ClutchSpacing.snug) {
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(ClutchFont.sectionLabel)
                         .foregroundStyle(.secondary)
                         .frame(width: 10)
                     Image(systemName: "list.bullet.rectangle")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(ClutchFont.microStrong)
                         .foregroundStyle(.secondary)
                     Text("Plan")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(ClutchFont.captionStrong)
                     Text("\(done)/\(entries.count)")
-                        .font(.system(size: 11))
+                        .font(ClutchFont.micro)
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                 }
@@ -53,11 +53,11 @@ struct PlanPanel: View {
             } else if let summary {
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: mark(for: summary))
-                        .font(.system(size: 10, weight: .bold))
+                        .font(ClutchFont.sectionLabel)
                         .foregroundStyle(color(for: summary))
                         .frame(width: 12)
                     Text(done == entries.count ? "All steps complete." : summary.content)
-                        .font(.system(size: 12))
+                        .font(ClutchFont.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -65,22 +65,23 @@ struct PlanPanel: View {
                 }
             }
         }
-        .padding(10)
-        .background(Color.clutchSecondaryBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(ClutchSpacing.cozy)
+        .background(ClutchColor.surface)
+        .clipShape(RoundedRectangle(cornerRadius: ClutchRadius.card))
+        .clutchAnimation(ClutchMotion.quick, value: expanded)
     }
 
     private var steps: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: ClutchSpacing.base) {
             ForEach(entries) { entry in
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: mark(for: entry))
-                        .font(.system(size: 10, weight: .bold))
+                        .font(ClutchFont.sectionLabel)
                         .foregroundStyle(color(for: entry))
                         .frame(width: 12)
                     Text(entry.content)
-                        .font(.system(size: 12))
-                        .foregroundStyle(entry.isDone ? Color.secondary : Color.primary)
+                        .font(ClutchFont.caption)
+                        .foregroundStyle(entry.isDone ? ClutchColor.textSecondary : ClutchColor.textPrimary)
                         .strikethrough(entry.isDone, color: .secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
@@ -91,14 +92,14 @@ struct PlanPanel: View {
 
     /// The mark that says where the entry stands.
     private func mark(for entry: AcpPlanEntry) -> String {
-        if entry.isDone { return "checkmark.circle.fill" }
-        if entry.isActive { return "arrow.triangle.2.circlepath" }
+        if entry.isDone { return ClutchStatus.success.symbol }
+        if entry.isActive { return ClutchStatus.running.symbol }
         return "circle"
     }
 
     private func color(for entry: AcpPlanEntry) -> Color {
-        if entry.isDone { return .green }
-        if entry.isActive { return .accentColor }
+        if entry.isDone { return ClutchColor.success }
+        if entry.isActive { return ClutchColor.accent }
         return .secondary
     }
 }
