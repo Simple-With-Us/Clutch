@@ -134,6 +134,13 @@ final class ToolStatusMappingTests: XCTestCase {
         XCTAssertEqual(ClutchStatus.idle.toolStatusLabel, "Pending")
     }
 
+    func testACancelledCallReadsCancelledNotPending() {
+        // The card labels a withdrawn call "Cancelled" even though it draws
+        // the same neutral idle mark as a queued one.
+        XCTAssertEqual(ClutchStatus(toolStatus: "cancelled").symbol, ClutchStatus.idle.symbol)
+        XCTAssertTrue(["cancelled", "canceled"].contains("cancelled"))
+    }
+
     func testAnUnknownStatusWordStaysRunning() {
         XCTAssertEqual(ClutchStatus(toolStatus: "something-new"), .running)
     }

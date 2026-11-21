@@ -108,7 +108,10 @@ public struct ThreadToolCard: View {
     }
 
     private var statusLabel: String {
-        ClutchStatus(toolStatus: status).toolStatusLabel
+        // A withdrawn call is not queued: pending and cancelled read their
+        // own words even though both draw the same neutral idle mark.
+        if status == "cancelled" || status == "canceled" { return "Cancelled" }
+        return ClutchStatus(toolStatus: status).toolStatusLabel
     }
 }
 
