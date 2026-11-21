@@ -231,40 +231,33 @@ public enum AttachmentPaste {
     }
 
     /// Build an outcome from paste-command or drop providers.  A provider
-    /// that names a file URL is read as that file (the real name survives),
-    /// then whatever its item turns out to be — a file-backed provider
-    /// vends the file itself rather than a file-URL identifier — then its
-    /// best image representation, then its raw data as a last resort.
+    /// that names a file URL is read as that file (the real name survives);
+    /// then a file-backed provider's file representation under its
+    /// suggested name; then the best image representation; then raw data
+    /// as a last resort.
     public static func outcomeForProviders(_ providers: [NSItemProvider]) async -> PasteOutcome {
         var outcome = PasteOutcome()
         for provider in providers.prefix(maxItemsPerPaste) {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
                let url = await loadFileURL(from: provider) {
                 outcome.merge(outcomeForFileURLs([url]))
-            } else if let url = await loadItemURL(from: provider) {
-                outcome.merge(outcomeForFileURLs([url]))
+            } else if let file = await loadFile(from: provider) {
+                switch file {
+                case .file(let data, let name):
+                    outcome.merge(fateOutcome(data: data, name: name))
+                case .tooLarge(let name):
+                    outcome.errors.append("\(name) is too big to attach.")
+                }
             } else if let identifier = imageIdentifier(for: provider),
                       let data = await loadData(from: provider, type: identifier) {
-                switch fate(data: data, name: suggestedName(for: identifier)) {
-                case .image(let attachment):
-                    outcome.images.append(attachment)
-                case .text(let insert):
-                    outcome.textInserts.append(insert)
-                case .rejected(let message):
-                    outcome.errors.append(message)
-                }
+                let name = provider.suggestedName ?? suggestedName(for: identifier)
+                outcome.merge(fateOutcome(data: data, name: name))
             } else if let identifier = provider.registeredTypeIdentifiers.first,
                       let data = await loadData(from: provider, type: identifier) {
                 // Last resort: unidentified data is still dispatched by its
                 // bytes, so a wrong claim is refused, not mis-sent.
-                switch fate(data: data, name: suggestedName(for: identifier)) {
-                case .image(let attachment):
-                    outcome.images.append(attachment)
-                case .text(let insert):
-                    outcome.textInserts.append(insert)
-                case .rejected(let message):
-                    outcome.errors.append(message)
-                }
+                let name = provider.suggestedName ?? suggestedName(for: identifier)
+                outcome.merge(fateOutcome(data: data, name: name))
             } else {
                 outcome.errors.append("That item is not an image or file Clutch can attach.")
             }
@@ -273,6 +266,66 @@ public enum AttachmentPaste {
             outcome.errors.append("Only the first \(maxItemsPerPaste) items were used.")
         }
         return outcome
+    }
+
+    /// What one file-backed provider holds: its bytes under its suggested
+    /// name, or the fact that it is too big to read at all.
+    enum LoadedFile {
+        case file(data: Data, name: String)
+        case tooLarge(name: String)
+    }
+
+    /// Read a file-backed provider through its file representation.
+    ///
+    /// A provider made from a file advertises the file's own type, and only
+    /// the file representation serves it — item and data loads come back
+    /// empty.  The bytes are read inside the handler (the copy is only
+    /// good there) after a size check, so a dropped movie never lands in
+    /// memory whole.
+    static func loadFile(from provider: NSItemProvider) async -> LoadedFile? {
+        let name = provider.suggestedName ?? suggestedName(for: provider.registeredTypeIdentifiers.first ?? "")
+        var identifiers = provider.registeredTypeIdentifiers
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            identifiers.insert(UTType.fileURL.identifier, at: 0)
+        }
+        for identifier in identifiers {
+            if let file = await loadFileResult(from: provider, type: identifier, name: name) {
+                return file
+            }
+        }
+        return nil
+    }
+
+    static func loadFileResult(from provider: NSItemProvider, type: String, name: String) async -> LoadedFile? {
+        await withCheckedContinuation { continuation in
+            _ = provider.loadFileRepresentation(forTypeIdentifier: type) { url, _ in
+                guard let url else { return continuation.resume(returning: nil) }
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if accessing { url.stopAccessingSecurityScopedResource() }
+                }
+                if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                   size > maxFileBytes {
+                    return continuation.resume(returning: .tooLarge(name: name))
+                }
+                guard let data = try? Data(contentsOf: url) else {
+                    return continuation.resume(returning: nil)
+                }
+                continuation.resume(returning: .file(data: data, name: name))
+            }
+        }
+    }
+
+    /// One file's dispatch wrapped as an outcome.
+    static func fateOutcome(data: Data, name: String) -> PasteOutcome {
+        switch fate(data: data, name: name) {
+        case .image(let attachment):
+            return PasteOutcome(images: [attachment])
+        case .text(let insert):
+            return PasteOutcome(textInserts: [insert])
+        case .rejected(let message):
+            return PasteOutcome(errors: [message])
+        }
     }
 
     /// The provider's best image representation, when it has one.
@@ -317,30 +370,6 @@ public enum AttachmentPaste {
         await withCheckedContinuation { continuation in
             _ = provider.loadDataRepresentation(forTypeIdentifier: type) { data, _ in
                 continuation.resume(returning: data)
-            }
-        }
-    }
-
-    /// The file a file-backed provider vends, when its item is one.
-    ///
-    /// A provider made from a file advertises the file's own type rather
-    /// than a file-URL identifier, and loading that type hands back the
-    /// file's URL — which is what keeps the real name on a drop.
-    static func loadItemURL(from provider: NSItemProvider) async -> URL? {
-        guard let identifier = provider.registeredTypeIdentifiers.first else { return nil }
-        return await withCheckedContinuation { continuation in
-            _ = provider.loadItem(forTypeIdentifier: identifier, options: nil) { item, _ in
-                // Only file URLs count: a web link must fall through to the
-                // image representations instead of shadowing them.
-                if let url = item as? URL, url.isFileURL {
-                    continuation.resume(returning: url)
-                } else if let data = item as? Data,
-                          let url = URL(dataRepresentation: data, relativeTo: nil),
-                          url.isFileURL {
-                    continuation.resume(returning: url)
-                } else {
-                    continuation.resume(returning: nil)
-                }
             }
         }
     }
