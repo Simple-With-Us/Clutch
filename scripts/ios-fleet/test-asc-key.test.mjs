@@ -497,6 +497,64 @@ test("actual local ship plan permits only wholly absent credentials and never in
   }
 });
 
+test("actual credential chmod refusal cleans its directory before a fresh successful retry", async () => {
+  const source = readFileSync(join(here, "ship-testflight.sh"), "utf8");
+  const start = "# --- ASC credentials begin";
+  const end = "# --- ASC credentials end";
+  for (const needle of [start, end]) assert.equal(source.split(needle).length, 2);
+  const credentials = source.slice(source.indexOf(start), source.indexOf(end));
+  const temp = mkdtempSync(join(root, "chmod-retry-"));
+  const env = {
+    PATH: safePath, HOME: join(temp, "home"), TMPDIR: temp, FLEET_DIR: here, REAL_NODE: process.execPath,
+    ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem,
+    FAILED_DIRECTORY_FILE: join(temp, "failed-directory"), SUCCESS_DIRECTORY_FILE: join(temp, "success-directory"),
+    KEY_WRITE_CALLS: join(temp, "key-writes")
+  };
+  const script = 'set -euo pipefail\nlog() { printf "%s\\n" "$*"; }\n' + credentials + `
+chmod() {
+  [[ "$1" == 700 && "$#" == 2 ]] || return 98
+  if [[ ! -e "$FAILED_DIRECTORY_FILE" ]]; then
+    printf '%s' "$2" > "$FAILED_DIRECTORY_FILE"
+    return 1
+  fi
+  command chmod "$@"
+}
+node() {
+  if [[ "$2" == write ]]; then printf '%s\\n' write >> "$KEY_WRITE_CALLS"; fi
+  command "$REAL_NODE" "$@"
+}
+first_status=0
+load_secrets || first_status=$?
+[[ "$first_status" -eq 1 && "$AUTH_MODE" == none && -z "$ASC_TMP_DIR" && ! -e "$KEY_WRITE_CALLS" ]]
+failed="$(<"$FAILED_DIRECTORY_FILE")"
+[[ -n "$failed" && ! -e "$failed" ]]
+load_secrets
+[[ "$AUTH_MODE" == api_key && "$ASC_TMP_DIR" != "$failed" && -d "$ASC_TMP_DIR" ]]
+[[ -f "$ASC_KEY_PATH" ]]
+[[ "$(stat -c %a "$ASC_KEY_PATH" 2>/dev/null || stat -f %Lp "$ASC_KEY_PATH")" == 600 ]]
+[[ "$(stat -c %a "$ASC_TMP_DIR" 2>/dev/null || stat -f %Lp "$ASC_TMP_DIR")" == 700 ]]
+command "$REAL_NODE" -e 'const fs=require("fs"); process.exit(fs.readFileSync(process.argv[1],"utf8").trim()===process.env.ASC_KEY_P8.trim()?0:1)' "$ASC_KEY_PATH"
+printf '%s' "$ASC_TMP_DIR" > "$SUCCESS_DIRECTORY_FILE"
+`;
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn("/bin/bash", ["-c", script], { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const failed = readFileSync(env.FAILED_DIRECTORY_FILE, "utf8");
+  const succeeded = readFileSync(env.SUCCESS_DIRECTORY_FILE, "utf8");
+  assert.notEqual(failed, succeeded);
+  assert.equal(existsSync(failed), false);
+  assert.equal(existsSync(succeeded), false);
+  assert.deepEqual(readFileSync(env.KEY_WRITE_CALLS, "utf8").trim().split("\n"), ["write"]);
+  assert.equal(readdirSync(temp).some(name => name.startsWith("asc-key.")), false);
+  assert.ok(!result.stdout.includes(keyPem.trim()) && !result.stderr.includes(keyPem.trim()));
+});
+
 test("actual post-archive credential refusal reaches package-ready exit three before any upload", async () => {
   const source = readFileSync(join(here, "ship-testflight.sh"), "utf8");
   const credentialStart = "# --- ASC credentials begin";

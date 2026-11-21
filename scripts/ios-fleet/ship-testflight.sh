@@ -333,6 +333,7 @@ load_secrets() {
     }
     chmod 700 "$ASC_TMP_DIR" || {
       log "could not protect the temp dir for the ASC key"
+      asc_cleanup
       return 1
     }
   fi
