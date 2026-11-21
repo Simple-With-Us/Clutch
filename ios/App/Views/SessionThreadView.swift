@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(PhotosUI)
 import PhotosUI
 #endif
@@ -385,6 +386,10 @@ public struct SessionThreadView: View {
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
     @State private var pickedPhoto: PhotosPickerItem?
+    /// The file picker for images and text files outside the photo library.
+    @State private var showFilePicker = false
+    /// Whether a drag is hovering the composer.
+    @State private var isDropTargeted = false
     @State private var showMuseSignIn = false
 
     public init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
@@ -666,6 +671,24 @@ public struct SessionThreadView: View {
             }
             .disabled(model.isSending)
             .accessibilityLabel("Attach Image")
+            Button {
+                showFilePicker = true
+            } label: {
+                Image(systemName: "folder")
+                    .font(.title3)
+                    .foregroundStyle(Color.secondary)
+            }
+            .disabled(model.isSending)
+            .accessibilityLabel("Attach File")
+            Button {
+                Task { await pasteClipboard() }
+            } label: {
+                Image(systemName: "doc.on.clipboard")
+                    .font(.title3)
+                    .foregroundStyle(Color.secondary)
+            }
+            .disabled(model.isSending)
+            .accessibilityLabel("Paste Image Or File")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -697,10 +720,78 @@ public struct SessionThreadView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        // Paste and drop take the same providers: files keep their names,
+        // image data becomes attachments, text files inline into the draft.
+        // No keyboard shortcut on the paste button: it would steal text
+        // pastes from the field, while the paste command only fires for
+        // the image and file types the field ignores.  The paste command
+        // is macOS-only; on iOS the paste button reads the clipboard.
+        #if os(macOS)
+        .onPasteCommand(of: [.image, .fileURL], perform: handlePasteProviders)
+        #endif
+        .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
+            handlePasteProviders(providers)
+            return !providers.isEmpty
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: true
+        ) { result in
+            // Any file is pickable; what Clutch cannot use is refused out
+            // loud by the dispatcher rather than greyed out here.
+            if case .success(let urls) = result {
+                let outcome = AttachmentPaste.outcomeForFileURLs(urls)
+                Task { @MainActor in applyOutcome(outcome) }
+            }
+        }
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
             pickedPhoto = nil
             Task { await loadAttachment(item) }
+        }
+    }
+
+    /// Take providers from a paste command or a drop.
+    private func handlePasteProviders(_ providers: [NSItemProvider]) {
+        Task {
+            let outcome = await AttachmentPaste.outcomeForProviders(providers)
+            await MainActor.run { applyOutcome(outcome) }
+        }
+    }
+
+    /// Paste whatever the clipboard holds: screenshots and copied photos
+    /// attach as images, copied files attach or inline by type.
+    private func pasteClipboard() async {
+        let outcome = await AttachmentPaste.pasteFromClipboard()
+        await MainActor.run { applyOutcome(outcome) }
+    }
+
+    /// Fold a paste, drop, or pick into the composer: images join the next
+    /// turn, text files splice into the draft, failures say so out loud.
+    @MainActor
+    private func applyOutcome(_ outcome: PasteOutcome) {
+        if !outcome.images.isEmpty {
+            model.attachments.append(contentsOf: outcome.images)
+        }
+        for insert in outcome.textInserts {
+            if model.draft.isEmpty {
+                model.draft = insert
+            } else {
+                model.draft += "\n\n" + insert
+            }
+        }
+        if !outcome.errors.isEmpty {
+            model.sendError = outcome.errors.joined(separator: " ")
+        } else if !outcome.images.isEmpty || !outcome.textInserts.isEmpty {
+            model.sendError = nil
         }
     }
 
@@ -742,14 +833,19 @@ public struct SessionThreadView: View {
             model.sendError = "Could not read that photo."
             return
         }
-        guard let attachment = ChatAttachment.from(data: data, name: "attachment") else {
-            model.sendError = Copy.gap(
-                "That image type is not supported.",
-                "Use PNG, JPEG, GIF, or WebP."
-            )
-            return
+        let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "png"
+        switch AttachmentPaste.fate(data: data, name: "attachment.\(ext)") {
+        case .image(let attachment):
+            model.attachments.append(attachment)
+        case .text(let insert):
+            if model.draft.isEmpty {
+                model.draft = insert
+            } else {
+                model.draft += "\n\n" + insert
+            }
+        case .rejected(let message):
+            model.sendError = message
         }
-        model.attachments.append(attachment)
     }
 }
 

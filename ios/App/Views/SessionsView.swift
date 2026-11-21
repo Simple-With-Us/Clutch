@@ -1,4 +1,8 @@
 import SwiftUI
+import UniformTypeIdentifiers
+#if canImport(PhotosUI)
+import PhotosUI
+#endif
 
 /// Native session list for the sidecar's MiniMax Code threads, as a real
 /// sidebar rather than a sheet: on iPad the rail stays beside the transcript,
@@ -431,6 +435,9 @@ struct NewThreadSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model: NewThreadModel
     @State private var showMuseSignIn = false
+    @State private var pickedPhoto: PhotosPickerItem?
+    @State private var showFilePicker = false
+    @State private var isDropTargeted = false
 
     init(host: ClutchHost, engine: String = "mcode", onCreated: @escaping (AcpSessionInfo) -> Void) {
         self.host = host
@@ -469,7 +476,35 @@ struct NewThreadSheet: View {
                     PlanPanel(entries: model.plan)
                 }
 
+                if !model.attachments.isEmpty {
+                    attachmentStrip
+                }
                 HStack(alignment: .bottom, spacing: 8) {
+                    PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                        Image(systemName: "paperclip")
+                            .font(.title3)
+                            .foregroundStyle(Color.secondary)
+                    }
+                    .disabled(model.isSending)
+                    .accessibilityLabel("Attach Image")
+                    Button {
+                        showFilePicker = true
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.title3)
+                            .foregroundStyle(Color.secondary)
+                    }
+                    .disabled(model.isSending)
+                    .accessibilityLabel("Attach File")
+                    Button {
+                        Task { await pasteClipboard() }
+                    } label: {
+                        Image(systemName: "doc.on.clipboard")
+                            .font(.title3)
+                            .foregroundStyle(Color.secondary)
+                    }
+                    .disabled(model.isSending)
+                    .accessibilityLabel("Paste Image Or File")
                     TextField("Message", text: $model.draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...6)
@@ -487,6 +522,36 @@ struct NewThreadSheet: View {
                     }
                     .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
                     .accessibilityLabel("Send Message")
+                }
+                // The paste command is macOS-only; on iOS the paste button
+                // reads the clipboard instead.
+                #if os(macOS)
+                .onPasteCommand(of: [.image, .fileURL], perform: handlePasteProviders)
+                #endif
+                .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
+                    handlePasteProviders(providers)
+                    return !providers.isEmpty
+                }
+                .overlay {
+                    if isDropTargeted {
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.accentColor, lineWidth: 2)
+                    }
+                }
+                .fileImporter(
+                    isPresented: $showFilePicker,
+                    allowedContentTypes: [.data],
+                    allowsMultipleSelection: true
+                ) { result in
+                    if case .success(let urls) = result {
+                        let outcome = AttachmentPaste.outcomeForFileURLs(urls)
+                        Task { @MainActor in applyOutcome(outcome) }
+                    }
+                }
+                .onChange(of: pickedPhoto) { _, item in
+                    guard let item else { return }
+                    pickedPhoto = nil
+                    Task { await loadAttachment(item) }
                 }
 
                 if let reply = model.reply {
@@ -515,6 +580,90 @@ struct NewThreadSheet: View {
             }
         }
     }
+
+    /// The images waiting on the first turn, each removable.
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.attachments) { attachment in
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 10))
+                        Text(attachment.displayName)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                        Button {
+                            model.attachments.removeAll { $0.id == attachment.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(attachment.displayName)")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.clutchSecondaryBackground, in: Capsule())
+                }
+            }
+        }
+    }
+
+    /// Take providers from a paste command or a drop.
+    private func handlePasteProviders(_ providers: [NSItemProvider]) {
+        Task {
+            let outcome = await AttachmentPaste.outcomeForProviders(providers)
+            await MainActor.run { applyOutcome(outcome) }
+        }
+    }
+
+    /// Paste whatever the clipboard holds: screenshots and copied photos
+    /// attach as images, copied files attach or inline by type.
+    private func pasteClipboard() async {
+        let outcome = await AttachmentPaste.pasteFromClipboard()
+        await MainActor.run { applyOutcome(outcome) }
+    }
+
+    /// Fold a paste, drop, or pick into the composer: images join the first
+    /// turn, text files splice into the draft, failures say so out loud.
+    @MainActor
+    private func applyOutcome(_ outcome: PasteOutcome) {
+        if !outcome.images.isEmpty {
+            model.attachments.append(contentsOf: outcome.images)
+        }
+        for insert in outcome.textInserts {
+            if model.draft.isEmpty {
+                model.draft = insert
+            } else {
+                model.draft += "\n\n" + insert
+            }
+        }
+        if !outcome.errors.isEmpty {
+            model.errorText = outcome.errors.joined(separator: " ")
+        } else if !outcome.images.isEmpty || !outcome.textInserts.isEmpty {
+            model.errorText = nil
+        }
+    }
+
+    /// Read a picked photo into an attachment.
+    private func loadAttachment(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            await MainActor.run { model.errorText = "Could not read that photo." }
+            return
+        }
+        let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "png"
+        let outcome: PasteOutcome
+        switch AttachmentPaste.fate(data: data, name: "attachment.\(ext)") {
+        case .image(let attachment):
+            outcome = PasteOutcome(images: [attachment])
+        case .text(let insert):
+            outcome = PasteOutcome(textInserts: [insert])
+        case .rejected(let message):
+            outcome = PasteOutcome(errors: [message])
+        }
+        await MainActor.run { applyOutcome(outcome) }
+    }
 }
 
 /// Sends the opening turn with no session id, then reports the session the
@@ -533,6 +682,9 @@ final class NewThreadModel {
     var reply: String?
     var errorText: String?
     var isSending = false
+    /// Images attached to the first turn, the way the thread surface
+    /// attaches files to a message.
+    var attachments: [ChatAttachment] = []
     /// The permission requests the engine is waiting on, oldest first.
     ///
     /// The engine asks one question at a time, but a second request can land
@@ -587,8 +739,10 @@ final class NewThreadModel {
             relayReceiverUid: "",
             engine: engine,
             museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil,
-            contextPolicy: engine == "muse" ? MuseContextPreferences.policy(for: host) : nil
+            contextPolicy: engine == "muse" ? MuseContextPreferences.policy(for: host) : nil,
+            images: attachments
         )
+        attachments = []
         Task {
             var text = ""
             do {
