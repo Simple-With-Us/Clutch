@@ -231,8 +231,8 @@ final class FleetRecallClientTests: XCTestCase {
     }
 
     func testMigrationRecognizesWhitespaceAndTrailingSlashVariants() {
-        for variant in ["https://agents.jays.services/mcp/", "  https://agents.jays.services/mcp  ", "https://agents.jays.services/mcp//"] {
-            let defaults = freshDefaults()
+        for (index, variant) in ["https://agents.jays.services/mcp/", "  https://agents.jays.services/mcp  ", "https://agents.jays.services/mcp//"].enumerated() {
+            let defaults = freshDefaults("\(#function)-\(index)")
             defaults.set(variant, forKey: "endpoint")
             FleetRecallClient.migrateRetiredDefaultEndpoint(defaults: defaults, endpointKey: "endpoint", migrationKey: "migrated")
             XCTAssertNil(defaults.string(forKey: "endpoint"), "variant \(variant) should migrate")
