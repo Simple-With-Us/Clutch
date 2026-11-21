@@ -60,7 +60,15 @@ public enum ClutchColor {
 
     public static let textPrimary = Color.primary
     public static let textSecondary = Color.secondary
-    public static let textTertiary = Color.tertiary
+    /// The tertiary text level, from the platform's own tertiary label
+    /// colour, because SwiftUI has no static `Color.tertiary`.
+    public static let textTertiary: Color = {
+        #if canImport(UIKit)
+        return Color(uiColor: .tertiaryLabel)
+        #else
+        return Color(nsColor: .tertiaryLabelColor)
+        #endif
+    }()
 
     public static let accent = Color.accentColor
     /// A light wash of the accent behind content that belongs to it.
