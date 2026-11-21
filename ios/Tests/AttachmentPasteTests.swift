@@ -187,9 +187,9 @@ final class AttachmentPasteTests: XCTestCase {
         let dir = try scratchDirectory()
         let textURL = dir.appendingPathComponent("hello.py")
         try "print(\"hi\")".write(to: textURL, atomically: true, encoding: .utf8)
-        guard let provider = NSItemProvider(contentsOf: textURL) else {
-            return XCTFail("A file URL should make a provider")
-        }
+        // A drop or paste vends the file as a file-URL identifier, the way
+        // Finder and Files copies arrive — and the real name survives.
+        let provider = NSItemProvider(item: textURL as NSURL, typeIdentifier: UTType.fileURL.identifier)
         let outcome = await AttachmentPaste.outcomeForProviders([provider])
         XCTAssertTrue(outcome.textInserts.first?.contains("```hello.py") ?? false)
         XCTAssertTrue(outcome.errors.isEmpty)
