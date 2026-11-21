@@ -329,15 +329,18 @@ load_secrets() {
     ASC_TMP_DIR="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/asc-key.XXXXXX")" || {
       ASC_TMP_DIR=""
       log "could not create a temp dir for the ASC key"
-      return 0
+      return 1
     }
-    chmod 700 "$ASC_TMP_DIR"
+    chmod 700 "$ASC_TMP_DIR" || {
+      log "could not protect the temp dir for the ASC key"
+      return 1
+    }
   fi
   key_path="${ASC_TMP_DIR}/AuthKey_${kid}.p8"
   if ! node "${FLEET_DIR}/asc-key.mjs" write "$key_path" <<< "$key_pem"; then
     rm -f "$key_path"
     log "the ASC key for ${kid} did not hold a PEM private key; the credential is not usable"
-    return 0
+    return 1
   fi
   export ASC_KEY_ID="$kid" ASC_ISSUER_ID="$iss" ASC_KEY_PATH="$key_path"
   export API_PRIVATE_KEYS_DIR="$ASC_TMP_DIR"
@@ -1218,7 +1221,15 @@ MARKETING_PREFIX="$(marketing_prefix)"
 
 # Load the ASC key now, in this shell: the App Store Connect queries below run
 # in a subshell and their asc-api.mjs call needs the exported ASC_* names.
-load_secrets
+# Only explicit local planning/export may start without any supplied binding.
+# Partial, malformed and path-only bindings remain refusals in every mode.
+LOCAL_WITHOUT_ASC=0
+if [[ -z "$UPLOAD_ONLY_IPA" && ( "$DRY_RUN" -eq 1 || "$EXPORT_ONLY" -eq 1 ) && -z "${ASC_KEY_ID:-}${ASC_ISSUER_ID:-}${ASC_KEY_P8:-}${ASC_KEY_PATH:-}${APPLE_API_KEY_ID:-}${APPLE_API_ISSUER_ID:-}${APPLE_API_KEY_P8_BASE64:-}" ]]; then
+  LOCAL_WITHOUT_ASC=1
+fi
+if ! load_secrets; then
+  [[ "$LOCAL_WITHOUT_ASC" -eq 1 ]] || exit 1
+fi
 
 # The App Store Connect platform key.  "macOS" in apps.json is MAC_OS there.
 ASC_PLATFORM="IOS"
@@ -1461,7 +1472,9 @@ if [[ "$SYNC_PROJECT_VERSION" -eq 1 ]]; then
   log "commit that change; it is the repo's record of this version"
 fi
 AUTH_MODE="none"
-load_secrets
+if ! load_secrets; then
+  [[ "$LOCAL_WITHOUT_ASC" -eq 1 ]] || exit 1
+fi
 
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_ROOT="${TMPDIR:-/tmp}/ios-ship-${APP_KEY}-${STAMP}"
@@ -1825,7 +1838,9 @@ PACKAGE="$(ls -1 "$EXPORT_DIR"/*.ipa "$EXPORT_DIR"/*.pkg 2>/dev/null | head -1 |
 
 # Re-load secrets before altool: long xcodebuild sessions can leave ASC_*
 # unset under `set -u` even when AUTH_MODE was api_key at plan time.
-load_secrets
+if ! load_secrets; then
+  AUTH_MODE="none"
+fi
 if [[ "$AUTH_MODE" != "api_key" ]]; then
   log "Package ready at: $PACKAGE"
   log "Upload blocked: no App Store Connect API key."

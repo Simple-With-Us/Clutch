@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,10 +94,21 @@ ${tail}
 const parse = (out: string): Record<string, string> =>
   Object.fromEntries(out.trim().split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
 
-function expectNoReaderOrStaging(dir: string, calls: string) {
+function expectNoReaderOrStaging(dir: string, calls: string, reported: Record<string, string> = {}) {
   expect(existsSync(calls)).toBe(false);
-  expect(readdirSync(dir).filter((name) => name.startsWith("asc-key."))).toEqual([]);
-  expect(existsSync(join(dir, OLD_DIR))).toBe(false);
+  for (const path of [reported.tmpdir, reported.keysdir]) {
+    if (path) expect(existsSync(path), "reported ASC staging directory survived exit").toBe(false);
+  }
+  const pending = [dir];
+  while (pending.length) {
+    const parent = pending.pop() as string;
+    for (const entry of readdirSync(parent, { withFileTypes: true })) {
+      expect(entry.name).not.toMatch(/^asc-key\./);
+      expect(entry.name).not.toMatch(/^AuthKey_[A-Za-z0-9]+\.p8$/);
+      expect(entry.name).not.toBe(OLD_DIR);
+      if (entry.isDirectory()) pending.push(join(parent, entry.name));
+    }
+  }
 }
 
 describe("ASC credentials in ship-testflight.sh", () => {
@@ -118,13 +129,14 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.issuer).toBe("direct-issuer");
     expect(out.path).toMatch(/\/AuthKey_TESTKEY123\.p8$/);
     expect(out.keysdir).toBe(out.path.replace(/\/[^/]+$/, ""));
+    expect(out.tmpdir).toBe(out.keysdir);
     expect(out.keyperm).toBe("600");
     expect(out.dirperm).toBe("700");
     expect(out.pem).toBe("1");
     expect(out.staged).toBe("expected");
     expect(existsSync(out.path)).toBe(false);
     expect(r.stdout + r.stderr).not.toContain(PEM.trim());
-    expectNoReaderOrStaging(s.dir, s.calls);
+    expectNoReaderOrStaging(s.dir, s.calls, out);
   });
 
   it("selects the complete APPLE_API_* export ahead of another complete direct tuple", () => {
@@ -146,7 +158,7 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.path).toMatch(/\/AuthKey_CIKEY\.p8$/);
     expect(out.staged).toBe("expected");
     expect(r.stdout + r.stderr).not.toContain(OTHER_PEM.trim());
-    expectNoReaderOrStaging(s.dir, s.calls);
+    expectNoReaderOrStaging(s.dir, s.calls, out);
   });
 
   it("takes the key from the environment and never from a named ASC_KEY_PATH", () => {
@@ -171,7 +183,7 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.path).not.toBe(named);
     expect(r.stderr).toMatch(/ASC_KEY_PATH is not a credential source/);
     expect(readFileSync(named, "utf8")).toBe(OTHER_PEM);
-    expectNoReaderOrStaging(s.dir, s.calls);
+    expectNoReaderOrStaging(s.dir, s.calls, out);
   });
 
   it("refuses a path-only binding without staging or calling the retired reader", () => {
@@ -194,7 +206,7 @@ describe("ASC credentials in ship-testflight.sh", () => {
     }
     expect(r.stdout + r.stderr).not.toContain(OTHER_PEM.trim());
     expect(readFileSync(named, "utf8")).toBe(OTHER_PEM);
-    expectNoReaderOrStaging(s.dir, s.calls);
+    expectNoReaderOrStaging(s.dir, s.calls, out);
   });
 
   it("decodes the complete hosted APPLE_API_* export without calling a reader", () => {
@@ -214,7 +226,7 @@ describe("ASC credentials in ship-testflight.sh", () => {
     expect(out.path).toMatch(/\/AuthKey_CIKEY\.p8$/);
     expect(out.pem).toBe("1");
     expect(out.staged).toBe("expected");
-    expectNoReaderOrStaging(s.dir, s.calls);
+    expectNoReaderOrStaging(s.dir, s.calls, out);
   });
 
   it("refuses missing, partial, mixed and malformed preferred exports without reader fallback", () => {
@@ -248,8 +260,22 @@ describe("ASC credentials in ship-testflight.sh", () => {
         expect(r.stderr).toContain("APPLE_API_ISSUER_ID");
       }
       expect(r.stdout + r.stderr).not.toContain(PEM.trim());
-      expectNoReaderOrStaging(s.dir, s.calls);
+      expectNoReaderOrStaging(s.dir, s.calls, out);
     }
+  });
+
+  it("detects nested staging and an empty reported directory under another prefix", () => {
+    const s = scratch();
+    const orphan = join(s.dir, "nested", "asc-key.orphan");
+    mkdirSync(orphan, { recursive: true, mode: 0o700 });
+    writeFileSync(join(orphan, "AuthKey_ORPHAN.p8"), "fixture", { mode: 0o600 });
+    expect(() => expectNoReaderOrStaging(s.dir, s.calls)).toThrow();
+    rmSync(orphan, { recursive: true });
+    const reported = join(s.dir, "nested", "different-prefix");
+    mkdirSync(reported, { mode: 0o700 });
+    expect(() => expectNoReaderOrStaging(s.dir, s.calls, { tmpdir: reported, keysdir: reported })).toThrow();
+    rmSync(reported, { recursive: true });
+    expectNoReaderOrStaging(s.dir, s.calls);
   });
 
   it("no ship script reads the old secrets folder", () => {

@@ -44,16 +44,18 @@ function staged(name, content = keyPem, mode = 0o600) {
 }
 
 function run(args, stdin = "", env = undefined) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [helper, ...args], {
       ...(env ? { env } : {}),
-      stdio: ["pipe", "pipe", "pipe"]
+      stdio: ["pipe", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL"
     });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
     child.stderr.on("data", (d) => { stderr += d; });
+    child.on("error", reject);
     child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.on("error", reject);
     child.stdin.end(stdin);
   });
 }
@@ -65,12 +67,13 @@ function spawnNode(args, env) {
     assert.equal(target.protocol, "http:");
     assert.equal(target.hostname, "127.0.0.1", "fixture GET must target literal loopback before spawning");
   }
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
     child.stderr.on("data", (d) => { stderr += d; });
+    child.on("error", reject);
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
 }
@@ -361,11 +364,12 @@ async function prepare(extra) {
     PATH: `${prepBin}:${safePath}`, HOME: join(temp, "home"), TMPDIR: temp, RUNNER_TEMP: temp,
     GITHUB_ENV: join(temp, "github-env"), FAKE_SIGNING_LOG: join(temp, "tools.log"), ...extra
   };
-  const result = await new Promise(resolve => {
-    const child = spawn("/bin/bash", [prep], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const result = await new Promise((resolve, reject) => {
+    const child = spawn("/bin/bash", [prep], { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
     let stdout = "", stderr = "";
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
     child.on("close", code => resolve({ code, stdout, stderr }));
   });
   assert.ok(!result.stdout.includes(keyPem.trim()) && !result.stderr.includes(keyPem.trim()));
@@ -437,13 +441,14 @@ test("actual ship entry uses producer outputs in dry-run and refuses missing inp
         APPLE_API_KEY_P8_BASE64: Buffer.from(otherPem).toString("base64")
       } : {})
     };
-    const result = await new Promise(resolve => {
+    const result = await new Promise((resolve, reject) => {
       const child = spawn("/bin/bash", [ship, "clutch", "--repo-root", join(here, "..", ".."),
         ...(planOnly ? ["--plan-build-only"] : ["--upload-only", ipa, "--dry-run", "--allow-dirty", "--force-ship"])],
-      { env, stdio: ["ignore", "pipe", "pipe"] });
+      { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
       let stdout = "", stderr = "";
       child.stdout.on("data", chunk => { stdout += chunk; });
       child.stderr.on("data", chunk => { stderr += chunk; });
+      child.on("error", reject);
       child.on("close", code => resolve({ code, stdout, stderr }));
     });
     assert.equal(result.code, present ? 0 : 1, result.stderr);
@@ -452,6 +457,134 @@ test("actual ship entry uses producer outputs in dry-run and refuses missing inp
     assert.equal(existsSync(env.FAKE_SIGNING_LOG), false, "no query, archive or upload tool may run");
     assert.equal(readdirSync(temp).some(name => name.startsWith("asc-key.")), false);
     assert.ok(!result.stdout.includes(otherPem.trim()) && !result.stderr.includes(otherPem.trim()));
+  }
+});
+
+test("actual local ship plan permits only wholly absent credentials and never invokes provider or build tools", async () => {
+  const ship = join(here, "ship-testflight.sh");
+  for (const [extra, expected] of [
+    [{}, 0],
+    [{ ASC_KEY_ID: "PARTIAL" }, 1],
+    [{ ASC_KEY_PATH: staged("path-only-plan.p8") }, 1],
+    [{ ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: "not a key" }, 1],
+    [{ APPLE_API_KEY_ID: "CIKEY01", APPLE_API_ISSUER_ID: "ci-issuer", APPLE_API_KEY_P8_BASE64: "invalid" }, 1]
+  ]) {
+    const temp = mkdtempSync(join(root, "local-plan-"));
+    const env = {
+      PATH: `${prepBin}:${safePath}`, HOME: join(temp, "home"), TMPDIR: temp,
+      IOS_FLEET_STATE_DIR: join(temp, "state"), IOS_FLEET_NODE: join(prepBin, "asc-query"),
+      FAKE_SIGNING_LOG: join(temp, "tools.log"), ...extra
+    };
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn("/bin/bash", [ship, "clutch", "--repo-root", join(here, "..", ".."),
+        "--dry-run", "--allow-dirty", "--force-ship", "--version", "9.9.8", "--build", "42"],
+      { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", chunk => { stdout += chunk; });
+      child.stderr.on("data", chunk => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", code => resolve({ code, stdout, stderr }));
+    });
+    assert.equal(result.code, expected, result.stderr);
+    assert.ok((result.stdout + result.stderr).includes("ASC_KEY_P8"));
+    if (expected === 0) {
+      assert.ok(result.stdout.includes("marketing=9.9.8 build=42"));
+      assert.ok(result.stdout.includes("auth=none"));
+      assert.ok(result.stdout.includes("dry-run: would archive + ship; exiting"));
+    }
+    assert.equal(existsSync(env.FAKE_SIGNING_LOG), false, "no query, archive or upload tool may run");
+    assert.equal(readdirSync(temp).some(name => name.startsWith("asc-key.")), false);
+  }
+});
+
+test("actual post-archive credential refusal reaches package-ready exit three before any upload", async () => {
+  const source = readFileSync(join(here, "ship-testflight.sh"), "utf8");
+  const credentialStart = "# --- ASC credentials begin";
+  const credentialEnd = "# --- ASC credentials end";
+  const handoffStart = "# Re-load secrets before altool:";
+  const handoffEnd = 'link_private_key "${ASC_KEY_PATH}" "${ASC_KEY_ID}"';
+  for (const needle of [credentialStart, credentialEnd, handoffStart, handoffEnd]) {
+    assert.equal(source.split(needle).length, 2, "source fixture boundary must remain unique");
+  }
+  const credentials = source.slice(source.indexOf(credentialStart), source.indexOf(credentialEnd));
+  const handoff = source.slice(source.indexOf(handoffStart), source.indexOf(handoffEnd, source.indexOf(handoffStart)));
+  for (const [extra, loseAfterStaging] of [
+    [{}, false],
+    [{ ASC_KEY_ID: "PARTIAL" }, false],
+    [{ ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: "not a key" }, false],
+    [{ ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem }, true]
+  ]) {
+    const temp = mkdtempSync(join(root, "archive-handoff-"));
+    const env = {
+      PATH: `${prepBin}:${safePath}`, HOME: join(temp, "home"), TMPDIR: temp,
+      FLEET_DIR: here, FAKE_SIGNING_LOG: join(temp, "tools.log"), ...extra
+    };
+    const result = await new Promise((resolve, reject) => {
+      const script = 'set -euo pipefail\nlog() { printf "%s\\n" "$*"; }\n' + credentials +
+        (loseAfterStaging ? '\nload_secrets\nunset ASC_KEY_P8\n' : '') +
+        '\nPACKAGE=fixture.ipa\nAPP_KEY=clutch\nBUNDLE_ID=fixture.bundle\n' + handoff + '\nexit 99\n';
+      const child = spawn("/bin/bash", ["-c", script], { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", chunk => { stdout += chunk; });
+      child.stderr.on("data", chunk => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", code => resolve({ code, stdout, stderr }));
+    });
+    assert.equal(result.code, 3, result.stderr);
+    assert.ok(result.stdout.includes("Package ready at: fixture.ipa"));
+    for (const name of ["ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8", "APPLE_API_KEY_ID", "APPLE_API_ISSUER_ID", "APPLE_API_KEY_P8_BASE64"]) {
+      assert.ok(result.stdout.includes(name));
+    }
+    assert.equal(existsSync(env.FAKE_SIGNING_LOG), false, "no provider or upload tool may run");
+    assert.equal(readdirSync(temp).some(name => name.startsWith("asc-key.")), false);
+    assert.ok(!result.stdout.includes(keyPem.trim()) && !result.stderr.includes(keyPem.trim()));
+  }
+});
+
+test("actual export-only permits absence while normal ships and staging failures refuse before archive", async () => {
+  const ship = join(here, "ship-testflight.sh");
+  for (const [localExport, brokenStaging] of [[true, false], [false, false], [false, true], [true, true]]) {
+    const temp = mkdtempSync(join(root, "export-entry-"));
+    const repo = join(temp, "repo");
+    mkdirSync(join(repo, "ios", "Clutch.xcodeproj"), { recursive: true });
+    writeFileSync(join(repo, "ios", "project.yml"), "DEVELOPMENT_TEAM: FIXTURETEAM\n");
+    const bin = join(temp, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "xcodebuild"), '#!/bin/bash\n[ "$1" = archive ] || exit 98\nprintf "%s\\n" archive >> "$FAKE_ARCHIVE_LOG"\nexit 99\n', { mode: 0o700 });
+    const blockedTemp = join(temp, "not-a-directory");
+    if (brokenStaging) writeFileSync(blockedTemp, "fixture");
+    const env = {
+      PATH: `${bin}:${prepBin}:${safePath}`, HOME: join(temp, "home"), TMPDIR: brokenStaging ? blockedTemp : temp,
+      IOS_FLEET_STATE_DIR: join(temp, "state"), IOS_FLEET_NODE: join(prepBin, "asc-query"), IOS_MANUAL_SIGN: "0",
+      FAKE_SIGNING_LOG: join(temp, "tools.log"), FAKE_ARCHIVE_LOG: join(temp, "archive.log"),
+      ...(brokenStaging ? { ASC_KEY_ID: "RAWKEY01", ASC_ISSUER_ID: "raw-issuer", ASC_KEY_P8: keyPem } : {})
+    };
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn("/bin/bash", [ship, "clutch", "--repo-root", repo, "--allow-dirty", "--force-ship",
+        "--skip-xcodegen", "--version", "9.9.8", "--build", "42", ...(localExport ? ["--export-only"] : [])],
+      { env, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", chunk => { stdout += chunk; });
+      child.stderr.on("data", chunk => { stderr += chunk; });
+      child.on("error", reject);
+      child.on("close", code => resolve({ code, stdout, stderr }));
+    });
+    assert.equal(result.code, 1, result.stderr);
+    if (brokenStaging) {
+      assert.ok(result.stdout.includes("could not create a temp dir for the ASC key"));
+    } else {
+      for (const name of ["ASC_KEY_ID", "ASC_ISSUER_ID", "ASC_KEY_P8", "APPLE_API_KEY_ID", "APPLE_API_ISSUER_ID", "APPLE_API_KEY_P8_BASE64"]) {
+        assert.ok((result.stdout + result.stderr).includes(name));
+      }
+    }
+    assert.equal(existsSync(env.FAKE_SIGNING_LOG), false, "no provider or upload tool may run");
+    assert.equal(existsSync(env.FAKE_ARCHIVE_LOG), localExport && !brokenStaging);
+    if (localExport && !brokenStaging) {
+      assert.ok(result.stdout.includes("auth=none export_only=1"));
+      assert.ok(result.stderr.includes("archive failed (rc=99)"));
+    }
+    assert.equal(readdirSync(temp).some(name => name.startsWith("asc-key.")), false);
+    assert.ok(!result.stdout.includes(keyPem.trim()) && !result.stderr.includes(keyPem.trim()));
   }
 });
 
