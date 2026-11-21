@@ -25,18 +25,17 @@ name: Auto-merge PRs
 # executed (rearm pins the default branch for gate sources).  Fork PRs stay
 # excluded by the reusable's own same-repo rule - that gate is not weakened.
 #
-# pull_request is intentionally omitted: GitHub runs that event from the
-# PR's merge commit, so a same-repo branch that edits this file would
-# execute the edited workflow with the merge App private key before
-# self_guard_paths can block the merge.  pull_request_review, schedule,
-# and workflow_dispatch all run this file from the default branch.
-# auto_merge_enabled / auto_merge_disabled therefore wait for the
-# 15-minute sweep (or a review event) rather than a pull_request_target
-# trigger, which would expose secrets to fork contexts.
+# pull_request and pull_request_review are intentionally omitted: GitHub
+# runs both events from the PR's merge ref (refs/pull/N/merge), so a
+# same-repo branch that edits this file would execute the edited workflow
+# with the merge App private key before self_guard_paths can block the
+# merge.  Only schedule and workflow_dispatch remain; both run this file
+# from the default branch.  pull_request_target is not used either (it
+# would expose secrets to fork contexts).  Review, label and
+# auto_merge_enabled / auto_merge_disabled transitions are therefore
+# picked up by the 15-minute sweep.
 
 on:
-  pull_request_review:
-    types: [submitted, edited, dismissed]
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
@@ -65,25 +64,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  auto-merge:
-    # Caller-level same-repo guard: fork review events never invoke the
-    # reusable at all (secrets are already unavailable to fork pull_request
-    # runs; this removes the wasted privileged invocation and keeps
-    # untrusted execution out of the lane entirely).  The reusable's own
-    # same-repo rule stays as defense in depth.  pull_request_target is
-    # deliberately NOT used: it would expose secrets to fork contexts, the
-    # opposite of the goal.
-    if: >-
-      github.event_name == 'pull_request_review'
-      && github.event.pull_request.head.repo.full_name == github.repository
-    uses: Simple-With-Us/AI-Fleet-Coordinator/.github/workflows/auto-merge-reusable.yml@ec5eb78e0ec0566fcd3fcc8aa6d84ce531203869
-    with:
-      expected_merge_actor: "swu-merge-automation[bot]"
-      self_guard_paths: .github/workflows/auto-merge-prs.yml
-    secrets:
-      merge_app_id: ${{ vars.SWU_MERGE_AUTOMATION_APP_ID }}
-      merge_app_private_key: ${{ secrets.SWU_MERGE_AUTOMATION_APP_PRIVATE_KEY }}
-
   # Trusted-base re-arm sweep (see header).  Secrets-bearing schedule /
   # dispatch events only; lists PR numbers, merges nothing itself.
   # concurrency: one sweep/rearm wave per repo at a time; a fire that finds
@@ -142,10 +122,10 @@ jobs:
 
   rearm-open-prs:
     needs: sweep
-    # Sweep is skipped on review events, leaving outputs.prs empty.  An
-    # empty string is not '[]', so fromJSON would fail the matrix.  Only
-    # a successful schedule/dispatch sweep with a non-empty list rearms,
-    # and the expression falls back to '[]' if the output is ever blank.
+    # A skipped or failed sweep leaves outputs.prs empty.  An empty string
+    # is not '[]', so fromJSON would fail the matrix.  Only a successful
+    # schedule/dispatch sweep with a non-empty list rearms, and the
+    # expression falls back to '[]' if the output is ever blank.
     if: >-
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
       && needs.sweep.result == 'success'
