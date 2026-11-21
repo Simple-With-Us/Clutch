@@ -113,8 +113,8 @@ jobs:
               | sort
               | . as $all
               | ($all | length) as $n
-              | if $n <= 50 then $all
-                else [range(0; 50) | $all[((($off * 50) + .) % $n)]]
+              | if $n <= 50 then [$all[] | tostring]
+                else [range(0; 50) | $all[((($off * 50) + .) % $n)] | tostring]
                 end')"
           fi
           printf '%s' "$prs" | jq -e 'type == "array"' > /dev/null
