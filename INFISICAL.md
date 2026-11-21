@@ -155,3 +155,9 @@ Project IDs are non-secret workflow constants rather than encrypted bindings.
 Missing CI inputs, authentication/list errors, or missing signing entries fail
 before export. GitHub signing-secret fallbacks and Infisical imports are not used.
 Local regression test: `node --test scripts/ios-signing-fetch.test.mjs`.
+
+The downstream ASC API client, TestFlight ship helper and signing preparation script consume complete Infisical-synced environment tuples only: `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID` / `APPLE_API_KEY_P8_BASE64`, or the existing direct `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8` tuple.  The complete `APPLE_API_*` tuple has precedence; partial tuples never borrow fields from another source.  A malformed preferred tuple fails closed.  A caller-supplied `ASC_KEY_PATH` is not a credential source.
+
+Signing preparation also requires a complete `IOS_CERT_P12_BASE64` / `IOS_CERT_PASSWORD` pair, or the existing direct `IOS_DIST_P12_BASE64` / `IOS_DIST_P12_PASSWORD` pair.  It validates the selected key before signing-store operations and retains private runner staging for later steps.  The ship helper retains its private temporary key and exit cleanup.  Optional Sentry upload uses only the existing exported `SENTRY_AUTH_TOKEN`; absence skips that optional upload.
+
+These helpers do not discover a reader application, read the Clutch runtime credential file, derive another key's folder, or acquire credentials from a broader project/root grant.  Unsupported standalone acquisition must supply an existing approved signing export; no account, grant or new issuer route is inferred.  Source tests with generated keys and disposable stores do not qualify real CI bindings, grant expiry, provider key identity or any credential-incident rotation.
