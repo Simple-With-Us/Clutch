@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import PhotosUI
 import CometChatUIKitSwift
 import CometChatSDK
 
@@ -40,6 +42,9 @@ public struct ChatView: View {
     /// Why the catalog could not be read, when it could not.
     @State private var catalogError: String?
     @State private var draft: String = ""
+    /// Images attached to the next turn, the way the thread surface
+    /// attaches files to a message.
+    @State private var attachments: [ChatAttachment] = []
     @State private var sessionId: String?
     @State private var sending: Bool = false
     @State private var thoughtLine: String?
@@ -189,7 +194,9 @@ public struct ChatView: View {
                                 sending: sending,
                                 isDictating: dictation.isRecording,
                                 onSend: { send(draft) },
-                                onVoice: { startVoice() }
+                                onVoice: { startVoice() },
+                                attachments: $attachments,
+                                onError: { sendError = $0 }
                             )
                         } else {
                             Spacer()
@@ -586,8 +593,10 @@ public struct ChatView: View {
             // The effort rides along only when the engine publishes levels
             // and the owner picked one, so a turn keeps the engine's own
             // effort otherwise.
-            effort: requestEffort
+            effort: requestEffort,
+            images: attachments
         )
+        attachments = []
         Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
@@ -663,34 +672,180 @@ struct ChatInputBar: View {
     var isDictating: Bool = false
     var onSend: () -> Void
     var onVoice: () -> Void
+    /// Images attached to the next turn.
+    @Binding var attachments: [ChatAttachment]
+    /// Reports a paste, drop, or pick failure; nil clears a stale one.
+    var onError: (String?) -> Void = { _ in }
+    @State private var pickedPhoto: PhotosPickerItem?
+    @State private var showFilePicker = false
+    @State private var isDropTargeted = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField("Message the agent…", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .disabled(sending)
-                .onSubmit(onSend)
-            Button(action: onVoice) {
-                Image(systemName: isDictating ? "mic.fill" : "mic")
-                    .frame(minWidth: 44, minHeight: 44)
+        VStack(spacing: 6) {
+            if !attachments.isEmpty {
+                attachmentStrip
             }
-            .disabled(sending)
-            .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
-            Button(action: onSend) {
-                if sending {
-                    ProgressView()
-                } else {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22))
+            HStack(spacing: 8) {
+                PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                    Image(systemName: "paperclip")
+                        .frame(minWidth: 32, minHeight: 44)
                 }
+                .disabled(sending)
+                .accessibilityLabel("Attach Image")
+                Button {
+                    showFilePicker = true
+                } label: {
+                    Image(systemName: "folder")
+                        .frame(minWidth: 32, minHeight: 44)
+                }
+                .disabled(sending)
+                .accessibilityLabel("Attach File")
+                Button {
+                    Task { await pasteClipboard() }
+                } label: {
+                    Image(systemName: "doc.on.clipboard")
+                        .frame(minWidth: 32, minHeight: 44)
+                }
+                .disabled(sending)
+                .accessibilityLabel("Paste Image Or File")
+                TextField("Message the agent…", text: $draft, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(sending)
+                    .onSubmit(onSend)
+                Button(action: onVoice) {
+                    Image(systemName: isDictating ? "mic.fill" : "mic")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .disabled(sending)
+                .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
+                Button(action: onSend) {
+                    if sending {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                    }
+                }
+                .frame(minWidth: 44, minHeight: 44)
+                .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel("Send Message")
             }
-            .frame(minWidth: 44, minHeight: 44)
-            .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Send Message")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(.systemBackground))
+        // Paste and drop take the same providers; no keyboard shortcut on
+        // the paste button, which would steal the field's text pastes.
+        .onPasteCommand(of: [.image, .fileURL], perform: handlePasteProviders)
+        .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
+            handlePasteProviders(providers)
+            return !providers.isEmpty
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.data],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                let outcome = AttachmentPaste.outcomeForFileURLs(urls)
+                Task { @MainActor in applyOutcome(outcome) }
+            }
+        }
+        .onChange(of: pickedPhoto) { _, item in
+            guard let item else { return }
+            pickedPhoto = nil
+            Task { await loadAttachment(item) }
+        }
+    }
+
+    /// The images waiting on the next turn, each removable.
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { attachment in
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 10))
+                        Text(attachment.displayName)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                        Button {
+                            attachments.removeAll { $0.id == attachment.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(attachment.displayName)")
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color(.secondarySystemBackground), in: Capsule())
+                }
+            }
+        }
+    }
+
+    /// Take providers from a paste command or a drop.
+    private func handlePasteProviders(_ providers: [NSItemProvider]) {
+        Task { @MainActor in
+            applyOutcome(await AttachmentPaste.outcomeForProviders(providers))
+        }
+    }
+
+    /// Paste whatever the clipboard holds: screenshots and copied photos
+    /// attach as images, copied files attach or inline by type.
+    private func pasteClipboard() async {
+        let outcome = await AttachmentPaste.pasteFromClipboard()
+        await MainActor.run { applyOutcome(outcome) }
+    }
+
+    /// Fold a paste, drop, or pick into the composer: images join the next
+    /// turn, text files splice into the draft, failures say so out loud.
+    @MainActor
+    private func applyOutcome(_ outcome: PasteOutcome) {
+        if !outcome.images.isEmpty {
+            attachments.append(contentsOf: outcome.images)
+        }
+        for insert in outcome.textInserts {
+            if draft.isEmpty {
+                draft = insert
+            } else {
+                draft += "\n\n" + insert
+            }
+        }
+        if !outcome.errors.isEmpty {
+            onError(outcome.errors.joined(separator: " "))
+        } else if !outcome.images.isEmpty || !outcome.textInserts.isEmpty {
+            onError(nil)
+        }
+    }
+
+    /// Read a picked photo into an attachment.
+    private func loadAttachment(_ item: PhotosPickerItem) async {
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            await MainActor.run { onError("Could not read that photo.") }
+            return
+        }
+        let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "png"
+        let outcome: PasteOutcome
+        switch AttachmentPaste.fate(data: data, name: "attachment.\(ext)") {
+        case .image(let attachment):
+            outcome = PasteOutcome(images: [attachment])
+        case .text(let insert):
+            outcome = PasteOutcome(textInserts: [insert])
+        case .rejected(let message):
+            outcome = PasteOutcome(errors: [message])
+        }
+        await MainActor.run { applyOutcome(outcome) }
     }
 }
 

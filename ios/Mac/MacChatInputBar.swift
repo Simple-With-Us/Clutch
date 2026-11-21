@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Native input bar for the Mac chat surface
 struct MacChatInputBar: View {
@@ -15,6 +16,9 @@ struct MacChatInputBar: View {
     var attachments: [ChatAttachment] = []
     var onAttach: () -> Void = {}
     var onRemoveAttachment: (ChatAttachment) -> Void = { _ in }
+    var onPaste: () -> Void = {}
+    var onProviders: ([NSItemProvider]) -> Void = { _ in }
+    @State private var isDropTargeted = false
 
     @AppStorage(MacBusySendMode.storageKey)
     private var busySendModeRawValue = MacBusySendMode.defaultMode.rawValue
@@ -70,8 +74,17 @@ struct MacChatInputBar: View {
                         .foregroundStyle(Color.secondary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Attach Image")
-                .help("Attach An Image")
+                .accessibilityLabel("Attach File")
+                .help("Attach A File")
+
+                Button(action: onPaste) {
+                    Image(systemName: "doc.on.clipboard")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Paste Image Or File")
+                .help("Paste An Image Or A File")
 
                 TextField("Message The Agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
@@ -148,6 +161,20 @@ struct MacChatInputBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.clutchBackground)
+        // Paste and drop take the same providers; no keyboard shortcut on
+        // the paste button, which would steal the field's text pastes.
+        .onPasteCommand(of: [.image, .fileURL], perform: onProviders)
+        .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
+            onProviders(providers)
+            return !providers.isEmpty
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.accentColor, lineWidth: 2)
+                    .padding(.horizontal, 8)
+            }
+        }
     }
 
     private var footerText: String {

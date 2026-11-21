@@ -21,10 +21,25 @@ public struct ChatAttachment: Equatable, Sendable, Identifiable {
     /// The image MIME types the code engines accept.
     public static let supportedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 
+    /// The largest attachment the sidecar takes, in decoded bytes.
+    ///
+    /// This matches `MAX_IMAGE_BYTES` in `src/web/chat-bridge.ts`: the
+    /// sidecar silently drops anything bigger, so the client refuses it
+    /// with a message instead of sending a turn that arrives imageless.
+    public static let maxBytes = 6 * 1024 * 1024
+
     /// Build an attachment from image bytes, or nil when the bytes are not
-    /// an image type the engines take.
+    /// an image type the engines take or are over the size cap.
     public static func from(data: Data, name: String) -> ChatAttachment? {
-        guard let mimeType = detectMimeType(data) else { return nil }
+        try? validated(data: data, name: name)
+    }
+
+    /// Build an attachment from image bytes, saying why when they cannot
+    /// become one.  A caller that reports the failure uses this; a caller
+    /// that silently skips uses `from`.
+    public static func validated(data: Data, name: String) throws -> ChatAttachment {
+        guard let mimeType = detectMimeType(data) else { throw AttachmentError.unsupportedType }
+        guard data.count <= maxBytes else { throw AttachmentError.tooLarge(bytes: data.count) }
         return ChatAttachment(mimeType: mimeType, data: data.base64EncodedString(), name: name)
     }
 
@@ -48,5 +63,23 @@ public struct ChatAttachment: Equatable, Sendable, Identifiable {
     /// A short label for the composer chip.
     public var displayName: String {
         name.isEmpty ? "Image" : name
+    }
+}
+
+/// Why bytes cannot become an attachment.
+public enum AttachmentError: Error, Equatable, Sendable {
+    /// Not one of the image types the engines take.
+    case unsupportedType
+    /// An image the engines would take, but over the size cap.
+    case tooLarge(bytes: Int)
+
+    /// What the composer shows for the failure.
+    public var message: String {
+        switch self {
+        case .unsupportedType:
+            return Copy.gap("That image type is not supported.", "Use PNG, JPEG, GIF, or WebP.")
+        case .tooLarge:
+            return Copy.gap("That image is over the 6 MB cap.", "Shrink it and try again.")
+        }
     }
 }
