@@ -10,6 +10,10 @@ struct HostsSheet: View {
     @AppStorage(MuseLaunchPreferences.storageKey) private var museLaunchPreferencesJSON = ""
     @AppStorage(MuseContextPreferences.storageKey) private var museContextPreferencesJSON = ""
     @State private var isAddingHost = false
+    /// The host a Forget action is waiting on confirmation for.  Forgetting
+    /// destroys the host's keychain tokens and cookies, so it never happens
+    /// on a single tap.
+    @State private var hostPendingRemoval: ClutchHost?
 
     private var busySendMode: MacBusySendMode {
         MacBusySendMode(rawValue: busySendModeRawValue) ?? .queue
@@ -30,7 +34,7 @@ struct HostsSheet: View {
                         #if os(macOS)
                         .contextMenu {
                             Button(role: .destructive) {
-                                store.remove(host)
+                                hostPendingRemoval = host
                             } label: {
                                 Label("Forget Host", systemImage: "trash")
                             }
@@ -38,7 +42,7 @@ struct HostsSheet: View {
                         #else
                         .swipeActions {
                             Button(role: .destructive) {
-                                store.remove(host)
+                                hostPendingRemoval = host
                             } label: {
                                 Label("Forget", systemImage: "trash")
                             }
@@ -59,6 +63,26 @@ struct HostsSheet: View {
                     ))
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .confirmationDialog(
+                    "Forget \(hostPendingRemoval?.name ?? "this host")?",
+                    isPresented: Binding(
+                        get: { hostPendingRemoval != nil },
+                        set: { if !$0 { hostPendingRemoval = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Forget Host", role: .destructive) {
+                        if let host = hostPendingRemoval {
+                            store.remove(host)
+                        }
+                        hostPendingRemoval = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        hostPendingRemoval = nil
+                    }
+                } message: {
+                    Text("This signs this device out of the host and drops its saved tokens.")
                 }
 
                 Section("Appearance") {
@@ -149,6 +173,23 @@ struct HostsSheet: View {
                 }
 
                 InfisicalSettingsSection(host: store.activeHost)
+
+                Section("More") {
+                    // The former iOS tabs: the Host console and Fleet Recall
+                    // are destinations from settings now, not top-level tabs.
+                    if let host = store.activeHost {
+                        NavigationLink {
+                            DshHostView(host: host)
+                        } label: {
+                            Label("Host Diagnostics", systemImage: "server.rack")
+                        }
+                    }
+                    NavigationLink {
+                        FleetRecallView()
+                    } label: {
+                        Label("Fleet Recall", systemImage: "sparkles.rectangle.stack.fill")
+                    }
+                }
 
                 Section("About") {
                     LabeledContent("Version", value: "\(Bundle.main.shortVersion) (\(Bundle.main.buildNumber))")
