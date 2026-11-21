@@ -734,9 +734,9 @@ struct ChatInputBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(.systemBackground))
-        // Paste and drop take the same providers; no keyboard shortcut on
-        // the paste button, which would steal the field's text pastes.
-        .onPasteCommand(of: [.image, .fileURL], perform: handlePasteProviders)
+        // Drop takes providers and the paste button reads the clipboard;
+        // no keyboard shortcut on the paste button, which would steal the
+        // field's text pastes.  (The paste command is macOS-only.)
         .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
             handlePasteProviders(providers)
             return !providers.isEmpty

@@ -523,7 +523,11 @@ struct NewThreadSheet: View {
                     .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
                     .accessibilityLabel("Send Message")
                 }
+                // The paste command is macOS-only; on iOS the paste button
+                // reads the clipboard instead.
+                #if os(macOS)
                 .onPasteCommand(of: [.image, .fileURL], perform: handlePasteProviders)
+                #endif
                 .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
                     handlePasteProviders(providers)
                     return !providers.isEmpty

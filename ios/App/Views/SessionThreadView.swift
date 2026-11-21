@@ -724,8 +724,11 @@ public struct SessionThreadView: View {
         // image data becomes attachments, text files inline into the draft.
         // No keyboard shortcut on the paste button: it would steal text
         // pastes from the field, while the paste command only fires for
-        // the image and file types the field ignores.
+        // the image and file types the field ignores.  The paste command
+        // is macOS-only; on iOS the paste button reads the clipboard.
+        #if os(macOS)
         .onPasteCommand(of: [.image, .fileURL], perform: handlePasteProviders)
+        #endif
         .onDrop(of: [.image, .fileURL], isTargeted: $isDropTargeted) { providers in
             handlePasteProviders(providers)
             return !providers.isEmpty
