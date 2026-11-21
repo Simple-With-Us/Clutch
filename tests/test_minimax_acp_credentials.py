@@ -18,8 +18,9 @@ class MiniMaxBridgeCredentialTests(unittest.TestCase):
         self,
         *,
         environment_key: str = "",
-        dsh_key: str = "",
         key_name: str = "MINIMAX_API_KEY",
+        dsh_file_text: str | None = None,
+        expected_key: str = "",
     ) -> tuple[str, str, str, Path]:
         temp = tempfile.TemporaryDirectory(prefix="clutch-minimax-bridge-")
         self.addCleanup(temp.cleanup)
@@ -40,11 +41,11 @@ class MiniMaxBridgeCredentialTests(unittest.TestCase):
             encoding="utf-8",
         )
         stub.chmod(0o700)
-        if dsh_key:
-            (dsh_home / ".credentials.yaml").write_text(f"{key_name}: {dsh_key}\n", encoding="utf-8")
+        if dsh_file_text is not None:
+            (dsh_home / ".credentials.yaml").write_text(dsh_file_text, encoding="utf-8")
             (dsh_home / ".credentials.yaml").chmod(0o600)
 
-        key = environment_key or dsh_key
+        key = environment_key or expected_key
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(home),
@@ -100,25 +101,55 @@ class MiniMaxBridgeCredentialTests(unittest.TestCase):
         key = "synthetic-env-key-do-not-print"
         stdout, stderr, reply, marker = self._run_bridge(
             environment_key=key,
-            dsh_key="synthetic-dsh-key-do-not-print",
             key_name="CUSTOM_MINIMAX_KEY",
+            dsh_file_text="export CUSTOM_MINIMAX_KEY: 'fixture-dsh'\n",
         )
         self.assertEqual(marker.read_text(encoding="utf-8"), "match")
         self.assertIn('"stopReason": "endTurn"', reply)
         self.assertNotIn(key, stdout + stderr)
 
     def test_dsh_credential_file_reaches_the_child(self) -> None:
-        key = "synthetic-dsh-key-do-not-print"
-        stdout, stderr, reply, marker = self._run_bridge(dsh_key=key)
+        key = "synthetic:dsh=key-do-not-print"
+        stdout, stderr, reply, marker = self._run_bridge(
+            dsh_file_text=f'export MINIMAX_API_KEY = "{key}"\n',
+            expected_key=key,
+        )
+        self.assertEqual(marker.read_text(encoding="utf-8"), "match")
+        self.assertIn('"stopReason": "endTurn"', reply)
+        self.assertNotIn(key, stdout + stderr)
+
+    def test_alternate_dsh_assignment_reaches_the_child(self) -> None:
+        key = "synthetic:alternate=key-do-not-print"
+        stdout, stderr, reply, marker = self._run_bridge(
+            key_name="CUSTOM_MINIMAX_KEY",
+            dsh_file_text=f'export CUSTOM_MINIMAX_KEY: "{key}"\n',
+            expected_key=key,
+        )
         self.assertEqual(marker.read_text(encoding="utf-8"), "match")
         self.assertIn('"stopReason": "endTurn"', reply)
         self.assertNotIn(key, stdout + stderr)
 
     def test_missing_key_rejects_prompt_without_starting_child(self) -> None:
-        stdout, stderr, reply, marker = self._run_bridge()
+        unusable_files = (
+            "# comment only\n",
+            "OTHER_MINIMAX_API_KEY: fixture-other\n",
+            'MINIMAX_API_KEY: ""\n',
+            "DEEPSEEK_API_KEY=fixture-other\n",
+        )
+        for contents in unusable_files:
+            with self.subTest(contents=contents):
+                stdout, stderr, reply, marker = self._run_bridge(dsh_file_text=contents)
+                self.assertFalse(marker.exists())
+                self.assertIn("MINIMAX_API_KEY is not configured", reply)
+                self.assertNotIn("fleet-secrets", stdout + stderr)
+
+    def test_alternate_missing_key_names_the_native_variable(self) -> None:
+        _stdout, _stderr, reply, marker = self._run_bridge(
+            key_name="CUSTOM_MINIMAX_KEY",
+            dsh_file_text="OTHER_PROVIDER_KEY: unrelated\n",
+        )
         self.assertFalse(marker.exists())
-        self.assertIn("MiniMax API key is not configured", reply)
-        self.assertNotIn("fleet-secrets", stdout + stderr)
+        self.assertIn("MINIMAX_API_KEY is not configured", reply)
 
 
 if __name__ == "__main__":

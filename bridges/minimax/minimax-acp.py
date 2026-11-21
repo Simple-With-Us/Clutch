@@ -42,6 +42,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -171,15 +172,19 @@ def _load_minimax_key() -> bool:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
-            if "MINIMAX_API_KEY" not in line and target not in line:
+            match = re.fullmatch(
+                r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.*?)\s*",
+                line,
+            )
+            if not match or match.group(1) not in {target, "MINIMAX_API_KEY"}:
                 continue
-            if ":" in line:
-                _k, val = line.split(":", 1)
-            elif "=" in line:
-                _k, val = line.split("=", 1)
-            else:
+            val = match.group(2).strip()
+            if val[:1] in {"'", '"'}:
+                if len(val) < 2 or val[-1] != val[0]:
+                    continue
+                val = val[1:-1].strip()
+            elif val[-1:] in {"'", '"'}:
                 continue
-            val = val.strip().strip("'").strip('"')
             if val:
                 os.environ["MINIMAX_API_KEY"] = val
                 os.environ[target] = val
@@ -616,7 +621,7 @@ def main() -> None:
             reply(req_id, {"sessionId": sess_id, "modes": modes_block()})
         elif method == "session/prompt":
             if not MINIMAX_KEY_AVAILABLE:
-                fail(req_id, "MiniMax API key is not configured", -32002)
+                fail(req_id, "MINIMAX_API_KEY is not configured", -32002)
                 continue
             sess_id = str(params.get("sessionId") or "")
             record = sessions.setdefault(sess_id, {"cwd": os.getcwd(), "sessionId": sess_id})

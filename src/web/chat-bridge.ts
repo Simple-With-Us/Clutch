@@ -442,16 +442,41 @@ export interface EngineAvailabilityContext {
 }
 
 /**
- * The dsh credential store the DeepSeek and MiniMax bridges read.
+ * The DSH credential file path for DeepSeek and MiniMax.
  *
  * `scripts/lib/clutch-env.sh` forces `DSH_HOME` to `$CLUTCH_HOME/dsh`, so
  * this is the one file both bridges open when the environment carries no
- * key.  Its presence is what makes the credential reachable on a host that
- * keeps the key in a file rather than in an environment variable.
+ * key.  DeepSeek keeps its legacy presence check; MiniMax parses its exact
+ * provider assignment below.
  */
 function dshCredentialFile(env: Record<string, string | undefined>): string {
   const clutchHome = env.CLUTCH_HOME ?? join(env.HOME ?? homedir(), ".clutch");
   return join(clutchHome, "dsh", ".credentials.yaml");
+}
+
+/** Read only whether one exact nonempty simple assignment exists in a DSH file. */
+function credentialFileHasKey(path: string, names: readonly string[]): boolean {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch {
+    return false;
+  }
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.*?)\s*$/.exec(line);
+    if (!match || !names.includes(match[1]!)) continue;
+    let value = match[2]!.trim();
+    if (value.startsWith("'") || value.startsWith('"')) {
+      if (value.length < 2 || value.at(-1) !== value[0]) continue;
+      value = value.slice(1, -1).trim();
+    } else if (value.endsWith("'") || value.endsWith('"')) {
+      continue;
+    }
+    if (value) return true;
+  }
+  return false;
 }
 
 /**
@@ -687,14 +712,14 @@ export async function engineAvailability(
   }
   if (engine === "minimax") {
     // The supported wrapper backfills Clutch-managed settings into the
-    // launch environment.  Direct bridge invocation may instead use the DSH
+    // launch environment.  Direct bridge invocation may instead use the DSH
     // credential file; these are the only credential sources this path
     // advertises.
     const keyName = settingValue("CLUTCH_MINIMAX_API_KEY_NAME", env, settings) || "MINIMAX_API_KEY";
     const inEnvironment = Boolean(
       settingValue(keyName, env, settings) || settingValue("MINIMAX_API_KEY", env, settings),
     );
-    if (!inEnvironment && !existsSync(credentialFile)) {
+    if (!inEnvironment && !credentialFileHasKey(credentialFile, [keyName, "MINIMAX_API_KEY"])) {
       return {
         available: false,
         note: `${label} needs an API key.\u00A0 Add ${keyName} in Clutch settings or save it in ${credentialFile}.`,
