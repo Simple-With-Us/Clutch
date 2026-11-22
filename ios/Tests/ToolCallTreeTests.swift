@@ -135,10 +135,15 @@ final class ToolStatusMappingTests: XCTestCase {
     }
 
     func testACancelledCallReadsCancelledNotPending() {
-        // The card labels a withdrawn call "Cancelled" even though it draws
-        // the same neutral idle mark as a queued one.
+        // A withdrawn call keeps the neutral idle mark but reads its own
+        // word, so the label rule lives in the vocabulary where it is
+        // testable rather than in the card.
         XCTAssertEqual(ClutchStatus(toolStatus: "cancelled").symbol, ClutchStatus.idle.symbol)
-        XCTAssertTrue(["cancelled", "canceled"].contains("cancelled"))
+        XCTAssertEqual(ClutchStatus.toolStatusLabel(forStatus: "cancelled"), "Cancelled")
+        XCTAssertEqual(ClutchStatus.toolStatusLabel(forStatus: "canceled"), "Cancelled")
+        XCTAssertEqual(ClutchStatus.toolStatusLabel(forStatus: "pending"), "Pending")
+        XCTAssertEqual(ClutchStatus.toolStatusLabel(forStatus: "running"), "Running")
+        XCTAssertEqual(ClutchStatus.toolStatusLabel(forStatus: "completed"), "Done")
     }
 
     func testAnUnknownStatusWordStaysRunning() {

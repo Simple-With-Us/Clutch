@@ -295,4 +295,15 @@ public enum ClutchStatus {
         case .warning: return "Needs Attention"
         }
     }
+
+    /// The label for a raw engine status word.  Pending and cancelled both
+    /// draw the idle mark but read their own words: a withdrawn call is not
+    /// queued.  Everything else asks the vocabulary entry its status maps
+    /// to, so the card never carries label rules of its own.
+    public static func toolStatusLabel(forStatus status: String) -> String {
+        switch status {
+        case "cancelled", "canceled": return "Cancelled"
+        default: return ClutchStatus(toolStatus: status).toolStatusLabel
+        }
+    }
 }
