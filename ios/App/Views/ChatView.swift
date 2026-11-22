@@ -633,6 +633,10 @@ public struct ChatView: View {
         )
         attachments = []
         var endedNormally = false
+        /// Whether the stream answered at all.  An event means the engine
+        /// has the turn, so its prompt and its images must not be handed
+        /// back a second time.
+        var receivedEvent = false
         // This turn takes the composer.  A stream that is still on its way
         // out compares the number it was given with the current one and
         // leaves the newer turn's state alone.
@@ -644,6 +648,7 @@ public struct ChatView: View {
                     // A newer turn owns the composer now, so this stream's
                     // events are stale and must not touch it.
                     guard turnToken == token else { return }
+                    receivedEvent = true
                     switch event {
                     case .capabilities:
                         break
@@ -735,13 +740,19 @@ public struct ChatView: View {
                 sendTask = nil
                 thoughtLine = nil
                 sendError = error.localizedDescription
-                // The turn never left, so its images come back ahead of
-                // anything attached since.
-                attachments = outgoingImages + attachments
-                // The prompt comes back with them, so a turn that never
-                // reached the engine does not eat what the owner wrote.
-                restoreToComposer(prompt)
+                // The parked correction goes back first, so the prompt
+                // that was sent lands ahead of it: the correction was
+                // typed after that prompt went out.
                 restoreParkedDraft()
+                // A stream that failed before any event means the turn
+                // never reached the engine, so its images and its prompt
+                // come back.  A stream that failed after an event means
+                // the engine already has them, and handing them back
+                // would ask the owner to repeat a turn that already ran.
+                if !receivedEvent {
+                    attachments = outgoingImages + attachments
+                    restoreToComposer(prompt)
+                }
             }
         }
         sendTask = task
