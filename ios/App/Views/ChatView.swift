@@ -211,7 +211,7 @@ public struct ChatView: View {
                                     if sending {
                                         queueDraft()
                                     } else {
-                                        send(draft)
+                                        _ = send(draft)
                                     }
                                 },
                                 onStop: { stopTurn() },
@@ -596,10 +596,16 @@ public struct ChatView: View {
         }
     }
 
-    private func send(_ text: String) {
+    /// Sends one turn.
+    ///
+    /// The answer says whether the turn started.  A send that bails on the
+    /// host or the connection has to hand its text back, because the
+    /// parked follow-up would otherwise be gone.
+    @discardableResult
+    private func send(_ text: String) -> Bool {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !sending else { return }
-        guard let host = activeHost, let myUid = manager.myUid else { return }
+        guard !prompt.isEmpty, !sending else { return false }
+        guard let host = activeHost, let myUid = manager.myUid else { return false }
         draft = ""
         sendError = nil
         sending = true
@@ -692,12 +698,25 @@ public struct ChatView: View {
                     let queued = queuedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !queued.isEmpty {
                         queuedDraft = ""
+                        // The queue holds text: the attachments in the
+                        // composer stay there for the next message instead
+                        // of riding the parked text.
+                        let carried = attachments
+                        attachments = []
                         // The chained send clears the composer, so what the
                         // owner typed while the turn was closing goes back
                         // in after it.
                         let typeAhead = draft
-                        send(queued)
-                        restoreToComposer(typeAhead)
+                        let started = send(queued)
+                        attachments = carried
+                        if started {
+                            restoreTypeAhead(typeAhead)
+                        } else {
+                            // The send never started, so the parked text
+                            // goes back in front of the type-ahead that is
+                            // still in the composer.
+                            restoreToComposer(queued)
+                        }
                     }
                 } else {
                     restoreParkedDraft()
@@ -719,10 +738,14 @@ public struct ChatView: View {
                 // The turn never left, so its images come back ahead of
                 // anything attached since.
                 attachments = outgoingImages + attachments
+                // The prompt comes back with them, so a turn that never
+                // reached the engine does not eat what the owner wrote.
+                restoreToComposer(prompt)
                 restoreParkedDraft()
             }
         }
         sendTask = task
+        return true
     }
 
     /// Parks text typed while a turn runs, to send when it completes.
@@ -747,17 +770,40 @@ public struct ChatView: View {
         restoreToComposer(parked)
     }
 
-    /// Puts text back into the composer without letting the dictation
-    /// observer take it away again.  That observer rewrites the field
-    /// from `draftBase` on every transcript change, so text that has to
-    /// survive the next transcript update joins the base while dictation
-    /// runs.
+    /// Puts text that has to survive back into the composer.
+    ///
+    /// The dictation observer rewrites the field from `draftBase` and the
+    /// transcript on every transcript change, so text that has to outlive
+    /// the next transcript update joins the base while dictation runs, and
+    /// the field is rebuilt the way the observer would rebuild it.
     private func restoreToComposer(_ text: String) {
-        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
         if dictation.isRecording {
-            draftBase = draftBase.isEmpty ? text : text + "\n\n" + draftBase
+            draftBase = draftBase.isEmpty ? value : value + "\n\n" + draftBase
+            let spoken = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            draft = draftBase + (draftBase.isEmpty || spoken.isEmpty ? "" : " ") + spoken
+            return
         }
-        draft = typed.isEmpty ? text : text + "\n\n" + draft
+        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = current.isEmpty ? value : value + "\n\n" + draft
+    }
+
+    /// Puts the owner's type-ahead back into the composer.
+    ///
+    /// While dictation records the field belongs to the observer, which
+    /// rebuilds it from the base and the transcript: the type-ahead stays
+    /// out of the base, because the live field already holds the dictated
+    /// words and folding it in would repeat them.
+    private func restoreTypeAhead(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        if dictation.isRecording {
+            draft = value
+            return
+        }
+        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = current.isEmpty ? value : value + "\n\n" + draft
     }
 
     /// Stops the in-flight turn: cancel on the sidecar, then drop the
