@@ -133,6 +133,26 @@ jobs:
             -destination "generic/platform=macOS" \
             CODE_SIGNING_ALLOWED=NO \
             build
+      # The Mac surface used to be compiled and never executed, so nothing on
+      # it could fail a build.  The UI test drives the app against a local
+      # stub sidecar and compares the surface against a checked-in baseline,
+      # which is what gives the Mac surface a verdict.
+      - name: Run the macOS UI tests
+        run: |
+          status=0
+          bash scripts/mac-ui-tests.sh || status=$?
+          if [ "$status" = "10" ]; then
+            echo "::warning title=macOS UI tests::no runnable macOS UI test host on this runner; the UI tests were skipped"
+            exit 0
+          fi
+          exit "$status"
+      - name: Publish the macOS UI test result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-ui-tests
+          path: mac-ui.xcresult
+          if-no-files-found: ignore
 
   e2e:
     runs-on: ubuntu-latest
