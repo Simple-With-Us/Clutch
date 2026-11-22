@@ -615,9 +615,12 @@ struct ThreadSidebarRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                         if let when = session.updated {
+                            // Secondary, not tertiary: the last-active time
+                            // is the row's most-read metadata, and tertiary
+                            // grey is unreadable at this size.
                             Text(when, style: .relative)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
                         }
                     }
                     // The one usage fact cheap enough to show inline on every
