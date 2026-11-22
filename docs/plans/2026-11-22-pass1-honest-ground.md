@@ -874,6 +874,22 @@ for the team, and the Mac targets ask for one by team id.  The macOS UI
 test now signs ad hoc, which is enough for a test bundle and its host on
 the machine that runs it.
 
+**What the second CI run found.**  The hosted runner's automation session
+does not see the Mac app's window.  Runs 45068164411 and 45073642226 both
+show the app launching, the automation session coming up and the app going
+idle, and `Descendants matching type Window` empty for the whole 60
+seconds.  The second run had `-ApplePersistenceIgnoreState` out of the
+launch arguments, so that flag is not the cause:  the flag contradicted the
+comment beside it and is gone, and the window is missing either way.
+
+That leaves the Mac UI test without a verdict on this runner.  The test
+skips, loudly, when the window is not visible and the result bundle carries
+the tree the runner did see, because a failure there would be a false alarm
+on every run.  What it can still answer is that the app launched and
+stayed alive.  The open step is a runner that can show the Mac app's
+window:  until then the Mac surface is exercised but not verified, and the
+script's exit 10 is what tells the workflow that the host could not host it.
+
 ### Task 5: Reduce Motion at every animation site
 
 Six animation sites ignore Reduce Motion.  The token layer already ships the Reduce Motion-aware modifier; this routes the call sites through it.
