@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -15,10 +16,17 @@ const LITERAL =
 
 type Allowlist = Record<string, Record<string, number>>;
 
+// The allowlist is a file in the repository, so its shape is a trust
+// boundary:  a schema means a drifted file fails here, loudly, instead of
+// quietly allowing a literal it should not or quietly forbidding one it
+// should.
+const AllowlistSchema = z.record(z.string(), z.record(z.string(), z.number()));
+
 function allowlist(): Allowlist {
-  return JSON.parse(
+  const raw = JSON.parse(
     readFileSync(join(ROOT, "tests/design-literal-allowlist.json"), "utf8"),
-  ) as Allowlist;
+  );
+  return AllowlistSchema.parse(raw);
 }
 
 function swiftFiles(): string[] {

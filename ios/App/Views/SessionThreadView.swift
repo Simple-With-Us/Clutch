@@ -1027,7 +1027,7 @@ public struct SessionThreadView: View {
                 .font(ClutchFont.footnote)
                 .foregroundStyle(.secondary)
             Text(queued)
-                .font(ClutchFont.callout)
+                .font(ClutchFont.caption)
                 .lineLimit(2)
             Spacer(minLength: 0)
             Button {

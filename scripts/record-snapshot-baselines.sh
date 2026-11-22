@@ -40,7 +40,10 @@ for test in manifest:
         source = attachment.get("exportedFileName")
         if not source:
             continue
-        target = os.path.join(dest, name)
+        # The bundle looks a baseline up as Baselines/<name>.png, so the
+        # lifted file has to carry that name.  The "-baseline" suffix is the
+        # attachment's marker, not part of the baseline's name.
+        target = os.path.join(dest, name[: -len("-baseline")] + ".png")
         shutil.copyfile(os.path.join(work, source), target)
         written.append(target)
 

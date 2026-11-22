@@ -389,6 +389,14 @@ public struct SessionsView: View {
             }
             .frame(minHeight: 44)
             .tag(HomeSelection.agentChat)
+            // The row is one thing to VoiceOver, not three:  the icon, the
+            // title and the subtitle are combined into a single element with
+            // one name, the way a thread row names itself.  The row behaves
+            // as a button because tapping it opens the agent conversation.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Agent Chat, The always-there conversation")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("agent-chat-row")
         }
         #endif
     }

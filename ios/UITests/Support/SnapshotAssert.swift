@@ -40,12 +40,16 @@ extension XCTestCase {
     ///
     /// The element is captured rather than the screen, so a baseline does not
     /// depend on the size of the machine that produced it.
+    ///
+    /// The call throws when there is no baseline to compare against yet, so
+    /// the test is reported as skipped rather than as passed:  a state that
+    /// was never compared is not a state that passed.
     func assertSnapshot(
         _ name: String,
         of element: XCUIElement,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) {
+    ) throws {
         guard element.exists else {
             XCTFail(
                 "\(name) could not be captured: the element does not exist",
@@ -70,14 +74,22 @@ extension XCTestCase {
                 return
             }
             // There is no baseline to compare against yet.  That is not a
-            // pass and it is not a failure: it is a gap, and it says so.
-            // A machine with a simulator runtime records the baseline and
+            // pass:  the state was not compared, and a test that reports a
+            // pass for a state it never looked at is the green build that
+            // proves nothing.  So the test skips, loudly, and the result
+            // bundle says which state was not compared.
+            //
+            // A machine with a simulator runtime records the baseline, and
             // the recording is lifted out of the result bundle by
             // scripts/record-snapshot-baselines.sh.
             print(
                 "SNAPSHOT-GAP: no baseline named \(name).png; this state was not compared"
             )
-            return
+            throw XCTSkip(
+                "no baseline named \(name).png; this state was not compared",
+                file: file,
+                line: line
+            )
         }
 
         guard let baseline = Self.decode(baselineData), let shot = Self.decode(current) else {

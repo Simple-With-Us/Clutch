@@ -50,7 +50,6 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         // test with nothing to look at.
         app.launchArguments = [
             "-ClutchResetHosts",
-            "-ApplePersistenceIgnoreState", "YES",
             "-ClutchWindowSize", "1040x760",
         ]
         app.launchEnvironment["CLUTCH_HOME"] = home.path
@@ -93,16 +92,20 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         app.windows.firstMatch
     }
 
-    /// Waits for the workspace window to show up, and skips the test when it
+    /// Waits for the workspace window to show up, and fails the test when it
     /// never does.
     ///
     /// A macOS window that sits on a space the runner is not showing is not
     /// in the accessibility tree, so the runner can be looking at an app
-    /// that plainly has a window and still see nothing.  That is a fact
-    /// about the machine, not a defect in the surface, and a test that
-    /// failed on it would be a false alarm.  So the test skips, loudly, and
-    /// the result bundle says which state it was in.
-    private func waitForWindow(timeout: TimeInterval = 60) throws {
+    /// that plainly has a window and still see nothing.  The app answers
+    /// that case itself:  the test window modifier moves its window to the
+    /// active space and brings it to the front, so a runner that can host
+    /// the test at all sees the window too.
+    ///
+    /// A window that still never appears is a defect in the surface, and the
+    /// test says so.  Skipping here would be a green build that proved
+    /// nothing, which is the state this test exists to end.
+    private func waitForWindow(timeout: TimeInterval = 60) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if app.windows.count > 0 { return }
@@ -111,16 +114,16 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         }
         snap("mac-window-missing")
         dump("mac-window-tree")
-        throw XCTSkip(
-            "the runner could not see the Mac app's window; the app may hold it on a space "
-                + "the runner is not showing"
+        XCTFail(
+            "the Mac app never opened a window the runner could see; the app may hold it on a "
+                + "space the runner is not showing"
         )
     }
 
     func testWorkspaceOpensAndListsTheStubThread() throws {
         app.launch()
 
-        try waitForWindow()
+        waitForWindow()
 
         // The sidebar is the Mac app's own chrome.  Its presence says the
         // window rendered rather than sat on a spinner.
@@ -144,13 +147,13 @@ final class ClutchMacSurfaceUITests: XCTestCase {
 
         let window = normalizedWindow()
         snap("mac-workspace-threads")
-        assertSnapshot("mac-workspace-threads", of: window)
+        try assertSnapshot("mac-workspace-threads", of: window)
     }
 
     func testWorkspaceShowsTheEngineCatalogTheStubServed() throws {
         app.launch()
 
-        try waitForWindow()
+        waitForWindow()
 
         // The engine picker carries the name the stub's engine catalog
         // served.  A workspace with no host shows a different engine, so the
@@ -166,6 +169,6 @@ final class ClutchMacSurfaceUITests: XCTestCase {
 
         let window = normalizedWindow()
         snap("mac-workspace-engine")
-        assertSnapshot("mac-workspace-engine", of: window)
+        try assertSnapshot("mac-workspace-engine", of: window)
     }
 }

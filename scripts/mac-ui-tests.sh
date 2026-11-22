@@ -26,6 +26,26 @@ export TEST_RUNNER_CLUTCH_SNAPSHOT_DIR="${CLUTCH_SNAPSHOT_DIR:-}"
 cd "$IOS_DIR" || exit 1
 xcodegen generate || exit 1
 
+# The workflow turns exit 10 into a warning and a skip, so the script has to
+# be able to say "there is nothing here to run".  A runner that offers no
+# macOS destination cannot host the UI test, and the run skips with that
+# answer instead of failing on a machine that was never able to run it.
+#
+# The listing has to succeed for the skip to be allowed:  a listing that
+# fails is a broken project, and that is an error rather than a skip.
+DESTINATIONS="$(xcodebuild -project Clutch.xcodeproj -scheme "Clutch macOS" -showdestinations 2>&1)"
+show_status=$?
+if [ "$show_status" -ne 0 ]; then
+  log "xcodebuild could not list the destinations of the 'Clutch macOS' scheme"
+  printf '%s\n' "$DESTINATIONS" >&2
+  exit 1
+fi
+if ! printf '%s\n' "$DESTINATIONS" | grep -qE 'platform[:=]macOS'; then
+  log "skipped: no runnable macOS UI test host on this machine"
+  printf '%s\n' "$DESTINATIONS" >&2
+  exit 10
+fi
+
 # xcodebuild refuses to write over an existing result bundle, and a failed
 # run leaves one behind.  Clearing it keeps a rerun working.
 rm -rf "$RESULT_BUNDLE"
