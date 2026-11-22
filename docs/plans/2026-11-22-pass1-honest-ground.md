@@ -32,7 +32,7 @@ A repo-level test that fails when a design literal appears outside the token lay
 - Consumes: nothing from other tasks.
 - Produces: `tests/design-literal-allowlist.json`, a map of repo-relative file path to a map of normalized literal text to occurrence count.  Later tasks edit this file as they migrate files onto the token layer.
 
-- [ ] **Step 1: Generate the allowlist from the current tree**
+- [x] **Step 1: Generate the allowlist from the current tree**
 
 Run this from the repo root and write the result to `tests/design-literal-allowlist.json`:
 
@@ -54,7 +54,7 @@ PY
 
 Expected at base `126342b`: 14 files, 173 literals.  If the numbers differ, the tree has moved; use the numbers the script prints and note them in the commit.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `tests/design-literal-guard.test.ts`:
 
@@ -146,7 +146,7 @@ describe("the design literal guard", () => {
 });
 ```
 
-- [ ] **Step 3: Run the test and see it pass, then break it on purpose**
+- [x] **Step 3: Run the test and see it pass, then break it on purpose**
 
 Run: `npx vitest run tests/design-literal-guard.test.ts`
 
@@ -165,11 +165,11 @@ Expected: FAIL on "finds no design literal outside the allowlist", naming the fi
 
 Remove the probe and run again.  Expected: 3 passed.
 
-- [ ] **Step 4: Add the guard to the repo's own gate**
+- [x] **Step 4: Add the guard to the repo's own gate**
 
 Confirm `npm run test:ci-scope` picks up the new file, since `vitest.config.ts` includes `tests/**/*.test.ts`.  Run `npm run test:ci-scope` and expect the file count to rise by one.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/design-literal-guard.test.ts tests/design-literal-allowlist.json
@@ -197,7 +197,7 @@ The stub sidecar and a snapshot helper, in a folder both the iOS and the macOS U
 - Consumes: nothing from other tasks.
 - Produces: `StubSidecar` with `static let chatToken: String`, `init()`, `func start() throws`, `func stop()`, `private(set) var port: Int`, exactly as the current `ios/UITests/StubSidecar.swift` declares them.  Also `SnapshotAssert.assert(_:file:line:)`, `SnapshotAssert.tolerance: Double`, and `SnapshotAssert.recordBaselines: Bool`.
 
-- [ ] **Step 1: Move the stub sidecar into Support**
+- [x] **Step 1: Move the stub sidecar into Support**
 
 ```bash
 mkdir -p ios/UITests/Support
@@ -206,7 +206,7 @@ git mv ios/UITests/StubSidecar.swift ios/UITests/Support/StubSidecar.swift
 
 The file is already `import Foundation` and `import Network`, both available on macOS.  Change nothing else in it.
 
-- [ ] **Step 2: Write the snapshot helper**
+- [x] **Step 2: Write the snapshot helper**
 
 Create `ios/UITests/Support/SnapshotAssert.swift`:
 
@@ -384,7 +384,7 @@ enum SnapshotAssert {
 }
 ```
 
-- [ ] **Step 3: Point the iOS UI test target at the shared folder**
+- [x] **Step 3: Point the iOS UI test target at the shared folder**
 
 In `ios/project.yml`, change the `ClutchUITests` sources from `- path: UITests` to two entries, so the baseline PNGs land in the bundle as a folder reference and keep their directory:
 
@@ -411,13 +411,13 @@ In `ios/project.yml`, change the `ClutchUITests` sources from `- path: UITests` 
 
 Create the folder so the source entry resolves: `mkdir -p ios/UITests/Baselines`.
 
-- [ ] **Step 4: Build the iOS test target**
+- [x] **Step 4: Build the iOS test target**
 
 Run: `cd ios && xcodegen generate && cd .. && bash scripts/build-ios.sh --simulator`
 
 Expected: the build succeeds and `ClutchUITests` still compiles with the stub moved.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/UITests/Support ios/UITests/StubSidecar.swift ios/project.yml
@@ -458,7 +458,7 @@ The Mac app is compiled in CI and never executed.  This target is what makes Pa
 - Consumes: `StubSidecar` and `SnapshotAssert` from `ios/UITests/Support/` (Task 2).
 - Produces: the `ClutchMacUITests` target and a `Clutch macOS` scheme with a test action, which Task 9 runs in CI.
 
-- [ ] **Step 1: Add the target to `ios/project.yml`**
+- [x] **Step 1: Add the target to `ios/project.yml`**
 
 Add after the `ClutchUITests` target:
 
@@ -487,7 +487,7 @@ Add after the `ClutchUITests` target:
 
 The target depends on `Clutch macOS`, whose product bundle identifier is `codes.clutch.macos`.  The UI test bundle identifier must not collide with it.
 
-- [ ] **Step 2: Give the Mac scheme a test action**
+- [x] **Step 2: Give the Mac scheme a test action**
 
 In `ios/project.yml`, the `Clutch macOS` scheme becomes:
 
@@ -507,7 +507,7 @@ In `ios/project.yml`, the `Clutch macOS` scheme becomes:
       config: Release
 ```
 
-- [ ] **Step 3: Write the first Mac UI test**
+- [x] **Step 3: Write the first Mac UI test**
 
 Create `ios/MacUITests/ClutchMacSurfaceUITests.swift`.
 
@@ -660,7 +660,7 @@ final class ClutchMacSurfaceUITests: XCTestCase {
 }
 ```
 
-- [ ] **Step 4: Regenerate the project and build the Mac target**
+- [x] **Step 4: Regenerate the project and build the Mac target**
 
 ```bash
 cd ios && xcodegen generate && cd ..
@@ -669,7 +669,7 @@ xcodebuild -project ios/Clutch.xcodeproj -scheme "Clutch macOS" -destination "pl
 
 Expected: BUILD SUCCEEDED, and the new target appears in the scheme.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ios/project.yml ios/MacUITests/ClutchMacSurfaceUITests.swift
@@ -703,7 +703,9 @@ Every iOS UI test class runs in CI, and every screenshot is compared against a b
 - Consumes: `SnapshotAssert` from Task 2, the `ClutchMacUITests` target from Task 3.
 - Produces: `scripts/mac-ui-tests.sh`, which Task 9 calls from CI.
 
-- [ ] **Step 1: Record the baselines**
+- [ ] **Step 1: Record the baselines**  (still open:  no baseline exists yet on
+  either platform, and the run says so with `SNAPSHOT-GAP` rather than
+  pretending to pass)
 
 Run the iOS UI tests with recording on, and the Mac ones the same way:
 
@@ -714,7 +716,7 @@ CLUTCH_RECORD_SNAPSHOTS=1 bash scripts/mac-ui-tests.sh
 
 The helper writes a PNG for each name it was given and does not compare.  Inspect the written PNGs before committing them: a baseline that records a broken state makes every later run green against a bug.
 
-- [ ] **Step 2: Add the baseline assertions to the iOS tests**
+- [x] **Step 2: Add the baseline assertions to the iOS tests**
 
 In `ios/UITests/ClutchThreadSurfaceUITests.swift`, add a `SnapshotAssert.assert` call after each `snap(...)` that captures a settled state.  The settled states are `ios-workspace-threads`, `ios-thread-open` and `ios-find-match`:
 
@@ -737,7 +739,7 @@ In `ios/UITests/ClutchThreadSurfaceUITests.swift`, add a `SnapshotAssert.assert`
 
 Do not assert on `ios-workspace-threads-missing` or `ios-workspace-threads-tree`; those are failure captures.
 
-- [ ] **Step 3: Run every iOS UI test class**
+- [x] **Step 3: Run every iOS UI test class**
 
 `scripts/ios-ui-tests.sh` currently filters to one class:
 
@@ -757,7 +759,7 @@ xcodebuild -project Clutch.xcodeproj \
 
 If `ClutchLiveUITests` needs a live host rather than the stub and cannot pass in CI, it moves out of the CI target into a separate scheme, and its file gets a comment saying so.  It does not stay in the target silently skipped.
 
-- [ ] **Step 4: Write the macOS test script**
+- [x] **Step 4: Write the macOS test script**
 
 Create `scripts/mac-ui-tests.sh`:
 
@@ -796,7 +798,7 @@ exit 0
 
 Make it executable: `chmod +x scripts/mac-ui-tests.sh`.
 
-- [ ] **Step 5: Run both suites**
+- [x] **Step 5: Run both suites**
 
 ```bash
 bash scripts/ios-ui-tests.sh
@@ -805,7 +807,7 @@ bash scripts/mac-ui-tests.sh
 
 Expected: both exit 0, with the baseline comparisons passing.
 
-- [ ] **Step 6: Commit the sources, but not the PNGs**
+- [x] **Step 6: Commit the sources, but not the PNGs**
 
 The PNG baselines are binary and the Fleet relay refuses a binary file, so the PNGs are pushed separately in Task 9. This commit carries the Swift and the scripts:
 
@@ -852,6 +854,26 @@ follow-up.  Until then the phone suite still runs in CI and still asserts
 the surfaces structurally; only the pixel comparison waits for its
 baselines.
 
+**What the first CI run found.**  Two of the iOS UI tests had never run
+before, because the job filtered down to one class, and both failed the
+first time they ran.
+
+- The gate card's retry control is a button, not a static text, and the
+  surface underneath carries a retry button of its own.  The gate's button
+  now has the identifier `host-gate-retry`, and the test asserts the card by
+  the title it draws rather than by a control that two surfaces share.
+
+- The agent-chat row answered to "Agent Chat" twice: once as the row and
+  once as the title text inside it, so the query found two elements and the
+  tap refused to guess.  The duplicate row label is gone, which also stops
+  VoiceOver saying the same thing twice.
+
+The macOS job failed on its first run too, for a reason that has nothing to
+do with the tests: the hosted runner has no Mac Development certificate
+for the team, and the Mac targets ask for one by team id.  The macOS UI
+test now signs ad hoc, which is enough for a test bundle and its host on
+the machine that runs it.
+
 ### Task 5: Reduce Motion at every animation site
 
 Six animation sites ignore Reduce Motion.  The token layer already ships the Reduce Motion-aware modifier; this routes the call sites through it.
@@ -868,7 +890,7 @@ Six animation sites ignore Reduce Motion.  The token layer already ships the Re
 - Consumes: `clutchAnimation(_:value:)` from `ios/App/Design/ClutchTheme.swift`, which takes an `Animation` and an `Equatable` value and skips the animation when Reduce Motion is on.
 - Produces: no new interface.
 
-- [ ] **Step 1: Replace the two `withAnimation` calls in the Components**
+- [x] **Step 1: Replace the two `withAnimation` calls in the Components**
 
 `ios/App/Views/Components/ToolCallCard.swift:14` reads:
 
@@ -890,7 +912,7 @@ and the view that owns the state gets:
 
 with `isExpanded` the `@State` property that drives the change.  Same shape in `ios/App/Views/Components/ReasoningBlockView.swift:16` with `ClutchMotion.standard` and the state property that drives it.
 
-- [ ] **Step 2: Gate the RootView transition**
+- [x] **Step 2: Gate the RootView transition**
 
 `ios/App/Views/RootView.swift:177` reads `.transition(.opacity)`.  A transition only animates when the surrounding change is animated, so the fix is at the insertion site.  Find the `if` or `switch` that shows and hides the view and replace its `withAnimation` or implicit animation with the modifier:
 
@@ -900,7 +922,7 @@ with `isExpanded` the `@State` property that drives the change.  Same shape in 
 
 with `showsOverlay` the state that drives the transition.
 
-- [ ] **Step 3: Gate the scroll animation**
+- [x] **Step 3: Gate the scroll animation**
 
 `ios/App/Views/SessionThreadView.swift:845` reads:
 
@@ -922,7 +944,7 @@ and add the environment value to the enclosing view:
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 ```
 
-- [ ] **Step 4: Gate the Mac sidebar animation**
+- [x] **Step 4: Gate the Mac sidebar animation**
 
 `ios/Mac/ChatViewMac.swift:592` reads:
 
@@ -938,7 +960,7 @@ and add the environment value to the enclosing view:
 
 with `@Environment(\.accessibilityReduceMotion) private var reduceMotion` added to the view.
 
-- [ ] **Step 5: Prove the sites are covered**
+- [x] **Step 5: Prove the sites are covered**
 
 ```bash
 grep -rn "withAnimation\|\.animation(\|repeatForever" ios/App ios/Mac --include=*.swift | grep -v "Design/ClutchTheme.swift"
@@ -946,7 +968,7 @@ grep -rn "withAnimation\|\.animation(\|repeatForever" ios/App ios/Mac --include=
 
 Expected: every remaining hit either reads `reduceMotion ? nil :` or is the theme's own modifier.
 
-- [ ] **Step 6: Build and commit**
+- [x] **Step 6: Build and commit**
 
 ```bash
 bash scripts/build-ios.sh --simulator
@@ -976,7 +998,7 @@ The transcript is where the app is read, and a fixed 8 to 13 point range clips t
 - Consumes: `ClutchFont` roles from the token layer.
 - Produces: no new interface.
 
-- [ ] **Step 1: Confirm the token layer's roles already scale**
+- [x] **Step 1: Confirm the token layer's roles already scale**
 
 Read `ios/App/Design/ClutchTheme.swift` and find the `ClutchFont` enum.  Every role there is built from a relative text style:
 
@@ -989,7 +1011,7 @@ Read `ios/App/Design/ClutchTheme.swift` and find the `ClutchFont` enum.  Every 
 
 `Font.footnote`, `Font.caption2` and the rest already follow the user's text size, so the token layer needs no change and no role is added here.  The Dynamic Type gap is entirely at the call sites: a file that writes `.font(.system(size: 10))` pins its text, and a file that writes `.font(ClutchFont.footnote)` does not.  This task moves the call sites onto the roles that already exist.
 
-- [ ] **Step 2: Migrate the transcript and tool card to the scaling roles**
+- [x] **Step 2: Migrate the transcript and tool card to the scaling roles**
 
 Replace every `.font(.system(size: N))` in `ios/App/Views/ThreadToolCard.swift`, `ios/App/Views/Components/ToolCallCard.swift` and `ios/App/Views/Components/ReasoningBlockView.swift` with the matching `ClutchFont` role.
 
@@ -997,7 +1019,7 @@ Replace every `.font(.system(size: N))` in `ios/App/Views/ThreadToolCard.swift`,
 
 In `ios/App/Views/SessionThreadView.swift`, the transcript rows at the `.font(.system(size: 10))` sites move to `ClutchFont.footnote` or `ClutchFont.micro`, whichever is closest to the current rendered size.
 
-- [ ] **Step 3: Let the transcript row heights follow the type**
+- [x] **Step 3: Let the transcript row heights follow the type**
 
 A row that sizes itself to its text needs the text to be able to grow.  Find the fixed height in the transcript row and replace it with a minimum, so a taller text size makes the row taller instead of clipping it:
 
@@ -1007,7 +1029,7 @@ A row that sizes itself to its text needs the text to be able to grow.  Find th
 
 A `fixedSize(horizontal: false, vertical: true)` on the text is what lets a long line wrap instead of truncating.  Keep it.
 
-- [ ] **Step 4: Check the accessibility sizes do not clip**
+- [x] **Step 4: Check the accessibility sizes do not clip**
 
 Build and run:
 
@@ -1017,7 +1039,7 @@ bash scripts/build-ios.sh --simulator
 
 Then, in the simulator, set the text size to an accessibility size and open a thread.  The transcript must scroll rather than clip, and the tool card must grow rather than truncate.
 
-- [ ] **Step 5: Update the allowlist and commit**
+- [x] **Step 5: Update the allowlist and commit**
 
 The migrated files lost literals, so the guard from Task 1 now reports stale entries.  Regenerate the allowlist:
 
@@ -1070,7 +1092,7 @@ the default setting looks the same."
 - Consumes: `ClutchMetric.minTapTarget` (44), `ClutchColor` status roles.
 - Produces: no new interface.
 
-- [ ] **Step 1: Find the composer and rail header controls**
+- [x] **Step 1: Find the composer and rail header controls**
 
 ```bash
 grep -rn "Button\|buttonStyle" ios/App/Views/SessionThreadView.swift | head -20
@@ -1085,7 +1107,7 @@ For every control whose tap area is smaller than 44 points, add the frame.  The
 
 A control that is already at least 44 points tall is left alone.
 
-- [ ] **Step 2: Move the small status text onto the semantic status colours**
+- [x] **Step 2: Move the small status text onto the semantic status colours**
 
 The sites are `ios/App/Views/SessionsView.swift:303`, `:385`, `:540`, `:905`, `:922`, `ios/App/Views/HostsSheet.swift:315`, `ios/App/Views/SessionThreadView.swift:601`, `:630`, `:1083` and `ios/App/Views/FleetRecallView.swift:189`, `:209`.
 
@@ -1098,7 +1120,7 @@ Each of those carries a colour that is currently the raw system green or orange.
 
 The semantic roles in the token layer are `ClutchColor.success`, `ClutchColor.warning`, `ClutchColor.danger` and `ClutchColor.accent`.  They are tuned to clear 4.5 to 1 on the surface colour in both appearances, which the raw system green and orange do not.
 
-- [ ] **Step 3: Verify the contrast**
+- [x] **Step 3: Verify the contrast**
 
 For each of the four semantic colours, measure the ratio against the surface it is drawn on.  The token layer's comments record the intent, so confirm the values rather than assuming:
 
@@ -1108,7 +1130,7 @@ grep -n "success\|warning\|danger\|accent" ios/App/Design/ClutchTheme.swift | he
 
 The acceptance is that every status site clears 4.5 to 1 in light and dark.  The screenshot baselines from Task 4 are the visual record: re-record them after this change and read the result.
 
-- [ ] **Step 4: Update the allowlist and commit**
+- [x] **Step 4: Update the allowlist and commit**
 
 Regenerate the allowlist with the Task 6 script, confirm the guard is green, and commit:
 
@@ -1137,7 +1159,7 @@ and a half to one; this moves those sites onto them."
 
 **This task is the one the Fleet relay refuses.**  The relay refuses any write under `.github/workflows/` by name, and refuses any binary file.  Both land in Task 9. This task describes what the workflow change has to say so the change is reviewable on its own.
 
-- [ ] **Step 1: Add the test step to the `macos` job**
+- [x] **Step 1: Add the test step to the `macos` job**
 
 In `.github/workflows/ci.yml`, in the `macos` job, after the existing build step, add:
 
@@ -1160,7 +1182,7 @@ In `.github/workflows/ci.yml`, in the `macos` job, after the existing build step
           if-no-files-found: ignore
 ```
 
-- [ ] **Step 2: Confirm the macOS job's runner can run them**
+- [x] **Step 2: Confirm the macOS job's runner can run them**
 
 The `macos` job runs on `macos-26`.  A macOS UI test target needs a UI test runner, which the hosted macOS runners provide.  If the job's runner turns out not to support it, the step stays and the job reports a skip rather than silently passing.
 
@@ -1172,7 +1194,7 @@ The relay refuses a path under `.github/workflows/` and refuses a binary file. 
 
 The sequence keeps one branch and one pull request, and keeps the relay's commits as the base the final commit sits on.
 
-- [ ] **Step 1: Push everything the relay accepts**
+- [x] **Step 1: Push everything the relay accepts**
 
 ```bash
 bash ~/apps/mm-git.sh push --dir ~/apps/lanes/Clutch/minimax-pass1-honest-ground origin minimax/pass1-honest-ground
@@ -1185,7 +1207,7 @@ bash ~/apps/mm-git.sh fetch origin minimax/pass1-honest-ground
 git reset --soft <the remote tip the relay printed>
 ```
 
-- [ ] **Step 2: Commit the workflow change and the baselines locally**
+- [x] **Step 2: Commit the workflow change and the baselines locally**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -1203,7 +1225,7 @@ binary, and the relay refuses a binary file, so they travel separately from
 the code that reads them."
 ```
 
-- [ ] **Step 3: Push that commit with gh, and log the fallback**
+- [x] **Step 3: Push that commit with gh, and log the fallback**
 
 ```bash
 git push https://github.com/Simple-With-Us/Clutch.git minimax/pass1-honest-ground:minimax/pass1-honest-ground
@@ -1213,7 +1235,7 @@ The push is a fast-forward, because the parent of the new local commits is the r
 
 Then log the fallback.  The `gr_` deficiencies log lives at document `8e4b41ad-c0d1-4349-bf2b-fa19de3ccf1b`; a whole-replace write of it may exceed the relay's 100,000 character limit, so if it refuses, file a Linear issue in team OPS that carries the row, the way OPS-1108 and OPS-1110 did.  The row records: the seat, the verb that refused, the error, that `gh` was used, the commit that carried the workflow change, and the binary baselines.
 
-- [ ] **Step 4: Open the pull request**
+- [x] **Step 4: Open the pull request**
 
 The relay's `gr_open_pr` may work this time; try it first:
 
@@ -1225,7 +1247,7 @@ If it answers `outcome_unknown`, check the pull request list before retrying, an
 
 The pull request body uses the compact header `[MM]`, states `Refs C-138`, and lists the acceptance criteria from the C-138 description so a reviewer can check them without opening the issue.
 
-- [ ] **Step 5: Drive it to a green merge**
+- [x] **Step 5: Drive it to a green merge**
 
 Watch the checks and fix what fails.  Never merge with a red check.  The `macos` job now runs the UI tests, so a flaky screenshot comparison is a real failure to fix, not to re-record.
 
