@@ -435,6 +435,16 @@ artifact."
 
 ---
 
+**What the implementation found.**  The stub needed two more routes than the
+plan listed.  The Mac app asks the sidecar for `/clutch/v1/session-meta`
+before it draws the thread list, and it previews a thread through
+`/clutch/v1/sessions/preview` before a thread is resumed, so a stub that
+answered only the four planned routes left the Mac surface reporting
+metadata errors over a working thread.  The stub also moved off
+`Network.framework`:  a `NWListener` fails to bind on the macOS host with
+"Invalid argument" while a plain POSIX socket binds, and one implementation
+that works on both platforms beats two that do not.
+
 ### Task 3: The macOS UI test target
 
 The Mac app is compiled in CI and never executed.  This target is what makes Pass 2 reviewable.
@@ -499,32 +509,85 @@ In `ios/project.yml`, the `Clutch macOS` scheme becomes:
 
 - [ ] **Step 3: Write the first Mac UI test**
 
-Create `ios/MacUITests/ClutchMacSurfaceUITests.swift`:
+Create `ios/MacUITests/ClutchMacSurfaceUITests.swift`.
+
+The Mac app is the host, not a companion, so it has no pairing card.  It
+boots straight into the Workspace and finds its first host by adopting
+`$CLUTCH_HOME/web-launch-url`, which the test points at the stub.  That is
+the path a real first run takes, so the test never depends on whatever the
+machine running it happens to have paired.
+
+Two things about the Mac app had to be made answerable before a test could
+ask it anything.  The window size and the thread rail width are both
+restored from the last run on the machine, so the app takes a
+`-ClutchWindowSize` argument that pins the window and drops the saved rail
+width.  And the window can open on a space the machine was not showing,
+where it is not in the accessibility tree at all, so the same argument
+orders the window forward before the test looks for it.
+
+`-ApplePersistenceIgnoreState` is deliberately not used.  It tells AppKit to
+ignore the saved state, and a SwiftUI app that ignores its saved state
+opens no window at all, which leaves the test with nothing to look at.
 
 ```swift
 import XCTest
 
-/// The macOS surfaces, exercised against the same stub sidecar the iOS suite
+/// The macOS workspace, exercised against the same stub sidecar the iOS suite
 /// drives, so both platforms are measured against one server.
 ///
-/// The Mac target is compiled in CI and was never executed.  These tests are
-/// what change that: a failure on the Mac surface ends a build.
+/// The Mac target was compiled in CI and never executed, so no defect on the
+/// Mac surface could fail a build.  These tests are what change that.
 final class ClutchMacSurfaceUITests: XCTestCase {
     private var app: XCUIApplication!
     private var stub: StubSidecar!
+    private var home: URL!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        stub = try StubSidecar()
+        stub = StubSidecar()
         try stub.start()
+
+        home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clutch-mac-uitest-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+
+        // The launch URL is the pairing the Mac app adopts on first run, and
+        // the token file is the sidecar credential it backfills onto a
+        // loopback host.  Both point at the stub, never at a real install.
+        try Self.write(
+            "clutch://pair?host=127.0.0.1&port=3180&kind=mcode"
+                + "&chat=\(StubSidecar.chatToken)&chatPort=\(stub.port)",
+            to: home.appendingPathComponent("web-launch-url")
+        )
+        try Self.write(
+            StubSidecar.chatToken,
+            to: home.appendingPathComponent("chat-token")
+        )
+
         app = XCUIApplication()
-        app.launchArguments = ["-ClutchResetHosts"]
+        // The window size and the rail width are both restored from the last
+        // run on the machine, so the app is asked to open at a fixed size and
+        // to drop the saved rail width.  That is what makes the surface
+        // under test the same surface on every machine.
+        app.launchArguments = [
+            "-ClutchResetHosts",
+            "-ClutchWindowSize", "1040x760",
+        ]
+        app.launchEnvironment["CLUTCH_HOME"] = home.path
     }
 
     override func tearDownWithError() throws {
         stub?.stop()
         app = nil
         stub = nil
+        if let home {
+            try?  FileManager.default.removeItem(at: home)
+        }
+        home = nil
+    }
+
+    private static func write(_ text: String, to url: URL) throws {
+        try text.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func snap(_ name: String) {
@@ -541,36 +604,58 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         add(tree)
     }
 
-    func testWindowOpensOnThePairingCard() throws {
-        app.launch()
-        XCTAssertTrue(
-            app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30),
-            "the Mac app did not show its pairing card"
-        )
-        snap("mac-pairing")
-        SnapshotAssert.assert("mac-pairing")
+    /// The window under test.
+    ///
+    /// The launch arguments make the app open one window at its declared
+    /// size, so the capture is the same picture on every machine.
+    private func normalizedWindow() -> XCUIElement {
+        app.windows.firstMatch
     }
 
-    func testPairingReachesTheThreadList() throws {
-        app.launchArguments = ["-ClutchResetHosts"]
+    func testWorkspaceOpensAndListsTheStubThread() throws {
         app.launch()
-        XCTAssertTrue(app.staticTexts["Pair With Clutch"].waitForExistence(timeout: 30))
 
-        let link = try XCTUnwrap(URL(string:
-            "clutch://pair?h=127.0.0.1&tls=0&kind=mcode&chat=\(StubSidecar.chatToken)&chatPort=\(stub.port)"))
-        app.open(link)
+        // The sidebar is the Mac app's own chrome.  Its presence says the
+        // window rendered rather than sat on a spinner.
+        XCTAssertTrue(
+            app.staticTexts["Threads"].waitForExistence(timeout: 60),
+            "the Mac workspace did not draw its thread sidebar"
+        )
 
-        // The Mac app opens its own window, so the thread row appears in
-        // the window the app just brought forward.
+        // The thread row is the proof the app really talked to the stub over
+        // the sidecar's own session route.  Nothing else in this test can
+        // fake that.
         let thread = app.buttons["Thread, Fix The Login Redirect"].firstMatch
-        if !thread.waitForExistence(timeout: 30) {
-            snap("mac-threads-missing")
-            dump("mac-threads-tree")
+        if !thread.waitForExistence(timeout: 60) {
+            snap("mac-workspace-threads-missing")
+            dump("mac-workspace-threads-tree")
             XCTFail("the stub's thread did not appear in the Mac thread list")
+            return
         }
-        thread.tap()
-        snap("mac-thread-open")
-        SnapshotAssert.assert("mac-thread-open")
+
+        let window = normalizedWindow()
+        snap("mac-workspace-threads")
+        assertSnapshot("mac-workspace-threads", of: window)
+    }
+
+    func testWorkspaceShowsTheEngineCatalogTheStubServed() throws {
+        app.launch()
+
+        // The engine picker carries the name the stub's engine catalog
+        // served.  A workspace with no host shows a different engine, so the
+        // name is the evidence that the app read the catalog over the
+        // sidecar and drew it.
+        let engine = app.menuButtons["MiniMax Code"].firstMatch
+        if !engine.waitForExistence(timeout: 60) {
+            snap("mac-engine-missing")
+            dump("mac-engine-tree")
+            XCTFail("the engine the stub served did not appear in the Mac workspace")
+            return
+        }
+
+        let window = normalizedWindow()
+        snap("mac-workspace-engine")
+        assertSnapshot("mac-workspace-engine", of: window)
     }
 }
 ```
@@ -738,6 +823,34 @@ attached, and the filter is gone."
 ```
 
 ---
+
+**What the implementation found.**  Two things about the comparison changed
+under the weight of a second machine.
+
+A baseline compared at full resolution fails on any runner that is not the
+one that recorded it, because the screen is a different size and the text is
+rendered by a different CoreText build.  The comparison therefore reduces
+both images to the same small grid first, which keeps a moved panel, a
+recoloured status, a missing row and a changed caption and drops the
+antialiasing noise underneath them.
+
+The record flag does not reach the test runner by being exported into the
+shell.  Xcode hands environment variables prefixed with `TEST_RUNNER_` to the
+runner process, so the scripts forward `CLUTCH_RECORD_SNAPSHOTS` and
+`CLUTCH_SNAPSHOT_DIR` that way.  Without the prefix the run compares against
+a baseline that was never recorded and fails with "no baseline named".
+
+**What is still open.**  The macOS baselines ship with this pass.  The iOS
+baselines do not, because the machine this was built on has no iOS simulator
+runtime installed and the phone suite cannot run there.  The iOS comparison
+is wired and it reports the gap rather than pretending to pass:  a state
+with no baseline prints `SNAPSHOT-GAP` and says it was not compared.  The CI
+runner downloads a runtime, so the baselines are recorded on the first CI
+run and lifted out of the result bundle by
+`scripts/record-snapshot-baselines.sh`, and they are committed in a
+follow-up.  Until then the phone suite still runs in CI and still asserts
+the surfaces structurally; only the pixel comparison waits for its
+baselines.
 
 ### Task 5: Reduce Motion at every animation site
 
