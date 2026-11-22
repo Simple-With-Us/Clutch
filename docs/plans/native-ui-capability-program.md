@@ -31,7 +31,7 @@ Measured in this lane against base `126342b`, not assumed.
 
 **No capability work has started.**  There are no typed tool cards, no diffs, no exit codes, no verbosity modes and no Live Activity.
 
-**A prior review left a defect open that Pass 3 must not repeat.**  The automated review of PR #296 reported, as an unresolved medium finding, that the permission notification may expose request details on a locked screen.  `TurnNotifier` was added that day and carries the request's headline and tool name.  Once a command or a diff is attached to a request, that detail is exactly what a Lock Screen must not show, so Pass 3 has to settle the redaction rule before it adds anything to the notification.
+**A landed redaction that Pass 3 must not widen.**  The automated review of PR #296 flagged that the permission notification may expose request details on a locked screen.  The shipped code answers it: `TurnNotifier.permissionRequest` takes only a thread title, and its comment states that the request text can carry tool commands and paths, so it stays behind the tap and the lock screen gets the thread's name only (`ios/App/Services/TurnNotifier.swift:16-19`).  That redaction is the baseline this program inherits.  Nothing in the repo stops a later change from widening that payload, so Pass 3 treats it as a line that has to be defended rather than a defect to repair.
 
 **One finding changes Pass 3's scope.**  The ACP `session/request_permission` params carry the tool's real input in `toolCall.rawInput` - the command for a shell tool, the path and old and new text for an edit.  The sidecar throws it away.  `PermissionParamsSchema` in `src/web/chat-bridge.ts:1284` keeps only `toolCallId`, `title` and `kind`, and the `PermissionRequest` interface it produces (`:1264`) has no field for the tool input.  The apps therefore render a headline and a tool name (`ios/App/Views/PermissionCard.swift:56`) and never the command, the path or the diff.  The evidence is available upstream and discarded at the boundary, so Pass 3 is not an app-only change.
 
@@ -160,13 +160,20 @@ This is the difference between a trust surface and a remote yes button for `rm -
 
 ### 3.3 Notification with actions and a deep link
 
-`TurnNotifier` already wakes the owner when a permission arrives.  Extend it: a time-sensitive notification with actions that answer the request without opening the app, and a deep link straight to the card.
+`TurnNotifier` already wakes the owner when a permission arrives.  Pass 3 extends it with a time-sensitive notification that carries actions, and a deep link straight to the card.
+
+Two rules govern that extension, and both come from the landed redaction rather than from taste.
+
+- **The locked payload stays as it is.**  The lock screen keeps the thread name and nothing else.  The tool name, the command, the path and the diff never reach it.  Widening the locked payload to show the tool name is an explicit owner decision, proposed as a delta with the exposure it adds stated, not a default this program picks.
+- **A locked device may deny, and may only open the app.**  The notification's actions are Deny and a deep link into the app.  Allow is not on the locked screen at all, because an allow nobody can read is an allow nobody informed.  Approving from a Lock Screen without the command, the path or the diff on it would make Face ID a signature on a blank page, and that is the exact failure the evidence rule in 3.2 exists to prevent.  The owner unlocks, sees the evidence, and allows there.
+
+The redaction is a constraint on the payload rather than a setting on the notification, so it holds for the notification action labels too and not only for the body.
 
 The notification carries no request detail while the device is locked.  A locked screen shows the tool name and the waiting count; the command, the path and the diff appear only after an unlock, and never in the notification body itself.  This closes the unresolved finding PR #296's review left open, and it is a constraint on the payload, not a setting on the notification.
 
 ### 3.4 Live Activity, Lock Screen and Control Center
 
-- A Live Activity rotating through up to three sessions, with a "2 waiting, 1 running" summary, titles and status only.
+- A Live Activity rotating through up to three sessions, with a "2 waiting, 1 running" summary, thread titles and status only, and no tool names and no request text, under the same redaction the notification follows.
 - A Lock Screen accessory count.
 - A Control Center action.
 - A small push relay on the host, so the phone can be reached when the app is not running.  This is the one piece of real infrastructure in the program and it is the main schedule risk.
@@ -177,9 +184,11 @@ The notification carries no request detail while the device is locked.  A locke
 - On the phone, an allow requires Face ID or Touch ID, and a deny never does.
 - There is no "Always allow" on the phone.
 - A permission arriving while the app is backgrounded produces a time-sensitive notification that can answer the request.
-- A locked screen shows the tool name and the waiting count, and never the command, the path or the diff.
+- A locked screen shows the thread name and nothing else, and never the command, the path, the diff or the tool name.
+- The locked notification offers Deny and an open-app action.  It does not offer Allow.
+- An allow requires the app to be open, unlocked, and showing the command, the path or the diff.
 - The Live Activity shows up to three sessions and a waiting count.
-- The whole loop is walkable on a real phone: start a turn on the Mac, approve it from the Lock Screen, and read the result without opening the app.
+- The whole loop is walkable on a real phone: start a turn on the Mac, see the approval on the Lock Screen, deep link into the app, unlock, read the command or the diff, allow it with Face ID, and read the result.  The Lock Screen alone can deny.
 
 ## Sequencing rationale
 
@@ -221,4 +230,5 @@ Pass 3 is last because it is the only pass with infrastructure risk.  It should
 
 1. **The push relay.**  Pass 3 wants the phone reachable when the app is not running.  That needs a small relay on the host.  Is a relay acceptable, or should the phone reach the host the way the app already does, over the tailnet?
 2. **Face ID on the Mac too.**  Pass 3 puts Touch ID in front of an allow on the phone.  The Mac already has the owner at the keyboard.  Should the Mac gate allows the same way, or stay ungated?
-3. **The icon.**  The overhaul plan wants the icon rebuilt from the wordmark with dark and tinted variants and the full macOS size set.  AGENTS.md puts that art with the owner.  Is there art, or does the program ship with the current icon?
+3. **The locked-screen payload.**  The lock screen shows the thread name today and Pass 3 keeps it that way.  Showing the tool name as well would tell a passerby that a shell command is waiting, without showing the command.  Is that worth the exposure, or does the thread name alone stay?
+4. **The icon.**  The overhaul plan wants the icon rebuilt from the wordmark with dark and tinted variants and the full macOS size set.  AGENTS.md puts that art with the owner.  Is there art, or does the program ship with the current icon?
