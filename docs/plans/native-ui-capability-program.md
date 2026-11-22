@@ -1,0 +1,219 @@
+# Clutch Native UI/UX And Capability Program - Three Sequenced Passes
+
+Date: Sun Nov 22 2026
+Seat: MM
+Status: Proposal, owner-directed on Nov 22 2026
+Linear: C-137
+Lane: `~/apps/lanes/Clutch/minimax-ui-ux-power`, branch `minimax/ui-ux-power`
+Scope: `ios/App` (iPhone, iPad), `ios/Mac` (macOS), the shared views both targets compile, and the sidecar contract in `src/web/chat-bridge.ts` where a change must reach both apps
+
+## Purpose
+
+The owner asked for the native Mac and iOS apps to get better UI/UX, more features, and to be more efficient and capable.  This document is the program that answers that, in three passes.
+
+The design vocabulary is already fixed.  `docs/plans/ui-ux-overhaul.md` is the source review, the north star, and the roadmap; this document does not replace it.  It narrows that roadmap to what is actually left, sequences it so each pass makes the next one verifiable, and gives each pass acceptance criteria.
+
+The north star from that document stands:
+
+> Clutch is not a window onto a log.  It is the answer to one question - what needs me right now - with every answer one tap from the Lock Screen.
+
+## Where the app stands today
+
+Measured in this lane against base `126342b`, not assumed.
+
+**Landed on Nov 22 in PR #296.** The iOS app got the Attention Stack home surface (Agent Chat, Needs You, Running, Pinned, then one section per working folder) in `ios/App/Views/SessionsView.swift:292`.  The Turn Cockpit landed with the plan panel on top, an approval card carrying the tool name and a queued-request count, conditional auto-scroll with a Latest pill, and a composer that never closes but steers or queues (`ios/App/Views/SessionThreadView.swift:221`, `:296`).  New Thread names a working folder before the first turn and remembers it per host (`ios/App/Models/RecentFolders.swift`).  An approval now wakes the owner (`ios/App/Services/TurnNotifier.swift:24`).
+
+**Not touched by that PR.**  The macOS app is unchanged.  `ios/Mac/ChatViewMac.swift` is 3,050 lines and one view still owns the whole window.  The agent's answer streams into a separate activity pane and then teleports into the transcript at turn end (`ios/Mac/ChatViewMac.swift:686`, rendering `MacWorkspacePanels(responseText: streamingText)`).  Replayed history is stamped with `Date()` (`ios/Mac/ChatViewMac.swift:429`, `:448`, `:464`), so a three-week-old thread claims every message arrived today.  There is no `.commands` block, no Settings scene, no menu bar and no `⌘,`; the only shortcuts are ad-hoc `.keyboardShortcut` calls, and `⌘N` and `⌘R` are bound to sidebar buttons that disappear with the sidebar (`ios/App/Views/ThreadSidebar.swift:282`, `:340`).
+
+**Verification is missing on the Mac.**  The `macos` job in `.github/workflows/ci.yml` compiles the Mac target and never runs it.  The iOS job does run `scripts/ios-ui-tests.sh` and `scripts/ios-unit-tests.sh`.  The iOS UI tests capture screenshots as attachments with no assertions and no export.
+
+**Foundations are half landed.**  `ios/App/Design/ClutchTheme.swift` is a real 309-line token layer with colour, type, spacing, radius, elevation, motion and status roles.  Three files consume it: `ThreadToolCard.swift`, `PlanPanel.swift` and `PermissionCard.swift`.  Everything else still carries its own literals: 165 `.system(size:)` calls and 28 literal `cornerRadius:` values across `ios/App` and `ios/Mac`, zero `@ScaledMetric`, zero Reduce Motion checks at the animation sites, and zero markdown rendering.
+
+**No capability work has started.**  There are no typed tool cards, no diffs, no exit codes, no verbosity modes and no Live Activity.
+
+**One finding changes Pass 3's scope.**  The ACP `session/request_permission` params carry the tool's real input in `toolCall.rawInput` - the command for a shell tool, the path and old and new text for an edit.  The sidecar throws it away.  `PermissionParamsSchema` in `src/web/chat-bridge.ts:1284` keeps only `toolCallId`, `title` and `kind`, and the `PermissionRequest` interface it produces (`:1264`) has no field for the tool input.  The apps therefore render a headline and a tool name (`ios/App/Views/PermissionCard.swift:56`) and never the command, the path or the diff.  The evidence is available upstream and discarded at the boundary, so Pass 3 is not an app-only change.
+
+## Non-goals
+
+These are out of scope for all three passes.
+
+- **The app icon and launch screen.**  AGENTS.md forbids generating, flattening, cropping or substituting icon art; only the owner or their assigned seat supplies it.  The overhaul plan's item on rebuilding the icon from the wordmark stays parked until the owner provides art.
+- **A diff viewer, an integrated terminal, and an in-app browser.**  The engines already serve those better.  The phone routes to depth rather than reimplementing it.
+- **Skeletons, gradients and custom illustration.**  The type scale, contrast and icon have to be right before a fourth visual language is added.
+- **Rewriting the iOS Attention Stack.**  It landed today and is not being re-litigated in this program.
+- **Touching `/Users/jay/Code/Clutch`.**  Every change happens in a lane.
+
+## Pass 1 - Honest ground
+
+Foundation and verification first.  The reason these defects survived is that nothing looks at the UI, so the first pass makes the surface observable and stops new drift.  Every later pass then lands on a surface that can be checked.
+
+### 1.1 A macOS UI test target
+
+A `ClutchMacUITests` target, driven by the stub sidecar the iOS suite already uses, with screenshot assertions for the workspace, the transcript, the composer and the permission card.
+
+- The Mac scheme gains a test action and the `macos` job in `.github/workflows/ci.yml` runs it instead of only building.
+- Screenshot assertions cover light and dark, because the token layer is appearance-aware and a token that only works in one is not a token.
+- This target is what makes Pass 2 reviewable.  A 3,050-line restructure with no visual assertions is exactly how the current defects got in.
+
+### 1.2 iOS UI tests become assertive
+
+The existing screenshot attachments carry no assertions and are never exported.  Convert them into assertions that fail, and export the images as CI artifacts so a human or a reviewer can look at them without running the suite locally.
+
+### 1.3 Accessibility that actually lands
+
+- Dynamic Type in the transcript and the tool cards.  The transcript is where the app is read, and a fixed 8-13 pt range clips there first.  `@ScaledMetric` is the mechanism, and no file uses it today.
+- Reduce Motion honoured at every animation site.  The app currently ignores it at all six.
+- 44 pt tap targets on the thread composer and the rail header.
+- Status contrast at the 9-10 pt sites.  The current system green and orange measure roughly 2.0:1 on `secondarySystemBackground`, where the tool status is drawn.  `ClutchTheme` already carries semantic status colours tuned past 4.5:1; this is the migration of the sites that still use the raw ones.
+
+### 1.4 A CI check that stops the drift
+
+A test that rejects new design literals: `.system(size:` and `cornerRadius:` with a numeric argument, outside `ios/App/Design/ClutchTheme.swift`.
+
+The remaining files are not migrated in one sweep.  They migrate when Pass 2 and Pass 3 touch them, which keeps the diff reviewable and keeps a large cosmetic change from masking a behavioural one.  The CI check is what makes that policy enforceable instead of aspirational.
+
+### Acceptance
+
+- CI runs the macOS target's tests and they fail when the Mac surface regresses.
+- Every iOS UI test asserts something and exports its screenshots.
+- The transcript and tool cards respect Dynamic Type up to the accessibility sizes without clipping.
+- Every animation site respects Reduce Motion.
+- The 9-10 pt status sites clear 4.5:1 in both appearances.
+- A grep for new design literals outside `ClutchTheme.swift` returns nothing.
+- `npm run typecheck && npm test` green, plus the iOS unit and UI scripts.
+
+## Pass 2 - Mac parity and a readable transcript
+
+The Mac gets the structure the iOS got today, and both apps get a transcript that can be read.
+
+### 2.1 Extract `MacTranscriptModel`
+
+The prerequisite.  `ChatViewMac.swift` holds 73 stored properties and the view is the model, which is why the file cannot be split.  Extract the transcript state into its own `@Observable` model so the view renders and the model holds.
+
+Before the extraction, measure the streaming re-render cost.  The lesson from BF-2612 is that a body that re-executes every frame is a hypothesis, not a finding, and that the fix is not where the frame goes.  Measure, record the numbers in the PR, then refactor against them.
+
+### 2.2 Stop the pane teleporting
+
+- Delete the separate activity pane.  The answer streams inside the transcript, in the turn being built, so text never moves panes and the window stops jumping 220 pt twice per turn.
+- Stop stamping replayed history with `Date()`.  Replayed messages carry the timestamp the engine recorded.  A thread that cannot show a real time cannot be trusted about anything else it shows.
+
+### 2.3 The Session Deck
+
+A real `NavigationSplitView`: threads on the left, transcript in the centre, an inspector on the right for plan, context, usage and the pending approval.
+
+This unlocks the macOS chrome that does not exist today:
+
+- A real `.toolbar` and a sidebar toggle.
+- `.commands`, a Settings scene and `⌘,`.
+- A titlebar that carries the thread name instead of the word Workspace.
+- `⌘N` and `⌘R` that are real commands, not sidebar buttons that vanish with the sidebar.
+- The model strip collapses from three rows to one status row, and nothing appears or collapses mid-turn.
+
+### 2.4 The Turn Ledger
+
+The transcript becomes a list of turns, not a list of messages.  Each turn has a header with the time, the prompt summary, the duration and the tool and file counts, a collapsed state, and a stable identity.  Find can then say "turn 3, tool 5" instead of highlighting a string and hoping.
+
+This deletes `MacWorkspacePanels` and most of `MacChatRow`.
+
+### 2.5 Shared capability: markdown and typed tool cards
+
+These are shared, so both apps get them at once.
+
+- **Markdown.**  Assistant prose through `AttributedString(markdown:)`, fenced code in a monospaced block with a copy button.  A coding client that renders literal triple backticks is a credibility problem, not a polish problem.  There are zero markdown call sites today.
+- **Typed tool cards.**  Four renderers to start: file read; edit with a diff and `+`/`-` counts; shell with the exit code and collapsible output; test with pass and fail and the failing names.  Raw JSON moves behind "Show raw".  The current card shows a title and a tool name and nothing else.
+- **Verbosity modes.**  Summary, Normal, Verbose, default Normal.  Normal collapses consecutive tool calls into one row - "5 files, 2 commands, 1 test" - that expands in place.  This is the single highest-leverage transcript pattern in the 2026 benchmark and it is a rendering concern, not a protocol change.
+
+### Acceptance
+
+- The answer never changes panes mid-turn, and the window does not resize mid-turn.
+- A replayed thread shows the real times of its messages.
+- The Mac window title is the thread name.
+- `⌘,` opens Settings, `⌘N` opens a new thread, and both work with the sidebar hidden.
+- A diff renders in the transcript with `+` and `-` counts.
+- Assistant prose renders as markdown and a fenced block copies as code.
+- Verbose mode shows every tool call; Normal collapses consecutive ones; Summary shows counts.
+- The macOS UI test target's screenshot assertions pass, and they fail against the old shell.
+
+## Pass 3 - The phone as the attention surface
+
+The reason to be native on the phone.  The engine is on the Mac, the phone is on the owner, and this pass makes the phone worth carrying.
+
+### 3.1 Carry the evidence to the client
+
+The blocker, and the change that makes the rest possible.
+
+- `src/web/chat-bridge.ts`: widen `PermissionParamsSchema` to keep the tool's real input, and add the field to `PermissionRequest`.  The payload is untrusted and stays validated; the schema drops what it does not recognise, so this has to be an explicit allow of a known shape rather than a passthrough.
+- `ios/App/Models/AcpSession.swift`: decode it.
+- `src/shared/dshHostContract.ts` and the native clients, if the wire contract names the field.
+
+What reaches the client is the command for a shell tool, the path for a file tool, and a compact diff for an edit.  Nothing larger than that crosses the wire.
+
+### 3.2 Approvals that show their work
+
+- Show the command, the path or the compact diff.  An approval the owner cannot read is not an approval.
+- Deny is the default-weighted action and Allow once is primary.  "Always allow" sits behind a second confirm that names the scope it is granting.
+- On the phone: Face ID or Touch ID before any allow.  Deny is always permitted and never gated.  There is no "Always allow" from the phone at all.
+
+This is the difference between a trust surface and a remote yes button for `rm -rf`.
+
+### 3.3 Notification with actions and a deep link
+
+`TurnNotifier` already wakes the owner when a permission arrives.  Extend it: a time-sensitive notification with actions that answer the request without opening the app, and a deep link straight to the card.
+
+### 3.4 Live Activity, Lock Screen and Control Center
+
+- A Live Activity rotating through up to three sessions, with a "2 waiting, 1 running" summary, titles and status only.
+- A Lock Screen accessory count.
+- A Control Center action.
+- A small push relay on the host, so the phone can be reached when the app is not running.  This is the one piece of real infrastructure in the program and it is the main schedule risk.
+
+### Acceptance
+
+- An approval shows the command or the path or the diff.  A shell approval shows the command.
+- On the phone, an allow requires Face ID or Touch ID, and a deny never does.
+- There is no "Always allow" on the phone.
+- A permission arriving while the app is backgrounded produces a time-sensitive notification that can answer the request.
+- The Live Activity shows up to three sessions and a waiting count.
+- The whole loop is walkable on a real phone: start a turn on the Mac, approve it from the Lock Screen, and read the result without opening the app.
+
+## Sequencing rationale
+
+Foundation before structure, structure before capability.
+
+Pass 1 comes first because the Mac target has never been executed in CI, and Pass 2 is a large restructure of a 3,050-line view.  Doing that with no visual assertions would repeat the failure mode this whole program exists to fix.  Pass 1 also makes the token drift enforceable, so Pass 2 and Pass 3 migrate the files they touch instead of sweeping the tree at the end.
+
+Pass 2 comes before Pass 3 because the approval evidence is now discarded at the sidecar.  Fixing that before the Mac transcript can render typed tool cards would mean carrying a richer payload into two transcript renderers that do not yet exist.  Doing the transcript first means the evidence lands in a renderer that can show it.
+
+Pass 3 is last because it is the only pass with infrastructure risk.  It should ride on a stable transcript, and it should be the pass that can be deferred without leaving the app half-built.
+
+## Verification strategy
+
+- Every pass runs `npm run typecheck && npm test` before the PR, plus the iOS scripts the pass touches: `scripts/build-ios.sh --simulator`, `scripts/ios-unit-tests.sh`, `scripts/ios-ui-tests.sh`, and the Mac build and test the pass adds.
+- The macOS UI test target is the gate for Pass 2 and it is created in Pass 1.
+- `ios/project.yml` is the source of truth for the Xcode project.  New Swift files are added there and the project is regenerated, never hand-edited in `project.pbxproj`.  This is the fix recorded in C-127.
+- A UI change without a verification path is not done.  The owner never takes manual screenshots, so the automated check is the only way the surface stays honest.
+
+## Ground rules
+
+- Work happens in `~/apps/lanes/Clutch/minimax-ui-ux-power` on `minimax/ui-ux-power`.  Never in `/Users/jay/Code/Clutch` and never in another seat's lane.
+- The seat identity is MM.  Posts carry the MM header and the `claimed:MM` board label.
+- GitHub work goes through the Fleet Tools relay under this seat's own identity, through `~/apps/mm-git.sh`.  `gh` is a fallback, used only when the relay cannot do a step, and the gap is logged in the Fleet GitOps deficiencies document.
+- Linear issue C-137 is the umbrella.  Each pass gets its own issue, its own branch, its own PR and its own review gate.
+- Commit messages, PR bodies and Zulip posts carry the sentence gap, and the copy rules in `FLEET-UI-COPY.md` apply to every user-visible string.
+- Measure before refactoring the streaming path.
+
+## Risks
+
+| Risk | Pass | Mitigation |
+|---|---|---|
+| The Mac restructure is larger than it looks | 2 | The model extraction is its own commit, and the screenshot assertions gate the rest |
+| The approval payload grows the wire contract | 3 | The schema keeps a known shape and stays validated; only a compact summary crosses |
+| The push relay does not land | 3 | The Live Activity and the notification deep link are worth having without it; the relay is the last slice, not the first |
+| The theme migration never completes | 1, 2 | The CI check makes new drift impossible and the remaining files migrate as later passes touch them |
+| A pass grows too wide to review | all | One pass is one PR; a pass that grows past its acceptance criteria is split |
+
+## Open questions for the owner
+
+1. **The push relay.**  Pass 3 wants the phone reachable when the app is not running.  That needs a small relay on the host.  Is a relay acceptable, or should the phone reach the host the way the app already does, over the tailnet?
+2. **Face ID on the Mac too.**  Pass 3 puts Touch ID in front of an allow on the phone.  The Mac already has the owner at the keyboard.  Should the Mac gate allows the same way, or stay ungated?
+3. **The icon.**  The overhaul plan wants the icon rebuilt from the wordmark with dark and tinted variants and the full macOS size set.  AGENTS.md puts that art with the owner.  Is there art, or does the program ship with the current icon?
