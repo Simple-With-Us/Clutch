@@ -117,6 +117,13 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if app.windows.count > 0 { return }
+            // An app that exited is a defect in the surface, and waiting out
+            // the timeout to say so would delay the answer by a minute per
+            // test on exactly the broken-app path.
+            if app.state == .notRunning {
+                XCTFail("the Mac app exited instead of opening a window")
+                return
+            }
             app.activate()
             Thread.sleep(forTimeInterval: 1)
         }
