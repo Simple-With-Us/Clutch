@@ -909,6 +909,9 @@ public struct ChatView: View {
                 try await ChatSessionClient.steer(host: host, sessionId: target, text: prompt)
             } catch {
                 sendError = error.localizedDescription
+                // The steer never left, so the text it was going to carry
+                // goes back to the composer instead of being lost.
+                restoreToComposer(prompt)
             }
         }
     }
