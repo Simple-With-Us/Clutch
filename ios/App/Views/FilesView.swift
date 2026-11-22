@@ -112,6 +112,110 @@ struct FolderView: View {
     }
 }
 
+/// Pick one folder: the New Thread sheet's "Browse…" destination, so a
+/// thread can be pointed at the repo it should work in before its first
+/// turn exists.
+struct FolderPickerView: View {
+    let host: ClutchHost
+    let root: String
+    let onChoose: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var model: FolderModel
+    @State private var path: String
+
+    init(host: ClutchHost, root: String, onChoose: @escaping (String) -> Void) {
+        self.host = host
+        self.root = root
+        self.onChoose = onChoose
+        _model = State(initialValue: FolderModel(host: host, root: root, path: ""))
+        _path = State(initialValue: "")
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let parent = model.listing?.parent {
+                    Button {
+                        navigate(to: parent)
+                    } label: {
+                        Label(parent.isEmpty ? "Root" : (parent as NSString).lastPathComponent, systemImage: "arrow.uturn.backward")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(model.listing?.entries ?? []) { entry in
+                    if entry.isDirectory {
+                        Button {
+                            navigate(to: entry.path)
+                        } label: {
+                            row(for: entry)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .task { await model.load() }
+            .overlay {
+                switch model.phase {
+                case .loading:
+                    ProgressView()
+                case .failed(let reason):
+                    ContentUnavailableView(
+                        "Cannot Read the Folder",
+                        systemImage: "folder.badge.questionmark",
+                        description: Text(reason)
+                    )
+                case .idle, .ready:
+                    EmptyView()
+                }
+            }
+            .navigationTitle("Choose Folder")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Choose This Folder") {
+                        onChoose(chosenPath)
+                        dismiss()
+                    }
+                    .disabled(model.listing == nil)
+                }
+            }
+        }
+    }
+
+    private func navigate(to target: String) {
+        path = target
+        model = FolderModel(host: host, root: root, path: target)
+        Task { await model.load() }
+    }
+
+    /// The folder on screen, by the path the machine that holds it uses.
+    ///
+    /// The engine a thread runs in resolves a relative working folder
+    /// against its own working directory, so the folder is chosen by the
+    /// absolute path the sidecar reports for it.  A sidecar older than
+    /// that field reports none, and the relative path is the best answer
+    /// there is.
+    private var chosenPath: String {
+        model.listing?.absolute ?? path
+    }
+
+    @ViewBuilder
+    private func row(for entry: FilesClient.Entry) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder")
+                .foregroundStyle(Color.accentColor)
+            Text(entry.name)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 /// One file, shown.
 struct FilePreviewView: View {
     let host: ClutchHost
@@ -134,7 +238,10 @@ struct FilePreviewView: View {
             Text(model.body)
                 .font(model.isCode ? .system(.body, design: .monospaced) : .body)
                 .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // A readable line length on iPad, the same cap the
+                // transcript uses.
+                .frame(maxWidth: 720, alignment: .leading)
+                .frame(maxWidth: .infinity)
                 .padding(16)
         }
         .background(Color.clutchBackground)

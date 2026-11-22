@@ -54,13 +54,14 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
             "clutch://pair?h=127.0.0.1&tls=0&kind=mcode&chat=\(StubSidecar.chatToken)&chatPort=\(stub.port)"))
         app.open(link)
 
-        let workspaceTab = app.tabBars.buttons["Workspace"]
-        XCTAssertTrue(workspaceTab.waitForExistence(timeout: 30))
-        workspaceTab.tap()
+        // The home list is the root surface; the thread list needs no tab
+        // tap anymore.
         snap("ios-workspace-threads")
 
-        // Open the stub's one thread.
-        let thread = app.staticTexts["Fix The Login Redirect"]
+        // Open the stub's one thread.  The row is a selection-driven List
+        // row whose combined element carries the thread's name and button
+        // semantics, so the query targets that element, not a bare text.
+        let thread = app.buttons["Thread, Fix The Login Redirect"].firstMatch
         if !thread.waitForExistence(timeout: 30) {
             snap("ios-workspace-threads-missing")
             dump("ios-workspace-threads-tree")
@@ -69,10 +70,11 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         thread.tap()
         snap("ios-thread-open")
 
-        // The find bar is open with the query in it, and the match count is
-        // the bar's own feedback that the search ran.  Only one stub message
-        // mentions "login", so the count is exactly one.
-        XCTAssertTrue(app.staticTexts["1 match"].waitForExistence(timeout: 30))
+        // The find bar is open with the query in it, and the position label
+        // ("1 of 1") is the bar's own feedback that the search ran and can
+        // be navigated.  Only one stub message mentions "login", so the
+        // position is exactly one.
+        XCTAssertTrue(app.staticTexts["1 of 1"].waitForExistence(timeout: 30))
         snap("ios-find-match")
     }
 }

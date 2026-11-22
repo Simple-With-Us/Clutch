@@ -49,14 +49,56 @@ public final class CometChatManager {
         }
         phase = .loadingConfig
         do {
-            let config = try await fetchConfig(host: host, token: chatToken)
-            try await ensureInitialized(config: config)
-            try await ensureLoggedIn()
-            try await ensureAgentUser()
+            // The whole setup is raced against one deadline: an SDK init or
+            // login that never calls back must not leave the tab on
+            // "Connecting chat…" forever, which is the state a hung
+            // continuation produced.
+            try await withConnectTimeout(seconds: 30) {
+                let config = try await self.fetchConfig(host: host, token: chatToken)
+                try await self.ensureInitialized(config: config)
+                try await self.ensureLoggedIn()
+                try await self.ensureAgentUser()
+            }
             phase = .ready
         } catch {
             phase = .failed(error.localizedDescription)
         }
+    }
+
+    /// Runs one attempt against a wall-clock deadline.
+    ///
+    /// The SDK's own continuations carry no cancellation handlers, so a hung
+    /// callback cannot be interrupted — which also means a task group cannot
+    /// be used here: a structured group waits for every child, and the hung
+    /// child would hold the whole deadline hostage.  The attempt therefore
+    /// runs unstructured, reports its outcome through a locked flag, and is
+    /// polled; on timeout it is cancelled and left behind (a hung
+    /// continuation stays suspended — that is the SDK's leak, not ours),
+    /// while `prepare` moves on to its failure state.
+    private func withConnectTimeout(seconds: Double, _ work: @escaping @MainActor @Sendable () async throws -> Void) async throws {
+        let attempt: @MainActor @Sendable () async throws -> Void = work
+        let flag = ConnectOutcome()
+        let workTask = Task {
+            do {
+                try await attempt()
+                flag.finish(.success(()))
+            } catch {
+                flag.finish(.failure(error))
+            }
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
+        while ContinuousClock.now < deadline {
+            switch flag.poll() {
+            case .success:
+                return
+            case .failure(let error):
+                throw error
+            case nil:
+                try await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        workTask.cancel()
+        throw CometChatSetupError.timedOut
     }
 
     // MARK: - Steps
@@ -177,6 +219,26 @@ public final class CometChatManager {
     }
 }
 
+/// Thread-safe completion report for one connect attempt, so the deadline
+/// poll can read the outcome without awaiting a task that may never finish.
+final class ConnectOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var outcome: Result<Void, Error>?
+
+    func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        if outcome == nil { outcome = result }
+        lock.unlock()
+    }
+
+    /// The finished outcome, or nil while the attempt is still running.
+    func poll() -> Result<Void, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return outcome
+    }
+}
+
 public enum CometChatSetupError: Error, LocalizedError {
     case badHost
     case configUnavailable
@@ -184,6 +246,7 @@ public enum CometChatSetupError: Error, LocalizedError {
     case notConfigured
     case agentMissing
     case loginFailed(String)
+    case timedOut
 
     public var errorDescription: String? {
         switch self {
@@ -199,6 +262,8 @@ public enum CometChatSetupError: Error, LocalizedError {
             return "The clutch-agent user does not exist in the CometChat app yet."
         case .loginFailed(let detail):
             return "Chat login failed: \(detail)"
+        case .timedOut:
+            return "Chat took too long to connect — check the Mac, then try again."
         }
     }
 }
