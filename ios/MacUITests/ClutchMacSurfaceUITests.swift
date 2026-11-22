@@ -121,7 +121,11 @@ final class ClutchMacSurfaceUITests: XCTestCase {
             // the timeout to say so would delay the answer by a minute per
             // test on exactly the broken-app path.
             if app.state == .notRunning {
-                failAppExited()
+                XCTFail("the Mac app exited instead of opening a window")
+                // The failure has to leave the test rather than fall through
+                // to the skip below:  a skip raised afterwards would report an
+                // app that exited as a fact about the machine.
+                throw Self.appExitedError
             }
             app.activate()
             Thread.sleep(forTimeInterval: 1)
@@ -129,7 +133,7 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         snap("mac-window-missing")
         dump("mac-window-tree")
         if app.state == .notRunning {
-            failAppExited()
+            throw Self.appExitedError
         }
         throw XCTSkip(
             "the runner's automation session could not see the Mac app's window; the app was "
@@ -137,20 +141,16 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         )
     }
 
-    /// Fails the test for an app that exited instead of opening a window.
+    /// The error an app that exited carries out of the window wait.
     ///
-    /// The failure has to leave the test rather than fall through to the skip
-    /// below it:  an app that exited is a defect in the surface, and a skip
-    /// would report it as a fact about the machine.  `XCTFail` alone is not
-    /// enough, because a skip raised afterwards would swallow the recorded
-    /// failure and report the run as skipped.
-    private func failAppExited() -> Never {
-        let message = "the Mac app exited instead of opening a window"
-        XCTFail(message)
-        throw NSError(
+    /// Throwing it leaves the test, and a test that ends in an error is a
+    /// failure:  an app that exited instead of opening a window is a defect
+    /// in the surface, not a fact about the machine.
+    private static var appExitedError: NSError {
+        NSError(
             domain: "ClutchMacSurfaceUITests",
             code: 1,
-            userInfo: [NSLocalizedDescriptionKey: message]
+            userInfo: [NSLocalizedDescriptionKey: "the Mac app exited instead of opening a window"]
         )
     }
 
