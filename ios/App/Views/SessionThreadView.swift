@@ -491,6 +491,9 @@ public struct SessionThreadView: View {
     /// Whether a drag is hovering the composer.
     @State private var isDropTargeted = false
     @State private var showMuseSignIn = false
+    /// Whether the user asked for reduced motion.  The scroll to the latest
+    /// turn is the one animation here, and it is skipped when it is on.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
         self.host = host
@@ -598,15 +601,15 @@ public struct SessionThreadView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "cpu")
-                        .font(.system(size: 10))
+                        .font(ClutchFont.micro)
                     // What the engine will run: the picked model, or the
                     // catalog's first row, which is only shown — an
                     // untouched thread keeps the model it was created with.
                     Text(model.pickerLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(ClutchFont.captionStrong)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(ClutchFont.microStrong)
                 }
             }
             .disabled(model.models.isEmpty)
@@ -627,11 +630,11 @@ public struct SessionThreadView: View {
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "gauge.with.dots.needle.50percent")
-                            .font(.system(size: 10))
+                            .font(ClutchFont.micro)
                         Text((model.effort ?? "default").capitalized)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(ClutchFont.captionStrong)
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
+                            .font(ClutchFont.microStrong)
                     }
                 }
             }
@@ -640,7 +643,7 @@ public struct SessionThreadView: View {
 
             if let note = model.catalog?.descriptor(model.engine)?.note {
                 Image(systemName: "info.circle")
-                    .font(.system(size: 11))
+                    .font(ClutchFont.footnote)
                     .foregroundStyle(.secondary)
                     .help(note)
             }
@@ -789,7 +792,7 @@ public struct SessionThreadView: View {
                             if let error = model.sendError {
                                 Label(error, systemImage: "exclamationmark.triangle")
                                     .font(.caption)
-                                    .foregroundStyle(.red)
+                                    .foregroundStyle(ClutchColor.danger)
                                     .padding(.horizontal, 12)
                                 if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
                                     Button("Sign In To Muse") { showMuseSignIn = true }
@@ -842,7 +845,9 @@ public struct SessionThreadView: View {
                         if !followLatest {
                             Button {
                                 followLatest = true
-                                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                                withAnimation(reduceMotion ? nil : ClutchMotion.quick) {
+                                    proxy.scrollTo("bottom", anchor: .bottom)
+                                }
                             } label: {
                                 Label("Latest", systemImage: "arrow.down")
                                     .font(.caption.weight(.semibold))
@@ -874,15 +879,17 @@ public struct SessionThreadView: View {
             } label: {
                 Image(systemName: dictation.isRecording ? "mic.fill" : "mic")
                     .font(.title3)
-                    .foregroundStyle(dictation.isRecording ? Color.red : Color.secondary)
+                    .foregroundStyle(dictation.isRecording ? ClutchColor.danger : Color.secondary)
             }
             .buttonStyle(.plain)
             .disabled(!composerEnabled)
+            .clutchTapTarget()
             .accessibilityLabel(dictation.isRecording ? "Stop Dictation" : "Dictate")
             PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
                 Image(systemName: "paperclip")
                     .font(.title3)
                     .foregroundStyle(Color.secondary)
+                    .clutchTapTarget()
             }
             .disabled(!composerEnabled)
             .accessibilityLabel("Attach Image")
@@ -894,6 +901,7 @@ public struct SessionThreadView: View {
                     .foregroundStyle(Color.secondary)
             }
             .disabled(!composerEnabled)
+            .clutchTapTarget()
             .accessibilityLabel("Attach File")
             Button {
                 Task { await pasteClipboard() }
@@ -903,6 +911,7 @@ public struct SessionThreadView: View {
                     .foregroundStyle(Color.secondary)
             }
             .disabled(!composerEnabled)
+            .clutchTapTarget()
             .accessibilityLabel("Paste Image Or File")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -919,9 +928,9 @@ public struct SessionThreadView: View {
                 } label: {
                     Image(systemName: "stop.circle.fill")
                         .font(.title2)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ClutchColor.danger)
                 }
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: ClutchMetric.minTapTarget, minHeight: ClutchMetric.minTapTarget)
                 .accessibilityLabel("Stop")
                 Button {
                     if model.supportsSteering { model.steerDraft() } else { model.queueDraft() }
@@ -929,7 +938,7 @@ public struct SessionThreadView: View {
                     Image(systemName: model.supportsSteering ? "paperplane.circle.fill" : "tray.and.arrow.down.circle.fill")
                         .font(.title2)
                 }
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: ClutchMetric.minTapTarget, minHeight: ClutchMetric.minTapTarget)
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel(model.supportsSteering ? "Steer" : "Queue")
             } else {
@@ -939,7 +948,7 @@ public struct SessionThreadView: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
                 }
-                .frame(minWidth: 44, minHeight: 44)
+                .frame(minWidth: ClutchMetric.minTapTarget, minHeight: ClutchMetric.minTapTarget)
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send Message")
             }
@@ -1015,10 +1024,10 @@ public struct SessionThreadView: View {
     private func queuedPromptPill(_ queued: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "tray.and.arrow.down")
-                .font(.system(size: 11))
+                .font(ClutchFont.footnote)
                 .foregroundStyle(.secondary)
             Text(queued)
-                .font(.system(size: 12))
+                .font(ClutchFont.callout)
                 .lineLimit(2)
             Spacer(minLength: 0)
             Button {
@@ -1080,15 +1089,15 @@ public struct SessionThreadView: View {
                 ForEach(model.attachments) { attachment in
                     HStack(spacing: 4) {
                         Image(systemName: "photo")
-                            .font(.system(size: 10))
+                            .font(ClutchFont.micro)
                         Text(attachment.displayName)
-                            .font(.system(size: 11))
+                            .font(ClutchFont.footnote)
                             .lineLimit(1)
                         Button {
                             model.attachments.removeAll { $0.id == attachment.id }
                         } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 11))
+                                .font(ClutchFont.footnote)
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)

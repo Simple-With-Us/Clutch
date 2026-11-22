@@ -1,36 +1,30 @@
 {
   "ios/App/Views/ChatView.swift": {
-    ".system(size: 10)": 2,
     ".system(size: 11)": 4,
     ".system(size: 12)": 4,
-    ".system(size: 12, weight: .semibold)": 1,
     ".system(size: 13)": 2,
-    ".system(size: 22)": 3,
-    ".system(size: 36, weight: .regular)": 1,
+    ".system(size: 10)": 2,
+    ".system(size: 12, weight: .semibold)": 1,
     ".system(size: 8, weight: .bold)": 1,
+    "cornerRadius: 8": 1,
     "cornerRadius: 10": 1,
+    ".system(size: 22)": 3,
     "cornerRadius: 14": 1,
-    "cornerRadius: 8": 1
+    ".system(size: 36, weight: .regular)": 1
   },
   "ios/App/Views/Components/ReasoningBlockView.swift": {
-    ".system(size: 11, weight: .semibold)": 1,
-    ".system(size: 13, weight: .medium)": 1,
-    ".system(size: 13, weight: .semibold)": 1,
     "cornerRadius: 8": 2
   },
   "ios/App/Views/Components/ToolCallCard.swift": {
-    ".system(size: 10, weight: .bold)": 2,
-    ".system(size: 10, weight: .semibold)": 1,
-    ".system(size: 12, weight: .semibold)": 1,
     "cornerRadius: 8": 2
   },
   "ios/App/Views/FleetRecallView.swift": {
-    ".system(size: 10)": 1,
-    ".system(size: 12)": 1,
-    ".system(size: 12, weight: .semibold)": 1,
-    ".system(size: 14, weight: .bold)": 1,
+    ".system(size: 24)": 1,
     ".system(size: 15, weight: .bold)": 1,
-    ".system(size: 24)": 1
+    ".system(size: 14, weight: .bold)": 1,
+    ".system(size: 12, weight: .semibold)": 1,
+    ".system(size: 12)": 1,
+    ".system(size: 10)": 1
   },
   "ios/App/Views/HostGateView.swift": {
     ".system(size: 44, weight: .regular)": 1
@@ -50,57 +44,52 @@
     "cornerRadius: 16": 1
   },
   "ios/App/Views/SessionThreadView.swift": {
-    ".system(size: 10)": 3,
-    ".system(size: 11)": 4,
-    ".system(size: 12)": 1,
-    ".system(size: 12, weight: .semibold)": 2,
-    ".system(size: 8, weight: .bold)": 2,
-    "cornerRadius: 10": 1,
-    "cornerRadius: 12": 2,
     "cornerRadius: 14": 2,
-    "cornerRadius: 8": 1
+    "cornerRadius: 10": 1,
+    "cornerRadius: 8": 1,
+    "cornerRadius: 12": 2
   },
   "ios/App/Views/SessionsView.swift": {
-    ".system(size: 10)": 3,
-    ".system(size: 11)": 3,
     ".system(size: 12)": 2,
     ".system(size: 12, weight: .semibold)": 7,
+    ".system(size: 10)": 3,
     ".system(size: 13)": 1,
+    ".system(size: 11)": 3,
     ".system(size: 9, weight: .bold)": 2,
-    "cornerRadius: 10": 1,
-    "cornerRadius: 14": 2
+    "cornerRadius: 14": 2,
+    "cornerRadius: 10": 1
   },
   "ios/App/Views/ThreadSidebar.swift": {
-    ".system(size: 10)": 6,
-    ".system(size: 10, weight: .bold)": 2,
-    ".system(size: 10, weight: .medium)": 3,
-    ".system(size: 10, weight: .semibold)": 3,
     ".system(size: 11)": 4,
     ".system(size: 11, weight: .semibold)": 4,
     ".system(size: 12)": 2,
-    ".system(size: 12, weight: .semibold)": 4,
     ".system(size: 22)": 1,
-    ".system(size: 24)": 1,
-    ".system(size: 8)": 2,
-    ".system(size: 9)": 1,
+    ".system(size: 12, weight: .semibold)": 4,
+    ".system(size: 10, weight: .bold)": 2,
+    ".system(size: 10, weight: .semibold)": 3,
     ".system(size: 9, weight: .semibold)": 2,
+    ".system(size: 10, weight: .medium)": 3,
     "cornerRadius: 6": 2,
-    "cornerRadius: 7": 1
+    "cornerRadius: 7": 1,
+    ".system(size: 24)": 1,
+    ".system(size: 9)": 1,
+    ".system(size: 8)": 2,
+    ".system(size: 10)": 6
   },
   "ios/Mac/ChatViewMac.swift": {
-    ".system(size: 10)": 6,
-    ".system(size: 11)": 8,
-    ".system(size: 11, weight: .medium)": 1,
-    ".system(size: 11, weight: .semibold)": 2,
     ".system(size: 12)": 5,
+    ".system(size: 11, weight: .semibold)": 2,
+    ".system(size: 11)": 8,
+    ".system(size: 10)": 6,
     ".system(size: 12, weight: .semibold)": 3,
-    ".system(size: 13)": 3,
-    ".system(size: 13, weight: .semibold)": 1,
-    ".system(size: 36, weight: .regular)": 1,
     ".system(size: 9)": 2,
     ".system(size: 9, weight: .bold)": 3,
+    "cornerRadius: 8": 2,
+    ".system(size: 13)": 3,
     "cornerRadius: 12": 3,
-    "cornerRadius: 8": 2
+    ".system(size: 13, weight: .semibold)": 1,
+    ".system(size: 11, weight: .medium)": 1,
+    ".system(size: 36, weight: .regular)": 1
   },
   "ios/Mac/MacChatInputBar.swift": {
     ".system(size: 10)": 2,

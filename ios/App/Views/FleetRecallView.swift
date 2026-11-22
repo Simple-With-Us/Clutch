@@ -147,7 +147,7 @@ public struct FleetRecallView: View {
                     Text(message)
                         .font(.footnote)
                 }
-                .foregroundColor(.green)
+                .foregroundStyle(ClutchColor.success)
             }
         }
     }
@@ -283,7 +283,7 @@ struct ContributeRecallSheet: View {
                     Section {
                         Text(validationError.message)
                             .font(.footnote)
-                            .foregroundColor(.red)
+                            .foregroundStyle(ClutchColor.danger)
                     }
                 }
 
@@ -291,7 +291,7 @@ struct ContributeRecallSheet: View {
                     Section {
                         Text(failure.message)
                             .font(.footnote)
-                            .foregroundColor(.red)
+                            .foregroundStyle(ClutchColor.danger)
                     }
                 }
 
@@ -303,7 +303,7 @@ struct ContributeRecallSheet: View {
                             Text(confirmation.confirmationMessage)
                                 .font(.footnote)
                         }
-                        .foregroundColor(.green)
+                        .foregroundStyle(ClutchColor.success)
                     }
                 }
             }

@@ -86,7 +86,7 @@ struct PairingActions: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(ClutchColor.danger)
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier("pairing-error")
             }

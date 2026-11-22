@@ -294,7 +294,7 @@ public struct SessionsView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(ClutchColor.warning)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(approval.title)
                                     .font(.system(size: 12, weight: .semibold))
@@ -702,7 +702,7 @@ struct NewThreadSheet: View {
                 if let error = model.errorText {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ClutchColor.danger)
                     if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
                         Button("Sign In To Muse") { showMuseSignIn = true }
                             .buttonStyle(.borderedProminent)
@@ -769,7 +769,7 @@ struct NewThreadSheet: View {
                         } label: {
                             Image(systemName: "stop.circle.fill")
                                 .font(.title2)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(ClutchColor.danger)
                         }
                         .frame(minWidth: 44, minHeight: 44)
                         .accessibilityLabel("Stop")

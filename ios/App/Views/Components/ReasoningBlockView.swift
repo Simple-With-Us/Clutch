@@ -3,6 +3,7 @@ import SwiftUI
 public struct ReasoningBlockView: View {
     public let reasoningText: String
     public var isStreaming: Bool = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isExpanded: Bool = false
 
     public init(reasoningText: String, isStreaming: Bool = false) {
@@ -13,23 +14,23 @@ public struct ReasoningBlockView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: {
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withAnimation(reduceMotion ? nil : ClutchMotion.standard) {
                     isExpanded.toggle()
                 }
             }) {
                 HStack(spacing: 8) {
                     Image(systemName: isStreaming ? "sparkles" : "brain")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(ClutchFont.footnote.weight(.semibold))
                         .foregroundColor(.indigo)
 
                     Text(isStreaming ? "Thinking…" : "Thought process")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(ClutchFont.footnote.weight(.medium))
                         .foregroundColor(.secondary)
 
                     Spacer()
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(ClutchFont.micro.weight(.semibold))
                         .foregroundColor(.secondary)
                 }
                 .padding(.horizontal, 12)
@@ -42,7 +43,7 @@ public struct ReasoningBlockView: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(reasoningText.replacingOccurrences(of: "&nbsp;", with: "  "))
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(ClutchFont.caption.monospaced())
                         .foregroundColor(.secondary)
                         .lineSpacing(3)
                         .padding(.horizontal, 12)
