@@ -47,17 +47,6 @@ public struct ChatView: View {
     @State private var attachments: [ChatAttachment] = []
     @State private var sessionId: String?
     @State private var sending: Bool = false
-    /// The in-flight turn's task, so the composer's stop control can drop
-    /// the local stream after cancelling on the sidecar.
-    @State private var sendTask: Task<Void, Never>?
-    /// Which turn owns the composer.  Every turn takes a new number, so a
-    /// stream that is on its way out can tell that it no longer owns the
-    /// state and leaves the newer turn alone.
-    @State private var turnToken: Int = 0
-    /// Text typed while a turn runs, sent automatically when the turn
-    /// completes on its own.  A stopped or failed turn hands it back to
-    /// the composer, since stopping means "not this direction".
-    @State private var queuedDraft: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
     /// The permission request the engine is waiting on, when it asked for
@@ -68,12 +57,36 @@ public struct ChatView: View {
     /// before the first is answered, so the queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
     @State private var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers did not reach the engine.
+    ///
+    /// The card offers the request again when this count moves, so a failed
+    /// answer never leaves the card disabled for good.
+    @State private var permissionAnswerFailures = 0
 
     /// The request on screen.
     private var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
     @State private var cardAlert: String?
     @State private var isTranscribingVoice: Bool = false
     @State private var voiceStatusMessage: String?
+    /// The prompt held back while a turn runs, sent the moment it ends.
+    ///
+    /// The field never closes while a turn streams: text typed then either
+    /// steers the running turn or queues for the next one, so supervising
+    /// from the phone never means waiting idle.
+    @State private var queuedPrompt: String?
+    /// Whether the sidecar reported the running turn accepts steering.
+    @State private var supportsSteering = false
+    /// The in-flight turn's task, cancelled by the stop control.
+    @State private var sendTask: Task<Void, Never>?
+    /// Which turn owns the composer.  Every turn takes a new number, so a
+    /// stream that is on its way out can tell that it no longer owns the
+    /// state and leaves the newer turn alone.
+    @State private var turnToken: Int = 0
+    /// Bumped on turn end and on permission arrival, so haptics have a
+    /// value to fire on.
+    @State private var turnTick = 0
+    @State private var permissionTick = 0
+    @State private var isShowingHosts = false
 
     let activeHost: ClutchHost?
     let transcriptionService = TranscriptionService.shared
@@ -166,6 +179,22 @@ public struct ChatView: View {
                             title: "Chat Unavailable",
                             message: message
                         )
+                        Button("Try Again") {
+                            if let host = activeHost {
+                                Task { await manager.prepare(host: host) }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .padding(.horizontal, 24)
+                        Button("Hosts And Settings") {
+                            isShowingHosts = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .padding(.horizontal, 24)
                         Spacer()
                     case .ready:
                         if let agent = manager.agentUser {
@@ -194,28 +223,29 @@ public struct ChatView: View {
                             // the question the engine is asking is answered
                             // where the turn is written.
                             if let request = pendingPermission {
-                                PermissionCard(request: request) { optionId in
+                                PermissionCard(
+                                    request: request,
+                                    queuedCount: max(pendingPermissions.count - 1, 0),
+                                    canAnswer: sessionId != nil,
+                                    answerFailures: permissionAnswerFailures
+                                ) { optionId in
                                     answerPermission(optionId)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.bottom, 8)
                             }
+                            if let queued = queuedPrompt {
+                                queuedPromptPill(queued)
+                            }
                             ChatInputBar(
                                 draft: $draft,
                                 sending: sending,
                                 isDictating: dictation.isRecording,
-                                onSend: {
-                                    // While a turn runs the send control is
-                                    // the queue control: typing ahead parks
-                                    // the text instead of dropping it.
-                                    if sending {
-                                        queueDraft()
-                                    } else {
-                                        _ = send(draft)
-                                    }
-                                },
+                                onSend: { _ = send(draft) },
                                 onStop: { stopTurn() },
                                 onQueue: { queueDraft() },
+                                onSteer: { steerDraft() },
+                                canSteer: supportsSteering && sessionId != nil,
                                 onVoice: { startVoice() },
                                 attachments: $attachments,
                                 onError: { sendError = $0 }
@@ -232,6 +262,13 @@ public struct ChatView: View {
             }
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $isShowingHosts) {
+                HostsSheet(store: store ?? HostStore.shared)
+            }
+            // Haptics keyed on counters, not on state booleans, so the
+            // feedback fires once per event rather than on every layout pass.
+            .sensoryFeedback(.success, trigger: turnTick)
+            .sensoryFeedback(.warning, trigger: permissionTick)
             .task(id: activeHost?.pairingKey) {
                 guard let host = activeHost else { return }
                 // A different host means a different catalog: the old one is
@@ -592,6 +629,7 @@ public struct ChatView: View {
                 pendingPermissions.removeFirst()
             } else {
                 sendError = "The permission answer did not reach the engine."
+                permissionAnswerFailures += 1
             }
         }
     }
@@ -604,14 +642,24 @@ public struct ChatView: View {
     @discardableResult
     private func send(_ text: String) -> Bool {
         let prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !sending else { return false }
-        guard let host = activeHost, let myUid = manager.myUid else { return false }
+        guard !prompt.isEmpty else { return false }
+        if sending {
+            // A prompt typed while a turn runs queues for the next one;
+            // the composer never has to disable itself for a stream.
+            queueDraft()
+            return false
+        }
+        guard let host = activeHost else { return false }
+        guard let myUid = manager.myUid else {
+            sendError = "Chat is still connecting — try again in a moment."
+            return false
+        }
         draft = ""
         sendError = nil
         sending = true
-        // A manual send consumes the queue: parked text that outlived a
-        // stop is the owner's to send or edit, never a later turn's.
-        queuedDraft = ""
+        // The capabilities belong to the turn that reported them, so a new
+        // turn starts without steering until the sidecar says otherwise.
+        supportsSteering = false
         // The turn's images ride the request while the composer clears:
         // what comes back on a transport failure is restored below, so a
         // send that never left never eats its attachments.
@@ -632,17 +680,17 @@ public struct ChatView: View {
             images: outgoingImages
         )
         attachments = []
-        var endedNormally = false
-        /// Whether the stream answered at all.  An event means the engine
-        /// has the turn, so its prompt and its images must not be handed
-        /// back a second time.
-        var receivedEvent = false
         // This turn takes the composer.  A stream that is still on its way
         // out compares the number it was given with the current one and
         // leaves the newer turn's state alone.
         turnToken += 1
         let token = turnToken
         let task = Task {
+            var endedNormally = false
+            /// Whether the stream answered at all.  An event means the engine
+            /// has the turn, so its prompt and its images must not be handed
+            /// back a second time.
+            var receivedEvent = false
             do {
                 for try await event in client.stream(prompt: prompt) {
                     // A newer turn owns the composer now, so this stream's
@@ -650,8 +698,8 @@ public struct ChatView: View {
                     guard turnToken == token else { return }
                     receivedEvent = true
                     switch event {
-                    case .capabilities:
-                        break
+                    case .capabilities(let steering):
+                        supportsSteering = steering
                     case .started(let id, _):
                         sessionId = id
                     case .message:
@@ -662,19 +710,24 @@ public struct ChatView: View {
                         break
                     case .permission(let request):
                         // The engine is blocked on this request until the
-                        // answer goes back, so it is held on screen.
+                        // answer goes back, so it is held on screen and the
+                        // owner is woken for it: a stalled approval is the
+                        // one event a turn-end notification can never cover.
                         pendingPermissions.append(request)
+                        permissionTick += 1
+                        TurnNotifier.permissionRequest(threadTitle: activeHost?.name ?? "Agent")
                     case .plan:
                         break // the plan panel belongs to the workspace
                     case .done(let stop, let id, _):
                         sessionId = id
                         thoughtLine = nil
                         pendingPermissions.removeAll()
+                        turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         // The host ends a turn with its own name for it, and
                         // the bridge with ACP's, so both are a normal end.
-                        // A turn the owner stopped is "cancelled": its
-                        // queued text stays parked rather than firing.
+                        // A turn the owner stopped is "cancelled": its queued
+                        // text stays parked rather than firing.
                         if stop != "endTurn" && stop != "end_turn" && stop != "cancelled" {
                             sendError = "Turn ended: \(stop)"
                         } else if stop != "cancelled" {
@@ -698,33 +751,29 @@ public struct ChatView: View {
                 sendTask = nil
                 // A turn that finished on its own sends what the owner
                 // typed ahead while it ran; a stopped or failed turn
-                // leaves the parked text for the send button.
-                if endedNormally {
-                    let queued = queuedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !queued.isEmpty {
-                        queuedDraft = ""
-                        // The queue holds text: the attachments in the
-                        // composer stay there for the next message instead
-                        // of riding the parked text.
-                        let carried = attachments
-                        attachments = []
-                        // The chained send clears the composer, so what the
-                        // owner typed while the turn was closing goes back
-                        // in after it.
-                        let typeAhead = draft
-                        let started = send(queued)
-                        attachments = carried
-                        if started {
-                            restoreTypeAhead(typeAhead)
-                        } else {
-                            // The send never started, so the parked text
-                            // goes back in front of the type-ahead that is
-                            // still in the composer.
-                            restoreToComposer(queued)
-                        }
+                // leaves the queued text for the send button.
+                if endedNormally, let queued = queuedPrompt, !queued.isEmpty {
+                    queuedPrompt = nil
+                    // The queue holds text: the attachments in the composer
+                    // stay there for the next message instead of riding the
+                    // parked text.
+                    let carried = attachments
+                    attachments = []
+                    // The chained send clears the composer, so what the owner
+                    // typed while the turn was closing goes back in after it.
+                    let typeAhead = draft
+                    let started = send(queued)
+                    attachments = carried
+                    if started {
+                        restoreTypeAhead(typeAhead)
+                    } else {
+                        // The send never started, so the queued text goes
+                        // back in front of the type-ahead that is still in
+                        // the composer.
+                        restoreToComposer(queued)
                     }
                 } else {
-                    restoreParkedDraft()
+                    restoreQueuedPrompt()
                 }
             } catch is CancellationError {
                 // A stop the owner asked for is not an error: the partial
@@ -733,52 +782,84 @@ public struct ChatView: View {
                 sending = false
                 sendTask = nil
                 thoughtLine = nil
-                restoreParkedDraft()
+                restoreQueuedPrompt()
             } catch {
                 guard turnToken == token else { return }
                 sending = false
                 sendTask = nil
                 thoughtLine = nil
-                sendError = error.localizedDescription
-                // The parked correction goes back first, so the prompt
-                // that was sent lands ahead of it: the correction was
-                // typed after that prompt went out.
-                restoreParkedDraft()
-                // A stream that failed before any event means the turn
-                // never reached the engine, so its images and its prompt
-                // come back.  A stream that failed after an event means
-                // the engine already has them, and handing them back
-                // would ask the owner to repeat a turn that already ran.
-                if !receivedEvent {
+                // A stopped turn is not a failure: the owner asked for it,
+                // so the surface says nothing about it.
+                let cancelled = Task.isCancelled
+                if !cancelled {
+                    sendError = error.localizedDescription
+                }
+                restoreQueuedPrompt()
+                // A stream that failed before any event means the turn never
+                // reached the engine, so its images and its prompt come
+                // back.  A stream that failed after an event means the
+                // engine already has them, and handing them back would ask
+                // the owner to repeat a turn that already ran.
+                if !cancelled, !receivedEvent {
                     attachments = outgoingImages + attachments
                     restoreToComposer(prompt)
                 }
             }
         }
+        // The task is assigned after it is built, so a turn that ends before
+        // the assignment lands cannot leave a finished task in the state.
         sendTask = task
         return true
     }
 
-    /// Parks text typed while a turn runs, to send when it completes.
-    /// A second park appends to the first, so several corrections ride
-    /// one follow-up turn in the order they were typed.
-    private func queueDraft() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, sending else { return }
-        queuedDraft = queuedDraft.isEmpty ? text : queuedDraft + "\n\n" + text
-        draft = ""
-        sendError = nil
+    /// Cancels the running turn: the sidecar is told first so the engine
+    /// stops work, then the local stream is dropped.
+    private func stopTurn() {
+        guard sending else { return }
+        if let host = activeHost, let sessionId {
+            let target = sessionId
+            Task { await ChatSessionClient.cancel(host: host, sessionId: target) }
+        }
+        sendTask?.cancel()
+        sendTask = nil
+        thoughtLine = nil
+        // This turn gives up the composer, so a stream that is still on its
+        // way out cannot clear the state of the next one.
+        turnToken += 1
+        // A stopped turn cannot answer a question any more, so the card goes
+        // with it rather than sitting there inviting an answer that lands
+        // nowhere.
+        pendingPermissions.removeAll()
+        // The queued text is the owner's to send or edit, so it goes back to
+        // the composer instead of waiting hidden for a later turn.
+        restoreQueuedPrompt()
+        supportsSteering = false
+        isSendingStopFeedback()
+        sending = false
     }
 
-    /// Moves parked text back into the composer.  A stopped or failed
+    /// Holds the draft for the next turn.
+    private func queueDraft() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, sending else { return }
+        draft = ""
+        // A second prompt joins the first instead of replacing it: a queued
+        // message that is silently dropped is a message the owner lost.
+        if let queued = queuedPrompt, !queued.isEmpty {
+            queuedPrompt = queued + "\n" + prompt
+        } else {
+            queuedPrompt = prompt
+        }
+    }
+
+    /// Moves the queued text back into the composer.  A stopped or failed
     /// turn hands it over, because the send button sends the composer's
-    /// text: parked text that stayed hidden in state would be sent by a
+    /// text: queued text that stayed hidden in state would be sent by a
     /// later turn the owner never asked for.
-    private func restoreParkedDraft() {
-        let parked = queuedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !parked.isEmpty else { return }
-        queuedDraft = ""
-        restoreToComposer(parked)
+    private func restoreQueuedPrompt() {
+        guard let queued = queuedPrompt else { return }
+        queuedPrompt = nil
+        restoreToComposer(queued)
     }
 
     /// Puts text that has to survive back into the composer.
@@ -817,29 +898,53 @@ public struct ChatView: View {
         draft = current.isEmpty ? value : value + "\n\n" + draft
     }
 
-    /// Stops the in-flight turn: cancel on the sidecar, then drop the
-    /// local stream.  A partial reply already on screen stays.  Parked
-    /// text stays queued for the send button — stopping means "not this
-    /// direction", so it is never auto-sent.
-    private func stopTurn() {
-        guard sending else { return }
-        if let sessionId, let host = activeHost {
-            Task { await ChatSessionClient.cancel(host: host, sessionId: sessionId) }
+    /// Injects the draft into the running turn when the sidecar allows it.
+    private func steerDraft() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, sending, supportsSteering, let host = activeHost, let sessionId else { return }
+        draft = ""
+        let target = sessionId
+        Task {
+            do {
+                try await ChatSessionClient.steer(host: host, sessionId: target, text: prompt)
+            } catch {
+                sendError = error.localizedDescription
+            }
         }
-        sendTask?.cancel()
-        sendTask = nil
-        sending = false
-        thoughtLine = nil
-        // This turn gives up the composer, so a stream that is still on
-        // its way out cannot clear the state of the next one.
-        turnToken += 1
-        // A stopped turn cannot answer a question any more, so the cards
-        // go with the turn rather than sitting there inviting answers
-        // that land nowhere.
-        pendingPermissions.removeAll()
-        // The parked text is the owner's to send or edit, so it goes back
-        // to the composer instead of waiting hidden for a later turn.
-        restoreParkedDraft()
+    }
+
+    private func isSendingStopFeedback() {
+        // Stop is a deliberate destructive-feeling tap; a medium impact
+        // marks it without a notification-grade buzz.
+        turnTick += 1
+    }
+
+    /// The pill naming what is waiting for the running turn to end.
+    @ViewBuilder
+    private func queuedPromptPill(_ queued: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(queued)
+                .font(.system(size: 12))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button {
+                queuedPrompt = nil
+                restoreToComposer(queued)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Discard Queued Message")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 
     private func startVoice() {
@@ -859,18 +964,19 @@ struct AgentThreadView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: AgentMessagesVC, context: Context) {}
 }
 
-/// Native input bar: the send path the kit never sees.
-///
-/// While a turn runs the field stays live and the send control splits:
-/// typed text parks with the queue control, and the round button becomes
-/// the stop control for the running turn.
+/// Native input bar: the send path the kit never sees.  While a turn runs
+/// the field stays open — text goes out as a steer when the turn accepts
+/// one, or queues for the next turn otherwise, and the send button becomes
+/// the stop control.
 struct ChatInputBar: View {
     @Binding var draft: String
     var sending: Bool
     var isDictating: Bool = false
     var onSend: () -> Void
-    var onStop: () -> Void
-    var onQueue: () -> Void
+    var onStop: () -> Void = {}
+    var onQueue: () -> Void = {}
+    var onSteer: () -> Void = {}
+    var canSteer: Bool = false
     var onVoice: () -> Void
     /// Images attached to the next turn.
     @Binding var attachments: [ChatAttachment]
@@ -905,37 +1011,28 @@ struct ChatInputBar: View {
                         .frame(minWidth: 32, minHeight: 44)
                 }
                 .accessibilityLabel("Paste Image Or File")
-                // The field stays live during a turn: typing ahead is how
-                // a correction gets queued instead of dropped.
                 TextField("Message the agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit(onSend)
                 Button(action: onVoice) {
                     Image(systemName: isDictating ? "mic.fill" : "mic")
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel(isDictating ? "Stop Dictation" : "Dictate")
                 if sending {
-                    // Typed-ahead text parks with this control; the round
-                    // button beside it stops the running turn.
-                    if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Button(action: onQueue) {
-                            Image(systemName: "text.badge.plus")
-                                .font(.system(size: 22))
-                        }
-                        .frame(minWidth: 44, minHeight: 44)
-                        .accessibilityLabel("Queue Message")
-                    }
                     Button(action: onStop) {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 22))
-                            .foregroundStyle(Color.clutchDynamic(
-                                light: (r: 0.729, g: 0.106, b: 0.106),
-                                dark: (r: 1.000, g: 0.420, b: 0.420)
-                            ))
+                            .foregroundStyle(.red)
                     }
                     .frame(minWidth: 44, minHeight: 44)
-                    .accessibilityLabel("Stop Turn")
+                    .accessibilityLabel("Stop")
+                    Button(action: canSteer ? onSteer : onQueue) {
+                        Image(systemName: canSteer ? "paperplane.circle.fill" : "tray.and.arrow.down.circle.fill")
+                            .font(.system(size: 22))
+                    }
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel(canSteer ? "Steer" : "Queue")
                 } else {
                     Button(action: onSend) {
                         Image(systemName: "arrow.up.circle.fill")

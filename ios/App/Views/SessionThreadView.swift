@@ -54,6 +54,17 @@ final class SessionThreadModel {
     var sendError: String?
     /// The engine's execution plan, as it last reported it.
     var plan: [AcpPlanEntry] = []
+    /// Whether the sidecar reported the running turn accepts steering.
+    var supportsSteering = false
+    /// The prompt held back while a turn runs, sent the moment it ends.
+    var queuedPrompt: String?
+    /// How many history entries the sidecar replayed.  At the client's
+    /// load cap this is also the "earlier history isn't loaded" flag.
+    var historyCount = 0
+    /// Bumped on turn end and on permission arrival, so haptics have a
+    /// value to fire on.
+    var turnTick = 0
+    var permissionTick = 0
     /// The permission requests the engine is waiting on, oldest first.
     ///
     /// The engine asks one question at a time, but a second request can land
@@ -61,9 +72,17 @@ final class SessionThreadModel {
     /// screen instead of dropping it behind the newer card, where it would
     /// only be answered by the fallback timer.
     var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers did not reach the engine.
+    ///
+    /// The card offers the request again when this count moves, so a failed
+    /// answer never leaves the card disabled for good.
+    var permissionAnswerFailures = 0
 
     /// The request on screen.
     var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
+    /// Whether an answer can travel: the sidecar chat id is what the
+    /// answer rides on, and it exists only once the turn has started.
+    var canAnswerPermissions: Bool { chatId != nil }
     /// Images attached to the next turn, the way the web canvas attaches
     /// files to a message.
     var attachments: [ChatAttachment] = []
@@ -147,6 +166,7 @@ final class SessionThreadModel {
             cwd = loaded.cwd
             remoteSessionId = loaded.remoteSessionId
             bubbles = Self.bubbles(from: loaded.history)
+            historyCount = loaded.history.count
             // The plan is a state, not a line of the transcript: the last
             // plan the thread carried is the one the engine last reported.
             // A reload that carries no plan keeps the one on screen: the
@@ -168,7 +188,11 @@ final class SessionThreadModel {
         sendError = nil
         isSending = true
         thoughtLine = nil
+        // The capabilities belong to the turn that reported them, so a new
+        // turn starts without steering until the sidecar says otherwise.
+        supportsSteering = false
         bubbles.append(ThreadBubbleItem(id: UUID().uuidString, role: .user, text: prompt))
+        TurnActivity.shared.runStarted(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
 
         // relayReceiverUid is empty: an unpaired CometChat thread has no sink
         // to relay into, and the sidecar skips the mirror when it is blank.
@@ -189,12 +213,13 @@ final class SessionThreadModel {
         attachments = []
         let replyId = UUID().uuidString
         var reply = ""
+        var didFinish = false
         sendTask = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
-                    case .capabilities:
-                        break
+                    case .capabilities(let steering):
+                        supportsSteering = steering
                     case .started(let id, _):
                         chatId = id
                     case .message(let text):
@@ -213,14 +238,24 @@ final class SessionThreadModel {
                         )
                     case .permission(let request):
                         // The engine is blocked on this request until the
-                        // answer goes back, so it is held on screen.
+                        // answer goes back, so it is held on screen, put in
+                        // the home list's "Needs You" section, and the owner
+                        // is woken for it — a stalled approval is the one
+                        // event a turn-end notification can never cover.
                         pendingPermissions.append(request)
+                        permissionTick += 1
+                        TurnActivity.shared.approvalArrived(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
+                        TurnNotifier.permissionRequest(threadTitle: session.displayTitle)
                     case .plan(let entries):
                         plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.removeAll()
+                        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                        turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
+                        didFinish = true
                     case .usage:
                         break // live usage strip is Mac-only
                     case .contextControls:
@@ -228,15 +263,62 @@ final class SessionThreadModel {
                     case .failed(let message):
                         sendError = message
                         pendingPermissions.removeAll()
+                        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                        turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
             } catch {
-                sendError = error.localizedDescription
+                // A stopped turn is not a failure: the owner asked for it,
+                // so the surface says nothing about it.
+                if !Task.isCancelled {
+                    sendError = error.localizedDescription
+                }
+                TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
             }
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
             isSending = false
+            // A prompt held back while the turn ran goes out now: the turn
+            // has ended, so sending again is allowed and the queue cannot
+            // chain inside the stream loop.
+            if didFinish, let queued = queuedPrompt, phase == .ready {
+                queuedPrompt = nil
+                draft = queued
+                send()
+            }
+        }
+    }
+
+    /// Holds the draft for the next turn while the current one streams.
+    func queueDraft() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, isSending else { return }
+        draft = ""
+        // A second prompt joins the first instead of replacing it: a queued
+        // message that is silently dropped is a message the owner lost.
+        if let queued = queuedPrompt, !queued.isEmpty {
+            queuedPrompt = queued + "\n" + prompt
+        } else {
+            queuedPrompt = prompt
+        }
+    }
+
+    /// Injects the draft into the running turn when the sidecar allows it.
+    func steerDraft() {
+        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, isSending, supportsSteering, let chatId else { return }
+        draft = ""
+        let target = chatId
+        let owner = host
+        Task {
+            do {
+                try await ChatSessionClient.steer(host: owner, sessionId: target, text: prompt)
+            } catch {
+                sendError = error.localizedDescription
+            }
         }
     }
 
@@ -259,8 +341,12 @@ final class SessionThreadModel {
                 // failed answer can be tried again instead of stranding the
                 // engine on a question nobody can see any more.
                 pendingPermissions.removeFirst()
+                if pendingPermissions.isEmpty {
+                    TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                }
             } else {
                 sendError = "The permission answer did not reach the engine."
+                permissionAnswerFailures += 1
             }
         }
     }
@@ -281,6 +367,14 @@ final class SessionThreadModel {
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
         pendingPermissions.removeAll()
+        // The prompt held for the stopped turn goes with it: it was written
+        // for a turn that is not running, and the next turn must not carry
+        // it out on its own.
+        queuedPrompt = nil
+        supportsSteering = false
+        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+        turnTick += 1
         isSending = false
     }
 
@@ -382,6 +476,12 @@ public struct SessionThreadView: View {
     @State private var model: SessionThreadModel
     @State private var showFind = DebugLaunch.showsFind
     @State private var findText = DebugLaunch.findText ?? ""
+    /// Which match the find arrows are on, an index into `matchOrder`.
+    @State private var findSelection = 0
+    /// Whether the transcript should chase the stream.  It turns off the
+    /// moment the user scrolls up to read, and the jump-to-latest pill
+    /// turns it back on.
+    @State private var followLatest = true
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
@@ -402,26 +502,38 @@ public struct SessionThreadView: View {
     public var body: some View {
         VStack(spacing: 0) {
             modelBar
+            // The plan is the cockpit's header, not a strip under the
+            // transcript: "what is it doing now" is the first question a
+            // supervisor asks, so it stays pinned above the reading pane.
+            if !model.plan.isEmpty {
+                PlanPanel(entries: model.plan)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                Divider()
+            }
             if showFind {
                 findBar
                 Divider()
             }
             transcript
             Divider()
-            // The plan and the permission card sit above the composer, so
-            // what the engine is doing and what it is asking are answered
-            // in the same place the turn is written.
-            if !model.plan.isEmpty {
-                PlanPanel(entries: model.plan)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-            }
+            // The approval sits directly above the composer, so the question
+            // the engine is asking is answered where the next turn is
+            // written — and it can never scroll out of the conversation.
             if let request = model.pendingPermission {
-                PermissionCard(request: request) { optionId in
+                PermissionCard(
+                    request: request,
+                    queuedCount: max(model.pendingPermissions.count - 1, 0),
+                    canAnswer: model.canAnswerPermissions,
+                    answerFailures: model.permissionAnswerFailures
+                ) { optionId in
                     model.answerPermission(optionId)
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
+            }
+            if let queued = model.queuedPrompt {
+                queuedPromptPill(queued)
             }
             composer
         }
@@ -454,6 +566,10 @@ public struct SessionThreadView: View {
             guard dictation.isRecording || !text.isEmpty else { return }
             model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+        // Haptics keyed on counters so each event lands once.
+        .sensoryFeedback(.success, trigger: model.turnTick)
+        .sensoryFeedback(.warning, trigger: model.permissionTick)
+        .sensoryFeedback(.error, trigger: model.sendError)
     }
 
     /// The model and effort pickers, straight from the host's catalog.
@@ -535,15 +651,38 @@ public struct SessionThreadView: View {
         .task { await model.loadCatalog() }
     }
 
+    /// The find bar with navigation: matches are counted in thread order and
+    /// the arrows walk them, so "1 match" is a place, not a dead end.
     private var findBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
             TextField("Find In Thread", text: $findText)
                 .textFieldStyle(.plain)
-            Text(matchLabel)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .autocorrectionDisabled()
+            if matchOrder.count > 0 {
+                Button {
+                    findSelection = (clampedSelection - 1 + matchOrder.count) % matchOrder.count
+                } label: {
+                    Image(systemName: "chevron.up")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Previous Match")
+                Text("\(clampedSelection + 1) of \(matchOrder.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Button {
+                    findSelection = (clampedSelection + 1) % matchOrder.count
+                } label: {
+                    Image(systemName: "chevron.down")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Next Match")
+            } else {
+                Text(matchLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Button {
                 showFind = false
                 findText = ""
@@ -557,18 +696,33 @@ public struct SessionThreadView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(Color.clutchSecondaryBackground.opacity(0.6))
+        // A new search starts at the first match.
+        .onChange(of: findText) { _, _ in
+            findSelection = 0
+        }
     }
 
-    private var matchingIDs: Set<String> {
+    /// The match the arrows are on, kept inside the list.
+    ///
+    /// The transcript grows while the owner reads it, so a selection that
+    /// was in range can fall outside it: the counter would then name a
+    /// match that is not there.
+    private var clampedSelection: Int {
+        guard !matchOrder.isEmpty else { return 0 }
+        return min(max(findSelection, 0), matchOrder.count - 1)
+    }
+
+    /// Matches in thread order, so the arrows can walk them.
+    private var matchOrder: [String] {
         let needle = findText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return [] }
-        return Set(model.bubbles.filter { $0.text.lowercased().contains(needle) }.map(\.id))
+        return model.bubbles.filter { $0.text.lowercased().contains(needle) }.map(\.id)
     }
 
     private var matchLabel: String {
         let needle = findText.trimmingCharacters(in: .whitespacesAndNewlines)
         if needle.isEmpty { return "" }
-        let count = matchingIDs.count
+        let count = matchOrder.count
         return count == 1 ? "1 match" : "\(count) matches"
     }
 
@@ -601,52 +755,113 @@ public struct SessionThreadView: View {
             }
         case .ready:
             let parents = model.toolParents
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(model.bubbles) { bubble in
-                            ThreadBubbleRow(
-                                bubble: bubble,
-                                isMatch: matchingIDs.contains(bubble.id),
-                                depth: model.toolDepth(of: bubble, parents: parents)
-                            )
-                                .id(bubble.id)
-                        }
-                        if let thought = model.thoughtLine, !thought.isEmpty {
-                            Text(thought)
+            let matched = Set(matchOrder)
+            GeometryReader { outer in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 10) {
+                            // A capped load used to look like a thread that
+                            // simply began mid-sentence; say so instead.
+                            if model.historyCount >= 200 {
+                                Text(Copy.gap(
+                                    "This thread has more history than the app loads.",
+                                    "Showing the most recent \(model.historyCount) events."
+                                ))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .padding(.horizontal, 12)
-                                .id("thought")
-                        }
-                        if let error = model.sendError {
-                            Label(error, systemImage: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .padding(.horizontal, 12)
-                            if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
-                                Button("Sign In To Muse") { showMuseSignIn = true }
+                                .padding(.bottom, 2)
                             }
+                            ForEach(model.bubbles) { bubble in
+                                ThreadBubbleRow(
+                                    bubble: bubble,
+                                    isMatch: matched.contains(bubble.id),
+                                    depth: model.toolDepth(of: bubble, parents: parents)
+                                )
+                                    .id(bubble.id)
+                            }
+                            if let thought = model.thoughtLine, !thought.isEmpty {
+                                Text(thought)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 12)
+                                    .id("thought")
+                            }
+                            if let error = model.sendError {
+                                Label(error, systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .padding(.horizontal, 12)
+                                if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
+                                    Button("Sign In To Muse") { showMuseSignIn = true }
+                                }
+                            }
+                            // Sentinel to scroll to: the transcript grows during a
+                            // stream, and ScrollViewProxy has no content size to
+                            // measure against.
+                            Color.clear
+                                .frame(height: 1)
+                                .id("bottom")
+                                .background(GeometryReader { sentinel in
+                                    Color.clear.preference(
+                                        key: TranscriptBottomVisibility.self,
+                                        value: sentinel.frame(in: .named("threadScroll")).maxY
+                                    )
+                                })
                         }
-                        // Sentinel to scroll to: the transcript grows during a
-                        // stream, and ScrollViewProxy has no content size to
-                        // measure against.
-                        Color.clear.frame(height: 1).id("bottom")
+                        // A readable line length on iPad: the bubbles cap
+                        // where a book would, and centre as one column.
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
+                    .coordinateSpace(name: "threadScroll")
+                    .onPreferenceChange(TranscriptBottomVisibility.self) { bottomY in
+                        // The sentinel rides at the content's end: near the
+                        // viewport's own height means the user is at the
+                        // bottom; anything beyond means they scrolled up.
+                        let atBottom = bottomY <= outer.size.height + 120
+                        if atBottom != followLatest { followLatest = atBottom }
+                    }
+                    .onChange(of: model.bubbles.count) { _, _ in
+                        guard followLatest else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    .onChange(of: model.thoughtLine) { _, _ in
+                        // Reasoning streams in many times a second; chasing
+                        // it would yank the reader down the whole time.
+                        guard followLatest else { return }
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
+                    .onChange(of: findSelection) { _, selection in
+                        let order = matchOrder
+                        guard order.indices.contains(selection) else { return }
+                        proxy.scrollTo(order[selection], anchor: .center)
+                    }
+                    .refreshable { await model.reload() }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !followLatest {
+                            Button {
+                                followLatest = true
+                                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+                            } label: {
+                                Label("Latest", systemImage: "arrow.down")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(.thinMaterial, in: Capsule())
+                            }
+                            .padding(12)
+                            .accessibilityLabel("Jump To Latest")
+                        }
+                    }
                 }
-                .onChange(of: model.bubbles.count) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: model.thoughtLine) { _, _ in
-                    withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .refreshable { await model.reload() }
             }
         }
     }
 
+    /// The composer dock.  The field closes only when the thread itself is
+    /// unusable (failed or still loading) — never while a turn runs, where
+    /// text steers or queues instead.
     private var composer: some View {
         VStack(spacing: 6) {
             if !model.attachments.isEmpty {
@@ -662,14 +877,14 @@ public struct SessionThreadView: View {
                     .foregroundStyle(dictation.isRecording ? Color.red : Color.secondary)
             }
             .buttonStyle(.plain)
-            .disabled(model.isSending)
+            .disabled(!composerEnabled)
             .accessibilityLabel(dictation.isRecording ? "Stop Dictation" : "Dictate")
             PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
                 Image(systemName: "paperclip")
                     .font(.title3)
                     .foregroundStyle(Color.secondary)
             }
-            .disabled(model.isSending)
+            .disabled(!composerEnabled)
             .accessibilityLabel("Attach Image")
             Button {
                 showFilePicker = true
@@ -678,7 +893,7 @@ public struct SessionThreadView: View {
                     .font(.title3)
                     .foregroundStyle(Color.secondary)
             }
-            .disabled(model.isSending)
+            .disabled(!composerEnabled)
             .accessibilityLabel("Attach File")
             Button {
                 Task { await pasteClipboard() }
@@ -687,16 +902,17 @@ public struct SessionThreadView: View {
                     .font(.title3)
                     .foregroundStyle(Color.secondary)
             }
-            .disabled(model.isSending)
+            .disabled(!composerEnabled)
             .accessibilityLabel("Paste Image Or File")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
+                .autocorrectionDisabled()
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .background(Color.clutchSecondaryBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
-                .disabled(model.isSending)
+                .disabled(!composerEnabled)
             if model.isSending {
                 Button {
                     model.stop()
@@ -705,7 +921,17 @@ public struct SessionThreadView: View {
                         .font(.title2)
                         .foregroundStyle(.red)
                 }
+                .frame(minWidth: 44, minHeight: 44)
                 .accessibilityLabel("Stop")
+                Button {
+                    if model.supportsSteering { model.steerDraft() } else { model.queueDraft() }
+                } label: {
+                    Image(systemName: model.supportsSteering ? "paperplane.circle.fill" : "tray.and.arrow.down.circle.fill")
+                        .font(.title2)
+                }
+                .frame(minWidth: 44, minHeight: 44)
+                .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityLabel(model.supportsSteering ? "Steer" : "Queue")
             } else {
                 Button {
                     model.send()
@@ -713,9 +939,16 @@ public struct SessionThreadView: View {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
                 }
+                .frame(minWidth: 44, minHeight: 44)
                 .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send Message")
             }
+            }
+            if !composerEnabled, !composerEnabledMessage.isEmpty {
+                Text(composerEnabledMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.horizontal, 12)
@@ -757,6 +990,51 @@ public struct SessionThreadView: View {
             pickedPhoto = nil
             Task { await loadAttachment(item) }
         }
+    }
+
+    /// Whether the composer can send at all: a failed or unloaded thread
+    /// has nowhere to send to, and the dock says so instead of swallowing
+    /// the tap the way the send guard used to.
+    private var composerEnabled: Bool {
+        model.phase == .ready
+    }
+
+    private var composerEnabledMessage: String {
+        switch model.phase {
+        case .failed:
+            return "Reopen this thread to continue — the last load failed."
+        case .idle, .loading:
+            return "Opening the thread…"
+        case .ready:
+            return ""
+        }
+    }
+
+    /// The pill naming what is waiting for the running turn to end.
+    @ViewBuilder
+    private func queuedPromptPill(_ queued: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(queued)
+                .font(.system(size: 12))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Button {
+                model.queuedPrompt = nil
+                model.draft = queued
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Discard Queued Message")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
     }
 
     /// Take providers from a paste command or a drop.
@@ -849,6 +1127,17 @@ public struct SessionThreadView: View {
     }
 }
 
+/// The sentinel's distance from the viewport top, reported so the
+/// transcript can tell "user is at the bottom" from "user scrolled up"
+/// without polling scroll offsets.
+struct TranscriptBottomVisibility: PreferenceKey {
+    static var defaultValue: CGFloat = .infinity
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = min(value, nextValue())
+    }
+}
+
 struct ThreadBubbleRow: View {
     let bubble: ThreadBubbleItem
     var isMatch: Bool = false
@@ -882,6 +1171,10 @@ struct ThreadBubbleRow: View {
                     )
                 if bubble.role == .assistant { Spacer(minLength: 40) }
             }
+            // VoiceOver needs to know who is speaking: the role was only
+            // ever a background colour, which reads as nothing.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(bubble.role == .user ? "You said: \(bubble.text)" : "Agent said: \(bubble.text)")
         }
     }
 }

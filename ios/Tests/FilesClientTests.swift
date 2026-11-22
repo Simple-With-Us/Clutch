@@ -24,6 +24,25 @@ final class FilesClientTests: XCTestCase {
         XCTAssertNil(listing.entries[1].size)
     }
 
+    func testDecodesTheAbsolutePathOfTheFolder() throws {
+        // The picker turns the folder into a thread's working directory, so
+        // it needs the path the machine that holds it uses.
+        let payload = """
+        {"path":"src","absolute":"/Users/jay/Code/Clutch/src","parent":"","entries":[]}
+        """
+        let listing = try JSONDecoder().decode(FilesClient.Listing.self, from: Data(payload.utf8))
+        XCTAssertEqual(listing.absolute, "/Users/jay/Code/Clutch/src")
+    }
+
+    func testAnOlderSidecarWithoutAnAbsolutePathStillDecodes() throws {
+        let payload = """
+        {"path":"src","parent":"","entries":[]}
+        """
+        let listing = try JSONDecoder().decode(FilesClient.Listing.self, from: Data(payload.utf8))
+        XCTAssertEqual(listing.path, "src")
+        XCTAssertNil(listing.absolute)
+    }
+
     func testDecodesAFilePreview() throws {
         let payload = """
         {"path":"README.md","name":"README.md","kind":"text","bytes":12,

@@ -526,99 +526,127 @@ struct ThreadSidebarRow: View {
     /// nil where no surface handles them (the Mac Code tab's thread list), so
     /// those items are left out there instead of shown and silently ignored.
     var onAction: ((ThreadSidebarAction, AcpSessionInfo) -> Void)? = nil
+    /// True when the containing `List(selection:)` owns the tap: the row
+    /// renders without its own button, because a plain button would eat the
+    /// tap and a compact-width split view only pushes its detail column for
+    /// a selection change.
+    var isListSelectable: Bool = false
 
     @State private var showingDetails = false
 
     var body: some View {
-        Button {
-            onSelect(session)
-        } label: {
-            HStack(spacing: 6) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
-                        if isPinned {
-                            Image(systemName: "pin.fill")
-                                .font(.system(size: 8))
-                                .foregroundStyle(.secondary)
-                        }
-                        Text(session.displayTitle)
-                            .font(.system(size: 12, weight: isSelected || isLoading ? .semibold : .regular))
-                            .lineLimit(1)
-                    }
-                    if isLoading {
-                        Text("Opening…")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.tint)
-                            .accessibilityHidden(true)
-                    } else {
-                        HStack(spacing: 4) {
-                            if let cwd = session.cwd, !cwd.isEmpty {
-                                Image(systemName: "folder")
-                                    .font(.system(size: 8))
-                                    .foregroundStyle(.tertiary)
-                                Text((cwd as NSString).lastPathComponent)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            if session.cwd?.isEmpty == false, session.updated != nil {
-                                Text("·")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            if let when = session.updated {
-                                Text(when, style: .relative)
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        // The one usage fact cheap enough to show inline on every
-                        // row.  Absent rather than estimated when the engine has not
-                        // reported a window.
-                        if let usage = session.usage,
-                           let occupancy = ThreadMetricPresentation.contextOccupancyLabel(usage) {
-                            Text(occupancy)
-                                .font(.system(size: 9, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                if isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 14, height: 14)
-                        .accessibilityHidden(true)
-                }
-                Spacer(minLength: 0)
+        #if os(macOS)
+        selectableContent
+            // The row shows only the folder's last component, so the tooltip
+            // carries the full path.  The Mac rail shows that path in Thread Details.
+            .help(showsTooltip ? (session.cwd ?? session.sessionId) : "")
+            .accessibilityAction(named: Text("Show Thread Details")) { showingDetails = true }
+            .contextMenu { menu }
+            .popover(isPresented: $showingDetails, arrowEdge: .trailing) {
+                ThreadDetailsCard(session: session, projects: projects, onLoadDetails: onLoadDetails)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(minHeight: 44)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                isSelected || isLoading
-                    ? Color.accentColor.opacity(0.18)
-                    : isHovered ? Color.primary.opacity(0.06) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-            .contentShape(Rectangle())
+        #else
+        selectableContent
+        #endif
+    }
+
+    /// The row's content, with or without its own tap handler depending on
+    /// who owns selection (`isListSelectable`).
+    private var selectableContent: some View {
+        Group {
+            if isListSelectable {
+                rowLabel
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Button {
+                    onSelect(session)
+                } label: {
+                    rowLabel
+                }
+                .buttonStyle(.plain)
+                .disabled(isDisabled)
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        // VoiceOver needs the thread named, not just its working directory.
+        // VoiceOver needs the thread named, not just its working directory,
+        // and the row behaves as a button: the combined element carries the
+        // name and lands in `app.buttons`, where the UI tests tap it.
         .accessibilityLabel(isLoading ? "Opening Thread, \(session.displayTitle)" : "Thread, \(session.displayTitle)")
         .accessibilityValue(isLoading ? "Opening" : isSelected ? "Selected" : "")
-        #if os(macOS)
-        // The row shows only the folder's last component, so the tooltip
-        // carries the full path.  The Mac rail shows that path in Thread Details.
-        .help(showsTooltip ? (session.cwd ?? session.sessionId) : "")
-        .accessibilityAction(named: Text("Show Thread Details")) { showingDetails = true }
-        .contextMenu { menu }
-        .popover(isPresented: $showingDetails, arrowEdge: .trailing) {
-            ThreadDetailsCard(session: session, projects: projects, onLoadDetails: onLoadDetails)
+        .accessibilityAddTraits(isListSelectable ? [.isButton] : [])
+    }
+
+    /// What the row draws, shared by both selection owners.
+    private var rowLabel: some View {
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    if isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(session.displayTitle)
+                        .font(.system(size: 12, weight: isSelected || isLoading ? .semibold : .regular))
+                        .lineLimit(1)
+                }
+                if isLoading {
+                    Text("Opening…")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                } else {
+                    HStack(spacing: 4) {
+                        if let cwd = session.cwd, !cwd.isEmpty {
+                            Image(systemName: "folder")
+                                .font(.system(size: 8))
+                                .foregroundStyle(.tertiary)
+                            Text((cwd as NSString).lastPathComponent)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        if session.cwd?.isEmpty == false, session.updated != nil {
+                            Text("·")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                        }
+                        if let when = session.updated {
+                            Text(when, style: .relative)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    // The one usage fact cheap enough to show inline on every
+                    // row.  Absent rather than estimated when the engine has not
+                    // reported a window.
+                    if let usage = session.usage,
+                       let occupancy = ThreadMetricPresentation.contextOccupancyLabel(usage) {
+                        Text(occupancy)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
+            }
+            Spacer(minLength: 0)
         }
-        #endif
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(minHeight: 44)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            isSelected || isLoading
+                ? Color.accentColor.opacity(0.18)
+                : isHovered ? Color.primary.opacity(0.06) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .contentShape(Rectangle())
     }
 
     #if os(macOS)

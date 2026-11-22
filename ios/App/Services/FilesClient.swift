@@ -34,11 +34,18 @@ public struct FilesClient {
     /// One folder, and what is in it.
     public struct Listing: Decodable, Equatable, Sendable {
         public var path: String
+        /// The folder's own path on the machine that holds it.
+        ///
+        /// A sidecar older than this field does not send one, so it stays
+        /// optional: the relative `path` is still what the listing is
+        /// addressed by.
+        public var absolute: String?
         public var parent: String?
         public var entries: [Entry]
 
-        public init(path: String, parent: String? = nil, entries: [Entry] = []) {
+        public init(path: String, absolute: String? = nil, parent: String? = nil, entries: [Entry] = []) {
             self.path = path
+            self.absolute = absolute
             self.parent = parent
             self.entries = entries
         }
