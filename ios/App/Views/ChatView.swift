@@ -1,5 +1,4 @@
 import SwiftUI
-import Foundation
 import UniformTypeIdentifiers
 import PhotosUI
 import CometChatUIKitSwift
@@ -909,7 +908,7 @@ public struct ChatView: View {
             do {
                 try await ChatSessionClient.steer(host: host, sessionId: target, text: prompt)
             } catch {
-                if steerFailedBeforeSend(error) {
+                if SteerFailure.failedBeforeSend(error) {
                     sendError = error.localizedDescription
                     // The steer never left, so the text it was going to carry
                     // goes back to the composer instead of being lost.
@@ -936,43 +935,6 @@ public struct ChatView: View {
         } else {
             restoreToComposer(prompt)
         }
-    }
-
-    /// True when the steer certainly never reached the sidecar.
-    ///
-    /// A transport failure after the request was sent leaves the outcome
-    /// unknown: the sidecar may have injected the text, and an owner who
-    /// finds it back in the composer sends the same correction twice.
-    private func steerFailedBeforeSend(_ error: Error) -> Bool {
-        if let clientError = error as? ChatClientError {
-            switch clientError {
-            case .missingToken, .badHost:
-                // The request was never built, so it never left the phone.
-                return true
-            case .steerRejected:
-                // The sidecar answered and refused, so it did not inject.
-                return true
-            case .http:
-                // The answer was not an HTTP response, so nothing says what
-                // the sidecar did with the request.
-                return false
-            }
-        }
-        if let urlError = error as? URLError {
-            switch urlError.code {
-            case .badURL, .unsupportedURL, .cannotFindHost, .dnsLookupFailed,
-                 .cannotConnectToHost, .notConnectedToInternet, .secureConnectionFailed,
-                 .serverCertificateUntrusted, .serverCertificateHasBadDate,
-                 .serverCertificateNotYetValid, .clientCertificateRejected,
-                 .clientCertificateRequired, .dataNotAllowed:
-                // The request never reached the sidecar.
-                return true
-            default:
-                // A timeout or a lost connection says nothing about it.
-                return false
-            }
-        }
-        return false
     }
 
     private func isSendingStopFeedback() {
