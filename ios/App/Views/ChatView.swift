@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import UniformTypeIdentifiers
 import PhotosUI
 import CometChatUIKitSwift
@@ -908,12 +909,70 @@ public struct ChatView: View {
             do {
                 try await ChatSessionClient.steer(host: host, sessionId: target, text: prompt)
             } catch {
-                sendError = error.localizedDescription
-                // The steer never left, so the text it was going to carry
-                // goes back to the composer instead of being lost.
-                restoreToComposer(prompt)
+                if steerFailedBeforeSend(error) {
+                    sendError = error.localizedDescription
+                    // The steer never left, so the text it was going to carry
+                    // goes back to the composer instead of being lost.
+                    restoreSteerPrompt(prompt)
+                } else {
+                    // The sidecar may have injected the text, so the text
+                    // stays out of the composer: putting it back would have
+                    // the owner send the same correction twice.
+                    sendError = "\(error.localizedDescription)\u{00A0} The steer outcome is unknown, so the text was not put back in the composer."
+                }
             }
         }
+    }
+
+    /// Puts a failed steer's text back into the composer.
+    ///
+    /// While dictation records, the field belongs to the dictation
+    /// observer, which rewrites it from the base and the transcript: the
+    /// text goes back the way the observer would write it, instead of
+    /// joining the base and repeating the dictated words.
+    private func restoreSteerPrompt(_ prompt: String) {
+        if dictation.isRecording {
+            restoreTypeAhead(prompt)
+        } else {
+            restoreToComposer(prompt)
+        }
+    }
+
+    /// True when the steer certainly never reached the sidecar.
+    ///
+    /// A transport failure after the request was sent leaves the outcome
+    /// unknown: the sidecar may have injected the text, and an owner who
+    /// finds it back in the composer sends the same correction twice.
+    private func steerFailedBeforeSend(_ error: Error) -> Bool {
+        if let clientError = error as? ChatClientError {
+            switch clientError {
+            case .missingToken, .badHost:
+                // The request was never built, so it never left the phone.
+                return true
+            case .steerRejected:
+                // The sidecar answered and refused, so it did not inject.
+                return true
+            case .http:
+                // The answer was not an HTTP response, so nothing says what
+                // the sidecar did with the request.
+                return false
+            }
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .badURL, .unsupportedURL, .cannotFindHost, .dnsLookupFailed,
+                 .cannotConnectToHost, .notConnectedToInternet, .secureConnectionFailed,
+                 .serverCertificateUntrusted, .serverCertificateHasBadDate,
+                 .serverCertificateNotYetValid, .clientCertificateRejected,
+                 .clientCertificateRequired, .dataNotAllowed:
+                // The request never reached the sidecar.
+                return true
+            default:
+                // A timeout or a lost connection says nothing about it.
+                return false
+            }
+        }
+        return false
     }
 
     private func isSendingStopFeedback() {
