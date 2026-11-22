@@ -21,6 +21,20 @@
                ReferencedContainer = "container:Clutch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B7DE938A3D6AE0EEDFDA1960"
+               BuildableName = "ClutchMacUITests.xctest"
+               BlueprintName = "ClutchMacUITests"
+               ReferencedContainer = "container:Clutch.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -39,7 +53,20 @@
          </BuildableReference>
       </MacroExpansion>
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B7DE938A3D6AE0EEDFDA1960"
+               BuildableName = "ClutchMacUITests.xctest"
+               BlueprintName = "ClutchMacUITests"
+               ReferencedContainer = "container:Clutch.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

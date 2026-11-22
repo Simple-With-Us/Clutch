@@ -215,7 +215,7 @@ public struct ChatView: View {
                             if let error = sendError {
                                 Text(error)
                                     .font(.system(size: 12))
-                                    .foregroundColor(.red)
+                                    .foregroundStyle(ClutchColor.danger)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 4)
                             }
@@ -1046,7 +1046,7 @@ struct ChatInputBar: View {
                     Button(action: onStop) {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 22))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(ClutchColor.danger)
                     }
                     .frame(minWidth: 44, minHeight: 44)
                     .accessibilityLabel("Stop")

@@ -161,7 +161,7 @@ struct ThreadSidebar: View {
                 if let errorText, !errorText.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(ClutchColor.warning)
                         Text(errorText)
                             .font(.system(size: 11))
                             .lineLimit(4)
@@ -174,7 +174,7 @@ struct ThreadSidebar: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Color.orange.opacity(0.12))
+                    .background(ClutchColor.warningWash)
                     Divider()
                 }
 
@@ -276,6 +276,7 @@ struct ThreadSidebar: View {
                     .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.plain)
+            .clutchTapTarget()
             .accessibilityLabel("New Thread")
             #if os(macOS)
             .help("New Thread (⌘N)")
@@ -289,6 +290,7 @@ struct ThreadSidebar: View {
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
+                .clutchTapTarget()
                 .accessibilityLabel("New Thread In New Window")
                 .help("New Thread In New Window")
             }
@@ -315,6 +317,7 @@ struct ThreadSidebar: View {
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.plain)
+                .clutchTapTarget()
                 .foregroundStyle(showArchived ? Color.accentColor : .secondary)
                 .accessibilityLabel(showArchived ? "Hide Archived Threads" : "Show Archived Threads")
                 #if os(macOS)
@@ -333,6 +336,7 @@ struct ThreadSidebar: View {
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.plain)
+                .clutchTapTarget()
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Refresh Threads")
                 #if os(macOS)

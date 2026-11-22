@@ -33,6 +33,11 @@ enum MacSidebarWidth {
     static func save(_ width: CGFloat) {
         UserDefaults.standard.set(min(max(width, range.lowerBound), range.upperBound), forKey: key)
     }
+
+    /// Forgets the saved width, so the rail opens at its default again.
+    static func reset() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
 }
 
 /// One bubble from `GET /clutch/v1/thread`.
@@ -131,6 +136,9 @@ public enum MacSurface: String {
 /// live into a pending bubble before the authoritative refresh.
 public struct ChatView: View {
     @Environment(\.openWindow) private var openWindow
+    /// Whether the user asked for reduced motion.  The sidebar slide is the
+    /// one animation here, and it is skipped when it is on.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private enum Phase: Equatable {
         case loading
         case ready
@@ -589,7 +597,7 @@ public struct ChatView: View {
                     .help("Export Transcript")
                     if isWorkspace {
                         Button {
-                            withAnimation(.easeInOut(duration: 0.15)) { showingSidebar.toggle() }
+                            withAnimation(reduceMotion ? nil : ClutchMotion.quick) { showingSidebar.toggle() }
                         } label: {
                             Image(systemName: "sidebar.leading")
                         }

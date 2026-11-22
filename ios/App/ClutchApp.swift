@@ -21,6 +21,9 @@ struct ClutchApp: App {
         WindowGroup {
             RootView()
                 .preferredColorScheme(colorScheme)
+                #if os(macOS)
+                .clutchTestWindow()
+                #endif
         }
         #if os(macOS)
         WindowGroup("Thread", for: MacThreadWindowRequest.self) { $request in

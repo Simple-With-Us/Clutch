@@ -60,7 +60,7 @@ struct DshHostView: View {
                     Section("Error") {
                         Text(errorMessage)
                             .font(.body)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(ClutchColor.danger)
                             .textSelection(.enabled)
                     }
                 }

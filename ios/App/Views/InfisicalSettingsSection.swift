@@ -53,7 +53,7 @@ struct InfisicalSettingsSection: View {
                         .font(.footnote)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(ClutchColor.warning)
                 }
                 Button {
                     Task { await model.reload() }
@@ -127,7 +127,7 @@ struct InfisicalSettingsSection: View {
                 .font(.footnote)
             } icon: {
                 Image(systemName: "arrow.clockwise.circle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(ClutchColor.warning)
             }
             .accessibilityLabel(Text("Clutch must restart on the Mac to use the new service tokens"))
         }

@@ -294,7 +294,7 @@ public struct SessionsView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 12))
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(ClutchColor.warning)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(approval.title)
                                     .font(.system(size: 12, weight: .semibold))
@@ -389,7 +389,14 @@ public struct SessionsView: View {
             }
             .frame(minHeight: 44)
             .tag(HomeSelection.agentChat)
-            .accessibilityLabel("Agent Chat")
+            // The row is one thing to VoiceOver, not three:  the icon, the
+            // title and the subtitle are combined into a single element with
+            // one name, the way a thread row names itself.  The row behaves
+            // as a button because tapping it opens the agent conversation.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Agent Chat, The always-there conversation")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("agent-chat-row")
         }
         #endif
     }
@@ -702,7 +709,7 @@ struct NewThreadSheet: View {
                 if let error = model.errorText {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ClutchColor.danger)
                     if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
                         Button("Sign In To Muse") { showMuseSignIn = true }
                             .buttonStyle(.borderedProminent)
@@ -769,7 +776,7 @@ struct NewThreadSheet: View {
                         } label: {
                             Image(systemName: "stop.circle.fill")
                                 .font(.title2)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(ClutchColor.danger)
                         }
                         .frame(minWidth: 44, minHeight: 44)
                         .accessibilityLabel("Stop")

@@ -22,6 +22,13 @@ log() { printf 'ios-ui-tests: %s\n' "$1" >&2; }
 # shellcheck source=lib/ios-simulator.sh
 source "$REPO_ROOT/scripts/lib/ios-simulator.sh"
 
+# Xcode hands environment variables prefixed with TEST_RUNNER_ to the test
+# runner process, so the snapshot flags travel that way.  Exporting them into
+# the shell alone leaves the runner without them, and the run compares
+# against a baseline that was never recorded.
+export TEST_RUNNER_CLUTCH_RECORD_SNAPSHOTS="${CLUTCH_RECORD_SNAPSHOTS:-}"
+export TEST_RUNNER_CLUTCH_SNAPSHOT_DIR="${CLUTCH_SNAPSHOT_DIR:-}"
+
 cd "$IOS_DIR" || exit 1
 xcodegen generate || exit 1
 
@@ -36,7 +43,6 @@ set -o pipefail
 xcodebuild -project Clutch.xcodeproj \
   -scheme Clutch \
   -destination "platform=iOS Simulator,id=$DEVICE" \
-  -only-testing:ClutchUITests/ClutchThreadSurfaceUITests \
   -resultBundlePath "$RESULT_BUNDLE" \
   test
 status=$?

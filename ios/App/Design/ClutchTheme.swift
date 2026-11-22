@@ -219,12 +219,21 @@ extension View {
 
     /// Grows an icon-only control to the minimum tap target so the whole
     /// padded box is hit-testable.
+    ///
+    /// The 44 point floor is a finger target.  The Mac app is driven by a
+    /// pointer and its compact rail header is sized for one, so the floor
+    /// applies on iOS and the Mac keeps its native size.  The hit-test shape
+    /// is rectangular on both, so the padding is tappable either way.
     public func clutchTapTarget() -> some View {
+        #if os(iOS)
         frame(
             minWidth: ClutchMetric.minTapTarget,
             minHeight: ClutchMetric.minTapTarget
         )
         .contentShape(Rectangle())
+        #else
+        contentShape(Rectangle())
+        #endif
     }
 }
 

@@ -99,6 +99,7 @@ struct HostGateView: View {
                 } label: {
                     Text("Try Again").frame(maxWidth: .infinity)
                 }
+                .accessibilityIdentifier("host-gate-retry")
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 Button {

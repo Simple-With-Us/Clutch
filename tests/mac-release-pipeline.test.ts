@@ -209,7 +209,13 @@ describe("the two builds cannot share one bundle identifier", () => {
   });
 
   it("declares codes.clutch.macos exactly once, on the native target", () => {
-    const hits = PROJECT_YML.split("\n").filter((l) => l.includes("PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.macos"));
+    // The identifier has to match exactly.  A UI test bundle carries the
+    // app's identifier as its prefix, the same way the iOS test bundles
+    // carry codes.clutch.ios, and a prefix match counts those as a second
+    // app claiming the same identity.
+    const hits = PROJECT_YML.split("\n").filter((l) =>
+      /^\s*PRODUCT_BUNDLE_IDENTIFIER:\s*codes\.clutch\.macos\s*$/.test(l),
+    );
     expect(hits).toHaveLength(1);
   });
 
