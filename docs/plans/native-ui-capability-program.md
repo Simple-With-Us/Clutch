@@ -31,6 +31,8 @@ Measured in this lane against base `126342b`, not assumed.
 
 **No capability work has started.**  There are no typed tool cards, no diffs, no exit codes, no verbosity modes and no Live Activity.
 
+**A prior review left a defect open that Pass 3 must not repeat.**  The automated review of PR #296 reported, as an unresolved medium finding, that the permission notification may expose request details on a locked screen.  `TurnNotifier` was added that day and carries the request's headline and tool name.  Once a command or a diff is attached to a request, that detail is exactly what a Lock Screen must not show, so Pass 3 has to settle the redaction rule before it adds anything to the notification.
+
 **One finding changes Pass 3's scope.**  The ACP `session/request_permission` params carry the tool's real input in `toolCall.rawInput` - the command for a shell tool, the path and old and new text for an edit.  The sidecar throws it away.  `PermissionParamsSchema` in `src/web/chat-bridge.ts:1284` keeps only `toolCallId`, `title` and `kind`, and the `PermissionRequest` interface it produces (`:1264`) has no field for the tool input.  The apps therefore render a headline and a tool name (`ios/App/Views/PermissionCard.swift:56`) and never the command, the path or the diff.  The evidence is available upstream and discarded at the boundary, so Pass 3 is not an app-only change.
 
 ## Non-goals
@@ -160,6 +162,8 @@ This is the difference between a trust surface and a remote yes button for `rm -
 
 `TurnNotifier` already wakes the owner when a permission arrives.  Extend it: a time-sensitive notification with actions that answer the request without opening the app, and a deep link straight to the card.
 
+The notification carries no request detail while the device is locked.  A locked screen shows the tool name and the waiting count; the command, the path and the diff appear only after an unlock, and never in the notification body itself.  This closes the unresolved finding PR #296's review left open, and it is a constraint on the payload, not a setting on the notification.
+
 ### 3.4 Live Activity, Lock Screen and Control Center
 
 - A Live Activity rotating through up to three sessions, with a "2 waiting, 1 running" summary, titles and status only.
@@ -173,6 +177,7 @@ This is the difference between a trust surface and a remote yes button for `rm -
 - On the phone, an allow requires Face ID or Touch ID, and a deny never does.
 - There is no "Always allow" on the phone.
 - A permission arriving while the app is backgrounded produces a time-sensitive notification that can answer the request.
+- A locked screen shows the tool name and the waiting count, and never the command, the path or the diff.
 - The Live Activity shows up to three sessions and a waiting count.
 - The whole loop is walkable on a real phone: start a turn on the Mac, approve it from the Lock Screen, and read the result without opening the app.
 
