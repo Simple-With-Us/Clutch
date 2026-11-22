@@ -17,11 +17,13 @@ The north star from that document stands:
 
 > Clutch is not a window onto a log.  It is the answer to one question - what needs me right now - with every answer one tap from the Lock Screen.
 
+That sentence carries one tension this program has to live inside, and it is worth naming before it becomes a surprise.  One tap from the Lock Screen can be a Deny, or it can be a deep link into the app.  It cannot be an informed Allow, because an informed allow needs the command, the path or the diff in front of the owner, and the Lock Screen is the wrong place for that.  The answer is one tap away; the signature takes an unlock and two more.
+
 ## Where the app stands today
 
 Measured in this lane against base `126342b`, not assumed.
 
-**Landed on Nov 22 in PR #296.** The iOS app got the Attention Stack home surface (Agent Chat, Needs You, Running, Pinned, then one section per working folder) in `ios/App/Views/SessionsView.swift:292`.  The Turn Cockpit landed with the plan panel on top, an approval card carrying the tool name and a queued-request count, conditional auto-scroll with a Latest pill, and a composer that never closes but steers or queues (`ios/App/Views/SessionThreadView.swift:221`, `:296`).  New Thread names a working folder before the first turn and remembers it per host (`ios/App/Models/RecentFolders.swift`).  An approval now wakes the owner (`ios/App/Services/TurnNotifier.swift:24`).
+**Landed on Nov 22 in PR #296.** The iOS app got the Attention Stack home surface (Agent Chat, Needs You, Running, Pinned, then one section per working folder) in `ios/App/Views/SessionsView.swift:292`.  The Turn Cockpit landed with the plan panel on top, an approval card carrying the tool name and a queued-request count, conditional auto-scroll with a Latest pill, and a composer that never closes but steers or queues (`ios/App/Views/SessionThreadView.swift:221`, `:296`).  New Thread names a working folder before the first turn and remembers it per host (`ios/App/Models/RecentFolders.swift`).  An approval now wakes the owner (`ios/App/Services/TurnNotifier.swift:18`).
 
 **Not touched by that PR.**  The macOS app is unchanged.  `ios/Mac/ChatViewMac.swift` is 3,050 lines and one view still owns the whole window.  The agent's answer streams into a separate activity pane and then teleports into the transcript at turn end (`ios/Mac/ChatViewMac.swift:686`, rendering `MacWorkspacePanels(responseText: streamingText)`).  Replayed history is stamped with `Date()` (`ios/Mac/ChatViewMac.swift:429`, `:448`, `:464`), so a three-week-old thread claims every message arrived today.  There is no `.commands` block, no Settings scene, no menu bar and no `⌘,`; the only shortcuts are ad-hoc `.keyboardShortcut` calls, and `⌘N` and `⌘R` are bound to sidebar buttons that disappear with the sidebar (`ios/App/Views/ThreadSidebar.swift:282`, `:340`).
 
@@ -169,8 +171,6 @@ Two rules govern that extension, and both come from the landed redaction rather 
 
 The redaction is a constraint on the payload rather than a setting on the notification, so it holds for the notification action labels too and not only for the body.
 
-The notification carries no request detail while the device is locked.  A locked screen shows the tool name and the waiting count; the command, the path and the diff appear only after an unlock, and never in the notification body itself.  This closes the unresolved finding PR #296's review left open, and it is a constraint on the payload, not a setting on the notification.
-
 ### 3.4 Live Activity, Lock Screen and Control Center
 
 - A Live Activity rotating through up to three sessions, with a "2 waiting, 1 running" summary, thread titles and status only, and no tool names and no request text, under the same redaction the notification follows.
@@ -183,7 +183,7 @@ The notification carries no request detail while the device is locked.  A locke
 - An approval shows the command or the path or the diff.  A shell approval shows the command.
 - On the phone, an allow requires Face ID or Touch ID, and a deny never does.
 - There is no "Always allow" on the phone.
-- A permission arriving while the app is backgrounded produces a time-sensitive notification that can answer the request.
+- A permission arriving while the app is backgrounded produces a time-sensitive notification that can deny the request or open the app to answer it.
 - A locked screen shows the thread name and nothing else, and never the command, the path, the diff or the tool name.
 - The locked notification offers Deny and an open-app action.  It does not offer Allow.
 - An allow requires the app to be open, unlocked, and showing the command, the path or the diff.
