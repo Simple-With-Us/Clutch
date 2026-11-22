@@ -121,22 +121,36 @@ final class ClutchMacSurfaceUITests: XCTestCase {
             // the timeout to say so would delay the answer by a minute per
             // test on exactly the broken-app path.
             if app.state == .notRunning {
-                XCTFail("the Mac app exited instead of opening a window")
-                return
+                failAppExited()
             }
             app.activate()
             Thread.sleep(forTimeInterval: 1)
         }
         snap("mac-window-missing")
         dump("mac-window-tree")
-        XCTAssertNotEqual(
-            app.state,
-            .notRunning,
-            "the Mac app exited instead of opening a window"
-        )
+        if app.state == .notRunning {
+            failAppExited()
+        }
         throw XCTSkip(
             "the runner's automation session could not see the Mac app's window; the app was "
                 + "running, so the Mac surface was not verified"
+        )
+    }
+
+    /// Fails the test for an app that exited instead of opening a window.
+    ///
+    /// The failure has to leave the test rather than fall through to the skip
+    /// below it:  an app that exited is a defect in the surface, and a skip
+    /// would report it as a fact about the machine.  `XCTFail` alone is not
+    /// enough, because a skip raised afterwards would swallow the recorded
+    /// failure and report the run as skipped.
+    private func failAppExited() -> Never {
+        let message = "the Mac app exited instead of opening a window"
+        XCTFail(message)
+        throw NSError(
+            domain: "ClutchMacSurfaceUITests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: message]
         )
     }
 
