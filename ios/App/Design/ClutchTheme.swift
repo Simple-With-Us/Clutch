@@ -276,7 +276,34 @@ public enum ClutchStatus {
         switch toolStatus {
         case "completed": self = .success
         case "failed": self = .danger
+        // A call the engine parked or withdrew is not running: show it as
+        // neutral instead of a live spinner, which is what the generic
+        // default used to draw for pending and cancelled calls.
+        case "pending": self = .idle
+        case "cancelled", "canceled": self = .idle
         default: self = .running
+        }
+    }
+
+    /// The word the tool card shows for where a call stands.
+    public var toolStatusLabel: String {
+        switch self {
+        case .success: return "Done"
+        case .danger: return "Failed"
+        case .idle: return "Pending"
+        case .running: return "Running"
+        case .warning: return "Needs Attention"
+        }
+    }
+
+    /// The label for a raw engine status word.  Pending and cancelled both
+    /// draw the idle mark but read their own words: a withdrawn call is not
+    /// queued.  Everything else asks the vocabulary entry its status maps
+    /// to, so the card never carries label rules of its own.
+    public static func toolStatusLabel(forStatus status: String) -> String {
+        switch status {
+        case "cancelled", "canceled": return "Cancelled"
+        default: return ClutchStatus(toolStatus: status).toolStatusLabel
         }
     }
 }
