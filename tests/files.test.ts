@@ -65,6 +65,16 @@ describe("the folder a thread works in", () => {
     expect(listing.entries.map((entry) => entry.name)).toEqual(["main.ts"]);
   });
 
+  it("carries the absolute path of the folder", async () => {
+    // A client that turns the folder into a thread's working directory
+    // needs the real path: an engine resolves a relative cwd against its
+    // own working directory, not against the sidecar's home.
+    const listing = await listDirectory(root, "");
+    expect(listing.absolute).toBe(root);
+    const inside = await listDirectory(root, "src");
+    expect(inside.absolute).toBe(join(root, "src"));
+  });
+
   it("refuses a path that leaves the root", async () => {
     await expect(listDirectory(root, "../..")).rejects.toThrow(FileAccessError);
     await expect(listDirectory(root, "/etc")).rejects.toThrow(/outside the folder/);

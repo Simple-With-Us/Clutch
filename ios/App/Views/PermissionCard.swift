@@ -22,6 +22,12 @@ struct PermissionCard: View {
     /// True while the answer is on its way, so a double tap cannot answer
     /// the same request twice.
     @State private var isAnswering = false
+    /// How many answers the surface could not deliver.
+    ///
+    /// A failed answer leaves the request on screen, so the card has to let
+    /// the owner try again: this count moves whenever an answer fails, and
+    /// the card offers the request again when it does.
+    var answerFailures: Int = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: ClutchSpacing.cozy) {
@@ -96,6 +102,14 @@ struct PermissionCard: View {
         .clipShape(RoundedRectangle(cornerRadius: ClutchRadius.bubble))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(Copy.gap("Permission Needed.", request.headline)))
+        // A request the owner answered is gone, and one that could not be
+        // answered is asked again: either way the card is live.
+        .onChange(of: request.id) { _, _ in
+            isAnswering = false
+        }
+        .onChange(of: answerFailures) { _, _ in
+            isAnswering = false
+        }
     }
 
     private func optionButton(_ option: AcpPermissionOption) -> some View {

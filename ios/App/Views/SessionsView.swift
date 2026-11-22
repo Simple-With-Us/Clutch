@@ -97,7 +97,9 @@ struct HomeFolderGroup: Identifiable {
     let path: String
     let sessions: [AcpSessionInfo]
 
-    var id: String { name }
+    /// The path, not the leaf name: two folders can end in the same name,
+    /// and the list must keep them apart.
+    var id: String { path }
 }
 
 public struct SessionsView: View {
@@ -435,17 +437,21 @@ public struct SessionsView: View {
         AcpSessionInfo.filtered(AcpSessionInfo.newestFirst(model.sessions), query: searchText)
     }
 
-    /// Approvals this device has seen, minus the ones already listed as
-    /// rows, so a thread never appears twice in one list.
+    /// Approvals this device has seen on the host on screen, minus the ones
+    /// already listed as rows, so a thread never appears twice in one list.
+    ///
+    /// The activity store holds every host this device talks to, so it is
+    /// read by host: another host's approval is not this host's business.
     private var pendingApprovals: [TurnActivityApproval] {
         let listed = Set(visibleSessions.map(\.sessionId))
-        return TurnActivity.shared.approvals.filter { !listed.contains($0.sessionId) }
+        return TurnActivity.shared.approvals.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
     }
 
-    /// Runs this device is streaming, minus the ones already listed.
+    /// Runs this device is streaming on the host on screen, minus the ones
+    /// already listed.
     private var runningTurns: [TurnActivityRun] {
         let listed = Set(visibleSessions.map(\.sessionId))
-        return TurnActivity.shared.runs.filter { !listed.contains($0.sessionId) }
+        return TurnActivity.shared.runs.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
     }
 
     private var hasActivity: Bool {
@@ -462,19 +468,22 @@ public struct SessionsView: View {
     private var folderGroups: [HomeFolderGroup] {
         let pinned = Set(pinnedIds)
         let unpinned = visibleSessions.filter { !pinned.contains($0.sessionId) }
-        var buckets: [String: (path: String, sessions: [AcpSessionInfo])] = [:]
+        // The bucket key is the whole path: two folders that end in the
+        // same name are two folders, and merging them would file a thread
+        // under a path it does not work in.
+        var buckets: [String: (name: String, sessions: [AcpSessionInfo])] = [:]
         for session in unpinned {
             let path = session.cwd ?? ""
             let name = path.isEmpty ? "" : (path as NSString).lastPathComponent
-            var bucket = buckets[name] ?? (path, [])
+            var bucket = buckets[path] ?? (name, [])
             bucket.sessions.append(session)
-            buckets[name] = bucket
+            buckets[path] = bucket
         }
         return buckets
-            .map { name, bucket in
+            .map { path, bucket in
                 HomeFolderGroup(
-                    name: name.isEmpty ? "No Folder" : name,
-                    path: bucket.path,
+                    name: bucket.name.isEmpty ? "No Folder" : bucket.name,
+                    path: path,
                     sessions: AcpSessionInfo.newestFirst(bucket.sessions)
                 )
             }
@@ -482,7 +491,7 @@ public struct SessionsView: View {
                 let lhsDate = lhs.sessions.compactMap(\.updated).max() ?? .distantPast
                 let rhsDate = rhs.sessions.compactMap(\.updated).max() ?? .distantPast
                 if lhsDate != rhsDate { return lhsDate > rhsDate }
-                return lhs.name < rhs.name
+                return lhs.path < rhs.path
             }
     }
 
@@ -706,7 +715,8 @@ struct NewThreadSheet: View {
                     PermissionCard(
                         request: request,
                         queuedCount: max(model.pendingPermissions.count - 1, 0),
-                        canAnswer: model.canAnswerPermissions
+                        canAnswer: model.canAnswerPermissions,
+                        answerFailures: model.permissionAnswerFailures
                     ) { optionId in
                         model.answerPermission(optionId)
                     }
@@ -840,6 +850,12 @@ struct NewThreadSheet: View {
             }
             .onChange(of: workingFolder) { _, folder in
                 model.workingFolder = folder
+            }
+            .onDisappear {
+                // A sheet that goes away mid-turn leaves the engine running
+                // with nobody on screen to stop it, so the turn is stopped
+                // with the sheet.
+                model.stop()
             }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -1013,6 +1029,11 @@ final class NewThreadModel {
     /// before the first is answered, so the queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
     var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers did not reach the engine.
+    ///
+    /// The card offers the request again when this count moves, so a failed
+    /// answer never leaves the card disabled for good.
+    var permissionAnswerFailures = 0
 
     /// The request on screen.
     var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
@@ -1042,6 +1063,7 @@ final class NewThreadModel {
                 pendingPermissions.removeFirst()
             } else {
                 errorText = "The permission answer did not reach the engine."
+                permissionAnswerFailures += 1
             }
         }
     }
@@ -1105,7 +1127,11 @@ final class NewThreadModel {
                     }
                 }
             } catch {
-                errorText = error.localizedDescription
+                // A stopped turn is not a failure: the owner asked for it,
+                // so the sheet says nothing about it.
+                if !Task.isCancelled {
+                    errorText = error.localizedDescription
+                }
             }
             isSending = false
             // Only adopt once the engine has actually minted an id, otherwise

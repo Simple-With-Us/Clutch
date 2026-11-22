@@ -95,6 +95,9 @@ struct DshHostView: View {
     // MARK: - Actions
 
     private func connect() async {
+        // One connection at a time: two overlapping attempts would race on
+        // the client's own state and leave stale text on screen.
+        guard !isConnecting, !isCalling else { return }
         errorMessage = nil
         resultText = ""
         isConnecting = true
@@ -107,7 +110,7 @@ struct DshHostView: View {
 
     private func call() async {
         let target = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty else { return }
+        guard !target.isEmpty, !isCalling, !isConnecting else { return }
         isCalling = true
         errorMessage = nil
         defer { isCalling = false }

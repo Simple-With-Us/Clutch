@@ -178,9 +178,10 @@ struct FolderPickerView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Choose This Folder") {
-                        onChoose(path)
+                        onChoose(chosenPath)
                         dismiss()
                     }
+                    .disabled(model.listing == nil)
                 }
             }
         }
@@ -190,6 +191,17 @@ struct FolderPickerView: View {
         path = target
         model = FolderModel(host: host, root: root, path: target)
         Task { await model.load() }
+    }
+
+    /// The folder on screen, by the path the machine that holds it uses.
+    ///
+    /// The engine a thread runs in resolves a relative working folder
+    /// against its own working directory, so the folder is chosen by the
+    /// absolute path the sidecar reports for it.  A sidecar older than
+    /// that field reports none, and the relative path is the best answer
+    /// there is.
+    private var chosenPath: String {
+        model.listing?.absolute ?? path
     }
 
     @ViewBuilder

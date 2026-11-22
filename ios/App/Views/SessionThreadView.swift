@@ -72,6 +72,11 @@ final class SessionThreadModel {
     /// screen instead of dropping it behind the newer card, where it would
     /// only be answered by the fallback timer.
     var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers did not reach the engine.
+    ///
+    /// The card offers the request again when this count moves, so a failed
+    /// answer never leaves the card disabled for good.
+    var permissionAnswerFailures = 0
 
     /// The request on screen.
     var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
@@ -183,8 +188,11 @@ final class SessionThreadModel {
         sendError = nil
         isSending = true
         thoughtLine = nil
+        // The capabilities belong to the turn that reported them, so a new
+        // turn starts without steering until the sidecar says otherwise.
+        supportsSteering = false
         bubbles.append(ThreadBubbleItem(id: UUID().uuidString, role: .user, text: prompt))
-        TurnActivity.shared.runStarted(sessionId: session.sessionId, title: session.displayTitle)
+        TurnActivity.shared.runStarted(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
 
         // relayReceiverUid is empty: an unpaired CometChat thread has no sink
         // to relay into, and the sidecar skips the mirror when it is blank.
@@ -236,15 +244,15 @@ final class SessionThreadModel {
                         // event a turn-end notification can never cover.
                         pendingPermissions.append(request)
                         permissionTick += 1
-                        TurnActivity.shared.approvalArrived(sessionId: session.sessionId, title: session.displayTitle)
+                        TurnActivity.shared.approvalArrived(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
                         TurnNotifier.permissionRequest(threadTitle: session.displayTitle)
                     case .plan(let entries):
                         plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.removeAll()
-                        TurnActivity.shared.approvalResolved(sessionId: session.sessionId)
-                        TurnActivity.shared.runEnded(sessionId: session.sessionId)
+                        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                         didFinish = true
@@ -255,16 +263,20 @@ final class SessionThreadModel {
                     case .failed(let message):
                         sendError = message
                         pendingPermissions.removeAll()
-                        TurnActivity.shared.approvalResolved(sessionId: session.sessionId)
-                        TurnActivity.shared.runEnded(sessionId: session.sessionId)
+                        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
                 }
             } catch {
-                sendError = error.localizedDescription
-                TurnActivity.shared.runEnded(sessionId: session.sessionId)
-                TurnActivity.shared.approvalResolved(sessionId: session.sessionId)
+                // A stopped turn is not a failure: the owner asked for it,
+                // so the surface says nothing about it.
+                if !Task.isCancelled {
+                    sendError = error.localizedDescription
+                }
+                TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
             }
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
@@ -285,7 +297,13 @@ final class SessionThreadModel {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty, isSending else { return }
         draft = ""
-        queuedPrompt = prompt
+        // A second prompt joins the first instead of replacing it: a queued
+        // message that is silently dropped is a message the owner lost.
+        if let queued = queuedPrompt, !queued.isEmpty {
+            queuedPrompt = queued + "\n" + prompt
+        } else {
+            queuedPrompt = prompt
+        }
     }
 
     /// Injects the draft into the running turn when the sidecar allows it.
@@ -324,10 +342,11 @@ final class SessionThreadModel {
                 // engine on a question nobody can see any more.
                 pendingPermissions.removeFirst()
                 if pendingPermissions.isEmpty {
-                    TurnActivity.shared.approvalResolved(sessionId: session.sessionId)
+                    TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
                 }
             } else {
                 sendError = "The permission answer did not reach the engine."
+                permissionAnswerFailures += 1
             }
         }
     }
@@ -348,8 +367,13 @@ final class SessionThreadModel {
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
         pendingPermissions.removeAll()
-        TurnActivity.shared.approvalResolved(sessionId: session.sessionId)
-        TurnActivity.shared.runEnded(sessionId: session.sessionId)
+        // The prompt held for the stopped turn goes with it: it was written
+        // for a turn that is not running, and the next turn must not carry
+        // it out on its own.
+        queuedPrompt = nil
+        supportsSteering = false
+        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
         turnTick += 1
         isSending = false
     }
@@ -500,7 +524,8 @@ public struct SessionThreadView: View {
                 PermissionCard(
                     request: request,
                     queuedCount: max(model.pendingPermissions.count - 1, 0),
-                    canAnswer: model.canAnswerPermissions
+                    canAnswer: model.canAnswerPermissions,
+                    answerFailures: model.permissionAnswerFailures
                 ) { optionId in
                     model.answerPermission(optionId)
                 }
@@ -637,17 +662,17 @@ public struct SessionThreadView: View {
                 .autocorrectionDisabled()
             if matchOrder.count > 0 {
                 Button {
-                    findSelection = (findSelection - 1 + matchOrder.count) % matchOrder.count
+                    findSelection = (clampedSelection - 1 + matchOrder.count) % matchOrder.count
                 } label: {
                     Image(systemName: "chevron.up")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Previous Match")
-                Text("\(findSelection + 1) of \(matchOrder.count)")
+                Text("\(clampedSelection + 1) of \(matchOrder.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 Button {
-                    findSelection = (findSelection + 1) % matchOrder.count
+                    findSelection = (clampedSelection + 1) % matchOrder.count
                 } label: {
                     Image(systemName: "chevron.down")
                 }
@@ -671,6 +696,20 @@ public struct SessionThreadView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(Color.clutchSecondaryBackground.opacity(0.6))
+        // A new search starts at the first match.
+        .onChange(of: findText) { _, _ in
+            findSelection = 0
+        }
+    }
+
+    /// The match the arrows are on, kept inside the list.
+    ///
+    /// The transcript grows while the owner reads it, so a selection that
+    /// was in range can fall outside it: the counter would then name a
+    /// match that is not there.
+    private var clampedSelection: Int {
+        guard !matchOrder.isEmpty else { return 0 }
+        return min(max(findSelection, 0), matchOrder.count - 1)
     }
 
     /// Matches in thread order, so the arrows can walk them.

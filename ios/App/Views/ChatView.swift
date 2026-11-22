@@ -57,6 +57,11 @@ public struct ChatView: View {
     /// before the first is answered, so the queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
     @State private var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers did not reach the engine.
+    ///
+    /// The card offers the request again when this count moves, so a failed
+    /// answer never leaves the card disabled for good.
+    @State private var permissionAnswerFailures = 0
 
     /// The request on screen.
     private var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
@@ -217,7 +222,8 @@ public struct ChatView: View {
                                 PermissionCard(
                                     request: request,
                                     queuedCount: max(pendingPermissions.count - 1, 0),
-                                    canAnswer: sessionId != nil
+                                    canAnswer: sessionId != nil,
+                                    answerFailures: permissionAnswerFailures
                                 ) { optionId in
                                     answerPermission(optionId)
                                 }
@@ -619,6 +625,7 @@ public struct ChatView: View {
                 pendingPermissions.removeFirst()
             } else {
                 sendError = "The permission answer did not reach the engine."
+                permissionAnswerFailures += 1
             }
         }
     }
@@ -640,6 +647,9 @@ public struct ChatView: View {
         draft = ""
         sendError = nil
         sending = true
+        // The capabilities belong to the turn that reported them, so a new
+        // turn starts without steering until the sidecar says otherwise.
+        supportsSteering = false
         // The turn's images ride the request while the composer clears:
         // what comes back on a transport failure is restored below, so a
         // send that never left never eats its attachments.
@@ -662,6 +672,7 @@ public struct ChatView: View {
         attachments = []
         sendTask = Task {
             var didFinish = false
+            var didStart = false
             do {
                 for try await event in client.stream(prompt: prompt) {
                     switch event {
@@ -669,6 +680,7 @@ public struct ChatView: View {
                         supportsSteering = steering
                     case .started(let id, _):
                         sessionId = id
+                        didStart = true
                     case .message:
                         thoughtLine = nil
                     case .thought(let text):
@@ -712,10 +724,19 @@ public struct ChatView: View {
             } catch {
                 sending = false
                 thoughtLine = nil
-                sendError = error.localizedDescription
+                // A stopped turn is not a failure: the owner asked for it,
+                // so the surface says nothing about it.
+                let cancelled = Task.isCancelled
+                if !cancelled {
+                    sendError = error.localizedDescription
+                }
                 // The turn never left, so its images come back ahead of
-                // anything attached since.
-                attachments = outgoingImages + attachments
+                // anything attached since.  A turn that reached the engine
+                // already carries them, and a stopped turn was delivered
+                // too, so neither gets them back.
+                if !cancelled, !didStart {
+                    attachments = outgoingImages + attachments
+                }
             }
             // A prompt held back while the turn ran goes out only after this
             // stream has fully ended: chaining inside the loop would let the
@@ -743,6 +764,11 @@ public struct ChatView: View {
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
         pendingPermissions.removeAll()
+        // The prompt held for the stopped turn goes with it: it was written
+        // for a turn that is not running, and the next turn must not carry
+        // it out on its own.
+        queuedPrompt = nil
+        supportsSteering = false
         isSendingStopFeedback()
         sending = false
     }
@@ -752,7 +778,13 @@ public struct ChatView: View {
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
         draft = ""
-        queuedPrompt = prompt
+        // A second prompt joins the first instead of replacing it: a queued
+        // message that is silently dropped is a message the owner lost.
+        if let queued = queuedPrompt, !queued.isEmpty {
+            queuedPrompt = queued + "\n" + prompt
+        } else {
+            queuedPrompt = prompt
+        }
     }
 
     /// Injects the draft into the running turn when the sidecar allows it.
