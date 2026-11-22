@@ -33,6 +33,11 @@ enum MacSidebarWidth {
     static func save(_ width: CGFloat) {
         UserDefaults.standard.set(min(max(width, range.lowerBound), range.upperBound), forKey: key)
     }
+
+    /// Forgets the saved width, so the rail opens at its default again.
+    static func reset() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
 }
 
 /// One bubble from `GET /clutch/v1/thread`.

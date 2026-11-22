@@ -2,10 +2,16 @@ import XCTest
 
 /// End-to-end run against a live clutch web on the Mac hosting the Simulator.
 ///
+/// This class is its own target and its own scheme, `Clutch Live`.  It is
+/// not part of the `Clutch` scheme, because it needs a live host and a
+/// pairing link, and because it drives the web canvas that the native apps
+/// no longer render.  A class that can only skip inside the CI target is a
+/// class that never runs.
+///
 /// Opt-in: skipped unless `CLUTCH_PAIR_LINK` reaches the runner, e.g.
 ///
 ///     TEST_RUNNER_CLUTCH_PAIR_LINK="$(node src/web/pair-ios.ts --simulator --print)" \
-///       xcodebuild … -only-testing:ClutchUITests test
+///       xcodebuild … -scheme "Clutch Live" test
 ///
 /// Screenshots are kept as attachments named `ios-<state>`.
 final class ClutchLiveUITests: XCTestCase {

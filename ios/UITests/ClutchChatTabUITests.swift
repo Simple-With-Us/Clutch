@@ -56,6 +56,7 @@ final class ClutchChatTabUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Chat Unavailable"].waitForExistence(timeout: 30))
         snap("ios-chat-unavailable")
+        assertSnapshot("ios-chat-unavailable", of: app.windows.firstMatch)
     }
 
     func testASidecarThatIsNotThereShowsTheGateCard() throws {
@@ -71,5 +72,6 @@ final class ClutchChatTabUITests: XCTestCase {
         // its own feedback that the card is up.
         XCTAssertTrue(app.staticTexts["Try Again"].waitForExistence(timeout: 30))
         snap("ios-cannot-reach")
+        assertSnapshot("ios-cannot-reach", of: app.windows.firstMatch)
     }
 }

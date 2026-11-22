@@ -57,6 +57,7 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         // The home list is the root surface; the thread list needs no tab
         // tap anymore.
         snap("ios-workspace-threads")
+        assertSnapshot("ios-workspace-threads", of: app.windows.firstMatch)
 
         // Open the stub's one thread.  The row is a selection-driven List
         // row whose combined element carries the thread's name and button
@@ -69,6 +70,7 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         }
         thread.tap()
         snap("ios-thread-open")
+        assertSnapshot("ios-thread-open", of: app.windows.firstMatch)
 
         // The find bar is open with the query in it, and the position label
         // ("1 of 1") is the bar's own feedback that the search ran and can
@@ -76,5 +78,6 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         // position is exactly one.
         XCTAssertTrue(app.staticTexts["1 of 1"].waitForExistence(timeout: 30))
         snap("ios-find-match")
+        assertSnapshot("ios-find-match", of: app.windows.firstMatch)
     }
 }
