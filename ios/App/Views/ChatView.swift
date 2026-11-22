@@ -50,9 +50,13 @@ public struct ChatView: View {
     /// The in-flight turn's task, so the composer's stop control can drop
     /// the local stream after cancelling on the sidecar.
     @State private var sendTask: Task<Void, Never>?
+    /// Which turn owns the composer.  Every turn takes a new number, so a
+    /// stream that is on its way out can tell that it no longer owns the
+    /// state and leaves the newer turn alone.
+    @State private var turnToken: Int = 0
     /// Text typed while a turn runs, sent automatically when the turn
-    /// completes on its own.  An explicit stop leaves it queued for the
-    /// send button, since stopping means "not this direction".
+    /// completes on its own.  A stopped or failed turn hands it back to
+    /// the composer, since stopping means "not this direction".
     @State private var queuedDraft: String = ""
     @State private var thoughtLine: String?
     @State private var sendError: String?
@@ -599,6 +603,9 @@ public struct ChatView: View {
         draft = ""
         sendError = nil
         sending = true
+        // A manual send consumes the queue: parked text that outlived a
+        // stop is the owner's to send or edit, never a later turn's.
+        queuedDraft = ""
         // The turn's images ride the request while the composer clears:
         // what comes back on a transport failure is restored below, so a
         // send that never left never eats its attachments.
@@ -620,9 +627,17 @@ public struct ChatView: View {
         )
         attachments = []
         var endedNormally = false
+        // This turn takes the composer.  A stream that is still on its way
+        // out compares the number it was given with the current one and
+        // leaves the newer turn's state alone.
+        turnToken += 1
+        let token = turnToken
         let task = Task {
             do {
                 for try await event in client.stream(prompt: prompt) {
+                    // A newer turn owns the composer now, so this stream's
+                    // events are stale and must not touch it.
+                    guard turnToken == token else { return }
                     switch event {
                     case .capabilities:
                         break
@@ -642,7 +657,6 @@ public struct ChatView: View {
                         break // the plan panel belongs to the workspace
                     case .done(let stop, let id, _):
                         sessionId = id
-                        sending = false
                         thoughtLine = nil
                         pendingPermissions.removeAll()
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
@@ -660,12 +674,15 @@ public struct ChatView: View {
                     case .contextControls:
                         break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
-                        sending = false
                         thoughtLine = nil
                         pendingPermissions.removeAll()
                         sendError = message
                     }
                 }
+                // The stream is closed, so the composer goes idle here
+                // and not on the first .done event: a turn that is still
+                // closing cannot be started a second time.
+                guard turnToken == token else { return }
                 sending = false
                 sendTask = nil
                 // A turn that finished on its own sends what the owner
@@ -675,16 +692,26 @@ public struct ChatView: View {
                     let queued = queuedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !queued.isEmpty {
                         queuedDraft = ""
+                        // The chained send clears the composer, so what the
+                        // owner typed while the turn was closing goes back
+                        // in after it.
+                        let typeAhead = draft
                         send(queued)
+                        draft = typeAhead
                     }
+                } else {
+                    restoreParkedDraft()
                 }
             } catch is CancellationError {
                 // A stop the owner asked for is not an error: the partial
                 // reply stays and the composer simply goes back to idle.
+                guard turnToken == token else { return }
                 sending = false
                 sendTask = nil
                 thoughtLine = nil
+                restoreParkedDraft()
             } catch {
+                guard turnToken == token else { return }
                 sending = false
                 sendTask = nil
                 thoughtLine = nil
@@ -692,18 +719,33 @@ public struct ChatView: View {
                 // The turn never left, so its images come back ahead of
                 // anything attached since.
                 attachments = outgoingImages + attachments
+                restoreParkedDraft()
             }
         }
         sendTask = task
     }
 
     /// Parks text typed while a turn runs, to send when it completes.
+    /// A second park appends to the first, so several corrections ride
+    /// one follow-up turn in the order they were typed.
     private func queueDraft() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, sending else { return }
         queuedDraft = queuedDraft.isEmpty ? text : queuedDraft + "\n\n" + text
         draft = ""
         sendError = nil
+    }
+
+    /// Moves parked text back into the composer.  A stopped or failed
+    /// turn hands it over, because the send button sends the composer's
+    /// text: parked text that stayed hidden in state would be sent by a
+    /// later turn the owner never asked for.
+    private func restoreParkedDraft() {
+        let parked = queuedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !parked.isEmpty else { return }
+        queuedDraft = ""
+        let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = typed.isEmpty ? parked : parked + "\n\n" + draft
     }
 
     /// Stops the in-flight turn: cancel on the sidecar, then drop the
@@ -719,10 +761,16 @@ public struct ChatView: View {
         sendTask = nil
         sending = false
         thoughtLine = nil
+        // This turn gives up the composer, so a stream that is still on
+        // its way out cannot clear the state of the next one.
+        turnToken += 1
         // A stopped turn cannot answer a question any more, so the cards
         // go with the turn rather than sitting there inviting answers
         // that land nowhere.
         pendingPermissions.removeAll()
+        // The parked text is the owner's to send or edit, so it goes back
+        // to the composer instead of waiting hidden for a later turn.
+        restoreParkedDraft()
     }
 
     private func startVoice() {
