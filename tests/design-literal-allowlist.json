@@ -74,7 +74,7 @@
     ".system(size: 24)": 1,
     ".system(size: 9)": 1,
     ".system(size: 8)": 2,
-    ".system(size: 10)": 6
+    ".system(size: 10)": 5
   },
   "ios/Mac/ChatViewMac.swift": {
     ".system(size: 12)": 5,
