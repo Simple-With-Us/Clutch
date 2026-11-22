@@ -697,7 +697,7 @@ public struct ChatView: View {
                         // in after it.
                         let typeAhead = draft
                         send(queued)
-                        draft = typeAhead
+                        restoreToComposer(typeAhead)
                     }
                 } else {
                     restoreParkedDraft()
@@ -744,8 +744,20 @@ public struct ChatView: View {
         let parked = queuedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !parked.isEmpty else { return }
         queuedDraft = ""
+        restoreToComposer(parked)
+    }
+
+    /// Puts text back into the composer without letting the dictation
+    /// observer take it away again.  That observer rewrites the field
+    /// from `draftBase` on every transcript change, so text that has to
+    /// survive the next transcript update joins the base while dictation
+    /// runs.
+    private func restoreToComposer(_ text: String) {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft = typed.isEmpty ? parked : parked + "\n\n" + draft
+        if dictation.isRecording {
+            draftBase = draftBase.isEmpty ? text : text + "\n\n" + draftBase
+        }
+        draft = typed.isEmpty ? text : text + "\n\n" + draft
     }
 
     /// Stops the in-flight turn: cancel on the sidecar, then drop the
