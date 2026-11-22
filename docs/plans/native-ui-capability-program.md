@@ -27,7 +27,7 @@ Measured in this lane against base `126342b`, not assumed.
 
 **Not touched by that PR.**  The macOS app is unchanged.  `ios/Mac/ChatViewMac.swift` is 3,050 lines and one view still owns the whole window.  The agent's answer streams into a separate activity pane and then teleports into the transcript at turn end (`ios/Mac/ChatViewMac.swift:686`, rendering `MacWorkspacePanels(responseText: streamingText)`).  Replayed history is stamped with `Date()` (`ios/Mac/ChatViewMac.swift:429`, `:448`, `:464`), so a three-week-old thread claims every message arrived today.  There is no `.commands` block, no Settings scene, no menu bar and no `⌘,`; the only shortcuts are ad-hoc `.keyboardShortcut` calls, and `⌘N` and `⌘R` are bound to sidebar buttons that disappear with the sidebar (`ios/App/Views/ThreadSidebar.swift:282`, `:340`).
 
-**Verification is missing on the Mac.**  The `macos` job in `.github/workflows/ci.yml` compiles the Mac target and never runs it.  The iOS job does run `scripts/ios-ui-tests.sh` and `scripts/ios-unit-tests.sh`.  The iOS UI tests capture screenshots as attachments with no assertions and no export.
+**Verification is thin on both platforms.**  The `macos` job in `.github/workflows/ci.yml` compiles the Mac target and never runs it.  The iOS job runs `scripts/ios-ui-tests.sh` and `scripts/ios-unit-tests.sh`, and the UI result bundle is published as the `ios-ui-screenshots` artifact.  But nothing compares a screenshot to a baseline, so a visual regression does not fail the build; it has to be noticed by a human opening the artifact.  And the script runs one test class of the three in the target, because `scripts/ios-ui-tests.sh` filters on `-only-testing:ClutchUITests/ClutchThreadSurfaceUITests`, so `ClutchChatTabUITests` and `ClutchLiveUITests` never execute in CI at all.
 
 **Foundations are half landed.**  `ios/App/Design/ClutchTheme.swift` is a real 309-line token layer with colour, type, spacing, radius, elevation, motion and status roles.  Three files consume it: `ThreadToolCard.swift`, `PlanPanel.swift` and `PermissionCard.swift`.  Everything else still carries its own literals: 165 `.system(size:)` calls and 28 literal `cornerRadius:` values across `ios/App` and `ios/Mac`, zero `@ScaledMetric`, zero Reduce Motion checks at the animation sites, and zero markdown rendering.
 
@@ -61,7 +61,7 @@ A `ClutchMacUITests` target, driven by the stub sidecar the iOS suite already us
 
 ### 1.2 iOS UI tests become assertive
 
-The existing screenshot attachments carry no assertions and are never exported.  Convert them into assertions that fail, and export the images as CI artifacts so a human or a reviewer can look at them without running the suite locally.
+The screenshot attachments are published as an artifact, but nothing compares them to a baseline, so a visual regression is a thing a human notices rather than a thing the build catches.  Two changes fix that.  A snapshot helper in the test target compares the current screenshot against a checked-in baseline with a pixel tolerance and fails with a diff image attached.  And the script stops filtering down to one class, so `ClutchChatTabUITests` and `ClutchLiveUITests` run in CI as well; a class that cannot pass in CI needs a reason to exist, not a silent skip.
 
 ### 1.3 Accessibility that actually lands
 
@@ -79,7 +79,7 @@ The remaining files are not migrated in one sweep.  They migrate when Pass 2 an
 ### Acceptance
 
 - CI runs the macOS target's tests and they fail when the Mac surface regresses.
-- Every iOS UI test asserts something and exports its screenshots.
+- Every iOS UI test class runs in CI, and a screenshot that differs from its checked-in baseline fails the build with a diff image attached.
 - The transcript and tool cards respect Dynamic Type up to the accessibility sizes without clipping.
 - Every animation site respects Reduce Motion.
 - The 9-10 pt status sites clear 4.5:1 in both appearances.
