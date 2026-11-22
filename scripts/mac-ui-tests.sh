@@ -31,10 +31,19 @@ xcodegen generate || exit 1
 rm -rf "$RESULT_BUNDLE"
 
 set -o pipefail
+# The hosted runner has no Mac Development certificate, and the Mac targets
+# ask for one by team id.  A UI test has to be signed to run at all, so the
+# run signs ad hoc instead:  an ad-hoc signature is enough for a test
+# bundle and its host on the machine that runs it.
 xcodebuild -project Clutch.xcodeproj \
   -scheme "Clutch macOS" \
   -destination "platform=macOS" \
   -resultBundlePath "$RESULT_BUNDLE" \
+  CODE_SIGN_IDENTITY="-" \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGNING_ALLOWED=YES \
+  DEVELOPMENT_TEAM="" \
   test
 status=$?
 

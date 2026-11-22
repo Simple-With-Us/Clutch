@@ -389,7 +389,6 @@ public struct SessionsView: View {
             }
             .frame(minHeight: 44)
             .tag(HomeSelection.agentChat)
-            .accessibilityLabel("Agent Chat")
         }
         #endif
     }

@@ -49,8 +49,10 @@ final class ClutchChatTabUITests: XCTestCase {
         app.open(link)
 
         // The home list is the whole surface now; the agent conversation is
-        // its first row rather than a tab.
-        let agentChat = app.staticTexts["Agent Chat"]
+        // its first row rather than a tab.  The row's title is the element to
+        // tap:  the row carries no button of its own, so a query for the
+        // row's accessibility label finds the title twice.
+        let agentChat = app.staticTexts["Agent Chat"].firstMatch
         XCTAssertTrue(agentChat.waitForExistence(timeout: 30))
         agentChat.tap()
 
@@ -68,9 +70,15 @@ final class ClutchChatTabUITests: XCTestCase {
             "clutch://pair?host=127.0.0.1&port=3180&chat=\(StubSidecar.chatToken)&chatPort=3811"))
         app.open(link)
 
-        // The gate card overlays the home surface; the Try Again button is
-        // its own feedback that the card is up.
-        XCTAssertTrue(app.staticTexts["Try Again"].waitForExistence(timeout: 30))
+        // The gate card overlays the home surface.  Its title is what says
+        // the card is up, and its retry button carries an identifier of its
+        // own, because the surface underneath has a retry button too and
+        // the two must not be confused.
+        let title = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Cannot Reach")
+        ).firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        XCTAssertTrue(app.buttons["host-gate-retry"].waitForExistence(timeout: 30))
         snap("ios-cannot-reach")
         assertSnapshot("ios-cannot-reach", of: app.windows.firstMatch)
     }
