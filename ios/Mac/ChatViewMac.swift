@@ -266,6 +266,9 @@ public struct ChatView: View {
     /// before the first is answered.  The queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
     @State private var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers were dropped because the request they named was no
+    /// longer the one on screen.
+    @State private var permissionStaleAnswers = 0
 
     /// The request on screen.
     private var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
@@ -879,8 +882,11 @@ public struct ChatView: View {
             }
             threadSurface
             if let request = pendingPermission, !isPreviewingThread {
-                PermissionCard(request: request) { optionId in
-                    answerPermission(optionId)
+                PermissionCard(
+                    request: request,
+                    staleAnswers: permissionStaleAnswers
+                ) { answer in
+                    answerPermission(answer)
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
@@ -2821,17 +2827,24 @@ public struct ChatView: View {
     /// The answer goes to the sidecar, which hands it to the engine.  The
     /// card is cleared either way: a request the sidecar could not answer
     /// is not one the engine will take an answer for later.
-    private func answerPermission(_ optionId: String?) {
+    private func answerPermission(_ answer: AcpPermissionAnswer) {
         guard let request = pendingPermissions.first, let host = activeHost else { return }
         // Without a chat id the sidecar has nothing to answer against, so the
         // card stays and the turn keeps waiting rather than losing the answer.
         guard let chatId = isWorkspace ? codeChatId : sessionId, !chatId.isEmpty else { return }
+        // The request the owner was answering can turn over while they
+        // confirm it.  An answer for a request that is no longer the one on
+        // screen is dropped, so it cannot approve whatever replaced it.
+        guard request.accepts(answer) else {
+            permissionStaleAnswers += 1
+            return
+        }
         Task {
             let answered = await ChatSessionClient.answerPermission(
                 host: host,
                 sessionId: chatId,
-                requestId: request.requestId,
-                optionId: optionId
+                requestId: answer.requestId,
+                optionId: answer.optionId
             )
             if answered {
                 // The card only goes away once the answer is on its way, so a

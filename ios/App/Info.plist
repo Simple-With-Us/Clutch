@@ -48,6 +48,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Clutch uses the camera to scan host pairing QR codes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Clutch checks that it is you before a tool runs on this phone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Clutch connects to the Clutch server or MiniMax Code on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>

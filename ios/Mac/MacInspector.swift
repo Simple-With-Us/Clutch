@@ -16,8 +16,10 @@ struct MacInspector: View {
     var contextLabel: String?
     /// The approval the engine is waiting on.
     var pendingApproval: AcpPermissionRequest?
-    /// Answers the approval.
-    var onAnswer: (String) -> Void
+    /// Answers the approval.  The answer names the request it belongs to,
+    /// so an answer for a request that has turned over is dropped rather
+    /// than sent to whatever replaced it.
+    var onAnswer: (AcpPermissionAnswer) -> Void
 
     var body: some View {
         ScrollView {
@@ -97,7 +99,7 @@ struct MacInspector: View {
             }
             ForEach(request.options) { option in
                 Button(option.name) {
-                    onAnswer(option.optionId)
+                    onAnswer(AcpPermissionAnswer(requestId: request.requestId, optionId: option.optionId))
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
