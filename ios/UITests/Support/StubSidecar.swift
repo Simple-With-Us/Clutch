@@ -46,6 +46,13 @@ final class StubSidecar {
     /// until the test releases it, so the card stays on screen long enough
     /// to be looked at.
     private let turnGate = DispatchSemaphore(value: 0)
+    /// The fixture turn waits here before it asks for permission.
+    ///
+    /// The wait is an explicit gate and not a delay:  a fixed delay races
+    /// the running-turn capture, and a slow machine lets the permission
+    /// card arrive in the middle of a picture that is meant to show the
+    /// running turn and nothing else.
+    private let permissionGate = DispatchSemaphore(value: 0)
 
     enum StubError: Error {
         case couldNotStart
@@ -62,6 +69,15 @@ final class StubSidecar {
     /// turn writes the rest of the transcript and ends.
     func releaseTurn() {
         turnGate.signal()
+    }
+
+    /// Lets the fixture turn ask for permission.
+    ///
+    /// The turn holds its permission request back until the test opens this
+    /// gate, so the test decides when the card appears rather than a clock
+    /// deciding it.
+    func armPermission() {
+        permissionGate.signal()
     }
 
     func start() throws {
@@ -121,6 +137,19 @@ final class StubSidecar {
         acceptThread = nil
     }
 
+    /// The queue the connections are served on.
+    ///
+    /// The queue is concurrent and the system reuses its threads, so a run
+    /// that opens a thousand short connections does not make a thousand
+    /// threads.
+    private let connectionQueue = DispatchQueue(
+        label: "clutch.stub.sidecar.connections",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+    /// The number of connections that may be in flight at once.
+    private let connectionSlots = DispatchSemaphore(value: 16)
+
     // MARK: - Accept loop
 
     private func acceptLoop(_ fd: Int32) {
@@ -130,16 +159,33 @@ final class StubSidecar {
                 if errno == EINTR { continue }
                 return
             }
-            // Every connection gets a thread of its own.  The fixture turn
-            // holds its stream open for as long as the test needs it, and a
-            // serial loop would block every other request the app makes
-            // while that stream is open.
-            let thread = Thread { [weak self] in
+            // A write to a peer that went away raises SIGPIPE, and the
+            // default action for that signal ends the process.  The socket
+            // says it does not want that signal, so a closed connection
+            // arrives as a failed write instead of a dead test host.
+            var noSigPipe: Int32 = 1
+            setsockopt(
+                client,
+                SOL_SOCKET,
+                SO_NOSIGPIPE,
+                &noSigPipe,
+                socklen_t(MemoryLayout<Int32>.size)
+            )
+            // The connections are served on a pool the system reuses, and
+            // the number of them in flight is bounded.  A thread per
+            // connection grows without a bound, and the fixture turn holds
+            // its stream open for as long as the test needs it, so the
+            // polling the app does while that stream is open would keep
+            // making threads.  A serial loop would be worse:  it would
+            // block every other request the app makes while the fixture
+            // stream is open.
+            let slots = connectionSlots
+            slots.wait()
+            connectionQueue.async { [weak self] in
                 self?.handle(client)
                 close(client)
+                slots.signal()
             }
-            thread.name = "clutch.stub.sidecar.client"
-            thread.start()
         }
     }
 
@@ -327,10 +373,10 @@ final class StubSidecar {
 
         write(event: "start", data: #"{"sessionId":"stub-chat","engine":"mcode"}"#, to: fd)
         write(event: "message", data: #"{"text":"Fixture running. "}"#, to: fd)
-        // The turn holds at the running moment for a moment before it asks
-        // for permission, so a capture of the running turn shows the turn
-        // running and not the card that comes after it.
-        Thread.sleep(forTimeInterval: 2)
+        // The turn holds at the running moment until the test opens the
+        // gate, so a capture of the running turn shows the turn running and
+        // not the card that comes after it, however slow the machine is.
+        _ = permissionGate.wait(timeout: .now() + 120)
         write(
             event: "tool",
             data: #"{"id":"fixture-tool-1","name":"read_file","status":"running","input":"src/routes/login.ts"}"#,
@@ -364,8 +410,22 @@ final class StubSidecar {
 
     private func write(_ text: String, to fd: Int32) {
         let bytes = Array(text.utf8)
-        _ = bytes.withUnsafeBytes { raw in
-            send(fd, raw.baseAddress, bytes.count, 0)
+        _ = bytes.withUnsafeBytes { raw -> Int in
+            guard let base = raw.baseAddress else { return 0 }
+            var sent = 0
+            while sent < bytes.count {
+                let written = send(fd, base.advanced(by: sent), bytes.count - sent, 0)
+                if written > 0 {
+                    sent += written
+                    continue
+                }
+                // A signal that arrived mid-write is not a failed write.
+                if written < 0 && errno == EINTR { continue }
+                // The peer is gone.  The stream ends here, and the run
+                // reports the missing state rather than the host dying.
+                return sent
+            }
+            return sent
         }
     }
 

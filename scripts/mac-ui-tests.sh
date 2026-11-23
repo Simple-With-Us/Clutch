@@ -116,8 +116,25 @@ fi
 # that checked nothing is the failure this step exists to prevent.  The count
 # comes from the result bundle, so it is the number the test runner reported.
 summary="$(xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE" 2>/dev/null || true)"
-passed="$(printf '%s' "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("passedTests", 0))' 2>/dev/null || echo 0)"
-skipped="$(printf '%s' "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("skippedTests", 0))' 2>/dev/null || echo 0)"
+counts="$(printf '%s' "$summary" | python3 -c '
+import json, sys
+try:
+    report = json.load(sys.stdin)
+    passed = int(report["passedTests"])
+    skipped = int(report["skippedTests"])
+except Exception:
+    # A summary that cannot be read is not a summary of zero tests:  it is
+    # a result bundle this script does not understand, and treating it as
+    # an empty run would let a broken bundle report a green gate.
+    sys.exit(1)
+print(passed, skipped)
+' 2>/dev/null)"
+if [ -z "$counts" ]; then
+  log "the macOS UI test result bundle could not be read; the gate fails closed"
+  exit 1
+fi
+passed="${counts%% *}"
+skipped="${counts##* }"
 if [ "${passed:-0}" -eq 0 ] && [ "${skipped:-0}" -gt 0 ]; then
   # A skip is either a fact about this machine or a gap in the repository,
   # and the two are not the same.  A machine that cannot show the window, or

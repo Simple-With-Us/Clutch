@@ -177,13 +177,20 @@ final class MacSurfaceSetup {
     /// become hittable.
     @discardableResult
     func tap(_ element: XCUIElement, timeout: TimeInterval = 30) -> Bool {
+        // The app is brought forward once, before the loop:  bringing it
+        // forward polls for the foreground for up to ten seconds itself, so
+        // doing it inside the loop would stretch a thirty-second timeout
+        // toward minutes.  Inside the loop the activation is a single
+        // request, which is enough to lift the app over a window that
+        // covered it without paying for the poll again.
+        bringToFront()
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            bringToFront()
             if element.exists, element.isHittable {
                 element.click()
                 return true
             }
+            try? app.activate()
             Thread.sleep(forTimeInterval: 0.5)
         }
         return false
