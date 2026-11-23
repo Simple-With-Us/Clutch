@@ -102,7 +102,7 @@ public struct MacTranscriptModel: Equatable, Sendable {
             let rows = buckets[number] ?? []
             let tools = rows.filter { $0.kind == .tool }
             return Turn(
-                id: MacTranscriptModel.stableIdentifier(["turn", String(number), rows.first?.id ?? ""]),
+                id: MacTranscriptModel.stableIdentifier(["turn", rows.first?.id ?? ""]),
                 number: number,
                 summary: promptSummary(of: rows),
                 startedAt: rows.compactMap { $0.date }.min(),
@@ -253,6 +253,11 @@ public struct MacTranscriptModel: Equatable, Sendable {
         public var toolOutput: String?
         /// How many tool calls a group row stands for.
         public var toolCount: Int
+        /// The calls a group row stands for.
+        ///
+        /// The group is one row in the transcript and the calls are the work
+        /// it stands for, so the row can open in place and show them.
+        public var members: [Row]
         /// The turn the row belongs to, counting from one.
         ///
         /// A turn is one prompt and everything the engine did in answer to
@@ -272,6 +277,7 @@ public struct MacTranscriptModel: Equatable, Sendable {
             toolInput: String? = nil,
             toolOutput: String? = nil,
             toolCount: Int = 1,
+            members: [Row] = [],
             turn: Int? = nil
         ) {
             self.id = id
@@ -285,6 +291,7 @@ public struct MacTranscriptModel: Equatable, Sendable {
             self.toolInput = toolInput
             self.toolOutput = toolOutput
             self.toolCount = toolCount
+            self.members = members
             self.turn = turn
         }
     }
@@ -628,8 +635,9 @@ public struct MacTranscriptModel: Equatable, Sendable {
                     toolStatus: last.toolStatus,
                     toolDepth: first.toolDepth,
                     toolInput: nil,
-                    toolOutput: nil,
+                    toolOutput: run.compactMap { $0.toolOutput }.last,
                     toolCount: run.count,
+                    members: run,
                     turn: first.turn
                 )
             )

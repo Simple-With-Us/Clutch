@@ -217,6 +217,50 @@ final class MacTranscriptModelTests: XCTestCase {
         XCTAssertEqual(model.rows.map { $0.turn }, [1, 1, 2, 2])
     }
 
+    func testTheTurnKeepsItsIdentityWhenEarlierHistoryLoads() {
+        var model = self.model()
+        model.history = [
+            MacTranscriptModel.HistoryEntry(id: "h1", text: "Do the work", fromAgent: false),
+            MacTranscriptModel.HistoryEntry(id: "h2", text: "On it."),
+            MacTranscriptModel.HistoryEntry(id: "h3", text: "Next question", fromAgent: false),
+            MacTranscriptModel.HistoryEntry(id: "h4", text: "On it again."),
+        ]
+        let before = model.turns[1]
+        XCTAssertEqual(before.number, 2)
+
+        // Earlier history arrives and the numbering moves under the turn.
+        model.history.insert(
+            MacTranscriptModel.HistoryEntry(id: "h0", text: "An older question", fromAgent: false),
+            at: 0
+        )
+
+        let after = model.turns.first { $0.id == before.id }
+        XCTAssertNotNil(after, "the turn kept its identity")
+        XCTAssertEqual(after?.number, 3)
+    }
+
+    func testACollapsedRunCarriesTheCallsItStandsForAndTheLastAnswer() {
+        var model = self.model()
+        model.history = [
+            MacTranscriptModel.HistoryEntry(id: "h1", text: "Do the work", fromAgent: false),
+            MacTranscriptModel.HistoryEntry(id: "h2", text: "read_file", isTool: true, toolOutput: "the file"),
+            MacTranscriptModel.HistoryEntry(id: "h3", text: "edit_file", isTool: true, toolOutput: "the change"),
+        ]
+        model.verbosity = .normal
+
+        let rows = model.rows
+
+        // The prompt stands on its own, and the run of calls is the row
+        // under it.
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].kind, .message)
+        XCTAssertEqual(rows[1].kind, .toolGroup)
+        // The run opens in place, because it kept the calls it stands for.
+        XCTAssertEqual(rows[1].members.map { $0.text }, ["read_file", "edit_file"])
+        // The answer of the last call is not lost when the run collapses.
+        XCTAssertEqual(rows[1].toolOutput, "the change")
+    }
+
     func testATurnCountsTheCallsItMadeAndTheFilesItTouched() {
         var model = self.model()
         model.history = [

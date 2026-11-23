@@ -764,7 +764,11 @@ public struct ChatView: View {
             registerCommands()
         }
         .onChange(of: threadName) { _, name in
-            commandRegistration?.threadName = name
+            guard let registration = commandRegistration else { return }
+            registration.threadName = name
+            // The registry is published again, because a name that is set
+            // on a registration nobody reads is not a change.
+            commands.register(registration)
         }
         .task(id: activeHost?.pairingKey) {
             await prepare()
@@ -1768,7 +1772,9 @@ public struct ChatView: View {
                                 date: entry.at.map { Date(timeIntervalSince1970: $0 / 1000) },
                                 fromAgent: !entry.isUser,
                                 isCard: false,
-                                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil
+                                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil,
+                                toolInput: entry.toolInput,
+                                toolOutput: entry.toolOutput
                             ))
                         }
                     }
@@ -3204,18 +3210,52 @@ struct MacChatRow: View {
     ///
     /// The group carries the outcome of the last call in the run, so the
     /// reader sees whether the run worked without opening every call in it.
+    /// The run opens in place:  the calls it stands for are listed under it,
+    /// so a reader never has to leave the turn to read one of them.
     private var toolGroupCard: some View {
-        ThreadToolCard(
-            name: row.text,
-            status: row.toolStatus ?? "completed",
-            depth: row.toolDepth,
-            input: nil,
-            output: row.toolOutput
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: ClutchRadius.control)
-                .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
-        )
+        VStack(alignment: .leading, spacing: 6) {
+            ThreadToolCard(
+                name: row.text,
+                status: row.toolStatus ?? "completed",
+                depth: row.toolDepth,
+                input: nil,
+                output: row.toolOutput
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ClutchRadius.control)
+                    .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+            )
+            if !row.members.isEmpty {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Label(
+                        expanded
+                            ? "Hide The \(row.members.count) Calls"
+                            : "Show The \(row.members.count) Calls",
+                        systemImage: expanded ? "chevron.up" : "chevron.down"
+                    )
+                    .font(ClutchFont.caption)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    expanded
+                        ? "Hide The \(row.members.count) Calls"
+                        : "Show The \(row.members.count) Calls"
+                )
+                if expanded {
+                    ForEach(row.members) { member in
+                        ThreadToolCard(
+                            name: member.text,
+                            status: member.toolStatus ?? "completed",
+                            depth: member.toolDepth,
+                            input: member.toolInput,
+                            output: member.toolOutput
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /// The engine's reasoning for the turn.

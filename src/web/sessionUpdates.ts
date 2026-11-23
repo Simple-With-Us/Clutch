@@ -112,7 +112,9 @@ export function compactToolHistory(history: readonly SessionUpdate[]): SessionUp
             ? { parentToolCallId: entry.parentToolCallId ?? kept.parentToolCallId }
             : {}),
           ...(entry.toolInput ?? kept.toolInput ? { toolInput: entry.toolInput ?? kept.toolInput } : {}),
-          ...(kept.toolOutput || entry.toolOutput ? { toolOutput: kept.toolOutput || entry.toolOutput } : {}),
+          // The newest answer wins:  a call that was corrected or
+          // retried must not keep showing the answer it had before.
+          ...(entry.toolOutput || kept.toolOutput ? { toolOutput: entry.toolOutput || kept.toolOutput } : {}),
         };
         continue;
       }

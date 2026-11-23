@@ -169,14 +169,23 @@ public struct TypedToolCard: Equatable, Sendable {
     private static func words(in name: String) -> Set<String> {
         var out: Set<String> = []
         var current = ""
-        for character in name.lowercased() {
+        var previous: Character?
+        for character in name {
             if character.isLetter || character.isNumber {
+                // A camel case boundary:  a lower case letter or a digit
+                // followed by an upper case one starts a new word, so
+                // `readFile` is two words and not one long one.
+                if let previous, previous.isLowercase || previous.isNumber, character.isUppercase, !current.isEmpty {
+                    out.insert(current.lowercased())
+                    current = ""
+                }
                 current.append(character)
             } else {
-                if !current.isEmpty { out.insert(current); current = "" }
+                if !current.isEmpty { out.insert(current.lowercased()); current = "" }
             }
+            previous = character
         }
-        if !current.isEmpty { out.insert(current) }
+        if !current.isEmpty { out.insert(current.lowercased()) }
         return out
     }
 
@@ -298,16 +307,22 @@ public enum LineChange {
     /// new side was added and what is left over on the old side was
     /// removed.  A line that appears twice is counted twice.
     static func lineChange(old: String, new: String) -> (added: Int, removed: Int) {
-        var remaining = lines(of: old)
+        // The lines both sides share cancel out, and the count of each line
+        // is kept in a table:  a line that appears twice is counted twice,
+        // and the whole change costs one pass over each side.
+        var remaining: [String: Int] = [:]
+        for line in lines(of: old) {
+            remaining[line, default: 0] += 1
+        }
         var added = 0
         for line in lines(of: new) {
-            if let index = remaining.firstIndex(of: line) {
-                remaining.remove(at: index)
+            if let count = remaining[line], count > 0 {
+                remaining[line] = count - 1
             } else {
                 added += 1
             }
         }
-        return (added, remaining.count)
+        return (added, remaining.values.reduce(0, +))
     }
 
     /// The lines of a text, with no line for an empty text.
@@ -343,7 +358,7 @@ public enum ShellResult {
             #"exit(?:ed)?(?:\s+with)?\s+(?:code|status)\s*[:=]?\s*(-?\d+)"#,
             #"process\s+exited\s+with\s+(?:code\s+)?(-?\d+)"#,
             #"command\s+exited\s+with\s+(?:code\s+)?(-?\d+)"#,
-            #"\bcode\s*[:=]\s*(-?\d+)\b"#,
+            #"\bexit\s+status\s*[:=]\s*(-?\d+)"#,
         ]
         for pattern in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }

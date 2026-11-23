@@ -134,6 +134,22 @@ final class TypedToolCardTests: XCTestCase {
         XCTAssertNil(card.command)
     }
 
+    func testACamelCaseToolNameIsReadAsWords() {
+        // The engines do not all write their tool names in snake case, and
+        // a camel case name is words too.
+        XCTAssertEqual(TypedToolCard.classify(name: "readFile"), .fileRead)
+        XCTAssertEqual(TypedToolCard.classify(name: "editFile"), .fileEdit)
+        XCTAssertEqual(TypedToolCard.classify(name: "runTests"), .test)
+    }
+
+    func testAnAnswerThatOnlyNamesACodeIsNotAnExitCode() {
+        // A number that follows the word code is not the exit of a
+        // command:  an HTTP status is not an exit code, and a card that
+        // shows it as one is claiming something the engine never said.
+        let card = TypedToolCard.make(name: "bash", output: "HTTP code: 404")
+        XCTAssertNil(card.exitCode)
+    }
+
     func testTheKindIsReadFromTheNameBeforeTheArguments() {
         XCTAssertEqual(TypedToolCard.classify(name: "run_tests"), .test)
         XCTAssertEqual(TypedToolCard.classify(name: "read_file"), .fileRead)
