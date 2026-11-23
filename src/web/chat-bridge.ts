@@ -1404,9 +1404,12 @@ export function buildPermissionEvidence(rawInput: unknown): PermissionEvidence |
   // the client cuts the same way:  a cut text says that it was cut.
   const command = readString(record.command);
   const path = readString(record.file_path) ?? readString(record.path);
+  // The diff reads the whole edit, because an edit that differs only past a
+  // cut is still an edit:  the diff is bounded by how many lines it shows
+  // and how long each of them is, and the content that is left out is said.
   const diff = compactDiff(
-    typeof record.old_string === "string" ? bounded(record.old_string, 20_000) : undefined,
-    typeof record.new_string === "string" ? bounded(record.new_string, 20_000) : undefined,
+    typeof record.old_string === "string" ? record.old_string : undefined,
+    typeof record.new_string === "string" ? record.new_string : undefined,
   );
   if (!command && !path && !diff) return undefined;
   return {
@@ -1426,28 +1429,18 @@ export function bounded(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
 
-/**
- * The tool's own input, as the engines send it.
+/** The tool call a permission request is about.
  *
- * Only the fields this file names are kept:  the command a shell tool wants
- * to run, the path a file tool wants to touch and the two halves of an edit.
- * Everything else the engine put in the input is dropped here and never
- * reaches the client.
+ * The tool's own input is kept as it arrives and read where the evidence is
+ * built:  a shape this file does not understand must not make the request
+ * unreadable, because a request that is dropped leaves the engine waiting
+ * on an answer that never comes.
  */
-const PermissionToolInputSchema = z.object({
-  command: z.string().optional(),
-  file_path: z.string().optional(),
-  path: z.string().optional(),
-  old_string: z.string().optional(),
-  new_string: z.string().optional(),
-});
-
-/** The tool call a permission request is about. */
 const PermissionToolCallSchema = z.object({
   toolCallId: z.string().optional(),
   title: z.string().optional(),
   kind: z.string().optional(),
-  rawInput: PermissionToolInputSchema.optional(),
+  rawInput: z.unknown().optional(),
 });
 
 /**
@@ -1946,15 +1939,18 @@ export class Bridge implements MuseAuthBridge {
    * before, so a caller that never asked for this feature sees no change.
    */
   private holdPermissionRequest(id: number | string, params: Record<string, unknown>): void {
+    // A request the engine sent in a shape this file does not understand is
+    // still a request the engine is blocked on, so it is held and answered
+    // rather than dropped:  a dropped request leaves the engine waiting.
     const parsed = PermissionParamsSchema.safeParse(params);
-    if (!parsed.success) return;
-    const options = parsePermissionOptions(parsed.data.options);
-    const toolCall: z.infer<typeof PermissionToolCallSchema> = parsed.data.toolCall ?? {};
+    const data: z.infer<typeof PermissionParamsSchema> = parsed.success ? parsed.data : {};
+    const options = parsePermissionOptions(data.options);
+    const toolCall: z.infer<typeof PermissionToolCallSchema> = data.toolCall ?? {};
     const title = readString(toolCall.title) ?? "";
     const evidence = buildPermissionEvidence(toolCall.rawInput);
     const request: PermissionRequest = {
       requestId: `perm-${(permissionCounter += 1)}`,
-      sessionId: readString(parsed.data.sessionId) ?? "",
+      sessionId: readString(data.sessionId) ?? "",
       title,
       toolName: readString(toolCall.kind) ?? (title || "Tool call"),
       options,

@@ -66,6 +66,32 @@ describe("permission evidence", () => {
     expect(compactDiff(undefined, undefined)).toBeUndefined();
   });
 
+  it("has no evidence when the tool's input is not an object", () => {
+    // A shape the sidecar does not understand is not evidence, and it is
+    // not a reason to drop the request:  the engine is blocked on it.
+    expect(permissionEvidenceFromParams({ toolCall: { rawInput: "ls -la" } })).toBeUndefined();
+    expect(permissionEvidenceFromParams({ toolCall: { rawInput: [{ command: "ls" }] } })).toBeUndefined();
+    expect(permissionEvidenceFromParams({ toolCall: { rawInput: 7 } })).toBeUndefined();
+  });
+
+  it("has no evidence when the params do not parse", () => {
+    // A malformed request is still a request the engine waits on, so the
+    // reading of it must not throw and must not invent evidence.
+    expect(permissionEvidenceFromParams({ options: [{ optionId: 7 }] })).toBeUndefined();
+    expect(permissionEvidenceFromParams({ toolCall: { title: 7 } })).toBeUndefined();
+  });
+
+  it("shows a change that sits past the old cut", () => {
+    // An edit that differs only far into the file is still an edit, and the
+    // diff says so rather than showing nothing at all.
+    const filler = "x".repeat(20_100);
+    const oldText = `head\n${filler}\nlast`;
+    const newText = `head\n${filler}\nchanged`;
+    const diff = compactDiff(oldText, newText);
+    expect(diff).toContain("- last");
+    expect(diff).toContain("+ changed");
+  });
+
   it("shows a few changed lines and says how many it left out", () => {
     const oldText = ["a", "b", "c", "d", "e", "f", "g"].join("\n");
     const newText = ["a", "b", "c", "x", "y", "z", "w"].join("\n");
