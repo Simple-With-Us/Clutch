@@ -6,10 +6,9 @@ struct ClutchApp: App {
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
 
     init() {
-        #if os(iOS)
-        // Sentry is linked into the iOS targets only; this file is shared with macOS.
+        // Sentry links both native targets; without a DSN the start below
+        // is a no-op, so local and CI builds without one behave as before.
         SentryTelemetry.start()
-        #endif
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
             HostStore.resetPersistedHosts()
