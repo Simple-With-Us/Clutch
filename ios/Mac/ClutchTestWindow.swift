@@ -32,14 +32,14 @@ struct ClutchTestWindowModifier: ViewModifier {
     }
 
     private func apply(size: CGSize) {
-        // A window that is bigger than the screen is clipped by the screen,
-        // and a control that sits in the clipped part cannot be clicked at
-        // all.  A runner's screen can be smaller than the size a test asks
-        // for, so the size is clamped to what the screen can show and the
-        // surface under test is the whole window rather than the part of it
-        // that fits.
-        let size = Self.clampToScreen(size)
         for window in NSApp.windows where window.contentView != nil {
+            // A window that is bigger than the screen is clipped by the
+            // screen, and a control that sits in the clipped part cannot be
+            // clicked at all.  A runner's screen can be smaller than the
+            // size a test asks for, so the size is clamped to what the
+            // screen can show and the surface under test is the whole
+            // window rather than the part of it that fits.
+            let size = Self.clampToScreen(size, for: window)
             window.setContentSize(NSSize(width: size.width, height: size.height))
             // The window can open on a space the machine was not showing, and
             // a window on another space is not in the accessibility tree, so
@@ -53,8 +53,15 @@ struct ClutchTestWindowModifier: ViewModifier {
 
 extension ClutchTestWindowModifier {
     /// The size the screen can show, for a size that is bigger than it.
-    static func clampToScreen(_ size: CGSize) -> CGSize {
-        guard let screen = NSScreen.main else { return size }
+    ///
+    /// The screen is the one the window is on, and the first one the machine
+    /// has when the window does not know yet.  The main screen is not used:
+    /// it is the screen of the app that holds the keyboard, and an app that
+    /// has no key window yet has no main screen, so asking for it would
+    /// leave the size unclamped exactly when the size is applied.
+    static func clampToScreen(_ size: CGSize, for window: NSWindow) -> CGSize {
+        let screen = window.screen ?? NSScreen.screens.first
+        guard let screen else { return size }
         let frame = screen.visibleFrame
         return CGSize(
             width: min(size.width, frame.width),
