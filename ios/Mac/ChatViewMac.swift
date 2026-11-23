@@ -1709,7 +1709,6 @@ public struct ChatView: View {
                             : "Resume this thread"
                 )
         }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func thoughtRow(_ thought: String) -> some View {

@@ -43,6 +43,13 @@ public final class HostStore {
     static let storageKey = "codes.clutch.hosts.v3"
     static let activeKey = "codes.clutch.activeHost.v3"
 
+    /// Whether the hosts have already been cleared in this process.
+    ///
+    /// A UI test starts from first run, and the reset happens once:  a
+    /// second store built over the same suite must not clear the hosts
+    /// that were paired after the first one was built.
+    private static var didResetHosts = false
+
     public private(set) var hosts: [ClutchHost] = []
     public private(set) var activeHostID: UUID?
 
@@ -62,8 +69,12 @@ public final class HostStore {
         #if DEBUG
         // A UI test starts from first run.  The reset happens here rather
         // than in the app's initializer, so it always runs before the
-        // hosts are loaded and no stale host can survive it.
-        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
+        // hosts are loaded and no stale host can survive it.  It happens
+        // once per process:  the Mac app builds more than one store, and a
+        // second store over the same suite would clear the hosts the
+        // first one paired.
+        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts"), !Self.didResetHosts {
+            Self.didResetHosts = true
             Self.resetPersistedHosts(defaults: resolved)
         }
         #endif

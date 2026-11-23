@@ -200,7 +200,20 @@ final class MacSurfaceSetup {
         // click is made at the point the control is on.
         guard element.exists else { return false }
         element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
-        return true
+        // The click is only a success if it reached the app.  A click that
+        // landed on the panel the system put in front of the app reaches
+        // nothing, and a caller that believes it tapped a control then
+        // fails later on a tree that never had it.
+        //
+        // A control that stays covered but is reachable is still a
+        // success:  that is the case the fallback is here for.  The app
+        // being in front is what says the click reached it.
+        let settled = Date().addingTimeInterval(2)
+        while Date() < settled {
+            if element.isHittable || app.state == .runningForeground { return true }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return false
     }
 
     /// Dismisses a system panel that took the front of the session.

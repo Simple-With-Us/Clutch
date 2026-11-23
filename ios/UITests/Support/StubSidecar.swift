@@ -154,7 +154,12 @@ final class StubSidecar {
         qos: .userInitiated,
         attributes: .concurrent
     )
-    /// The number of connections that may be in flight at once.
+    /// The number of requests that may be answered at once.
+    ///
+    /// The fixture turn holds its stream open for as long as the test
+    /// needs it, and the stream is served outside this budget:  a stream
+    /// that held a slot would starve the polling the app does while it is
+    /// open.
     private let connectionSlots = DispatchSemaphore(value: 16)
 
     // MARK: - Accept loop
@@ -179,19 +184,19 @@ final class StubSidecar {
                 socklen_t(MemoryLayout<Int32>.size)
             )
             // The connections are served on a pool the system reuses, and
-            // the number of them in flight is bounded.  A thread per
-            // connection grows without a bound, and the fixture turn holds
-            // its stream open for as long as the test needs it, so the
-            // polling the app does while that stream is open would keep
-            // making threads.  A serial loop would be worse:  it would
-            // block every other request the app makes while the fixture
-            // stream is open.
-            let slots = connectionSlots
-            slots.wait()
+            // the number of them answered at once is bounded.  A thread
+            // per connection grows without a bound, and a serial loop
+            // would be worse:  it would block every other request the app
+            // makes while the fixture stream is open.
+            //
+            // The accept thread never waits.  A thread parked on a full
+            // pool cannot see the listening socket close, so the run
+            // would hang in teardown instead of ending;  the pool is
+            // taken by the worker, and a request that cannot get one is
+            // told so.
             connectionQueue.async { [weak self] in
                 self?.handle(client)
                 close(client)
-                slots.signal()
             }
         }
     }
@@ -227,8 +232,19 @@ final class StubSidecar {
         let request = String(decoding: buffer, as: UTF8.self)
         switch reply(for: request) {
         case .body(let status, let json):
+            // The pool is taken here, where the route is known, and the
+            // wait is bounded:  a full pool says so rather than parking a
+            // worker forever, and a parked worker holds a client that can
+            // never be closed.
+            guard connectionSlots.wait(timeout: .now() + 5) == .success else {
+                respond(on: fd, status: 503, reason: "Service Unavailable", json: #"{"error":"the stub is busy"}"#)
+                return
+            }
+            defer { connectionSlots.signal() }
             respond(on: fd, status: status, json: json)
         case .eventStream:
+            // The stream is the one connection that stays open for as long
+            // as the test needs it, so it is served outside the pool.
             streamFixtureTurn(on: fd)
         }
     }
@@ -383,7 +399,11 @@ final class StubSidecar {
         // The turn holds at the running moment until the test opens the
         // gate, so a capture of the running turn shows the turn running and
         // not the card that comes after it, however slow the machine is.
-        _ = permissionGate.wait(timeout: .now() + 120)
+        // A gate that never opened ends the stream.  A turn that was
+        // never armed must not stream a permission card into a test that
+        // has already given up, and the writes after that would race the
+        // teardown.
+        guard permissionGate.wait(timeout: .now() + 120) == .success else { return }
         write(
             event: "tool",
             data: #"{"id":"fixture-tool-1","name":"read_file","status":"running","input":"src/routes/login.ts"}"#,
@@ -396,7 +416,7 @@ final class StubSidecar {
         )
 
         // The turn waits here for the test to say it has seen the card.
-        _ = turnGate.wait(timeout: .now() + 180)
+        guard turnGate.wait(timeout: .now() + 180) == .success else { return }
 
         write(
             event: "tool",
@@ -436,13 +456,13 @@ final class StubSidecar {
         }
     }
 
-    private func respond(on fd: Int32, status: Int, json: String) {
+    private func respond(on fd: Int32, status: Int, reason: String? = nil, json: String) {
         let payload = Data(json.utf8)
         // The header block ends with a blank line: CRLF CRLF.  A Swift
         // multi-line string ends with a single newline, which leaves the
         // body glued to the headers and the client reads the whole thing as
         // one malformed header.
-        let header = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\n"
+        let header = "HTTP/1.1 \(status) \(reason ?? (status == 200 ? "OK" : "Not Found"))\r\n"
             + "Content-Type: application/json\r\n"
             + "Content-Length: \(payload.count)\r\n"
             + "Connection: close\r\n"

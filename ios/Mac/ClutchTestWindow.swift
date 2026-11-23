@@ -73,10 +73,17 @@ extension ClutchTestWindowModifier {
         // The title bar is part of the window's frame and not of its
         // content, so the content is made short enough for the whole window
         // to fit on the screen and not only its content area.
+        //
+        // The window has to fit.  A window taller than the screen is
+        // clipped, and the controls in the clipped part are not in the
+        // accessibility tree at all, so a floor that asked for more room
+        // than the screen has would hide the very controls a test is
+        // looking for.
         let chrome = max(0, window.frame.height - (window.contentView?.bounds.height ?? 0))
+        let usable = max(0, frame.height - chrome)
         return CGSize(
             width: min(size.width, frame.width),
-            height: min(size.height, max(240, frame.height - chrome))
+            height: min(size.height, usable)
         )
     }
 
@@ -191,9 +198,17 @@ final class ClutchTestActivationDelegate: NSObject, NSApplicationDelegate {
                 // The app asks for the foreground again every few seconds:
                 // a menu, an alert or another window can take it, and a
                 // background app's controls cannot be clicked at all.
-                NSRunningApplication.current.activate(
-                    options: [.activateAllWindows, .activateIgnoringOtherApps]
-                )
+                //
+                // It only asks when it does not have the foreground.  An
+                // app that takes the foreground it already holds takes it
+                // away from whatever else the session is doing, and the
+                // hosted runner is a session that belongs to somebody
+                // else.
+                if NSRunningApplication.current.isActive == false {
+                    NSRunningApplication.current.activate(
+                        options: [.activateAllWindows, .activateIgnoringOtherApps]
+                    )
+                }
             }
             if self.forwardTicks >= Self.forwardTicks {
                 self.forwardTimer?.invalidate()
