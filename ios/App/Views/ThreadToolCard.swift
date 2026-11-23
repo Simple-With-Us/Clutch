@@ -42,6 +42,9 @@ public struct ThreadToolCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(accessibilitySummary)
+            // The card is named after the call it draws, so a UI test can
+            // ask for one control by the name the engine gave it.
+            .accessibilityIdentifier("tool-call-\(name)")
             if expanded {
                 detail
             }
