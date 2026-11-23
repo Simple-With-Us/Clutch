@@ -1,6 +1,6 @@
 # Clutch UI Improvement Catalog
 
-Date: Sun Nov 22 2026 (updated after the peer sub-thread merges)
+Date: Mon Nov 23 2026 (updated after pass 2 and the first slice of pass 3 landed)
 Seat: OPENCODE
 Status: Living document, companion to `docs/plans/ui-ux-overhaul.md` and `docs/plans/native-ui-capability-program.md`
 Scope: every UI improvement brainstormed for the native apps, across all review and implementation sub-threads — the four-specialist review (iOS interaction and IA, macOS product design, design systems and accessibility, competitive benchmark), this seat's implementation PRs, and the parallel peer sub-threads (the AE OpenCode thread that landed the Attention Stack and Turn Cockpit in #296, and the MM thread whose program spec (#302), honest-ground pass (#303), readability pass (#304), composer pass (#305), and Mac-test follow-up (#306) are folded in below)
@@ -12,7 +12,7 @@ Each item carries an ID, the improvement, why it matters, the evidence, and a st
 ## A.  Structure and information architecture
 
 - **A1 — Attention Stack home surface** (Landed on iOS, #296).  The tab bar is gone on iPhone: `SessionsView` is the one home surface with Agent Chat, Needs You, Running, Pinned, and one section per working folder, backed by a new `TurnActivity` model (`ios/App/Views/SessionsView.swift:292`, `ios/App/Models/TurnActivity.swift`).  Open: the same treatment as the Mac home surface, and deleting the residual tab logic on macOS.
-- **A2 — Kill the Workspace/Chat split on iOS** (Landed, #296, for iPhone).  One list-to-thread flow.  Open: the Mac's `NavigationSplitView` equivalent (D10).
+- **A2 — Kill the Workspace/Chat split on iOS** (Landed, #296, for iPhone).  One list-to-thread flow.  Landed on the Mac in #309:  the rail is a resizable column and the panel on the right is the real macOS inspector, and the programme document records that deviation on purpose (D10).
 - **A3 — Repo-first grouping option** (Proposed).  Folder as the organising axis across all sections; per-folder sections exist (#296), a full folder-first alternative does not.  Needs a decision against A1.
 - **A4 — Host tab becomes a status screen** (Partial, #296 touched `DshHostView`).  Full version: health, last contact, sidecar version, engine inventory, restart guidance; the raw JSON-RPC console behind a Diagnostics disclosure (`DshHostView.swift:39-56`, `isBusy` always false `:121-126`).  Status: Open.
 - **A5 — Fleet Recall becomes a verb** (Open).  `@recall` in the composer and a global search field; the tab disappears into settings or search.
@@ -23,7 +23,7 @@ Each item carries an ID, the improvement, why it matters, the evidence, and a st
 
 - **B1 — Approval wakes the owner** (Landed, #296 — `TurnNotifier.swift:18` now fires on a permission arrival).  Open remainder: actionable Approve/Deny on the notification, `.timeSensitive` interruption level, and a deep link that opens the exact card.
 - **B2 — Face ID before any allow from the phone** (Open).  Deny always permitted from the phone; no "Always allow" from the phone.  The programme doc names the tension honestly: one tap can Deny or deep-link, but an informed Allow needs the unlock and the evidence (B3) in front of the owner.
-- **B3 — Approvals show evidence** (Partial, #296 — the card now carries the tool name and a queued-request count).  Open: command text, target path, or a compact diff; "Always allow" behind a confirm naming its scope; default-weighted Deny.  Evidence base: `PermissionCard.swift` reworked in #296 (+61).
+- **B3 — Approvals show evidence** (Landed for the evidence, #310 — the sidecar keeps the tool's own input in a known shape and the request carries the command, the path and a compact diff of the lines that change, and the phone and the Mac show them).  Open: "Always allow" behind a confirm naming its scope, and the default-weighted Deny.
 - **B4 — Pending requests visible outside the thread** (Landed, #296 — Needs You section plus the queue count on the card).  Open remainder: tab-badge style surfacing on macOS.
 - **B5 — Tiered approval modes** (Proposed).  Ask every time / Assisted / Approve all.  Needs sidecar support; needs a decision.
 
@@ -36,17 +36,17 @@ Each item carries an ID, the improvement, why it matters, the evidence, and a st
 
 ## D.  Transcript and reading
 
-- **D1 — Verbosity modes** (Open).  Summary / Normal / Verbose; Normal collapses consecutive tool calls into one row.  Rendering concern, not a protocol change.
-- **D2 — Markdown and code blocks** (Open).  `AttributedString(markdown:)` for prose; fenced code in a monospaced block with copy.  Today raw text at a fixed size (`ChatViewMac.swift:2879-2889`).
-- **D3 — Typed tool cards** (Open).  File read, edit-with-diff, shell with exit code, test with pass/fail; raw JSON behind Show raw.
+- **D1 — Verbosity modes** (Landed, #309).  Summary / Normal / Verbose; Normal collapses a run of tool calls into one row that carries the calls it stands for and opens in place to show them.  The transcript model decides it, and the tests say what the reader is told.
+- **D2 — Markdown and code blocks** (Landed, #309).  The inline syntax is read, and a fenced block is drawn as code in a monospaced block with a copy button.  The prose of a thread no longer arrives as raw text.
+- **D3 — Typed tool cards** (Landed, #309).  File read, edit-with-diff, shell with exit code, test with pass/fail; the raw call and the raw answer behind Show raw.  Nothing is invented:  a call whose answer names no exit code has no exit code on its card.
 - **D4 — Conditional auto-scroll** (Landed, #296 — follows only near the bottom, with a Latest pill).
 - **D5 — Load earlier messages** (Open).  `hasMore` from the sidecar plus a Load-200-more row; today the transcript starts mid-conversation silently (`SessionsClient.swift:345-352`).
 - **D6 — Find that navigates** (Open).  Match index, jump, per-character highlight, Esc, `⌘G`; search tool input and plan text (`SessionThreadView.swift:538-573`, `ChatViewMac.swift:837-850`).
-- **D7 — Stop fabricating timestamps** (Partial, #304 made the visible timestamps readable — primary styling and a larger size).  The underlying bug remains: replayed Mac history is stamped `Date()`, so a three-week-old thread claims every message arrived today (`ChatViewMac.swift:429`, `:448`, `:464`).
-- **D8 — Stable row identity** (Open).  Ids from tool-call ids, not array position (`ChatViewMac.swift:446`); open cards stop collapsing mid-stream.
+- **D7 — Stop fabricating timestamps** (Landed, #309).  A replayed row carries the time the engine recorded, and a row with no recorded time carries none, because a three week old thread must not claim to have happened today.  #304 had made the visible timestamps readable.
+- **D8 — Stable row identity** (Landed, #309).  A turn's identity comes from its first row and not from its number, so a turn keeps its identity when earlier history loads and the numbering moves under it.
 - **D9 — Turn Cockpit** (Landed on iOS, #296 — plan panel on top of the thread, approval card in the flow, supervision in the composer; `SessionThreadView.swift:221`, `:296`).  Open: the Mac equivalent.
-- **D10 — Session Deck on macOS** (Open).  Real `NavigationSplitView` (threads / transcript / inspector), unlocking a real toolbar, `.commands`, and a titlebar that names the thread.
-- **D11 — Delete the Mac activity pane** (Open).  The answer streams into a 220 pt pane that appears mid-turn and teleports into the transcript at turn end (`ChatViewMac.swift:686`).
+- **D10 — Session Deck on macOS** (Landed in substance, #309, with one deviation on purpose).  The threads rail, the transcript and the inspector are on screen, with a real toolbar, real `.commands`, and a titlebar that names the thread.  The rail is a resizable column with a drag handle and a saved width rather than a `NavigationSplitView`, because the rail has its own acceptance criteria, and the programme document records that.
+- **D11 — Delete the Mac activity pane** (Landed, #309).  The answer streams inside the transcript, in the turn being built, so the text never moves panes and the window stops jumping twice per turn.
 - **D12 — Readable width on iPad** (Open).  Cap transcript lines (~720 pt) instead of full-bleed.
 - **D13 — New From Summary** (Proposed).  Fresh thread carrying a summary of the current one (Zed's pattern).
 
@@ -74,9 +74,9 @@ Each item carries an ID, the improvement, why it matters, the evidence, and a st
 
 ## G.  Mac platform-native
 
-- **G1 — Menu bar, Settings scene, `⌘,`** (Open).  No `.commands`, no `Settings` scene today; `⌘N`/`⌘R` bound to buttons that disappear (`ClutchApp.swift:20-32`, `ThreadSidebar.swift:282,340`).  Named unchanged by #296 and still true after #303.
-- **G2 — Shortcuts out of view-bound buttons** (Open).  Same evidence as G1.
-- **G3 — `MacTranscriptModel` extraction** (Open).  The 3,050-line view owns 73 state properties, an HTTP client, and persistence, and re-derives history per keystroke (`ChatViewMac.swift:155-274`).
+- **G1 — Menu bar, Settings scene, `⌘,`** (Landed, #309).  The menu bar carries New Thread and Refresh Thread, the comma key opens Settings, and the commands follow the window in front when two thread windows are open.
+- **G2 — Shortcuts out of view-bound buttons** (Landed, #309).  The shortcuts are commands on the window rather than buttons that come and go.
+- **G3 — `MacTranscriptModel` extraction** (Landed, #309).  The model derives the rows in `ios/App/Models`, where the phone's unit test target can reach it, and twenty-four tests say what the reader is told.  The derivation is linear:  the parent map and the turn headers are each built once.
 - **G4 — Unify the six error surfaces** (Open).
 - **G5 — Quick Look, drag-out, Services** (Open).
 - **G6 — Window defaults and restoration** (Open).  No default size; rail visibility and tab selection unpersisted.
@@ -122,9 +122,9 @@ Each item carries an ID, the improvement, why it matters, the evidence, and a st
 
 ## L.  Verification guardrails
 
-- **L1 — Mac UI test target** (Landed first pass, #303 — a Mac UI test exists with honest ground; #306 is OPEN making it reach the Mac surface and land, and is the one open peer PR).
+- **L1 — Mac UI test target** (Landed, #303 and #306).  The Mac UI test target runs on the hosted runner against the synthetic stub sidecar, and it is behavioural rather than a picture comparison.
 - **L2 — Golden-image tests for the token layer** (Open).
-- **L3 — `MacTranscriptModel`** — see G3.
+- **L3 — `MacTranscriptModel`** — landed with G3 in #309.
 
 ## M.  Reliability surfaces the peer threads added
 
@@ -139,4 +139,4 @@ A diff viewer, an integrated terminal, an in-app browser, custom illustration, g
 
 ## Where to go next
 
-The live sequencing belongs to `native-ui-capability-program.md` (C-137) and its pass documents; this catalogue is the inventory behind it.  The biggest open clusters, by impact: the Mac structural fixes (D7, D11, G1-G3 — the Mac is untouched by #296), the approval-evidence remainder (B3), ambient surfaces (H1-H4), and the accessibility remainders (I1-I5).  One peer PR is open: #306, the Mac UI test reaching the Mac surface.
+The live sequencing belongs to `native-ui-capability-program.md` (C-137) and its pass documents; this catalogue is the inventory behind it.  The biggest open clusters, by impact: the approval evidence past the sidecar (B2, B3 and the phone's Face ID gate), the ambient surfaces (H1-H4), and the accessibility remainders (I1-I5).  Pass 2 of the programme landed on main as #309, and Pass 3, the phone as the attention surface, has started with the approval evidence reaching the client (#310).
