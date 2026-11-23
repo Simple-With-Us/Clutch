@@ -87,6 +87,20 @@ export function museSessionsRoot(env: NodeJS.ProcessEnv = process.env, home = ho
   return join(dataHome, "muse", "sessions");
 }
 
+/**
+ * The time the engine recorded a record, in epoch milliseconds.
+ *
+ * The engine writes its log in microseconds.  A record with no time, or a
+ * time that is not one, has no time:  it is left off rather than guessed.
+ */
+function recordedAtMs(value: unknown): number | undefined {
+  const record = asRecord(value);
+  const raw = record?.["recorded_at"];
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) return undefined;
+  const ms = Math.round(raw / 1000);
+  return ms > 0 ? ms : undefined;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -244,6 +258,8 @@ export function parseMuseSessionLog(
     if (typeof value === "string" && value.trim().length > MAX_TEXT_CHARS) result.transcriptTruncated = true;
     return text;
   };
+  // The time of the record being read, when the engine recorded one.
+  let recordedAt: number | undefined;
   const append = (update: SessionUpdate | null): void => {
     if (!options.includeTranscript && options.includeTranscript !== undefined) return;
     if (!update) return;
@@ -255,11 +271,15 @@ export function parseMuseSessionLog(
       transcriptChars -= removed.text.length;
       result.transcriptTruncated = true;
     }
-    result.transcript.push({ ...update, text });
+    // The entry carries the time the engine recorded it.  An entry with no
+    // recorded time keeps none:  a client that shows a made up time for it
+    // is worse than a client that shows no time at all.
+    result.transcript.push({ ...update, ...(recordedAt === undefined ? {} : { at: recordedAt }), text });
     transcriptChars += text.length;
   };
 
   for (const [recordIndex, { value }] of records.entries()) {
+    recordedAt = recordedAtMs(value);
     const type = value.payload_type;
     const payload = asRecord(value.payload);
     if (!payload || typeof type !== "string") continue;
@@ -324,14 +344,25 @@ export function parseMuseSessionLog(
         const call = asRecord(rawCall);
         const callId = typeof call?.call_id === "string" ? call.call_id : call?.id;
         const name = transcriptText(call?.name);
-        if (typeof callId === "string" && name) append({ sessionId, kind: "tool_call", text: name, toolCallId: callId, toolStatus: "running" });
+        if (typeof callId === "string" && name) {
+          append({ sessionId, kind: "tool_call", text: name, toolCallId: callId, toolStatus: "running" });
+        }
       }
     } else if (event.kind === "tool_result_batch_committed" && Array.isArray(event.results)) {
       for (const rawResult of event.results) {
         const item = asRecord(rawResult);
         const text = transcriptText(item?.text);
         if (typeof item?.tool_call_id === "string" && text) {
-          append({ sessionId, kind: "tool_call_update", text, toolCallId: item.tool_call_id, toolStatus: "completed" });
+          append({
+            sessionId,
+            kind: "tool_call_update",
+            text,
+            toolCallId: item.tool_call_id,
+            toolStatus: "completed",
+            // The answer is kept beside the call, so a card can show what
+            // came back and not only what the tool was asked.
+            toolOutput: text,
+          });
         }
       }
     }

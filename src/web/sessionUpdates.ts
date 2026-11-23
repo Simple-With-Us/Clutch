@@ -55,8 +55,25 @@ export interface SessionUpdate {
    * part a person reading the thread actually wants.
    */
   toolInput?: string;
+  /**
+   * What the tool answered, as the engine wrote it.
+   *
+   * The input says what the tool was asked and the output says what came
+   * back.  A card that carries only the input shows a question; a card that
+   * carries both shows the work.
+   */
+  toolOutput?: string;
   /** The plan entries, for a `plan` update.  An empty list means the plan is gone. */
   plan?: PlanEntry[];
+  /**
+   * The time the engine recorded the entry, in epoch milliseconds.
+   *
+   * A replayed entry carries the time it happened, not the time it was
+   * read back:  a three week old thread that stamps every message with the
+   * moment it was opened cannot be trusted about anything else it shows.
+   * An entry with no time says so rather than being given one.
+   */
+  at?: number;
 }
 
 /** ACP tool-call status as the clients render it. */
@@ -95,6 +112,7 @@ export function compactToolHistory(history: readonly SessionUpdate[]): SessionUp
             ? { parentToolCallId: entry.parentToolCallId ?? kept.parentToolCallId }
             : {}),
           ...(entry.toolInput ?? kept.toolInput ? { toolInput: entry.toolInput ?? kept.toolInput } : {}),
+          ...(kept.toolOutput || entry.toolOutput ? { toolOutput: kept.toolOutput || entry.toolOutput } : {}),
         };
         continue;
       }

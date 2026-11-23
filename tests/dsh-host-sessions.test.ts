@@ -307,6 +307,9 @@ describe("dshHostHistoryUpdates", () => {
     expect(compacted).toHaveLength(1);
     expect(compacted[0]?.text).toBe("Bash");
     expect(compacted[0]?.toolStatus).toBe("completed");
+    // The answer the tool gave is kept, so a card can show the work and
+    // not only the name of the call.
+    expect(compacted[0]?.toolOutput).toBe("ok");
   });
 
   it("keeps the relation and the input when a call is collapsed into one row", () => {

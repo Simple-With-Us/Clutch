@@ -863,6 +863,23 @@ function toolContentText(content: unknown): string {
 }
 
 /**
+ * What the engine wrote as raw JSON, in one line.
+ *
+ * The engine writes a tool's arguments and its result as JSON, sometimes as
+ * an object and sometimes as a string that already holds JSON.  Both are
+ * read here, and neither is invented:  what cannot be read is nothing.
+ */
+function rawToolText(raw: unknown): string {
+  if (typeof raw === "string") return raw.slice(0, 8000);
+  if (raw === undefined || raw === null) return "";
+  try {
+    return JSON.stringify(raw).slice(0, 8000);
+  } catch {
+    return "";
+  }
+}
+
+/**
  * One ACP `session/update` as an `AcpUpdate`, or null for updates the
  * clients do not render (plan entries, mode changes, …).  Tool calls used
  * to be dropped here, so a remote thread showed prose with the actual work
@@ -892,6 +909,15 @@ export function normalizeSessionUpdate(params: unknown): AcpUpdate | null {
       text: text.slice(0, 500),
       ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
       toolStatus: toolStatusOf(update.status),
+      // What the call was asked and what it answered.  The engine writes the
+      // arguments and the result as raw JSON, and a card that shows only the
+      // name of the tool shows nothing of the work.
+      ...(kind === "tool_call" && update.rawInput !== undefined
+        ? { toolInput: rawToolText(update.rawInput) }
+        : {}),
+      ...(kind === "tool_call_update" && update.rawOutput !== undefined
+        ? { toolOutput: rawToolText(update.rawOutput) }
+        : {}),
     };
   }
   if (kind === "plan" || kind === "plan_update" || kind === "plan_removed") {
