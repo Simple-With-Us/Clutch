@@ -23,7 +23,7 @@ type Allowlist = Record<string, Record<string, number>>;
 const AllowlistSchema = z.record(z.string(), z.record(z.string(), z.number()));
 
 function allowlist(): Allowlist {
-  const raw = JSON.parse(
+  const raw: unknown = JSON.parse(
     readFileSync(join(ROOT, "tests/design-literal-allowlist.json"), "utf8"),
   );
   return AllowlistSchema.parse(raw);
@@ -47,8 +47,8 @@ function normalize(literal: string): string {
  * The design literal guard.
  *
  * The token layer exists so the two native apps draw one concept one way, and
- * three files use it while a hundred and seventy three literals are still
- * spread across fourteen others.  Nothing stopped the next one.
+ * the literals that are left are spread across the files the later passes
+ * have not reached yet.  Nothing stopped the next one.
  *
  * The guard is a ratchet rather than a blank slate.  The allowlist names every
  * literal that exists today, so the guard is green now and fails on a new

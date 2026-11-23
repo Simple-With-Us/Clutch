@@ -12,15 +12,15 @@ struct ClutchApp: App {
     @State private var commands = MacWorkspaceCommands()
     #endif
 
+    #if os(macOS)
+    /// Brings the app forward for a UI test run, and does nothing otherwise.
+    @NSApplicationDelegateAdaptor(ClutchTestActivationDelegate.self) private var testActivation
+    #endif
+
     init() {
         // Sentry links both native targets; without a DSN the start below
         // is a no-op, so local and CI builds without one behave as before.
         SentryTelemetry.start()
-        #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
-            HostStore.resetPersistedHosts()
-        }
-        #endif
     }
 
     var body: some Scene {

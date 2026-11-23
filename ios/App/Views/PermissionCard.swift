@@ -70,6 +70,7 @@ struct PermissionCard: View {
                 .buttonStyle(.bordered)
                 .tint(ClutchColor.danger)
                 .disabled(!canAnswer || isAnswering)
+                .accessibilityIdentifier("permission-option-deny")
             } else {
                 VStack(spacing: ClutchSpacing.base) {
                     ForEach(request.options) { option in
@@ -102,6 +103,9 @@ struct PermissionCard: View {
         .clipShape(RoundedRectangle(cornerRadius: ClutchRadius.bubble))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(Copy.gap("Permission Needed.", request.headline)))
+        // The card is addressable by name, so a surface test can ask for the
+        // card itself and not for a word that happens to be on it.
+        .accessibilityIdentifier("permission-card")
         // A request the owner answered is gone, and one that could not be
         // answered is asked again: either way the card is live.
         .onChange(of: request.id) { _, _ in
@@ -123,6 +127,14 @@ struct PermissionCard: View {
             .font(ClutchFont.bodyStrong)
             .frame(maxWidth: .infinity, minHeight: ClutchMetric.minTapTarget)
         }
+        // The engine's own option id is the button's name, so a test can ask
+        // for this one button instead of matching a word against every button
+        // in the app.  A word match has to ask the app for every button's
+        // label and value, and on a loaded runner with a turn running that
+        // evaluation times out and the test fails at the query rather than at
+        // the card.  The name on screen is the engine's to choose; this one is
+        // the app's.
+        .accessibilityIdentifier("permission-option-\(option.optionId)")
     }
 
     /// The engine's own name for the option, with an explicit Always marker
