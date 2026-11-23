@@ -1359,6 +1359,17 @@ Watch the checks and fix what fails.  Never merge with a red check.  The `maco
 
 ---
 
+## The Mac fixture:  one synthetic turn, captured
+
+The macOS UI test that PR #303 shipped had never run, and the hosted runner that could not see the Mac app's window could not say anything about the surface either.  The follow-up branch fixes the launch path, and the fixture gives the runner something real to run.
+
+**What the fixture is.**  The stub sidecar can now serve a synthetic turn:  it answers the chat route as a server-sent event stream, streams a tool call, stops at a permission request, and holds the stream open there until the test has looked at the card.  The hold is what makes the card observable at all, because the turn's output is folded into the transcript only when the turn ends.
+
+**What the test does.**  It opens the named fixture thread, resumes it, sends a prompt, and looks at three moments:  the running turn, the permission card, and the transcript the turn ends in.  It answers nothing, so the card is evidence of the surface and not of an approval.
+
+**What the hosted runner found.**  It sees the window now:  the two workspace tests pass there, and the fixture test failed once on a control that another window covered.  A control that is covered is not clickable, so the tap brings the app forward and waits for the control to become hittable.
+
+**What the run leaves behind.**  Three captures and the receipt, in `docs/evidence/c-137-mac-fixture/`.
 ## Self-Review
 
 **Spec coverage.**  Pass 1 has four requirements in `docs/plans/native-ui-capability-program.md`: the macOS UI test target (Task 3), assertive iOS UI tests with exported screenshots (Task 4), the accessibility work (Tasks 5, 6 and 7), and the CI literal check (Task 1).  The verification strategy and ground rules are in the Global Constraints section and in Task 9. Every acceptance bullet in the spec's Pass 1 section maps to a task: CI runs the Mac tests (Task 8), every UI test class runs and a baseline mismatch fails the build (Task 4), Dynamic Type does not clip (Task 6), every animation site respects Reduce Motion (Task 5), the small status sites clear contrast (Task 7), and the grep for new literals returns nothing (Task 1).
