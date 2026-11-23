@@ -1636,15 +1636,60 @@ public struct ChatView: View {
         }
     }
 
+    /// The bar at the bottom of a previewed thread.
+    ///
+    /// The buttons have to stay reachable in a narrow window.  A row that
+    /// does not fit is not squeezed by the layout:  it is clipped by the
+    /// window, and a clipped button cannot be clicked at all, so the thread
+    /// cannot be resumed and the surface is broken rather than ugly.  The
+    /// row is therefore the first choice and a stacked layout is what the
+    /// bar falls back to.
     private func previewActionBar(for preview: SessionsClient.PreviewSession) -> some View {
+        ViewThatFits(in: .horizontal) {
+            previewActionRow(for: preview, stacked: false)
+            previewActionRow(for: preview, stacked: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.clutchSecondaryBackground.opacity(0.7))
+    }
+
+    @ViewBuilder
+    private func previewActionRow(
+        for preview: SessionsClient.PreviewSession,
+        stacked: Bool
+    ) -> some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 8) {
+                previewHint
+                previewButtons(for: preview)
+            }
+        } else {
+            HStack(spacing: 8) {
+                previewHint
+                previewButtons(for: preview)
+            }
+        }
+    }
+
+    /// What the bar says while the thread is only being previewed.
+    private var previewHint: some View {
         HStack(spacing: 8) {
             Label("Preview Only", systemImage: "eye")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             Text("Resume to send messages in this thread.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            Spacer()
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// What the bar can be done with.
+    private func previewButtons(for preview: SessionsClient.PreviewSession) -> some View {
+        HStack(spacing: 8) {
             Button(codeRemoteId == nil ? "New Thread" : "Current Thread") {
                 returnFromPreview()
             }
@@ -1664,9 +1709,7 @@ public struct ChatView: View {
                             : "Resume this thread"
                 )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(Color.clutchSecondaryBackground.opacity(0.7))
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func thoughtRow(_ thought: String) -> some View {
