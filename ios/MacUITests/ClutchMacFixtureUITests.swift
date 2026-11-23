@@ -44,6 +44,9 @@ final class ClutchMacFixtureUITests: XCTestCase {
         app.launch()
 
         try harness.waitForWindow()
+        // The app is a window on a desktop that belongs to somebody else, and
+        // a control another window covers cannot be tapped at all.
+        harness.bringToFront()
 
         // The fixture thread, by the name the stub gives it.  The name is
         // the identity of the fixture, so a capture says which sequence it
@@ -55,7 +58,12 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the fixture thread did not appear in the Mac thread list")
             return
         }
-        thread.click()
+        guard harness.tap(thread) else {
+            harness.snap("mac-fixture-thread-not-hittable")
+            harness.dump("mac-fixture-thread-tree")
+            XCTFail("the fixture thread could not be tapped")
+            return
+        }
 
         // The Mac app previews a thread before it resumes it, and the
         // composer stays closed until the thread is resumed.
@@ -66,7 +74,12 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the fixture thread did not open its preview")
             return
         }
-        resume.click()
+        guard harness.tap(resume) else {
+            harness.snap("mac-fixture-resume-not-hittable")
+            harness.dump("mac-fixture-resume-tree")
+            XCTFail("the fixture thread's resume control could not be tapped")
+            return
+        }
 
         // The replayed history is on screen before the turn starts, and it
         // is not the transcript the turn ends in:  the replayed words and
@@ -88,7 +101,12 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the Mac composer did not offer its draft field")
             return
         }
-        draft.click()
+        guard harness.tap(draft) else {
+            harness.snap("mac-fixture-composer-not-hittable")
+            harness.dump("mac-fixture-composer-tree")
+            XCTFail("the Mac composer could not be typed into")
+            return
+        }
         draft.typeText("Run the fixture turn")
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
@@ -97,7 +115,12 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the Mac composer did not offer its send button")
             return
         }
-        send.click()
+        guard harness.tap(send) else {
+            harness.snap("mac-fixture-send-not-hittable")
+            harness.dump("mac-fixture-send-tree")
+            XCTFail("the Mac composer could not be sent from")
+            return
+        }
 
         // Moment one:  the turn is running.
         let running = carrying(app.staticTexts, "Fixture running")

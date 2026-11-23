@@ -157,6 +157,27 @@ final class MacSurfaceHarness {
         )
     }
 
+    /// Taps an element once the app is in front and the element can be hit.
+    ///
+    /// The app under test is a window on a desktop that belongs to somebody
+    /// else, and a control that another window covers is not clickable at
+    /// all:  the test would fail on the desktop rather than on the surface.
+    /// So the app is brought forward and the tap waits for the control to
+    /// become hittable.
+    @discardableResult
+    func tap(_ element: XCUIElement, timeout: TimeInterval = 30) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            bringToFront()
+            if element.exists, element.isHittable {
+                element.click()
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        return false
+    }
+
     /// Stops the app and waits for it to go.
     ///
     /// The next test launches its own copy of the app, and a copy that is
