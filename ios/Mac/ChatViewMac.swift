@@ -158,6 +158,11 @@ public struct ChatView: View {
     /// The window registers what its commands do, so the menu bar can reach
     /// them whether the thread rail is showing or hidden.
     @Environment(MacWorkspaceCommands.self) private var commands
+    /// The window this view is in, so the menu bar can find the window in
+    /// front when two are open.
+    @State private var commandWindow: NSWindow?
+    /// What this window's commands do, held by the menu bar.
+    @State private var commandRegistration: MacWorkspaceCommands.Registration?
     /// Whether the user asked for reduced motion.  The sidebar slide is the
     /// one animation here, and it is skipped when it is on.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -474,6 +479,11 @@ public struct ChatView: View {
                 isCard: $0.kind == "card"
             )
         }
+        // The parent map is built once for this derivation.  A tool that
+        // runs other tools is the parent of them, and the map is the same
+        // for every row, so building it per row would make a long thread
+        // cost more the longer it gets.
+        let parents = toolParents
         model.history = codeLoaded.enumerated().map { index, entry in
             MacTranscriptModel.HistoryEntry(
                 id: MacTranscriptModel.stableIdentifier([
@@ -488,7 +498,7 @@ public struct ChatView: View {
                 isThought: entry.kind == "agent_thought_chunk",
                 isTool: entry.isTool,
                 toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil,
-                toolDepth: entry.isTool ? ToolCallDepth.depth(of: entry.toolCallId, parents: toolParents) : 0,
+                toolDepth: entry.isTool ? ToolCallDepth.depth(of: entry.toolCallId, parents: parents) : 0,
                 toolInput: entry.toolInput,
                 toolOutput: entry.toolOutput
             )
@@ -501,7 +511,7 @@ public struct ChatView: View {
                 id: tool.id,
                 name: tool.name,
                 status: tool.status,
-                depth: ToolCallDepth.depth(of: tool.id, parents: toolParents),
+                depth: ToolCallDepth.depth(of: tool.id, parents: parents),
                 input: tool.input,
                 output: tool.output
             )
@@ -524,11 +534,19 @@ public struct ChatView: View {
     /// The header comes before the first row of the turn, so a reader sees
     /// where a turn began before they read what it did.
     private var ledger: [MacLedgerItem] {
+        // The transcript is derived once here and the turn headers are
+        // looked up in a table, so a long thread costs one derivation and
+        // one lookup per row rather than a derivation per row.
+        let model = transcript
+        let headers = Dictionary(
+            model.turns.map { ($0.number, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         var out: [MacLedgerItem] = []
         var seen: Set<Int> = []
-        for row in rows {
+        for row in model.rows {
             let number = row.turn ?? 1
-            let header = transcript.turns.first { $0.number == number }
+            let header = headers[number]
             if !seen.contains(number) {
                 seen.insert(number)
                 if let header { out.append(.header(header)) }
@@ -571,20 +589,24 @@ public struct ChatView: View {
     /// window says here what New Thread and Refresh Thread mean while it is
     /// in front.
     private func registerCommands() {
-        commands.newThread = {
+        let registration = commandRegistration ?? MacWorkspaceCommands.Registration()
+        registration.window = commandWindow
+        registration.newThread = {
             if isWorkspace {
                 startMcodeThread()
             } else {
                 draft = ""
             }
         }
-        commands.refresh = {
+        registration.refresh = {
             Task { await refreshThread() }
         }
-        commands.newWindow = {
+        registration.newWindow = {
             openNewThreadWindow()
         }
-        commands.threadName = threadName
+        registration.threadName = threadName
+        commandRegistration = registration
+        commands.register(registration)
     }
 
     /// Where the focused match sits, in the words a reader uses.
@@ -742,7 +764,7 @@ public struct ChatView: View {
             registerCommands()
         }
         .onChange(of: threadName) { _, name in
-            commands.threadName = name
+            commandRegistration?.threadName = name
         }
         .task(id: activeHost?.pairingKey) {
             await prepare()
@@ -803,9 +825,24 @@ public struct ChatView: View {
             Task { await prepare() }
         }
         .background {
-            MacWindowCloseObserver {
-                Task { @MainActor in
-                    runningSessionRegistry.release(owner: runningRegistryOwner)
+            VStack(spacing: 0) {
+                MacWindowReader { window in
+                    // The window is what tells the menu bar which
+                    // registration belongs to the front of the app.
+                    if let window {
+                        if let current = commandWindow, current === window { return }
+                        commandWindow = window
+                        registerCommands()
+                    }
+                }
+                MacWindowCloseObserver {
+                    Task { @MainActor in
+                        runningSessionRegistry.release(owner: runningRegistryOwner)
+                        if let registration = commandRegistration {
+                            commands.unregister(registration)
+                            commandRegistration = nil
+                        }
+                    }
                 }
             }
             .frame(width: 1, height: 1)
@@ -2815,6 +2852,47 @@ public struct ChatView: View {
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
         pendingPermissions.removeAll()
+    }
+}
+
+/// Reports the window a view is in.
+///
+/// The menu bar belongs to the application and not to a window, so a window
+/// has to say which one it is for the menu bar to reach the right commands.
+private struct MacWindowReader: NSViewRepresentable {
+    let onWindow: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.view = view
+        context.coordinator.onWindow = onWindow
+        DispatchQueue.main.async { context.coordinator.report() }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.view = nsView
+        context.coordinator.onWindow = onWindow
+        // The window is reported without a hop through the run loop here:
+        // the view is already in its window by the time the view updates,
+        // and a hop on every update would queue work on every streaming
+        // token.
+        context.coordinator.report()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        weak var view: NSView?
+        var onWindow: ((NSWindow?) -> Void)?
+        private var reported: NSWindow?
+
+        func report() {
+            guard let window = view?.window else { return }
+            guard reported !== window else { return }
+            reported = window
+            onWindow?(window)
+        }
     }
 }
 

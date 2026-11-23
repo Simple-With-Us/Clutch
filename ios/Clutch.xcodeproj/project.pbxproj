@@ -38,7 +38,6 @@
 		2FFFCF809F1C07937FA9B389 /* SnapshotAssert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96091C16552CEA3625AD96E0 /* SnapshotAssert.swift */; };
 		30C7AF3E27CFE5AF8E203755 /* InfisicalSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 132E63075DFF396CB0A55FCA /* InfisicalSettingsSection.swift */; };
 		33354DD24CC674FB7534AEC4 /* StubSidecar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075F6C76C816463CB4A9C109 /* StubSidecar.swift */; };
-		33C88EF82FEDB14FE9322F70 /* MacWorkspacePanels.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C910843DC03E7CBEA53E81 /* MacWorkspacePanels.swift */; };
 		34DEB316FC4547BF59DDA16F /* SentryTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F0339A3E0FBDCCAEC93ECE /* SentryTelemetry.swift */; };
 		359FC2995B878E2CC138DF7C /* StubSidecar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 075F6C76C816463CB4A9C109 /* StubSidecar.swift */; };
 		370FBEA63878C948DC0E9C77 /* ErrorReportingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 135C3F6B7CC34C00DEF47ED4 /* ErrorReportingTests.swift */; };
@@ -327,7 +326,6 @@
 		F4F1BE6B000B196114EDE880 /* ClutchTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ClutchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F505EC3C61ABCA07E83DD6C1 /* HostGateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostGateView.swift; sourceTree = "<group>"; };
 		F5B2C76CDD0B285BB24CB178 /* ThreadSidebarMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadSidebarMetricsTests.swift; sourceTree = "<group>"; };
-		F7C910843DC03E7CBEA53E81 /* MacWorkspacePanels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspacePanels.swift; sourceTree = "<group>"; };
 		F81457A11AE35E90469E20EF /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostStore.swift; sourceTree = "<group>"; };
 		FB8B087893FF01FA2CD9BF4C /* AppIcon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = AppIcon.png; sourceTree = "<group>"; };
@@ -562,7 +560,6 @@
 				EF05FF9684394C6A74BE2776 /* MacSettingsView.swift */,
 				0D97EFD696ED0615FD3D2E45 /* MacThreadWindow.swift */,
 				02BD5C517F092893BF4C6806 /* MacWorkspaceCommands.swift */,
-				F7C910843DC03E7CBEA53E81 /* MacWorkspacePanels.swift */,
 			);
 			path = Mac;
 			sourceTree = "<group>";
@@ -947,7 +944,6 @@
 				B4D2A0F5B76CE0EF040185CD /* MacThreadWindowState.swift in Sources */,
 				53BA9A68701FF301FBB9741A /* MacTranscriptModel.swift in Sources */,
 				E64E5F126568F95581E97A35 /* MacWorkspaceCommands.swift in Sources */,
-				33C88EF82FEDB14FE9322F70 /* MacWorkspacePanels.swift in Sources */,
 				8AF5B617CD4F20AC12ED1DA1 /* MarkdownBlocks.swift in Sources */,
 				10950FDFF3C7150C078C0DB1 /* MuseContextPolicy.swift in Sources */,
 				B358A3BF898C0600BE5DD604 /* PairView.swift in Sources */,
