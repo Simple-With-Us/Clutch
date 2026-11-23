@@ -1351,10 +1351,26 @@ const EVIDENCE_CUT_MARKER = "… the edit was cut here; more may have changed";
 /** How long one line of the evidence may be. */
 const EVIDENCE_LINE_LIMIT = 160;
 
-/** One side of an edit, and whether it was cut. */
+/** One side of an edit, and whether it was cut.
+ *
+ * The cut is at a line boundary, because a cut inside a line compares two
+ * halves of a line as two different lines and says the edit changed when
+ * it did not.  The cut never leaves half a character behind either:  a
+ * character that is half of a pair is not a character, and it misrenders
+ * on the card.
+ */
 function boundedEdit(text: string): { text: string; cut: boolean } {
   if (text.length <= EVIDENCE_EDIT_LIMIT) return { text, cut: false };
-  return { text: text.slice(0, EVIDENCE_EDIT_LIMIT), cut: true };
+  let head = text.slice(0, EVIDENCE_EDIT_LIMIT);
+  const newline = head.lastIndexOf("\n");
+  if (newline >= 0) head = head.slice(0, newline + 1);
+  if (head.length > 0) {
+    const last = head.charCodeAt(head.length - 1);
+    // A high surrogate at the end is half of a pair, and the other half is
+    // past the cut.
+    if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+  }
+  return { text: head, cut: true };
 }
 
 /** The lines a text holds, without the empty ones. */
@@ -1377,9 +1393,14 @@ export function compactDiff(
   newText: string | undefined,
   cut = false,
 ): string | undefined {
+  // An edit larger than the evidence reads cannot be aligned honestly:  the
+  // part that was read may hold the same lines at a different place, and a
+  // diff of that says the edit changed lines it did not.  So a cut edit says
+  // that it was cut and shows nothing it cannot stand behind.
+  if (cut) return EVIDENCE_CUT_MARKER;
   const before = contentLines(oldText);
   const after = contentLines(newText);
-  if (before.length === 0 && after.length === 0) return cut ? EVIDENCE_CUT_MARKER : undefined;
+  if (before.length === 0 && after.length === 0) return undefined;
   // The lines the two sides share at the head and at the tail did not
   // change, so the diff shows only the part in the middle:  a diff that
   // calls an unchanged line removed is a diff that lies.
@@ -1395,16 +1416,13 @@ export function compactDiff(
   }
   const removed = before.slice(head, before.length - tail);
   const added = after.slice(head, after.length - tail);
-  if (removed.length === 0 && added.length === 0) return cut ? EVIDENCE_CUT_MARKER : undefined;
+  if (removed.length === 0 && added.length === 0) return undefined;
   const lines: string[] = [];
   for (const line of removed.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`- ${evidenceLine(line)}`);
   for (const line of added.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`+ ${evidenceLine(line)}`);
   const more =
     Math.max(0, removed.length - EVIDENCE_DIFF_LINES) + Math.max(0, added.length - EVIDENCE_DIFF_LINES);
   if (more > 0) lines.push(`… ${more} more line${more === 1 ? "" : "s"}`);
-  // An edit that was cut can still differ past the cut, so the diff says so
-  // rather than showing a change that is not there.
-  if (cut) lines.push(EVIDENCE_CUT_MARKER);
   return lines.join("\n");
 }
 

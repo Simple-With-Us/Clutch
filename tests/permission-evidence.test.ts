@@ -81,16 +81,26 @@ describe("permission evidence", () => {
     expect(permissionEvidenceFromParams({ toolCall: { title: 7 } })).toBeUndefined();
   });
 
-  it("says that an edit was cut rather than showing a change that is not there", () => {
+  it("says that an edit was cut rather than showing a change it cannot stand behind", () => {
     // The engine's input is unbounded and the request is on the message
-    // path, so the diff reads a bounded part of the edit.  A change past
-    // the cut is said, and not shown as nothing.
+    // path, so the diff reads a bounded part of the edit.  What it cannot
+    // align is not shown at all:  a change that is not there is worse than
+    // a change that is not shown.
     const filler = "x".repeat(20_100);
     const oldText = `head\n${filler}\nlast`;
     const newText = `head\n${filler}\nchanged`;
     const evidence = buildPermissionEvidence({ old_string: oldText, new_string: newText });
+    expect(evidence?.diff).toBe("… the edit was cut here; more may have changed");
+  });
+
+  it("never leaves half a character behind when it cuts an edit", () => {
+    // A character that is half of a pair is not a character, and it
+    // misrenders on the card.
+    const filler = "x".repeat(20_099);
+    const oldText = `${filler}\u{1F600}\nlast`;
+    const evidence = buildPermissionEvidence({ old_string: oldText, new_string: `${filler}\nchanged` });
     expect(evidence?.diff).toContain("the edit was cut here");
-    expect(evidence?.diff).not.toContain("- last");
+    expect(evidence?.diff).not.toContain("\uFFFD");
   });
 
   it("shows the change of an edit that is not cut", () => {
