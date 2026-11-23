@@ -165,6 +165,16 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
         self.evidence = evidence
     }
 
+    /// The options the phone offers.
+    ///
+    /// There is no "Always allow" on the phone:  an allow that outlives the
+    /// turn is an allow the owner cannot see the scope of, and the phone is
+    /// the surface where the owner is not at the keyboard.  The Mac keeps
+    /// the option, because the owner is at the keyboard there.
+    public var phoneOptions: [AcpPermissionOption] {
+        options.filter { $0.kind != "allow_always" }
+    }
+
     /// The heading the card shows: what the tool wants, and which tool it is.
     public var headline: String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)

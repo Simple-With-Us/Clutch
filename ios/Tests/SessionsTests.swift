@@ -145,6 +145,34 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertEqual(evidence.lines.first?.text, "/tmp/clutch")
     }
 
+    func testThePhoneDoesNotOfferAnAllowThatOutlivesTheTurn() throws {
+        let request = AcpPermissionRequest(
+            requestId: "perm-10",
+            title: "Run a command",
+            toolName: "bash",
+            options: [
+                AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once"),
+                AcpPermissionOption(optionId: "allow-always", kind: "allow_always", name: "Always allow"),
+                AcpPermissionOption(optionId: "reject-once", kind: "reject_once", name: "Reject"),
+            ]
+        )
+        // The phone offers the allow that ends with the turn and the deny.
+        XCTAssertEqual(request.phoneOptions.map { $0.optionId }, ["allow-once", "reject-once"])
+        // The Mac keeps every option the engine offered.
+        XCTAssertEqual(request.options.count, 3)
+    }
+
+    func testAPhoneRequestWithOnlyAnAlwaysAllowHasNothingToOfferButTheDeny() {
+        let request = AcpPermissionRequest(
+            requestId: "perm-11",
+            title: "Run a command",
+            toolName: "bash",
+            options: [AcpPermissionOption(optionId: "allow-always", kind: "allow_always", name: "Always allow")]
+        )
+        // Nothing the phone can offer, so the card shows the deny alone.
+        XCTAssertTrue(request.phoneOptions.isEmpty)
+    }
+
     func testDecodesThePlanFromTheStream() throws {
         let payload = """
         {"entries":[{"content":"Read the failing test","priority":"high","status":"in_progress"},

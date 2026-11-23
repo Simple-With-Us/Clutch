@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import LocalAuthentication
+#endif
 
 /// The card that answers a permission request.
 ///
@@ -22,6 +25,11 @@ struct PermissionCard: View {
     /// True while the answer is on its way, so a double tap cannot answer
     /// the same request twice.
     @State private var isAnswering = false
+    /// Why the last allow did not go out, when it did not.
+    ///
+    /// The card says it rather than swallowing the tap, because an allow
+    /// that failed silently looks like an allow that was given.
+    @State private var authenticationMessage: String?
     /// How many answers the surface could not deliver.
     ///
     /// A failed answer leaves the request on screen, so the card has to let
@@ -76,7 +84,7 @@ struct PermissionCard: View {
                 }
                 .accessibilityIdentifier("permission-evidence")
             }
-            if request.options.isEmpty {
+            if offeredOptions.isEmpty {
                 // An engine that offered no options can only be cancelled.
                 Button {
                     answer(nil)
@@ -91,7 +99,7 @@ struct PermissionCard: View {
                 .accessibilityIdentifier("permission-option-deny")
             } else {
                 VStack(spacing: ClutchSpacing.base) {
-                    ForEach(request.options) { option in
+                    ForEach(offeredOptions) { option in
                         // An option that lets the engine proceed is the one
                         // primary action; a refusing option reads as a plain
                         // button, never as a second equally-weighted call to
@@ -109,6 +117,12 @@ struct PermissionCard: View {
                         }
                     }
                 }
+            }
+            if let authenticationMessage {
+                Text(authenticationMessage)
+                    .font(ClutchFont.micro)
+                    .foregroundStyle(ClutchColor.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if !canAnswer {
                 Text("Waiting for the turn to start — the answer needs a live session.")
@@ -128,6 +142,7 @@ struct PermissionCard: View {
         // answered is asked again: either way the card is live.
         .onChange(of: request.id) { _, _ in
             isAnswering = false
+            authenticationMessage = nil
         }
         .onChange(of: answerFailures) { _, _ in
             isAnswering = false
@@ -166,9 +181,63 @@ struct PermissionCard: View {
         return name
     }
 
+    /// The options this surface offers.
+    ///
+    /// The phone does not offer an allow that outlives the turn, because an
+    /// allow the owner cannot see the scope of is not an approval.
+    private var offeredOptions: [AcpPermissionOption] {
+        #if os(iOS)
+        return request.phoneOptions
+        #else
+        return request.options
+        #endif
+    }
+
     private func answer(_ optionId: String?) {
         guard !isAnswering else { return }
+        #if os(iOS)
+        // An allow on the phone is the one decision the owner makes away
+        // from the keyboard, so it is the one that needs to know the owner
+        // is there.  A deny is never gated:  the owner can always say no.
+        if let optionId,
+           let option = request.options.first(where: { $0.optionId == optionId }),
+           option.allows {
+            authenticateThenAnswer(optionId)
+            return
+        }
+        #endif
         isAnswering = true
         onAnswer(optionId)
     }
+
+    #if os(iOS)
+    /// Asks for the owner's face or finger before an allow goes out.
+    ///
+    /// A device that cannot check the owner cannot answer for the owner, so
+    /// the allow is refused and the request waits rather than going out
+    /// unchecked.
+    private func authenticateThenAnswer(_ optionId: String) {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            authenticationMessage = error?.localizedDescription
+                ?? "This device cannot check that it is you, so the allow is held."
+            return
+        }
+        context.evaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: "Allow this tool to run"
+        ) { success, error in
+            Task { @MainActor in
+                if success {
+                    isAnswering = true
+                    onAnswer(optionId)
+                } else {
+                    authenticationMessage = error?.localizedDescription
+                        ?? "The allow was not confirmed, so it was not given."
+                }
+            }
+        }
+    }
+    #endif
 }
