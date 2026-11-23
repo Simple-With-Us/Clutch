@@ -615,9 +615,13 @@ struct ThreadSidebarRow: View {
                                 .foregroundStyle(.tertiary)
                         }
                         if let when = session.updated {
+                            // The strong micro role in secondary: the
+                            // last-active time is the row's most-read
+                            // metadata, and tertiary grey is unreadable at
+                            // this size.  Tokens, so it tracks Dynamic Type.
                             Text(when, style: .relative)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
+                                .font(ClutchFont.microStrong)
+                                .foregroundStyle(ClutchColor.textSecondary)
                         }
                     }
                     // The one usage fact cheap enough to show inline on every

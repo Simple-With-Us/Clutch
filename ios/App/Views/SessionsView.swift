@@ -538,6 +538,8 @@ public struct SessionsView: View {
                         }
                     }
                 } label: {
+                    // Primary throughout: the picked engine is the bar's
+                    // subject, not a hint, and grey here reads as disabled.
                     HStack(spacing: 5) {
                         Image(systemName: "cpu")
                             .font(.system(size: 11))
@@ -545,14 +547,13 @@ public struct SessionsView: View {
                             .font(.system(size: 12, weight: .semibold))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.primary)
                 }
                 .accessibilityLabel("Engine: \(engineLabel)")
             } else {
                 Text(engineLabel)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
             // The server picker sits beside the engine picker: both answer
