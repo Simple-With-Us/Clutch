@@ -3550,17 +3550,24 @@ async function main(): Promise<void> {
           log(`chat relay session=${chatId} receiverType=${relay.receiverType}`);
         }
       }
+      // The name a call was given, so an update that carries only a status
+      // does not replace the name with the answer.
+      const toolNames = new Map<string, string>();
       active.stream = (u) => {
         if (u.kind === "tool_call" || u.kind === "tool_call_update") {
           turnDiagnostics.record("tool", { status: u.toolStatus ?? "running" });
+          const id = u.toolCallId ?? "";
+          if (u.kind === "tool_call" && u.text) toolNames.set(id, u.text);
+          const name = u.kind === "tool_call" ? u.text : (toolNames.get(id) ?? u.text);
           sseSend(res, "tool", {
-            id: u.toolCallId ?? "",
-            name: u.text,
+            id,
+            name,
             status: u.toolStatus ?? "running",
             // A tool that runs other tools is the parent of them, and the
             // client shows the children hanging under it.
             ...(u.parentToolCallId ? { parentId: u.parentToolCallId } : {}),
             ...(u.toolInput ? { input: u.toolInput } : {}),
+            ...(u.toolOutput ? { output: u.toolOutput } : {}),
           });
           return;
         }
