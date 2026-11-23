@@ -678,6 +678,8 @@ struct NewThreadSheet: View {
     @State private var model: NewThreadModel
     @State private var showMuseSignIn = false
     @State private var pickedPhoto: PhotosPickerItem?
+    @State private var showAttachMenu = false
+    @State private var showPhotoPicker = false
     @State private var showFilePicker = false
     @State private var isDropTargeted = false
     @State private var isShowingFolderPicker = false
@@ -737,31 +739,17 @@ struct NewThreadSheet: View {
                     attachmentStrip
                 }
                 HStack(alignment: .bottom, spacing: 8) {
-                    PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                    // One attach control: photo, file, and paste share a
+                    // sheet, so the field keeps its width on a phone.
+                    Button {
+                        showAttachMenu = true
+                    } label: {
                         Image(systemName: "paperclip")
                             .font(.title3)
                             .foregroundStyle(Color.secondary)
                     }
                     .disabled(model.isSending)
-                    .accessibilityLabel("Attach Image")
-                    Button {
-                        showFilePicker = true
-                    } label: {
-                        Image(systemName: "folder")
-                            .font(.title3)
-                            .foregroundStyle(Color.secondary)
-                    }
-                    .disabled(model.isSending)
-                    .accessibilityLabel("Attach File")
-                    Button {
-                        Task { await pasteClipboard() }
-                    } label: {
-                        Image(systemName: "doc.on.clipboard")
-                            .font(.title3)
-                            .foregroundStyle(Color.secondary)
-                    }
-                    .disabled(model.isSending)
-                    .accessibilityLabel("Paste Image Or File")
+                    .accessibilityLabel("Attach Image Or File")
                     TextField("Message", text: $model.draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...6)
@@ -818,6 +806,18 @@ struct NewThreadSheet: View {
                         Task { @MainActor in applyOutcome(outcome) }
                     }
                 }
+                .confirmationDialog("Attach", isPresented: $showAttachMenu, titleVisibility: .hidden) {
+                    Button("Choose Photo") { showPhotoPicker = true }
+                    Button("Choose File") { showFilePicker = true }
+                    Button("Paste Image Or File") { Task { await pasteClipboard() } }
+                    Button("Cancel", role: .cancel) {}
+                }
+                .photosPicker(
+                    isPresented: $showPhotoPicker,
+                    selection: $pickedPhoto,
+                    matching: .images,
+                    photoLibrary: .shared()
+                )
                 .onChange(of: pickedPhoto) { _, item in
                     guard let item else { return }
                     pickedPhoto = nil
@@ -1131,6 +1131,7 @@ final class NewThreadModel {
                         break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         errorText = message
+                        ErrorReporting.turnFailed(engine: engine, message: message)
                         pendingPermissions.removeAll()
                     }
                 }
@@ -1139,6 +1140,7 @@ final class NewThreadModel {
                 // so the sheet says nothing about it.
                 if !Task.isCancelled {
                     errorText = error.localizedDescription
+                    ErrorReporting.turnTransportFailed(engine: engine, error: error)
                 }
             }
             isSending = false

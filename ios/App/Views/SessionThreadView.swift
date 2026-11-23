@@ -262,6 +262,7 @@ final class SessionThreadModel {
                         break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         sendError = message
+                        ErrorReporting.turnFailed(engine: engine, message: message)
                         pendingPermissions.removeAll()
                         TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
                         TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
@@ -274,6 +275,7 @@ final class SessionThreadModel {
                 // so the surface says nothing about it.
                 if !Task.isCancelled {
                     sendError = error.localizedDescription
+                    ErrorReporting.turnTransportFailed(engine: engine, error: error)
                 }
                 TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
                 TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
@@ -486,6 +488,10 @@ public struct SessionThreadView: View {
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
     @State private var pickedPhoto: PhotosPickerItem?
+    /// The attach sheet: photo, file, or paste behind one control.
+    @State private var showAttachMenu = false
+    /// The photo library, opened from the attach sheet.
+    @State private var showPhotoPicker = false
     /// The file picker for images and text files outside the photo library.
     @State private var showFilePicker = false
     /// Whether a drag is hovering the composer.
@@ -885,34 +891,18 @@ public struct SessionThreadView: View {
             .disabled(!composerEnabled)
             .clutchTapTarget()
             .accessibilityLabel(dictation.isRecording ? "Stop Dictation" : "Dictate")
-            PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+            // One attach control: photo, file, and paste share a sheet, so
+            // the field keeps its width on a phone.
+            Button {
+                showAttachMenu = true
+            } label: {
                 Image(systemName: "paperclip")
                     .font(.title3)
                     .foregroundStyle(Color.secondary)
-                    .clutchTapTarget()
-            }
-            .disabled(!composerEnabled)
-            .accessibilityLabel("Attach Image")
-            Button {
-                showFilePicker = true
-            } label: {
-                Image(systemName: "folder")
-                    .font(.title3)
-                    .foregroundStyle(Color.secondary)
             }
             .disabled(!composerEnabled)
             .clutchTapTarget()
-            .accessibilityLabel("Attach File")
-            Button {
-                Task { await pasteClipboard() }
-            } label: {
-                Image(systemName: "doc.on.clipboard")
-                    .font(.title3)
-                    .foregroundStyle(Color.secondary)
-            }
-            .disabled(!composerEnabled)
-            .clutchTapTarget()
-            .accessibilityLabel("Paste Image Or File")
+            .accessibilityLabel("Attach Image Or File")
             TextField("Message", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
@@ -994,6 +984,18 @@ public struct SessionThreadView: View {
                 Task { @MainActor in applyOutcome(outcome) }
             }
         }
+        .confirmationDialog("Attach", isPresented: $showAttachMenu, titleVisibility: .hidden) {
+            Button("Choose Photo") { showPhotoPicker = true }
+            Button("Choose File") { showFilePicker = true }
+            Button("Paste Image Or File") { Task { await pasteClipboard() } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $pickedPhoto,
+            matching: .images,
+            photoLibrary: .shared()
+        )
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
             pickedPhoto = nil

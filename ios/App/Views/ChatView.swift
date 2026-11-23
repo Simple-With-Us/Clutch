@@ -741,6 +741,7 @@ public struct ChatView: View {
                         thoughtLine = nil
                         pendingPermissions.removeAll()
                         sendError = message
+                        ErrorReporting.turnFailed(engine: selectedEngine, message: message)
                     }
                 }
                 // The stream is closed, so the composer goes idle here
@@ -793,6 +794,7 @@ public struct ChatView: View {
                 let cancelled = Task.isCancelled
                 if !cancelled {
                     sendError = error.localizedDescription
+                    ErrorReporting.turnTransportFailed(engine: selectedEngine, error: error)
                 }
                 restoreQueuedPrompt()
                 // A stream that failed before any event means the turn never
@@ -1007,6 +1009,8 @@ struct ChatInputBar: View {
     /// Reports a paste, drop, or pick failure; nil clears a stale one.
     var onError: (String?) -> Void = { _ in }
     @State private var pickedPhoto: PhotosPickerItem?
+    @State private var showAttachMenu = false
+    @State private var showPhotoPicker = false
     @State private var showFilePicker = false
     @State private var isDropTargeted = false
 
@@ -1016,25 +1020,15 @@ struct ChatInputBar: View {
                 attachmentStrip
             }
             HStack(spacing: 8) {
-                PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                // One attach control: photo, file, and paste share a sheet,
+                // so the field keeps its width on a phone.
+                Button {
+                    showAttachMenu = true
+                } label: {
                     Image(systemName: "paperclip")
                         .frame(minWidth: 32, minHeight: 44)
                 }
-                .accessibilityLabel("Attach Image")
-                Button {
-                    showFilePicker = true
-                } label: {
-                    Image(systemName: "folder")
-                        .frame(minWidth: 32, minHeight: 44)
-                }
-                .accessibilityLabel("Attach File")
-                Button {
-                    Task { await pasteClipboard() }
-                } label: {
-                    Image(systemName: "doc.on.clipboard")
-                        .frame(minWidth: 32, minHeight: 44)
-                }
-                .accessibilityLabel("Paste Image Or File")
+                .accessibilityLabel("Attach Image Or File")
                 TextField("Message the agent…", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                 Button(action: onVoice) {
@@ -1095,6 +1089,18 @@ struct ChatInputBar: View {
                 Task { @MainActor in applyOutcome(outcome) }
             }
         }
+        .confirmationDialog("Attach", isPresented: $showAttachMenu, titleVisibility: .hidden) {
+            Button("Choose Photo") { showPhotoPicker = true }
+            Button("Choose File") { showFilePicker = true }
+            Button("Paste Image Or File") { Task { await pasteClipboard() } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $pickedPhoto,
+            matching: .images,
+            photoLibrary: .shared()
+        )
         .onChange(of: pickedPhoto) { _, item in
             guard let item else { return }
             pickedPhoto = nil
