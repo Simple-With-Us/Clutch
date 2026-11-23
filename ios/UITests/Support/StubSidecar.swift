@@ -327,6 +327,10 @@ final class StubSidecar {
 
         write(event: "start", data: #"{"sessionId":"stub-chat","engine":"mcode"}"#, to: fd)
         write(event: "message", data: #"{"text":"Fixture running. "}"#, to: fd)
+        // The turn holds at the running moment for a moment before it asks
+        // for permission, so a capture of the running turn shows the turn
+        // running and not the card that comes after it.
+        Thread.sleep(forTimeInterval: 2)
         write(
             event: "tool",
             data: #"{"id":"fixture-tool-1","name":"read_file","status":"running","input":"src/routes/login.ts"}"#,

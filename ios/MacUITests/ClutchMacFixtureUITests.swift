@@ -107,12 +107,14 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the fixture turn did not show its running text")
             return
         }
+        // The capture comes first:  the turn reaches its permission request
+        // moments later, and a running-turn picture that already carries the
+        // card is not a picture of the running turn.
+        harness.snap("mac-fixture-running")
         XCTAssertTrue(
             app.buttons["Stop"].firstMatch.waitForExistence(timeout: 30),
             "the composer did not swap its send button for a stop button while the turn ran"
         )
-        harness.bringToFront()
-        harness.snap("mac-fixture-running")
 
         // Moment two:  the permission card.  The turn is held at its
         // request until the test has looked at it, and nothing here answers
