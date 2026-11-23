@@ -102,6 +102,17 @@ describe("permission evidence", () => {
     expect(evidence?.diff).toContain("the edit was cut here");
   });
 
+  it("never leaves half a character behind when it cuts a line", () => {
+    // A long line with a pair at the cut is cut without splitting the pair.
+    const filler = "x".repeat(158);
+    const evidence = buildPermissionEvidence({
+      old_string: `${filler}\u{1F600}\n`,
+      new_string: `${filler}\u{1F600}\nchanged\n`,
+    });
+    expect(evidence?.diff).not.toContain("\uFFFD");
+    expect([...(evidence?.diff ?? "")].every((character) => character.codePointAt(0)! < 0xd800 || character.codePointAt(0)! > 0xdfff)).toBe(true);
+  });
+
   it("says the line that was added, not the lines it moved", () => {
     // An insertion moves the lines after it, and a diff that reports them
     // as changed says the edit changed lines it did not.

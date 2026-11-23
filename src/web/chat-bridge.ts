@@ -1378,9 +1378,17 @@ function contentLines(text: string | undefined): string[] {
   return (text ?? "").split("\n").filter((line) => line.trim().length > 0);
 }
 
-/** One line of evidence, cut to a length a card can hold. */
+/** One line of evidence, cut to a length a card can hold.
+ *
+ * The cut never leaves half of a character behind:  a character that is
+ * half of a pair is not a character, and it misrenders on the card.
+ */
 function evidenceLine(line: string): string {
-  return line.length > EVIDENCE_LINE_LIMIT ? `${line.slice(0, EVIDENCE_LINE_LIMIT)}…` : line;
+  if (line.length <= EVIDENCE_LINE_LIMIT) return line;
+  let cut = line.slice(0, EVIDENCE_LINE_LIMIT);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
 }
 
 /** A compact diff of what an edit would write.
