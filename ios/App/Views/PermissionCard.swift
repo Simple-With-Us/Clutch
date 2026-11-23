@@ -17,11 +17,26 @@ struct PermissionCard: View {
     /// False while the surface has no session for the answer to travel on;
     /// the buttons are held and the card says why instead of swallowing taps.
     var canAnswer: Bool = true
-    /// Called with the option the owner picked.  A nil id cancels the
-    /// request, which is what a deny amounts to when the engine offered no
-    /// reject option of its own.  Declared last so call sites can pass it
-    /// as a trailing closure.
-    let onAnswer: (String?) -> Void
+    /// How many answers the surface could not deliver.
+    ///
+    /// A failed answer leaves the request on screen, so the card has to let
+    /// the owner try again: this count moves whenever an answer fails, and
+    /// the card offers the request again when it does.
+    var answerFailures: Int = 0
+    /// How many answers the surface refused because the request they named
+    /// was no longer the one on screen.
+    ///
+    /// The surface is the only place that knows which request is on screen
+    /// now, so it drops an answer for a request that has turned over and
+    /// says so here, and the card tells the owner.
+    var staleAnswers: Int = 0
+    /// Called with the answer the owner gave.  The answer names the request
+    /// it belongs to, because the owner confirms on a delay — the phone
+    /// asks for a face — and the request on screen can turn over while
+    /// they do.  A nil option id cancels the request, which is what a deny
+    /// amounts to when the engine offered no reject option of its own.
+    /// Declared last so call sites can pass it as a trailing closure.
+    let onAnswer: (AcpPermissionAnswer) -> Void
     /// True while the answer is on its way, so a double tap cannot answer
     /// the same request twice.
     @State private var isAnswering = false
@@ -30,12 +45,12 @@ struct PermissionCard: View {
     /// The card says it rather than swallowing the tap, because an allow
     /// that failed silently looks like an allow that was given.
     @State private var authenticationMessage: String?
-    /// How many answers the surface could not deliver.
+    /// The notice that an answer was dropped because the request it named
+    /// was no longer the one on screen.
     ///
-    /// A failed answer leaves the request on screen, so the card has to let
-    /// the owner try again: this count moves whenever an answer fails, and
-    /// the card offers the request again when it does.
-    var answerFailures: Int = 0
+    /// It has a row of its own because it is about the request that just
+    /// left the screen, not about the one that replaced it.
+    @State private var staleNotice: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: ClutchSpacing.cozy) {
@@ -118,11 +133,40 @@ struct PermissionCard: View {
                     }
                 }
             }
+            if let staleNotice {
+                Text(staleNotice)
+                    .font(ClutchFont.micro)
+                    .foregroundStyle(ClutchColor.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let authenticationMessage {
                 Text(authenticationMessage)
                     .font(ClutchFont.micro)
                     .foregroundStyle(ClutchColor.warning)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if !withheldOptions.isEmpty {
+                // An option this surface does not offer is named rather than
+                // dropped without a word, so the owner can see that the
+                // option exists and where it lives.
+                VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
+                    Text("Mac Only")
+                        .font(ClutchFont.microStrong)
+                        .foregroundStyle(ClutchColor.textSecondary)
+                    ForEach(withheldOptions) { option in
+                        Text(displayName(option))
+                            .font(ClutchFont.bodyStrong)
+                            .foregroundStyle(ClutchColor.textSecondary)
+                    }
+                    Text(Copy.gap(
+                        "The Mac keeps this option, because the owner is at the keyboard there.",
+                        "It is not offered on the phone."
+                    ))
+                    .font(ClutchFont.micro)
+                    .foregroundStyle(ClutchColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityIdentifier("permission-withheld-options")
             }
             if !canAnswer {
                 Text("Waiting for the turn to start — the answer needs a live session.")
@@ -147,6 +191,13 @@ struct PermissionCard: View {
         .onChange(of: answerFailures) { _, _ in
             isAnswering = false
         }
+        .onChange(of: staleAnswers) { _, _ in
+            // The surface dropped the answer because the request it named
+            // was no longer the one on screen.  The card says so and lets
+            // the owner answer what is on screen now.
+            isAnswering = false
+            staleNotice = AcpPermissionAnswer.staleRequestMessage
+        }
     }
 
     private func optionButton(_ option: AcpPermissionOption) -> some View {
@@ -154,7 +205,7 @@ struct PermissionCard: View {
             answer(option.optionId)
         } label: {
             HStack(spacing: ClutchSpacing.snug) {
-                Image(systemName: option.allows ? "checkmark.circle" : "xmark.circle")
+                Image(systemName: mark(for: option))
                 Text(displayName(option))
             }
             .font(ClutchFont.bodyStrong)
@@ -174,11 +225,32 @@ struct PermissionCard: View {
     /// where the choice outlives this turn.
     private func displayName(_ option: AcpPermissionOption) -> String {
         let name = option.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty { return option.kind }
-        if option.kind == "allow_always", !name.lowercased().contains("always") {
-            return Copy.gap(name, "(Always)")
+        let label = name.isEmpty ? option.kind : name
+        switch option.effect {
+        case .allowAlways:
+            if !label.lowercased().contains("always") {
+                return Copy.gap(label, "(Always)")
+            }
+            return label
+        case .unknown:
+            // A kind this build has never seen is named as it arrived, so
+            // the card does not pretend to know more about it than it does.
+            return Copy.gap(label, "(\(option.kind))")
+        case .allowOnce, .reject:
+            return label
         }
-        return name
+    }
+
+    /// The mark on the button tells the owner what the option does.
+    ///
+    /// A kind this build does not know gets a question rather than a tick
+    /// or a cross, because the build cannot claim to know what it does.
+    private func mark(for option: AcpPermissionOption) -> String {
+        switch option.effect {
+        case .allowOnce, .allowAlways: return "checkmark.circle"
+        case .reject: return "xmark.circle"
+        case .unknown: return "questionmark.circle"
+        }
     }
 
     /// The options this surface offers.
@@ -193,21 +265,43 @@ struct PermissionCard: View {
         #endif
     }
 
+    /// The options this surface does not offer.
+    ///
+    /// The phone leaves the allow that outlives the turn to the Mac, and
+    /// says here that it left it, so the owner is never left wondering
+    /// where an option the engine offered went.
+    private var withheldOptions: [AcpPermissionOption] {
+        let offered = Set(offeredOptions.map(\.optionId))
+        return request.options.filter { !offered.contains($0.optionId) }
+    }
+
     private func answer(_ optionId: String?) {
         guard !isAnswering else { return }
+        // The answer names the request it belongs to.  The owner confirms
+        // on a delay, and the request on screen can turn over while they
+        // do, so the answer carries the id it was given for and the
+        // surface drops it if that request is no longer the one on screen.
+        let requestId = request.id
+        staleNotice = nil
         #if os(iOS)
         // An allow on the phone is the one decision the owner makes away
         // from the keyboard, so it is the one that needs to know the owner
         // is there.  A deny is never gated:  the owner can always say no.
+        // The gate is default-deny:  every option but a known refusal waits
+        // for the owner's face, so a kind this build has never seen cannot
+        // go through unchecked.
         if let optionId,
            let option = request.options.first(where: { $0.optionId == optionId }),
-           option.allows {
-            authenticateThenAnswer(optionId)
+           option.needsOwnerPresence {
+            // The buttons go dead before the prompt opens, so a second tap
+            // cannot ask for a second face while the first one is up.
+            isAnswering = true
+            authenticateThenAnswer(optionId, requestId: requestId)
             return
         }
         #endif
         isAnswering = true
-        onAnswer(optionId)
+        onAnswer(AcpPermissionAnswer(requestId: requestId, optionId: optionId))
     }
 
     #if os(iOS)
@@ -216,10 +310,11 @@ struct PermissionCard: View {
     /// A device that cannot check the owner cannot answer for the owner, so
     /// the allow is refused and the request waits rather than going out
     /// unchecked.
-    private func authenticateThenAnswer(_ optionId: String) {
+    private func authenticateThenAnswer(_ optionId: String, requestId: String) {
         let context = LAContext()
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            isAnswering = false
             authenticationMessage = error?.localizedDescription
                 ?? "This device cannot check that it is you, so the allow is held."
             return
@@ -230,9 +325,13 @@ struct PermissionCard: View {
         ) { success, error in
             Task { @MainActor in
                 if success {
-                    isAnswering = true
-                    onAnswer(optionId)
+                    // The answer carries the request it was given for, so an
+                    // allow for a request that has since turned over is
+                    // dropped by the surface rather than sent to whatever
+                    // took its place.
+                    onAnswer(AcpPermissionAnswer(requestId: requestId, optionId: optionId))
                 } else {
+                    isAnswering = false
                     authenticationMessage = error?.localizedDescription
                         ?? "The allow was not confirmed, so it was not given."
                 }

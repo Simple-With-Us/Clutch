@@ -728,9 +728,10 @@ struct NewThreadSheet: View {
                         request: request,
                         queuedCount: max(model.pendingPermissions.count - 1, 0),
                         canAnswer: model.canAnswerPermissions,
-                        answerFailures: model.permissionAnswerFailures
-                    ) { optionId in
-                        model.answerPermission(optionId)
+                        answerFailures: model.permissionAnswerFailures,
+                        staleAnswers: model.permissionStaleAnswers
+                    ) { answer in
+                        model.answerPermission(answer)
                     }
                 }
                 if !model.plan.isEmpty {
@@ -1047,6 +1048,9 @@ final class NewThreadModel {
     /// The card offers the request again when this count moves, so a failed
     /// answer never leaves the card disabled for good.
     var permissionAnswerFailures = 0
+    /// How many answers were dropped because the request they named was no
+    /// longer the one on screen.
+    var permissionStaleAnswers = 0
 
     /// The request on screen.
     var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
@@ -1061,14 +1065,21 @@ final class NewThreadModel {
     /// Answer the permission request the engine is waiting on.
     ///
     /// The answer goes to the sidecar, which hands it to the engine.
-    func answerPermission(_ optionId: String?) {
+    func answerPermission(_ answer: AcpPermissionAnswer) {
         guard let request = pendingPermissions.first, let chatId else { return }
+        // The request the owner was answering can turn over while they
+        // confirm it.  An answer for a request that is no longer the one on
+        // screen is dropped, so it cannot approve whatever replaced it.
+        guard request.accepts(answer) else {
+            permissionStaleAnswers += 1
+            return
+        }
         Task {
             let answered = await ChatSessionClient.answerPermission(
                 host: host,
                 sessionId: chatId,
-                requestId: request.requestId,
-                optionId: optionId
+                requestId: answer.requestId,
+                optionId: answer.optionId
             )
             if answered {
                 // The card only goes away once the answer is on its way, so a

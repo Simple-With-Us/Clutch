@@ -173,6 +173,61 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(request.phoneOptions.isEmpty)
     }
 
+    func testThePhoneNamesTheOptionItLeavesToTheMac() {
+        let request = AcpPermissionRequest(
+            requestId: "perm-12",
+            title: "Run a command",
+            toolName: "bash",
+            options: [
+                AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once"),
+                AcpPermissionOption(optionId: "allow-always", kind: "allow_always", name: "Always allow"),
+                AcpPermissionOption(optionId: "reject-once", kind: "reject_once", name: "Reject"),
+            ]
+        )
+        // The option the phone leaves is named, so the card can say where it
+        // went instead of dropping it without a word.
+        XCTAssertEqual(request.phoneWithheldOptions.map { $0.optionId }, ["allow-always"])
+        XCTAssertFalse(request.phoneOptions.contains { $0.optionId == "allow-always" })
+    }
+
+    func testAKnownRefusalIsNeverGated() {
+        let reject = AcpPermissionOption(optionId: "reject-once", kind: "reject_once", name: "Reject")
+        let rejectAlways = AcpPermissionOption(optionId: "reject-always", kind: "reject_always", name: "Reject always")
+        // The owner can always say no, so a refusal never asks for a face.
+        XCTAssertTrue(reject.isReject)
+        XCTAssertTrue(rejectAlways.isReject)
+        XCTAssertFalse(reject.needsOwnerPresence)
+        XCTAssertFalse(rejectAlways.needsOwnerPresence)
+        XCTAssertFalse(reject.allows)
+    }
+
+    func testAKindThisBuildDoesNotKnowIsGatedRatherThanAllowed() {
+        let unknown = AcpPermissionOption(optionId: "odd", kind: "allow_sometimes", name: "Maybe")
+        // The gate is default-deny:  a kind this build has never seen is not
+        // a refusal, and it is not an allow the build is willing to wave
+        // through unchecked either.
+        XCTAssertEqual(unknown.effect, .unknown)
+        XCTAssertFalse(unknown.isReject)
+        XCTAssertFalse(unknown.allows)
+        XCTAssertTrue(unknown.needsOwnerPresence)
+    }
+
+    func testAnAnswerForARequestThatTurnedOverIsNotAccepted() {
+        let request = AcpPermissionRequest(
+            requestId: "perm-13",
+            title: "Run a command",
+            toolName: "bash",
+            options: [AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once")]
+        )
+        let mine = AcpPermissionAnswer(requestId: "perm-13", optionId: "allow-once")
+        let theirs = AcpPermissionAnswer(requestId: "perm-14", optionId: "allow-once")
+        // The answer names the request it was given for.
+        XCTAssertTrue(request.accepts(mine))
+        // An answer for a request that has turned over is not accepted, so
+        // it cannot approve whatever replaced it.
+        XCTAssertFalse(request.accepts(theirs))
+    }
+
     func testDecodesThePlanFromTheStream() throws {
         let payload = """
         {"entries":[{"content":"Read the failing test","priority":"high","status":"in_progress"},

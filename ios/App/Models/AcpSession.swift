@@ -55,6 +55,25 @@ public struct AcpPlanEntry: Decodable, Equatable, Sendable, Identifiable {
     public var isDone: Bool { status == "completed" }
 }
 
+/// What a permission option does, as far as this build can tell.
+///
+/// The engine names four kinds and this build knows three of them well:
+/// an allow that ends with the turn, an allow that outlives it, and a
+/// refusal.  A kind this build has never seen is not a refusal, and the
+/// card does not pretend to know more than it does:  the option is shown
+/// with a mark that says so, and it waits for the owner like any other
+/// grant.
+public enum AcpPermissionOptionEffect: Equatable, Sendable {
+    /// The tool runs, and the grant ends with the turn.
+    case allowOnce
+    /// The tool runs, and the grant outlives the turn.
+    case allowAlways
+    /// The tool does not run.
+    case reject
+    /// The engine named a kind this build does not know.
+    case unknown
+}
+
 /// One option the engine offers for a permission request.
 public struct AcpPermissionOption: Decodable, Equatable, Sendable, Identifiable {
     /// The id the sidecar answers with.
@@ -73,9 +92,40 @@ public struct AcpPermissionOption: Decodable, Equatable, Sendable, Identifiable 
         self.name = name
     }
 
-    /// True when the option lets the tool run.
+    /// What the option does, as far as this build can tell.
+    public var effect: AcpPermissionOptionEffect {
+        switch kind {
+        case "allow_once": return .allowOnce
+        case "allow_always": return .allowAlways
+        case "reject_once", "reject_always": return .reject
+        default: return .unknown
+        }
+    }
+
+    /// True when the engine said the option lets the tool run.
+    ///
+    /// A kind this build does not know is not counted here:  the engine
+    /// never said so, and the card shows what it knows rather than what it
+    /// guesses.
     public var allows: Bool {
-        kind == "allow_once" || kind == "allow_always"
+        effect == .allowOnce || effect == .allowAlways
+    }
+
+    /// True when the option refuses the tool.
+    ///
+    /// Only the kinds the protocol names are refusals.  An unfamiliar kind
+    /// is not one, so the gate stays shut on it.
+    public var isReject: Bool {
+        effect == .reject
+    }
+
+    /// True when answering this option needs the owner to be there.
+    ///
+    /// The gate is default-deny:  every option but a known refusal waits
+    /// for the owner's face, so a kind this build has never seen cannot
+    /// go through unchecked.
+    public var needsOwnerPresence: Bool {
+        !isReject
     }
 }
 
@@ -172,7 +222,24 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
     /// the surface where the owner is not at the keyboard.  The Mac keeps
     /// the option, because the owner is at the keyboard there.
     public var phoneOptions: [AcpPermissionOption] {
-        options.filter { $0.kind != "allow_always" }
+        options.filter { $0.effect != .allowAlways }
+    }
+
+    /// The options the phone does not offer, and why the Mac keeps them.
+    ///
+    /// The phone names these instead of dropping them without a word, so
+    /// the owner can see that the Mac has an option the phone does not.
+    public var phoneWithheldOptions: [AcpPermissionOption] {
+        options.filter { $0.effect == .allowAlways }
+    }
+
+    /// True when the answer belongs to this request.
+    ///
+    /// The request can turn over while the owner is confirming it, and an
+    /// answer for a request that is gone must not approve the request that
+    /// took its place.
+    public func accepts(_ answer: AcpPermissionAnswer) -> Bool {
+        answer.requestId == requestId
     }
 
     /// The heading the card shows: what the tool wants, and which tool it is.
@@ -182,6 +249,30 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
         let tool = toolName.trimmingCharacters(in: .whitespacesAndNewlines)
         return tool.isEmpty ? "The engine is asking for permission" : tool
     }
+}
+
+/// One answer the owner gave to one permission request.
+///
+/// The request travels with the answer, because the owner confirms on a
+/// delay — the phone asks for a face — and the request on screen can
+/// turn over while they do.  An answer that names a request which is no
+/// longer the one on screen is dropped rather than sent to whatever
+/// replaced it.
+public struct AcpPermissionAnswer: Equatable, Sendable {
+    /// The request the owner was answering.
+    public var requestId: String
+    /// The option the owner picked, or nil to cancel the request.
+    public var optionId: String?
+
+    public init(requestId: String, optionId: String?) {
+        self.requestId = requestId
+        self.optionId = optionId
+    }
+
+    /// What the owner is told when an answer is dropped because the
+    /// request it belonged to is no longer the one on screen.
+    public static let staleRequestMessage =
+        "That request changed before the answer went out, so it was not sent."
 }
 
 /// Real token accounting for one session, as reported by the engine.
