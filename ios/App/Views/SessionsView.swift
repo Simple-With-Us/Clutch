@@ -79,6 +79,29 @@ final class SessionsModel {
     }
 }
 
+/// Where the home surface's detail pane is pointed.
+enum HomeSelection: Hashable {
+    /// The thread with this session id.
+    case thread(String)
+    /// The always-there agent conversation.
+    case agentChat
+    /// Nothing yet — the detail pane explains itself.
+    case none
+}
+
+/// One working folder's threads in the home list.
+struct HomeFolderGroup: Identifiable {
+    let name: String
+    /// The full path a "New Thread Here" button preselects; empty means the
+    /// sidecar's home-directory default.
+    let path: String
+    let sessions: [AcpSessionInfo]
+
+    /// The path, not the leaf name: two folders can end in the same name,
+    /// and the list must keep them apart.
+    var id: String { path }
+}
+
 public struct SessionsView: View {
     let host: ClutchHost
     /// The engine whose threads this list shows.
@@ -87,9 +110,13 @@ public struct SessionsView: View {
     /// one the owner picked from the menu above the list.
     @State private var engine: String = "mcode"
     @State private var model: SessionsModel
-    @State private var selectedId: String?
+    /// Where the detail pane is pointed: a thread, the agent conversation,
+    /// or nothing.  The agent conversation is a destination now, not a tab.
+    @State private var selection: HomeSelection = .none
     @State private var isStartingThread = false
+    @State private var newThreadFolder: String = ""
     @State private var isShowingFiles = false
+    @State private var isShowingHosts = false
     @State private var searchText = ""
     @State private var pinnedIds: Set<String> = []
     @State private var catalog: EngineCatalog?
@@ -120,7 +147,7 @@ public struct SessionsView: View {
             // reused: otherwise the list keeps showing the previous host's
             // threads.
             model = SessionsModel(host: host)
-            selectedId = nil
+            selection = .none
             pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
             // The list and the catalog are read together: the list must not
             // wait on a host that serves no catalog, and the catalog must not
@@ -166,7 +193,7 @@ public struct SessionsView: View {
                 } actions: {
                     Button("Try Again") { Task { await model.refresh() } }
                 }
-            } else if model.sessions.isEmpty {
+            } else if model.sessions.isEmpty && !hasActivity {
                 // Hold the spinner only for the first load.  A refresh over an
                 // empty list should land on the empty state, not spin forever,
                 // and a refresh with rows on screen keeps those rows visible.
@@ -181,10 +208,10 @@ public struct SessionsView: View {
                     )
                 }
             } else {
-                threadList
+                homeList
             }
         }
-        .navigationTitle("Threads")
+        .navigationTitle("Clutch")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -192,6 +219,14 @@ public struct SessionsView: View {
             engineBar
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isShowingHosts = true
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("Hosts And Settings")
+            }
             ToolbarItem(placement: .primaryAction) {
                 // The files of the folder the open thread works in, the way
                 // the web canvas shows them beside the thread list.
@@ -204,7 +239,8 @@ public struct SessionsView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    selectedId = nil
+                    newThreadFolder = ""
+                    selection = .none
                     isStartingThread = true
                 } label: {
                     Image(systemName: "square.and.pencil")
@@ -221,17 +257,249 @@ public struct SessionsView: View {
             }
         }
         .sheet(isPresented: $isStartingThread) {
-            NewThreadSheet(host: host, engine: engine) { created in
+            NewThreadSheet(host: host, engine: engine, initialFolder: newThreadFolder) { created in
                 isStartingThread = false
                 Task {
                     await model.refresh()
-                    selectedId = created.sessionId
+                    selection = .thread(created.sessionId)
                 }
             }
         }
         .sheet(isPresented: $isShowingFiles) {
             FilesView(host: host, root: filesRoot)
         }
+        .sheet(isPresented: $isShowingHosts) {
+            HostsSheet(store: HostStore.shared)
+        }
+    }
+
+    /// The home list: what needs the owner first, then the folders their
+    /// threads work in.  The tab bar used to split these across two tabs;
+    /// they are one question — "what is going on" — so they are one list.
+    ///
+    /// Selection drives the detail: a compact-width split view only pushes
+    /// its detail column for a selection change, so every row that opens
+    /// something is tagged and the List owns the tap (plain buttons here
+    /// would swallow it and the thread would never open).
+    @ViewBuilder
+    private var homeList: some View {
+        List(selection: Binding(
+            get: { selection == .none ? nil : selection },
+            set: { selection = $0 ?? .none }
+        )) {
+            agentChatRow
+            if !pendingApprovals.isEmpty {
+                Section("Needs You") {
+                    ForEach(pendingApprovals) { approval in
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(ClutchColor.warning)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(approval.title)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .lineLimit(1)
+                                Text("Wants approval")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: 44)
+                        .tag(HomeSelection.thread(approval.sessionId))
+                        .accessibilityLabel("Approval wanted by \(approval.title)")
+                    }
+                }
+            }
+            if !runningTurns.isEmpty {
+                Section("Running") {
+                    ForEach(runningTurns) { run in
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 14, height: 14)
+                            Text(run.title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: 44)
+                        .tag(HomeSelection.thread(run.sessionId))
+                        .accessibilityLabel("Running: \(run.title)")
+                    }
+                }
+            }
+            if !pinnedIds.isEmpty {
+                Section("Pinned") {
+                    ForEach(pinnedSessions) { session in
+                        threadRow(session)
+                    }
+                }
+            }
+            ForEach(folderGroups) { folder in
+                Section(folder.name) {
+                    ForEach(folder.sessions) { session in
+                        threadRow(session)
+                    }
+                    Button {
+                        newThreadFolder = folder.path
+                        selection = .none
+                        isStartingThread = true
+                    } label: {
+                        Label(
+                            folder.path.isEmpty ? "New Thread In Home Directory" : "New Thread In \(folder.name)",
+                            systemImage: "square.and.pencil"
+                        )
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(minHeight: 36)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .searchable(text: $searchText, prompt: "Filter Threads")
+        .refreshable { await model.refresh() }
+        .overlay {
+            if visibleSessions.isEmpty && !hasActivity && !model.sessions.isEmpty {
+                ContentUnavailableView.search(text: searchText)
+            }
+        }
+    }
+
+    /// The agent conversation row: the always-there thread that used to be
+    /// its own tab.  iOS only — the Mac keeps its own Agent Chat tab.  The
+    /// row is selection-tagged like the thread rows above it.
+    @ViewBuilder
+    private var agentChatRow: some View {
+        #if os(iOS)
+        Section {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Agent Chat")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("The always-there conversation")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44)
+            .tag(HomeSelection.agentChat)
+            // The row is one thing to VoiceOver, not three:  the icon, the
+            // title and the subtitle are combined into a single element with
+            // one name, the way a thread row names itself.  The row behaves
+            // as a button because tapping it opens the agent conversation.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Agent Chat, The always-there conversation")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("agent-chat-row")
+        }
+        #endif
+    }
+
+    /// One thread row with its context menu, shared by the pinned and folder
+    /// sections.  The row renders without its own button: the List's
+    /// selection binding is what opens the thread on a phone.
+    private func threadRow(_ session: AcpSessionInfo) -> some View {
+        let isSelected: Bool = {
+            if case .thread(let id) = selection { return id == session.sessionId }
+            return false
+        }()
+        return ThreadSidebarRow(
+            session: session,
+            isSelected: isSelected,
+            isLoading: false,
+            isDisabled: false,
+            onSelect: { _ in },
+            isListSelectable: true
+        )
+        .tag(HomeSelection.thread(session.sessionId))
+        .contextMenu {
+            Button {
+                ThreadPinStore.toggle(session.sessionId, forHost: host.id)
+                pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
+            } label: {
+                Label(
+                    pinnedIds.contains(session.sessionId) ? "Unpin Thread" : "Pin Thread",
+                    systemImage: pinnedIds.contains(session.sessionId) ? "pin.slash" : "pin"
+                )
+            }
+            #if os(iOS)
+            Button {
+                UIPasteboard.general.string = session.sessionId
+            } label: {
+                Label("Copy Session ID", systemImage: "doc.on.doc")
+            }
+            #endif
+        }
+    }
+
+    // MARK: - Home sections
+
+    private var visibleSessions: [AcpSessionInfo] {
+        AcpSessionInfo.filtered(AcpSessionInfo.newestFirst(model.sessions), query: searchText)
+    }
+
+    /// Approvals this device has seen on the host on screen, minus the ones
+    /// already listed as rows, so a thread never appears twice in one list.
+    ///
+    /// The activity store holds every host this device talks to, so it is
+    /// read by host: another host's approval is not this host's business.
+    private var pendingApprovals: [TurnActivityApproval] {
+        let listed = Set(visibleSessions.map(\.sessionId))
+        return TurnActivity.shared.approvals.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
+    }
+
+    /// Runs this device is streaming on the host on screen, minus the ones
+    /// already listed.
+    private var runningTurns: [TurnActivityRun] {
+        let listed = Set(visibleSessions.map(\.sessionId))
+        return TurnActivity.shared.runs.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
+    }
+
+    private var hasActivity: Bool {
+        !pendingApprovals.isEmpty || !runningTurns.isEmpty
+    }
+
+    private var pinnedSessions: [AcpSessionInfo] {
+        visibleSessions.filter { pinnedIds.contains($0.sessionId) }
+    }
+
+    /// One group per working folder, the folder's leaf name as the title,
+    /// sorted by the newest thread each folder holds.  A thread with no
+    /// folder lands in "No Folder" rather than vanishing.
+    private var folderGroups: [HomeFolderGroup] {
+        let pinned = Set(pinnedIds)
+        let unpinned = visibleSessions.filter { !pinned.contains($0.sessionId) }
+        // The bucket key is the whole path: two folders that end in the
+        // same name are two folders, and merging them would file a thread
+        // under a path it does not work in.
+        var buckets: [String: (name: String, sessions: [AcpSessionInfo])] = [:]
+        for session in unpinned {
+            let path = session.cwd ?? ""
+            let name = path.isEmpty ? "" : (path as NSString).lastPathComponent
+            var bucket = buckets[path] ?? (name, [])
+            bucket.sessions.append(session)
+            buckets[path] = bucket
+        }
+        return buckets
+            .map { path, bucket in
+                HomeFolderGroup(
+                    name: bucket.name.isEmpty ? "No Folder" : bucket.name,
+                    path: path,
+                    sessions: AcpSessionInfo.newestFirst(bucket.sessions)
+                )
+            }
+            .sorted { lhs, rhs in
+                let lhsDate = lhs.sessions.compactMap(\.updated).max() ?? .distantPast
+                let rhsDate = rhs.sessions.compactMap(\.updated).max() ?? .distantPast
+                if lhsDate != rhsDate { return lhsDate > rhsDate }
+                return lhs.path < rhs.path
+            }
     }
 
     /// The folder the file tree is rooted at.
@@ -240,8 +508,8 @@ public struct SessionsView: View {
     /// engine is working in.  A thread that names no folder falls back to
     /// the folder a new thread would work in.
     private var filesRoot: String {
-        guard let selectedId,
-              let session = model.sessions.first(where: { $0.sessionId == selectedId }),
+        guard case .thread(let id) = selection,
+              let session = model.sessions.first(where: { $0.sessionId == id }),
               let cwd = session.cwd,
               !cwd.isEmpty else { return "" }
         return cwd
@@ -270,6 +538,8 @@ public struct SessionsView: View {
                         }
                     }
                 } label: {
+                    // Primary throughout: the picked engine is the bar's
+                    // subject, not a hint, and grey here reads as disabled.
                     HStack(spacing: 5) {
                         Image(systemName: "cpu")
                             .font(.system(size: 11))
@@ -277,14 +547,13 @@ public struct SessionsView: View {
                             .font(.system(size: 12, weight: .semibold))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.primary)
                 }
                 .accessibilityLabel("Engine: \(engineLabel)")
             } else {
                 Text(engineLabel)
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
             // The server picker sits beside the engine picker: both answer
@@ -304,7 +573,9 @@ public struct SessionsView: View {
         guard id != engine else { return }
         engine = id
         model.engine = id
-        selectedId = nil
+        // The open thread is dropped, because a thread belongs to the engine
+        // that made it and another engine's transcript is a different thing.
+        selection = .none
         Task {
             async let catalogTask = refreshCatalog(for: id)
             await model.reloadForEngine()
@@ -334,70 +605,31 @@ public struct SessionsView: View {
         catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
     }
 
-    private var visibleSessions: [AcpSessionInfo] {
-        AcpSessionInfo.filtered(AcpSessionInfo.newestFirst(model.sessions), query: searchText)
-    }
-
-    private var threadList: some View {
-        List(selection: $selectedId) {
-            ForEach(AcpSessionInfo.grouped(visibleSessions, pinned: pinnedIds)) { group in
-                Section(group.title) {
-                    ForEach(group.sessions) { session in
-                        ThreadSidebarRow(
-                            session: session,
-                            isSelected: session.sessionId == selectedId,
-                            isLoading: false,
-                            isDisabled: false,
-                            onSelect: { selectedId = $0.sessionId }
-                        )
-                        .tag(session.sessionId)
-                        .contextMenu {
-                            Button {
-                                ThreadPinStore.toggle(session.sessionId, forHost: host.id)
-                                pinnedIds = ThreadPinStore.pinnedIDs(forHost: host.id)
-                            } label: {
-                                Label(
-                                    pinnedIds.contains(session.sessionId) ? "Unpin Thread" : "Pin Thread",
-                                    systemImage: pinnedIds.contains(session.sessionId) ? "pin.slash" : "pin"
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.plain)
-        .searchable(text: $searchText, prompt: "Filter Threads")
-        .refreshable { await model.refresh() }
-        .overlay {
-            if visibleSessions.isEmpty {
-                ContentUnavailableView.search(text: searchText)
-            }
-        }
-    }
-
     // MARK: - Detail
 
     @ViewBuilder
     private var detail: some View {
-        if let session = selectedSession {
+        switch selection {
+        case .thread(let id):
             // Each thread gets its own view, so switching threads starts the
             // new one clean: the transcript, the plan and the pending
-            // questions belong to the thread they were raised in.
+            // questions belong to the thread they were raised in.  A thread
+            // tapped from Needs You or Running that the loaded pages do not
+            // carry still opens: the load call needs only the id.
+            let session = model.sessions.first { $0.sessionId == id } ?? AcpSessionInfo(sessionId: id)
             SessionThreadView(host: host, session: session, engine: engine)
-                .id(session.sessionId)
-        } else {
+                .id(id)
+        case .agentChat:
+            #if os(iOS)
+            ChatView(activeHost: host, store: HostStore.shared)
+            #endif
+        case .none:
             ContentUnavailableView(
-                "Select A Thread",
+                "Pick A Thread",
                 systemImage: "text.bubble",
-                description: Text("Pick a thread from the sidebar, or start a new one.")
+                description: Text("Pick a thread from the list, or start one.")
             )
         }
-    }
-
-    private var selectedSession: AcpSessionInfo? {
-        guard let selectedId else { return nil }
-        return model.sessions.first { $0.sessionId == selectedId }
     }
 
     /// The load error, if the last attempt failed.
@@ -426,22 +658,42 @@ public struct SessionsView: View {
 /// first turn is sent, and the stream hands back the remote session id to
 /// adopt.  This mirrors the Mac rail's New Thread button, which also only
 /// resets local state and lets the first message create the session.
+///
+/// The sheet names the working folder before the first turn: a thread
+/// created without one lands in the sidecar's `$HOME` default, and the ACP
+/// bridge then refuses to resume it anywhere else.
 struct NewThreadSheet: View {
     let host: ClutchHost
     /// The engine the new thread runs on.
     let engine: String
+    /// The folder the first turn works in, preselected by the caller (a
+    /// folder section's "New Thread Here" button) or chosen in the sheet.
+    @State private var workingFolder: String = ""
+    /// The folder the sheet was opened with; folded into `workingFolder` on
+    /// appear so a caller that preselects also sees it as chosen.
+    private let initialFolder: String
     let onCreated: (AcpSessionInfo) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var model: NewThreadModel
     @State private var showMuseSignIn = false
     @State private var pickedPhoto: PhotosPickerItem?
+    @State private var showAttachMenu = false
+    @State private var showPhotoPicker = false
     @State private var showFilePicker = false
     @State private var isDropTargeted = false
+    @State private var isShowingFolderPicker = false
+    @State private var recentFolders: [String] = []
 
-    init(host: ClutchHost, engine: String = "mcode", onCreated: @escaping (AcpSessionInfo) -> Void) {
+    init(
+        host: ClutchHost,
+        engine: String = "mcode",
+        initialFolder: String = "",
+        onCreated: @escaping (AcpSessionInfo) -> Void
+    ) {
         self.host = host
         self.engine = engine
+        self.initialFolder = initialFolder
         self.onCreated = onCreated
         _model = State(initialValue: NewThreadModel(host: host, engine: engine))
     }
@@ -455,10 +707,12 @@ struct NewThreadSheet: View {
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
 
+                workingFolderRow
+
                 if let error = model.errorText {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ClutchColor.danger)
                     if engine == "muse", EngineAuthenticationAttempt.isRequired(error) {
                         Button("Sign In To Muse") { showMuseSignIn = true }
                             .buttonStyle(.borderedProminent)
@@ -468,7 +722,12 @@ struct NewThreadSheet: View {
                 // The engine is blocked on this request until the answer
                 // goes back, so it is held on screen.
                 if let request = model.pendingPermission {
-                    PermissionCard(request: request) { optionId in
+                    PermissionCard(
+                        request: request,
+                        queuedCount: max(model.pendingPermissions.count - 1, 0),
+                        canAnswer: model.canAnswerPermissions,
+                        answerFailures: model.permissionAnswerFailures
+                    ) { optionId in
                         model.answerPermission(optionId)
                     }
                 }
@@ -480,48 +739,47 @@ struct NewThreadSheet: View {
                     attachmentStrip
                 }
                 HStack(alignment: .bottom, spacing: 8) {
-                    PhotosPicker(selection: $pickedPhoto, matching: .images, photoLibrary: .shared()) {
+                    // One attach control: photo, file, and paste share a
+                    // sheet, so the field keeps its width on a phone.
+                    Button {
+                        showAttachMenu = true
+                    } label: {
                         Image(systemName: "paperclip")
                             .font(.title3)
                             .foregroundStyle(Color.secondary)
                     }
                     .disabled(model.isSending)
-                    .accessibilityLabel("Attach Image")
-                    Button {
-                        showFilePicker = true
-                    } label: {
-                        Image(systemName: "folder")
-                            .font(.title3)
-                            .foregroundStyle(Color.secondary)
-                    }
-                    .disabled(model.isSending)
-                    .accessibilityLabel("Attach File")
-                    Button {
-                        Task { await pasteClipboard() }
-                    } label: {
-                        Image(systemName: "doc.on.clipboard")
-                            .font(.title3)
-                            .foregroundStyle(Color.secondary)
-                    }
-                    .disabled(model.isSending)
-                    .accessibilityLabel("Paste Image Or File")
+                    .accessibilityLabel("Attach Image Or File")
                     TextField("Message", text: $model.draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...6)
+                        .autocorrectionDisabled()
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                         .background(Color.clutchSecondaryBackground)
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                         .disabled(model.isSending)
-                    Button {
-                        model.send()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                            .frame(minWidth: 44, minHeight: 44)
+                    if model.isSending {
+                        Button {
+                            model.stop()
+                        } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.title2)
+                                .foregroundStyle(ClutchColor.danger)
+                        }
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityLabel("Stop")
+                    } else {
+                        Button {
+                            model.send()
+                        } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.title2)
+                                .frame(minWidth: 44, minHeight: 44)
+                        }
+                        .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
+                        .accessibilityLabel("Send Message")
                     }
-                    .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isSending)
-                    .accessibilityLabel("Send Message")
                 }
                 // The paste command is macOS-only; on iOS the paste button
                 // reads the clipboard instead.
@@ -548,6 +806,21 @@ struct NewThreadSheet: View {
                         Task { @MainActor in applyOutcome(outcome) }
                     }
                 }
+                .confirmationDialog("Attach", isPresented: $showAttachMenu, titleVisibility: .hidden) {
+                    // The pickers open after the dialog dismisses:
+                    // presenting synchronously from the action can drop the
+                    // second presentation while the dismissal is in flight.
+                    Button("Choose Photo") { DispatchQueue.main.async { showPhotoPicker = true } }
+                    Button("Choose File") { DispatchQueue.main.async { showFilePicker = true } }
+                    Button("Paste Image Or File") { Task { await pasteClipboard() } }
+                    Button("Cancel", role: .cancel) {}
+                }
+                .photosPicker(
+                    isPresented: $showPhotoPicker,
+                    selection: $pickedPhoto,
+                    matching: .images,
+                    photoLibrary: .shared()
+                )
                 .onChange(of: pickedPhoto) { _, item in
                     guard let item else { return }
                     pickedPhoto = nil
@@ -570,6 +843,31 @@ struct NewThreadSheet: View {
             .sheet(isPresented: $showMuseSignIn) {
                 EngineSignInView(host: host) { model.errorText = nil }
             }
+            .sheet(isPresented: $isShowingFolderPicker) {
+                FolderPickerView(host: host, root: "") { chosen in
+                    workingFolder = chosen
+                    RecentFolderStore.add(chosen, forHost: host.id)
+                    recentFolders = RecentFolderStore.recent(forHost: host.id)
+                }
+            }
+            .onAppear {
+                if workingFolder.isEmpty && !initialFolder.isEmpty {
+                    workingFolder = initialFolder
+                }
+                recentFolders = RecentFolderStore.recent(forHost: host.id)
+                // The folder lives on the model, since send() reads it there;
+                // the sheet's own state is just what the menu edits.
+                model.workingFolder = workingFolder
+            }
+            .onChange(of: workingFolder) { _, folder in
+                model.workingFolder = folder
+            }
+            .onDisappear {
+                // A sheet that goes away mid-turn leaves the engine running
+                // with nobody on screen to stop it, so the turn is stopped
+                // with the sheet.
+                model.stop()
+            }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -579,6 +877,50 @@ struct NewThreadSheet: View {
                 }
             }
         }
+    }
+
+    /// The folder the first turn will run in: recents, browse, or the
+    /// caller's preselection.  Empty deliberately means the sidecar's own
+    /// default — the label says that out loud rather than hiding it.
+    @ViewBuilder
+    private var workingFolderRow: some View {
+        Menu {
+            Button {
+                workingFolder = ""
+            } label: {
+                Label("Default (Home Directory)", systemImage: workingFolder.isEmpty ? "checkmark" : "house")
+            }
+            ForEach(recentFolders, id: \.self) { folder in
+                Button {
+                    workingFolder = folder
+                } label: {
+                    Label(folder, systemImage: workingFolder == folder ? "checkmark" : "folder")
+                }
+            }
+            Button {
+                isShowingFolderPicker = true
+            } label: {
+                Label("Browse…", systemImage: "folder.badge.plus")
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text(workingFolder.isEmpty
+                        ? "Working Folder: Default (Home Directory)"
+                        : "Working In \((workingFolder as NSString).lastPathComponent)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.clutchSecondaryBackground, in: Capsule())
+        }
+        .accessibilityLabel("Working Folder")
     }
 
     /// The images waiting on the first turn, each removable.
@@ -674,7 +1016,6 @@ final class NewThreadModel {
     private let host: ClutchHost
     /// The engine the new thread runs on.
     private let engine: String
-    private var chatId: String?
     private var remoteSessionId: String?
     var onCreated: ((AcpSessionInfo) -> Void)?
 
@@ -682,6 +1023,14 @@ final class NewThreadModel {
     var reply: String?
     var errorText: String?
     var isSending = false
+    /// The working folder the first turn runs in; empty means the sidecar's
+    /// `$HOME` default, which the ACP bridge then pins the thread to.
+    var workingFolder: String = ""
+    /// The sidecar chat id the first turn created; the permission answer
+    /// rides on it, so the card is unanswerable until it exists.
+    var chatId: String?
+    var canAnswerPermissions: Bool { chatId != nil }
+    private var sendTask: Task<Void, Never>?
     /// Images attached to the first turn, the way the thread surface
     /// attaches files to a message.
     var attachments: [ChatAttachment] = []
@@ -691,6 +1040,11 @@ final class NewThreadModel {
     /// before the first is answered, so the queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
     var pendingPermissions: [AcpPermissionRequest] = []
+    /// How many answers did not reach the engine.
+    ///
+    /// The card offers the request again when this count moves, so a failed
+    /// answer never leaves the card disabled for good.
+    var permissionAnswerFailures = 0
 
     /// The request on screen.
     var pendingPermission: AcpPermissionRequest? { pendingPermissions.first }
@@ -720,6 +1074,7 @@ final class NewThreadModel {
                 pendingPermissions.removeFirst()
             } else {
                 errorText = "The permission answer did not reach the engine."
+                permissionAnswerFailures += 1
             }
         }
     }
@@ -738,12 +1093,15 @@ final class NewThreadModel {
             sessionId: nil,
             relayReceiverUid: "",
             engine: engine,
+            // The chosen folder rides on the first turn: without it the
+            // sidecar defaults to $HOME and the thread is stuck there.
+            cwd: workingFolder.isEmpty ? nil : workingFolder,
             museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil,
             contextPolicy: engine == "muse" ? MuseContextPreferences.policy(for: host) : nil,
             images: attachments
         )
         attachments = []
-        Task {
+        sendTask = Task {
             var text = ""
             do {
                 for try await event in client.stream(prompt: prompt) {
@@ -759,31 +1117,56 @@ final class NewThreadModel {
                         break
                     case .permission(let request):
                         // The engine is blocked on this request until the
-                        // answer goes back, so it is held on screen.
+                        // answer goes back, so it is held on screen and the
+                        // owner is woken for it.
                         pendingPermissions.append(request)
+                        TurnNotifier.permissionRequest(threadTitle: "New Thread")
                     case .plan(let entries):
                         plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.removeAll()
+                        // The folder worked, so the next New Thread starts here.
+                        RecentFolderStore.add(workingFolder, forHost: host.id)
                     case .usage:
                         break // live usage strip is Mac-only
                     case .contextControls:
                         break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         errorText = message
+                        ErrorReporting.turnFailed(engine: engine, message: message)
                         pendingPermissions.removeAll()
                     }
                 }
             } catch {
-                errorText = error.localizedDescription
+                // A stopped turn is not a failure: the owner asked for it,
+                // so the sheet says nothing about it.
+                if !Task.isCancelled {
+                    errorText = error.localizedDescription
+                    ErrorReporting.turnTransportFailed(engine: engine, error: error)
+                }
             }
             isSending = false
             // Only adopt once the engine has actually minted an id, otherwise
             // the sidebar would select a row that does not exist.
             if let remoteSessionId {
-                onCreated?(AcpSessionInfo(sessionId: remoteSessionId))
+                onCreated?(AcpSessionInfo(sessionId: remoteSessionId, cwd: workingFolder.isEmpty ? nil : workingFolder))
             }
         }
+    }
+
+    /// Cancels the first turn: the sidecar is told first, then the local
+    /// stream is dropped, so a sheet that is dismissed mid-turn stops the
+    /// engine instead of abandoning it.
+    func stop() {
+        guard isSending else { return }
+        if let chatId {
+            let host = self.host
+            Task { await ChatSessionClient.cancel(host: host, sessionId: chatId) }
+        }
+        sendTask?.cancel()
+        sendTask = nil
+        pendingPermissions.removeAll()
+        isSending = false
     }
 }

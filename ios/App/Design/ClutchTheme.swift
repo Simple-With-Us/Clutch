@@ -219,12 +219,21 @@ extension View {
 
     /// Grows an icon-only control to the minimum tap target so the whole
     /// padded box is hit-testable.
+    ///
+    /// The 44 point floor is a finger target.  The Mac app is driven by a
+    /// pointer and its compact rail header is sized for one, so the floor
+    /// applies on iOS and the Mac keeps its native size.  The hit-test shape
+    /// is rectangular on both, so the padding is tappable either way.
     public func clutchTapTarget() -> some View {
+        #if os(iOS)
         frame(
             minWidth: ClutchMetric.minTapTarget,
             minHeight: ClutchMetric.minTapTarget
         )
         .contentShape(Rectangle())
+        #else
+        contentShape(Rectangle())
+        #endif
     }
 }
 
@@ -276,7 +285,34 @@ public enum ClutchStatus {
         switch toolStatus {
         case "completed": self = .success
         case "failed": self = .danger
+        // A call the engine parked or withdrew is not running: show it as
+        // neutral instead of a live spinner, which is what the generic
+        // default used to draw for pending and cancelled calls.
+        case "pending": self = .idle
+        case "cancelled", "canceled": self = .idle
         default: self = .running
+        }
+    }
+
+    /// The word the tool card shows for where a call stands.
+    public var toolStatusLabel: String {
+        switch self {
+        case .success: return "Done"
+        case .danger: return "Failed"
+        case .idle: return "Pending"
+        case .running: return "Running"
+        case .warning: return "Needs Attention"
+        }
+    }
+
+    /// The label for a raw engine status word.  Pending and cancelled both
+    /// draw the idle mark but read their own words: a withdrawn call is not
+    /// queued.  Everything else asks the vocabulary entry its status maps
+    /// to, so the card never carries label rules of its own.
+    public static func toolStatusLabel(forStatus status: String) -> String {
+        switch status {
+        case "cancelled", "canceled": return "Cancelled"
+        default: return ClutchStatus(toolStatus: status).toolStatusLabel
         }
     }
 }

@@ -118,6 +118,12 @@ targets:
     platform: iOS
     sources:
       - path: UITests
+        excludes:
+          - Baselines
+          - ClutchLiveUITests.swift
+      - path: UITests/Baselines
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: Clutch
     settings:
@@ -126,6 +132,50 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         TEST_TARGET_NAME: Clutch
         SWIFT_VERSION: '5.9'
+  ClutchLiveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests/ClutchLiveUITests.swift
+    dependencies:
+      - target: Clutch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.ios.uitests.live
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Clutch
+        SWIFT_VERSION: '5.9'
+  ClutchMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: MacUITests
+        excludes:
+          - Baselines
+      - path: UITests/Support
+      - path: MacUITests/Baselines
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: Clutch macOS
+    entitlements:
+      path: MacUITests/ClutchMacUITests.entitlements
+      properties:
+        # The Xcode-generated macOS UI test runner is app-sandboxed with
+        # network.client only, so the stub sidecar cannot listen on a
+        # socket.  The server entitlement is what lets it answer.
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.server: true
+        com.apple.security.network.client: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.macos.uitests
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Clutch macOS
+        DEVELOPMENT_TEAM: CC8UTF7ATG
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: '5.9'
+        MACOSX_DEPLOYMENT_TARGET: '14.0'
   Clutch macOS:
     type: application
     platform: macOS
@@ -137,7 +187,6 @@ targets:
           # carries a foreign Contents/Resources/Info.plist with iOS-only keys.
           # This target's own plist is Mac/Info.plist (info.path below).
           - Info.plist
-          - SentryTelemetry.swift
           - Services/CometChatManager.swift
           - Views/ChatView.swift
           - Views/AgentMessagesVC.swift
@@ -146,6 +195,9 @@ targets:
       - path: Mac
       - path: Resources
       - path: Assets.xcassets
+    dependencies:
+      - package: Sentry
+        product: Sentry
     settings:
       base:
         PRODUCT_NAME: Clutch
@@ -168,6 +220,7 @@ targets:
         CFBundleName: Clutch
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SENTRY_DSN: $(SENTRY_DSN)
         LSApplicationCategoryType: public.app-category.developer-tools
         ITSAppUsesNonExemptEncryption: false
         NSHighResolutionCapable: true
@@ -204,7 +257,25 @@ schemes:
     build:
       targets:
         Clutch macOS: all
+        ClutchMacUITests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClutchMacUITests
+    archive:
+      config: Release
+  Clutch Live:
+    build:
+      targets:
+        Clutch: all
+        ClutchLiveUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ClutchLiveUITests
     archive:
       config: Release

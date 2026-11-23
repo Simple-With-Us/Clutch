@@ -30,6 +30,15 @@ export interface FileEntry {
 export interface DirectoryListing {
   /** The path of the folder, relative to the root. */
   readonly path: string;
+  /**
+   * The absolute path of the folder on this machine.
+   *
+   * The relative path above is what the listing is addressed by, but a
+   * client that wants the folder to become a thread's working directory
+   * needs the real one: an engine resolves a relative `cwd` against its
+   * own working directory, not against the sidecar's home.
+   */
+  readonly absolute: string;
   /** The folder above it, or null at the root. */
   readonly parent: string | null;
   /** What is in it, folders first and then by name. */
@@ -203,7 +212,7 @@ export async function listDirectory(root: string, relative: string): Promise<Dir
   if (entries.length > LISTING_MAX_ENTRIES) entries.length = LISTING_MAX_ENTRIES;
   const path = relativePath(root, target);
   const parent = path === "" ? null : path.split(sep).slice(0, -1).join(sep);
-  return { path, parent, entries };
+  return { path, absolute: target, parent, entries };
 }
 
 /**

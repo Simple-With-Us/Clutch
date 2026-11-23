@@ -1376,6 +1376,15 @@ export function safeMuseBridgeError(error: unknown): string {
   if (/(?:this\s+)?session (?:is )?(?:already being opened|already open|already in use|open in another process)|session (?:is )?open in another process|this muse thread is open in another process/i.test(message)) {
     return "This Muse thread is open in another process; choose another thread or wait until it is released.";
   }
+  // A rate-limit refusal reads as what it is instead of a bare ACP code.
+  // The copy keeps the "rate limit" words so re-sanitizing it maps to
+  // itself, the way the session-conflict copy does.
+  if (/rate limit|too many requests|quota exceeded|\b429\b/i.test(message)) {
+    if (typeof row.code === "number" && Number.isSafeInteger(row.code)) {
+      return `Muse rate limit reached (ACP code ${row.code}); wait a bit and retry.`;
+    }
+    return "Muse rate limit reached; wait a bit and retry.";
+  }
   if (typeof row.code === "number" && Number.isSafeInteger(row.code)) {
     return `Muse request failed (ACP code ${row.code}).`;
   }

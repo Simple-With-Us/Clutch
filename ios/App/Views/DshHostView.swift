@@ -20,6 +20,7 @@ struct DshHostView: View {
     @State private var resultText: String = ""
     @State private var errorMessage: String?
     @State private var isCalling = false
+    @State private var isConnecting = false
 
     var body: some View {
         NavigationStack {
@@ -33,7 +34,7 @@ struct DshHostView: View {
                     } label: {
                         Text(client.state == .connected ? "Reconnect" : "Connect")
                     }
-                    .disabled(isBusy)
+                    .disabled(isConnecting || isCalling)
                 }
 
                 Section("Call") {
@@ -52,14 +53,14 @@ struct DshHostView: View {
                             Text("Send")
                         }
                     }
-                    .disabled(isBusy || endpoint.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(isCalling || isConnecting || endpoint.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
 
                 if let errorMessage {
                     Section("Error") {
                         Text(errorMessage)
                             .font(.body)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(ClutchColor.danger)
                             .textSelection(.enabled)
                     }
                 }
@@ -94,8 +95,13 @@ struct DshHostView: View {
     // MARK: - Actions
 
     private func connect() async {
+        // One connection at a time: two overlapping attempts would race on
+        // the client's own state and leave stale text on screen.
+        guard !isConnecting, !isCalling else { return }
         errorMessage = nil
         resultText = ""
+        isConnecting = true
+        defer { isConnecting = false }
         await client.connect(to: host)
         if case .failed(let reason) = client.state {
             errorMessage = reason
@@ -104,7 +110,7 @@ struct DshHostView: View {
 
     private func call() async {
         let target = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty else { return }
+        guard !target.isEmpty, !isCalling, !isConnecting else { return }
         isCalling = true
         errorMessage = nil
         defer { isCalling = false }
@@ -117,13 +123,6 @@ struct DshHostView: View {
     }
 
     // MARK: - Presentation
-
-    private var isBusy: Bool {
-        switch client.state {
-        case .connecting, .connected: return false
-        case .disconnected, .failed: return false
-        }
-    }
 
     private var stateLabel: String {
         switch client.state {

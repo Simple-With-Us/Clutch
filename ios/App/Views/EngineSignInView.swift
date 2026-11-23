@@ -23,10 +23,10 @@ struct EngineSignInView: View {
 
             if attempt?.state == "complete" {
                 Label("Muse Is Connected", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(ClutchColor.success)
                 Text("You can now open a thread or submit your message again.")
             } else if let failure {
-                Text(failure).foregroundStyle(.red).textSelection(.enabled)
+                Text(failure).foregroundStyle(ClutchColor.danger).textSelection(.enabled)
                 Button("Try Again") { generation += 1 }
             } else if let attempt, let url = attempt.verificationURL {
                 Text(attempt.message ?? "Open the Muse login page and approve the code.")
