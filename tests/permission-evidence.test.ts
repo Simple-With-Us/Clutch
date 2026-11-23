@@ -90,7 +90,23 @@ describe("permission evidence", () => {
     const oldText = `head\n${filler}\nlast`;
     const newText = `head\n${filler}\nchanged`;
     const evidence = buildPermissionEvidence({ old_string: oldText, new_string: newText });
+    // The change is past the cut, so the diff says the edit was cut and
+    // shows nothing it cannot align.
     expect(evidence?.diff).toBe("… the edit was cut here; more may have changed");
+  });
+
+  it("shows the change inside the part of a cut edit that was read", () => {
+    const filler = "x".repeat(20_100);
+    const evidence = buildPermissionEvidence({ old_string: "foo\n", new_string: `foo\nbar\n${filler}` });
+    expect(evidence?.diff).toContain("+ bar");
+    expect(evidence?.diff).toContain("the edit was cut here");
+  });
+
+  it("says the line that was added, not the lines it moved", () => {
+    // An insertion moves the lines after it, and a diff that reports them
+    // as changed says the edit changed lines it did not.
+    const evidence = buildPermissionEvidence({ old_string: "a\nb\nc\n", new_string: "x\na\nb\nc\n" });
+    expect(evidence?.diff).toBe("+ x");
   });
 
   it("never leaves half a character behind when it cuts an edit", () => {

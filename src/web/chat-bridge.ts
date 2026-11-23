@@ -1393,11 +1393,6 @@ export function compactDiff(
   newText: string | undefined,
   cut = false,
 ): string | undefined {
-  // An edit larger than the evidence reads cannot be aligned honestly:  the
-  // part that was read may hold the same lines at a different place, and a
-  // diff of that says the edit changed lines it did not.  So a cut edit says
-  // that it was cut and shows nothing it cannot stand behind.
-  if (cut) return EVIDENCE_CUT_MARKER;
   const before = contentLines(oldText);
   const after = contentLines(newText);
   if (before.length === 0 && after.length === 0) return undefined;
@@ -1416,13 +1411,39 @@ export function compactDiff(
   }
   const removed = before.slice(head, before.length - tail);
   const added = after.slice(head, after.length - tail);
-  if (removed.length === 0 && added.length === 0) return undefined;
+  // The two sides read the same, so the change may be past the cut:  an
+  // edit that was cut says so even when what was read did not differ.
+  if (removed.length === 0 && added.length === 0) return cut ? EVIDENCE_CUT_MARKER : undefined;
+  // A line that was added or taken away moves the lines around it, so the
+  // diff says the line that was added or taken away rather than the same
+  // lines twice:  a change the owner reads as three changed lines is a
+  // change the owner was not shown.
+  let shownRemoved = removed;
+  let shownAdded = added;
+  if (
+    removed.length > 0 &&
+    added.length === removed.length + 1 &&
+    added.slice(1).every((line, index) => line === removed[index])
+  ) {
+    shownRemoved = [];
+    shownAdded = added.slice(0, 1);
+  } else if (
+    added.length > 0 &&
+    removed.length === added.length + 1 &&
+    removed.slice(1).every((line, index) => line === added[index])
+  ) {
+    shownRemoved = removed.slice(0, 1);
+    shownAdded = [];
+  }
   const lines: string[] = [];
-  for (const line of removed.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`- ${evidenceLine(line)}`);
-  for (const line of added.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`+ ${evidenceLine(line)}`);
+  for (const line of shownRemoved.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`- ${evidenceLine(line)}`);
+  for (const line of shownAdded.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`+ ${evidenceLine(line)}`);
   const more =
-    Math.max(0, removed.length - EVIDENCE_DIFF_LINES) + Math.max(0, added.length - EVIDENCE_DIFF_LINES);
+    Math.max(0, shownRemoved.length - EVIDENCE_DIFF_LINES) + Math.max(0, shownAdded.length - EVIDENCE_DIFF_LINES);
   if (more > 0) lines.push(`… ${more} more line${more === 1 ? "" : "s"}`);
+  // An edit larger than the evidence reads may still change past the cut,
+  // so the diff says so beside the lines it could align.
+  if (cut) lines.push(EVIDENCE_CUT_MARKER);
   return lines.join("\n");
 }
 
