@@ -25,25 +25,33 @@ xcrun xcresulttool export attachments --path "$BUNDLE" --output-path "$WORK" >/d
 }
 
 python3 - "$WORK" "$DEST" <<'PY'
-import json, os, shutil, sys
+import json, os, re, shutil, sys
 
 work, dest = sys.argv[1], sys.argv[2]
 manifest = json.load(open(os.path.join(work, "manifest.json")))
+
+# The result bundle names an attachment "<name>-baseline_<index>_<uuid>",
+# so the index and the identifier come off before the name is used.
+BASELINE = re.compile(r"^(?P<stem>.+)-baseline(?:_\d+_[0-9A-Fa-f-]+)?$")
 
 os.makedirs(dest, exist_ok=True)
 written = []
 for test in manifest:
     for attachment in test.get("attachments", []):
         name = attachment.get("suggestedHumanReadableName", "")
-        if not name.endswith("-baseline"):
+        match = BASELINE.match(name)
+        if not match:
             continue
         source = attachment.get("exportedFileName")
         if not source:
             continue
         # The bundle looks a baseline up as Baselines/<name>.png, so the
         # lifted file has to carry that name.  The "-baseline" suffix is the
-        # attachment's marker, not part of the baseline's name.
-        target = os.path.join(dest, name[: -len("-baseline")] + ".png")
+        # attachment's marker, not part of the baseline's name, and the
+        # result bundle may or may not put an index and an identifier after
+        # it.  A lifted file under any other name is never found, and every
+        # later run stays in SNAPSHOT-GAP.
+        target = os.path.join(dest, match.group("stem") + ".png")
         shutil.copyfile(os.path.join(work, source), target)
         written.append(target)
 

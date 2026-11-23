@@ -378,12 +378,14 @@ public struct SessionsView: View {
                 Image(systemName: "bubble.left.and.bubble.right.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Agent Chat")
                         .font(.system(size: 12, weight: .semibold))
                     Text("The always-there conversation")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
                 Spacer(minLength: 0)
             }

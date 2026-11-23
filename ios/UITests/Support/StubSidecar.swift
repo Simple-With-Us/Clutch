@@ -167,7 +167,7 @@ final class StubSidecar {
         }
         if path.hasPrefix("/clutch/v1/engines") {
             let engines = """
-            {"engines":[{"id":"mcode","label":"MiniMax Code","available":true,
+            {"engines":[{"id":"mcode","label":"Stub Engine","available":true,
             "models":[{"id":"M3.1-Flash","label":"M3.1-Flash","value":"m:minimax:MiniMax-M3.1-Flash:v:"}],
             "effortLevels":["default","high"],"effortConfigId":"thinkingEffort","modelConfigId":"model"}]}
             """

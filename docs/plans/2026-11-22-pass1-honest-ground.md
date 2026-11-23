@@ -874,6 +874,86 @@ for the team, and the Mac targets ask for one by team id.  The macOS UI
 test now signs ad hoc, which is enough for a test bundle and its host on
 the machine that runs it.
 
+**What the review threads found.**  Nine threads were open on the pull
+request when the job went green, and two of them said the same thing from
+opposite ends:  the macOS UI test had never actually run.
+
+- The launch arguments asked AppKit to ignore its saved state, and a
+SwiftUI app that ignores its saved state opens no window at all, so every
+run skipped.  The argument is gone.
+
+- An app started by running its binary never receives the activation event
+that a launch through the Dock gives it, and SwiftUI opens the window of
+its scene when the app is activated.  So the app sat there with no window,
+and the runner looked at an app that plainly had one and found nothing.
+The debug hook now asks LaunchServices to activate the app once it has
+finished launching, which is the only point where that works.
+
+- A test runner that lives on a removable volume makes macOS ask the owner
+for permission to read it before the run can start, and the prompt is
+modal.  The script can point the build output at the local disk, and a
+machine whose checkout is on such a volume sets
+`CLUTCH_MAC_UI_DERIVED_DATA`.
+
+- A state with no snapshot baseline now skips the test loudly instead of
+passing quietly, so the result bundle says which states were never
+compared.
+
+- The script fails the build when the run verified nothing at all, so a
+green job always means the Mac surface was checked.
+
+**What the first macOS run in the open found.**  With the window there at
+last, the two tests ran and both failed on the same thing:  the app was
+showing its pairing card instead of the workspace.  The cause was not the
+app but the channel the pairing travelled on.
+
+- The test wrote the pairing link into a file under its own temporary
+directory, and named that directory with a launch argument.  The argument
+arrived, the file was there, and the app could not read it:  the test
+runner's container is protected, so the read fails with `EPERM` even
+though the file is owned by the owner and mode 0644.  The pairing link
+now travels as a launch argument of its own, which is the one channel
+that reaches the app on every machine.
+
+- The host list lives in preferences, and the preferences of the app on
+this machine belong to the owner.  A test that resets them unpairs the
+owner's own servers.  The run is now given a preferences suite of its
+own, so it never touches the owner's configuration.
+
+- The launch URL the Mac app adopts on a real first run is still read
+from the machine's own home, and a test run leaves it alone:  a run that
+named a pairing link of its own never adopts the machine's launch URL
+and never backfills the machine's chat token.
+
+- The engine the stub serves is named "Stub Engine", which no build of the
+app can produce on its own.  The name in the workspace is therefore the
+evidence that the app read the engine catalog over the sidecar, rather
+than a string the app happened to carry for the "mcode" engine.  Making
+that assertion possible turned up a real difference between the two
+surfaces:  the phone names an engine from the catalog and the Mac named it
+from a list the app carries, so the Mac now reads the name from the
+catalog as well.
+
+**Why the Mac surface has no picture comparison.**  A screenshot of a macOS
+window shows the screen region the window covers, so a window that another
+application is sitting on top of is captured with that other application in
+it.  On a desktop that belongs to somebody else, that is most of the time:
+the recorded baseline had another seat's Clutch window in it, and the
+comparison then measured the desktop rather than the app.  A gate that
+reports that would be worse than no gate, so the Mac test checks what the
+surface must contain instead, which is the workspace, the thread the stub
+served and the engine the stub's catalog named, and keeps the screenshots
+as attachments for a human to look at.  The phone keeps the picture
+comparison, because a phone has nothing else on the screen.
+
+**The channel a recording run asks through.**  The ask to record a
+baseline cannot travel in the environment of the shell that started the
+run:  the test runner does not inherit it, so a recording run would
+compare against a baseline that was never written and every state would
+stay a gap.  The ask now travels in a file, and the file is looked for in
+the checkout and in the scratch directory, because the runner is sandboxed
+and the checkout may sit on a volume it cannot read.
+
 **What the second CI run found.**  The hosted runner's automation session
 does not see the Mac app's window.  Runs 45068164411 and 45073642226 both
 show the app launching, the automation session coming up and the app going
@@ -889,6 +969,16 @@ on every run.  What it can still answer is that the app launched and
 stayed alive.  The open step is a runner that can show the Mac app's
 window:  until then the Mac surface is exercised but not verified, and the
 script's exit 10 is what tells the workflow that the host could not host it.
+
+
+**Where the Mac surface stands.**  On a machine with a desktop session the
+test now runs and passes:  the window comes up, the workspace draws, the
+thread the stub served is listed and the engine the stub's catalog named is
+the name on screen.  On the hosted runner the window is not visible at all,
+so the test skips there and the script says so, and the Mac surface is
+exercised on that runner but not verified.  A runner that can show the
+window is the open piece.
+
 
 ### Task 5: Reduce Motion at every animation site
 
