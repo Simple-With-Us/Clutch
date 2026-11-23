@@ -41,6 +41,13 @@ struct ClutchTestWindowModifier: ViewModifier {
             // window rather than the part of it that fits.
             let size = Self.clampToScreen(size, for: window)
             window.setContentSize(NSSize(width: size.width, height: size.height))
+            // A window that hangs over the edge of the screen shows only the
+            // part of itself that is on screen, and the controls in the part
+            // that hangs over are not in the accessibility tree at all:  the
+            // run then finds a surface that is plainly there with its
+            // controls missing.  So the window is moved back inside the
+            // screen it is on after it has been sized.
+            Self.keepInsideScreen(window)
             // The window can open on a space the machine was not showing, and
             // a window on another space is not in the accessibility tree, so
             // a test would see no window at all.  Ordering it front brings
@@ -63,10 +70,36 @@ extension ClutchTestWindowModifier {
         let screen = window.screen ?? NSScreen.screens.first
         guard let screen else { return size }
         let frame = screen.visibleFrame
+        // The title bar is part of the window's frame and not of its
+        // content, so the content is made short enough for the whole window
+        // to fit on the screen and not only its content area.
+        let chrome = max(0, window.frame.height - (window.contentView?.bounds.height ?? 0))
         return CGSize(
             width: min(size.width, frame.width),
-            height: min(size.height, frame.height)
+            height: min(size.height, max(240, frame.height - chrome))
         )
+    }
+
+    /// Moves a window back inside the screen it is on.
+    ///
+    /// The size is clamped to what the screen can show, but a window also
+    /// has a place on that screen:  a window that hangs over the edge keeps
+    /// only the part of itself that is on screen, and the controls in the
+    /// part that hangs over are not in the accessibility tree at all.  A
+    /// runner's screen is small, and a restored frame is put back where the
+    /// last run left it, so the window has to be moved as well as sized.
+    static func keepInsideScreen(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.screens.first else { return }
+        let visible = screen.visibleFrame
+        let frame = window.frame
+        guard frame.size.width <= visible.width, frame.size.height <= visible.height else { return }
+        let origin = NSPoint(
+            x: min(max(frame.origin.x, visible.minX), visible.maxX - frame.size.width),
+            y: min(max(frame.origin.y, visible.minY), visible.maxY - frame.size.height)
+        )
+        if origin != frame.origin {
+            window.setFrameOrigin(origin)
+        }
     }
 }
 
