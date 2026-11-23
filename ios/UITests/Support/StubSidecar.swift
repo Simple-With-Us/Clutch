@@ -37,6 +37,13 @@ final class StubSidecar {
     /// The text the fixture turn ends with.
     static let fixtureFinalText = "Fixture finished."
 
+    /// The id the engine gave the option that lets the fixture turn run.
+    static let fixtureAllowOnceOptionId = "fixture-allow-once"
+    /// The id the engine gave the option that refuses the request.
+    static let fixtureRejectOptionId = "fixture-reject-once"
+    /// The name the engine gave the tool the fixture turn calls.
+    static let fixtureToolName = "read_file"
+
     private(set) var port: Int = 0
     private var listenFD: Int32 = -1
     private var acceptThread: Thread?
@@ -384,7 +391,7 @@ final class StubSidecar {
         )
         write(
             event: "permission",
-            data: #"{"requestId":"fixture-request-1","title":"Run the login test suite","toolName":"shell","options":[{"optionId":"fixture-allow-once","kind":"allow_once","name":"Allow once"},{"optionId":"fixture-reject-once","kind":"reject_once","name":"Reject"}]}"#,
+            data: #"{"requestId":"fixture-request-1","title":"Run the login test suite","toolName":"shell","options":[{"optionId":"\#(Self.fixtureAllowOnceOptionId)","kind":"allow_once","name":"Allow once"},{"optionId":"\#(Self.fixtureRejectOptionId)","kind":"reject_once","name":"Reject"}]}"#,
             to: fd
         )
 

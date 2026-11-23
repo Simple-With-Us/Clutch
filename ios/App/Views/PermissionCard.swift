@@ -70,6 +70,7 @@ struct PermissionCard: View {
                 .buttonStyle(.bordered)
                 .tint(ClutchColor.danger)
                 .disabled(!canAnswer || isAnswering)
+                .accessibilityIdentifier("permission-option-deny")
             } else {
                 VStack(spacing: ClutchSpacing.base) {
                     ForEach(request.options) { option in
@@ -102,6 +103,9 @@ struct PermissionCard: View {
         .clipShape(RoundedRectangle(cornerRadius: ClutchRadius.bubble))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(Copy.gap("Permission Needed.", request.headline)))
+        // The card is addressable by name, so a surface test can ask for the
+        // card itself and not for a word that happens to be on it.
+        .accessibilityIdentifier("permission-card")
         // A request the owner answered is gone, and one that could not be
         // answered is asked again: either way the card is live.
         .onChange(of: request.id) { _, _ in

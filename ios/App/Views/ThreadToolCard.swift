@@ -37,6 +37,11 @@ public struct ThreadToolCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(accessibilitySummary)
+            // The tool's own name is the call's name, so a surface test can
+            // ask for the exact call the engine made without reading the
+            // whole transcript, and without matching a word against every
+            // button in the window to find it.
+            .accessibilityIdentifier("tool-call-\(name)")
             if expanded {
                 ScrollView {
                     VStack(alignment: .leading, spacing: ClutchSpacing.snug) {

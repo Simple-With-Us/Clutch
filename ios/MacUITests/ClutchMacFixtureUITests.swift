@@ -135,6 +135,14 @@ final class ClutchMacFixtureUITests: XCTestCase {
             (draft.value as? String)?.contains("Run the fixture turn") ?? false,
             "the composer did not take the pasted text"
         )
+        // The composer has the focus now, and a field with the focus puts a
+        // panel of the system's own over the app (an auto-complete list),
+        // and a panel over the app is modal for the automation session:  the
+        // app behind it reads as a background app, and a control in a
+        // background app cannot be clicked at all.  So the panel is closed
+        // here, after the composer took the focus, and not only at the
+        // start of the run.
+        setup.dismissSystemPanel()
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
             setup.snap("mac-fixture-send-missing")
@@ -189,7 +197,8 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // hosted runner with a turn running that evaluation timed out and the
         // test failed at the query instead of at the card.
         XCTAssertTrue(
-            app.buttons["permission-option-fixture-allow-once"].waitForExistence(timeout: 30),
+            app.buttons["permission-option-\(StubSidecar.fixtureAllowOnceOptionId)"]
+                .waitForExistence(timeout: 30),
             "the permission card did not offer the engine's own options"
         )
         setup.bringToFront()
@@ -206,8 +215,13 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the fixture turn did not end in its transcript")
             return
         }
+        // The tool call is asked for by name too, and for the same reason:  a
+        // word match over every button in the window asks the app for every
+        // button's label and value, and that read does not come back on a
+        // loaded runner while a turn is running.
         XCTAssertTrue(
-            carrying(app.buttons, "read_file").waitForExistence(timeout: 30),
+            app.buttons["tool-call-\(StubSidecar.fixtureToolName)"]
+                .waitForExistence(timeout: 30),
             "the fixture turn's tool call did not reach the transcript"
         )
         XCTAssertTrue(
