@@ -467,10 +467,11 @@ final class StubSidecar {
             + "Content-Length: \(payload.count)\r\n"
             + "Connection: close\r\n"
             + "\r\n"
-        var response = Data(header.utf8)
-        response.append(payload)
-        _ = response.withUnsafeBytes { raw in
-            send(fd, raw.baseAddress, response.count, 0)
-        }
+        // The whole answer goes out through the write helper, which loops
+        // until every byte is sent.  A single send can come up short, and a
+        // short answer leaves the peer reading a body shorter than the
+        // length the header announced, so the route hangs instead of
+        // answering.
+        write(header + json, to: fd)
     }
 }
