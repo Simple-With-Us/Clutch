@@ -43,12 +43,25 @@ public final class HostStore {
     static let storageKey = "codes.clutch.hosts.v3"
     static let activeKey = "codes.clutch.activeHost.v3"
 
-    /// Whether the hosts have already been cleared in this process.
+    /// The preferences that have already been cleared in this process.
     ///
-    /// A UI test starts from first run, and the reset happens once:  a
-    /// second store built over the same suite must not clear the hosts
-    /// that were paired after the first one was built.
-    private static var didResetHosts = false
+    /// A UI test starts from first run, and the reset happens once for
+    /// each set of preferences:  a second store over the same suite must
+    /// not clear the hosts that were paired after the first one was
+    /// built, and a store over a different suite must still get its own
+    /// first run.
+    private static var clearedPreferences: Set<String> = []
+
+    /// What a set of preferences is called, for the reset that happens once.
+    ///
+    /// The key is the suite's name and not the identity of the object,
+    /// because two calls to `UserDefaults(suiteName:)` make two objects
+    /// over one suite, and both of them belong to the same first run.
+    private static func resetKey(for defaults: UserDefaults) -> String {
+        if defaults === UserDefaults.standard { return "standard" }
+        if let suite = DebugLaunch.defaultsSuite, !suite.isEmpty { return suite }
+        return "preferences-\(ObjectIdentifier(defaults).hashValue)"
+    }
 
     public private(set) var hosts: [ClutchHost] = []
     public private(set) var activeHostID: UUID?
@@ -69,14 +82,8 @@ public final class HostStore {
         #if DEBUG
         // A UI test starts from first run.  The reset happens here rather
         // than in the app's initializer, so it always runs before the
-        // hosts are loaded and no stale host can survive it.  It happens
-        // once per process:  the Mac app builds more than one store, and a
-        // second store over the same suite would clear the hosts the
-        // first one paired.
-        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts"), !Self.didResetHosts {
-            Self.didResetHosts = true
-            Self.resetPersistedHosts(defaults: resolved)
-        }
+        // hosts are loaded and no stale host can survive it.
+        Self.resetForFirstRun(defaults: resolved)
         #endif
         load()
     }
@@ -151,6 +158,25 @@ public final class HostStore {
 
     #if DEBUG
     /// UI tests start from first run.  Must run before `shared` is created.
+    /// Clears the hosts of a set of preferences once, when a run asked for
+    /// a first-run start.
+    ///
+    /// The reset happens once for each set of preferences:  the Mac app
+    /// builds more than one store, and a second store over the same suite
+    /// would clear the hosts the first one paired, while a store over a
+    /// different suite still has to get its own first run.
+    ///
+    /// It is a function of its own so the behaviour can be tested without
+    /// a launch argument.
+    static func resetForFirstRun(
+        defaults: UserDefaults,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) {
+        guard arguments.contains("-ClutchResetHosts") else { return }
+        guard clearedPreferences.insert(resetKey(for: defaults)).inserted else { return }
+        resetPersistedHosts(defaults: defaults)
+    }
+
     static func resetPersistedHosts(defaults: UserDefaults = .standard) {
         if let data = defaults.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([ClutchHost].self, from: data) {

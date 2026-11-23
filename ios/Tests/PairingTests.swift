@@ -156,6 +156,29 @@ final class HostStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.activeHost?.pendingLaunchToken, "one")
     }
 
+    func testTheFirstRunResetHappensOnceForEachSetOfPreferences() {
+        let preferences = self.freshDefaults()
+        let other = self.freshDefaults()
+        let arguments = ["-ClutchResetHosts"]
+
+        HostStore.resetForFirstRun(defaults: preferences, arguments: arguments)
+        let store = HostStore(defaults: preferences)
+        store.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "one", chatToken: "chat-one"))
+        XCTAssertEqual(store.hosts.count, 1)
+
+        // A second store over the same preferences must not clear the host
+        // the first one paired.
+        HostStore.resetForFirstRun(defaults: preferences, arguments: arguments)
+        XCTAssertEqual(HostStore(defaults: preferences).hosts.count, 1)
+
+        // A different set of preferences gets its own first run.
+        let otherStore = HostStore(defaults: other)
+        otherStore.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "two", chatToken: "chat-two"))
+        XCTAssertEqual(otherStore.hosts.count, 1)
+        HostStore.resetForFirstRun(defaults: other, arguments: arguments)
+        XCTAssertEqual(HostStore(defaults: other).hosts.count, 0)
+    }
+
     func testTheTokensAreNotKeptInThePreferencesFile() {
         // The preferences file rides the device backup, so a token that can
         // drive a coding session stays out of it.
