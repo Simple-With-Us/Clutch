@@ -32,6 +32,13 @@ struct ClutchTestWindowModifier: ViewModifier {
     }
 
     private func apply(size: CGSize) {
+        // A window that is bigger than the screen is clipped by the screen,
+        // and a control that sits in the clipped part cannot be clicked at
+        // all.  A runner's screen can be smaller than the size a test asks
+        // for, so the size is clamped to what the screen can show and the
+        // surface under test is the whole window rather than the part of it
+        // that fits.
+        let size = Self.clampToScreen(size)
         for window in NSApp.windows where window.contentView != nil {
             window.setContentSize(NSSize(width: size.width, height: size.height))
             // The window can open on a space the machine was not showing, and
@@ -41,6 +48,18 @@ struct ClutchTestWindowModifier: ViewModifier {
             window.collectionBehavior.insert(.moveToActiveSpace)
             window.makeKeyAndOrderFront(nil)
         }
+    }
+}
+
+extension ClutchTestWindowModifier {
+    /// The size the screen can show, for a size that is bigger than it.
+    static func clampToScreen(_ size: CGSize) -> CGSize {
+        guard let screen = NSScreen.main else { return size }
+        let frame = screen.visibleFrame
+        return CGSize(
+            width: min(size.width, frame.width),
+            height: min(size.height, frame.height)
+        )
     }
 }
 
