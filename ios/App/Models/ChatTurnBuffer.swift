@@ -12,19 +12,23 @@ struct ChatTurnBuffer: Equatable {
         var parentId: String?
         /// What the tool was asked to do, as the engine wrote it.
         var input: String?
+        /// What the tool answered, as the engine wrote it.
+        var output: String?
 
         init(
             id: String,
             name: String,
             status: String,
             parentId: String? = nil,
-            input: String? = nil
+            input: String? = nil,
+            output: String? = nil
         ) {
             self.id = id
             self.name = name
             self.status = status
             self.parentId = parentId
             self.input = input
+            self.output = output
         }
     }
 
@@ -50,7 +54,8 @@ struct ChatTurnBuffer: Equatable {
         name: String,
         status: String,
         parentId: String? = nil,
-        input: String? = nil
+        input: String? = nil,
+        output: String? = nil
     ) {
         guard !finished else { return }
         if !id.isEmpty {
@@ -59,13 +64,15 @@ struct ChatTurnBuffer: Equatable {
                 if !name.isEmpty { tools[index].name = name }
                 if let parentId { tools[index].parentId = parentId }
                 if let input { tools[index].input = input }
+                if let output { tools[index].output = output }
             } else {
                 tools.append(Tool(
                     id: id,
                     name: name.isEmpty ? "Tool Call" : name,
                     status: status,
                     parentId: parentId,
-                    input: input
+                    input: input,
+                    output: output
                 ))
             }
             return
@@ -78,7 +85,8 @@ struct ChatTurnBuffer: Equatable {
                 name: name.isEmpty ? "Tool Call" : name,
                 status: status,
                 parentId: parentId,
-                input: input
+                input: input,
+                output: output
             ))
             return
         }
