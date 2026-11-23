@@ -212,6 +212,12 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(unknown.needsOwnerPresence)
     }
 
+    func testTheDroppedAnswerNoticeNamesTheRequestTheOwnerAnswered() {
+        // The notice is about the request the owner tapped, not about the
+        // request on screen now, and it says which one it is about.
+        XCTAssertTrue(AcpPermissionAnswer.staleRequestMessage.hasPrefix("The request you answered"))
+    }
+
     func testAnAnswerForARequestThatTurnedOverIsNotAccepted() {
         let request = AcpPermissionRequest(
             requestId: "perm-13",

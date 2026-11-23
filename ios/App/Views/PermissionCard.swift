@@ -48,9 +48,15 @@ struct PermissionCard: View {
     /// The notice that an answer was dropped because the request it named
     /// was no longer the one on screen.
     ///
-    /// It has a row of its own because it is about the request that just
-    /// left the screen, not about the one that replaced it.
+    /// It has a row of its own because it is about the request the owner
+    /// answered, not about the one on screen.
     @State private var staleNotice: String?
+    /// The request the notice was raised on.
+    ///
+    /// The notice belongs to that request and not to the next one, so it
+    /// goes when the next request replaces it and cannot misattribute an
+    /// older drop to whatever is on screen now.
+    @State private var staleNoticeRequestId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: ClutchSpacing.cozy) {
@@ -184,9 +190,18 @@ struct PermissionCard: View {
         .accessibilityIdentifier("permission-card")
         // A request the owner answered is gone, and one that could not be
         // answered is asked again: either way the card is live.
-        .onChange(of: request.id) { _, _ in
+        .onChange(of: request.id) { _, newValue in
             isAnswering = false
             authenticationMessage = nil
+            // The dropped-answer notice belongs to the request it was
+            // raised on.  It stays while that request is on screen, so the
+            // owner still learns that their confirmation did not go out,
+            // and it goes with the next request, so it cannot outlive the
+            // request it is about.
+            if staleNoticeRequestId != newValue {
+                staleNotice = nil
+                staleNoticeRequestId = nil
+            }
         }
         .onChange(of: answerFailures) { _, _ in
             isAnswering = false
@@ -197,6 +212,7 @@ struct PermissionCard: View {
             // the owner answer what is on screen now.
             isAnswering = false
             staleNotice = AcpPermissionAnswer.staleRequestMessage
+            staleNoticeRequestId = request.id
         }
     }
 
@@ -283,6 +299,7 @@ struct PermissionCard: View {
         // surface drops it if that request is no longer the one on screen.
         let requestId = request.id
         staleNotice = nil
+        staleNoticeRequestId = nil
         #if os(iOS)
         // An allow on the phone is the one decision the owner makes away
         // from the keyboard, so it is the one that needs to know the owner

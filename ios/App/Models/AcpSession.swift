@@ -271,8 +271,12 @@ public struct AcpPermissionAnswer: Equatable, Sendable {
 
     /// What the owner is told when an answer is dropped because the
     /// request it belonged to is no longer the one on screen.
+    ///
+    /// It names the request the owner answered rather than the one on
+    /// screen, because the two are not the same and the owner has to know
+    /// which one did not go out.
     public static let staleRequestMessage =
-        "That request changed before the answer went out, so it was not sent."
+        "The request you answered changed before the answer went out, so it was not sent."
 }
 
 /// Real token accounting for one session, as reported by the engine.
