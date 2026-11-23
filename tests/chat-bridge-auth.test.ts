@@ -129,6 +129,16 @@ describe("Muse auth sidecar endpoints", () => {
     expect(mapped).not.toContain("provider diagnostics");
   });
 
+  it("maps provider rate-limit refusals to actionable copy that survives re-sanitization", () => {
+    const mapped = safeMuseBridgeError({
+      code: -32603,
+      message: "too many requests: rate limit exceeded for this model, retry later",
+    });
+    expect(mapped).toBe("Muse rate limit reached (ACP code -32603); wait a bit and retry.");
+    expect(safeMuseBridgeError(Object.assign(new Error(mapped), { code: -32603 }))).toBe(mapped);
+    expect(mapped).not.toContain("retry later");
+  });
+
   it("attaches only allowlisted auth metadata to sanitized ACP errors", () => {
     const raw = {
       code: -32000,
