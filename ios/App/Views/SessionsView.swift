@@ -378,12 +378,19 @@ public struct SessionsView: View {
                 Image(systemName: "bubble.left.and.bubble.right.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Agent Chat")
                         .font(.system(size: 12, weight: .semibold))
+                        // The row is one thing to a VoiceOver user, so the
+                        // title carries the whole name and the subtitle is
+                        // not read a second time on its own.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Agent Chat, The always-there conversation")
                     Text("The always-there conversation")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                 }
                 Spacer(minLength: 0)
             }

@@ -15,7 +15,21 @@ import WebKit
 @MainActor
 @Observable
 public final class HostStore {
-    public static let shared = HostStore()
+    public static let shared = HostStore(defaults: resolveDefaults())
+
+    /// The preferences the app keeps its hosts in.
+    ///
+    /// A UI test names a suite of its own, so a test run never unpairs the
+    /// hosts the owner has on this machine.  Everything else uses the app's
+    /// own suite.
+    static func resolveDefaults() -> UserDefaults {
+        #if DEBUG
+        if let suite = DebugLaunch.defaultsSuite, !suite.isEmpty {
+            return UserDefaults(suiteName: suite) ?? .standard
+        }
+        #endif
+        return .standard
+    }
 
     static let storageKey = "codes.clutch.hosts.v3"
     static let activeKey = "codes.clutch.activeHost.v3"
@@ -27,6 +41,14 @@ public final class HostStore {
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        #if DEBUG
+        // A UI test starts from first run.  The reset happens here rather
+        // than in the app's initializer, so it always runs before the
+        // hosts are loaded and no stale host can survive it.
+        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
+            Self.resetPersistedHosts(defaults: defaults)
+        }
+        #endif
         load()
     }
 
@@ -126,10 +148,30 @@ public final class HostStore {
         }
         attachCredentials()
         #if os(macOS)
+        // A UI test pairs the app with its stub from a launch argument, and
+        // a test must not adopt the machine's own launch URL or the
+        // machine's own token, so both are left alone when the run named a
+        // link of its own.
+        if pairForUITest() {
+            return
+        }
         adoptLocalLaunchURL()
         backfillLocalChatToken()
         #endif
     }
+
+    #if os(macOS)
+    /// Pairs the app with the link a UI test named, and reports whether it
+    /// did.
+    @discardableResult
+    private func pairForUITest() -> Bool {
+        guard let raw = DebugLaunch.pairingLink,
+              case .success(var payload) = PairingLink.parse(raw) else { return false }
+        if payload.chatToken == nil { payload.chatToken = localChatToken() }
+        _ = pair(payload)
+        return true
+    }
+    #endif
 
     #if os(macOS)
     private func localClutchHome() -> String {
@@ -155,8 +197,8 @@ public final class HostStore {
     /// zero-config behavior the Dock shell had. Only fills an empty store;
     /// never touches an existing pairing.
     private func adoptLocalLaunchURL() {
-        guard hosts.isEmpty else { return }
         let path = (localClutchHome() as NSString).appendingPathComponent("web-launch-url")
+        guard hosts.isEmpty else { return }
         guard let raw = try? String(contentsOfFile: path, encoding: .utf8),
               case .success(var payload) = PairingLink.parse(raw) else { return }
         if payload.chatToken == nil { payload.chatToken = localChatToken() }

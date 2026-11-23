@@ -49,16 +49,17 @@ final class ClutchChatTabUITests: XCTestCase {
         app.open(link)
 
         // The home list is the whole surface now; the agent conversation is
-        // its first row rather than a tab.  The row's title is the element to
-        // tap:  the row carries no button of its own, so a query for the
-        // row's accessibility label finds the title twice.
-        let agentChat = app.staticTexts["Agent Chat"].firstMatch
+        // its first row rather than a tab.  The row carries one grouped name
+        // for VoiceOver, and that name is what the test asks for.
+        let agentChat = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Agent Chat"))
+            .firstMatch
         XCTAssertTrue(agentChat.waitForExistence(timeout: 30))
         agentChat.tap()
 
         XCTAssertTrue(app.staticTexts["Chat Unavailable"].waitForExistence(timeout: 30))
         snap("ios-chat-unavailable")
-        assertSnapshot("ios-chat-unavailable", of: app.windows.firstMatch)
+        try assertSnapshot("ios-chat-unavailable", of: app.windows.firstMatch)
     }
 
     func testASidecarThatIsNotThereShowsTheGateCard() throws {
@@ -80,6 +81,6 @@ final class ClutchChatTabUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 30))
         XCTAssertTrue(app.buttons["host-gate-retry"].waitForExistence(timeout: 30))
         snap("ios-cannot-reach")
-        assertSnapshot("ios-cannot-reach", of: app.windows.firstMatch)
+        try assertSnapshot("ios-cannot-reach", of: app.windows.firstMatch)
     }
 }

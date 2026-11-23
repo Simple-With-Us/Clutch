@@ -50,3 +50,59 @@ extension View {
         modifier(ClutchTestWindowModifier())
     }
 }
+
+/// Brings the app forward when a UI test asked for it.
+///
+/// A UI test launches the app by running its binary, and an app started that
+/// way never receives the activation event a launch through the Dock gives
+/// it.  Its windows are created, but they are never ordered in front, so
+/// they sit off screen and the accessibility tree cannot see them at all.
+/// The runner then looks at an app that plainly has a window and finds
+/// nothing.
+///
+/// So the app orders its own windows in once it has finished launching,
+/// which is the only point where that works:  activating before the launch
+/// finishes leaves the app with no window at all.  The windows are ordered
+/// in more than once, because the first ones appear a moment after the
+/// launch finishes and a window that is never ordered in stays where it
+/// was.
+///
+/// This is a debug-only hook.  It does nothing unless the run asked for a
+/// window size, so a shipped build never takes this path.
+final class ClutchTestActivationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard DebugLaunch.windowSize != nil else { return }
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        // SwiftUI opens the window of its scene when the app is activated,
+        // and an app that was started by running its binary never receives
+        // that event.  Asking LaunchServices to open the app is what
+        // delivers it:  LaunchServices finds the running instance and
+        // activates it, and the window comes up.
+        Self.activateThroughLaunchServices()
+        for delay in [0.2, 0.5, 1.0, 2.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                Self.orderWindowsIn()
+            }
+        }
+    }
+
+    /// Asks LaunchServices to activate this app.
+    static func activateThroughLaunchServices() {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(
+            at: Bundle.main.bundleURL,
+            configuration: configuration
+        ) { _, _ in }
+    }
+
+    /// Orders every real window in front, on the space the runner is showing.
+    static func orderWindowsIn() {
+        for window in NSApp.windows where window.contentView != nil {
+            window.collectionBehavior.insert(.moveToActiveSpace)
+            window.makeKeyAndOrderFront(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}

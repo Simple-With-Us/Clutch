@@ -25,22 +25,30 @@ xcrun xcresulttool export attachments --path "$BUNDLE" --output-path "$WORK" >/d
 }
 
 python3 - "$WORK" "$DEST" <<'PY'
-import json, os, shutil, sys
+import json, os, re, shutil, sys
 
 work, dest = sys.argv[1], sys.argv[2]
 manifest = json.load(open(os.path.join(work, "manifest.json")))
+
+# The result bundle names an attachment "<name>-baseline_<index>_<uuid>",
+# so the index and the identifier come off before the name is used.
+BASELINE = re.compile(r"^(?P<stem>.+)-baseline(?:_\d+_[0-9A-Fa-f-]+)?$")
 
 os.makedirs(dest, exist_ok=True)
 written = []
 for test in manifest:
     for attachment in test.get("attachments", []):
         name = attachment.get("suggestedHumanReadableName", "")
-        if not name.endswith("-baseline"):
+        match = BASELINE.match(name)
+        if not match:
             continue
         source = attachment.get("exportedFileName")
         if not source:
             continue
-        target = os.path.join(dest, name)
+        # The test asks for "Baselines/<name>.png", so the extension goes on.
+        # A lifted file under any other name is never found, and every later
+        # run stays in SNAPSHOT-GAP.
+        target = os.path.join(dest, match.group("stem") + ".png")
         shutil.copyfile(os.path.join(work, source), target)
         written.append(target)
 

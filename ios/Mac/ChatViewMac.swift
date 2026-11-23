@@ -311,6 +311,16 @@ public struct ChatView: View {
     /// Clutch can run has them.
     private var isWorkspace: Bool { surface == .workspace }
 
+    /// The name of an engine, from the catalog when the host published one.
+    ///
+    /// The catalog is the source of truth for these names, so a host that
+    /// calls an engine something else is shown as it calls it, which is what
+    /// the phone already does.  The built-in name stands in when there is no
+    /// catalog, or when the catalog does not mention this engine.
+    private func engineName(_ candidate: ChatEngine) -> String {
+        catalog?.descriptor(candidate.sidecarId)?.label ?? candidate.label
+    }
+
     /// The engines this host can run, from its catalog.  A host that answers
     /// with no catalog falls back to the built-in list, so the picker is
     /// never empty.
@@ -1058,20 +1068,20 @@ public struct ChatView: View {
                             selectEngine(candidate)
                         } label: {
                             if candidate == engine {
-                                Label(candidate.label, systemImage: "checkmark")
+                                Label(engineName(candidate), systemImage: "checkmark")
                             } else {
-                                Text(candidate.label)
+                                Text(engineName(candidate))
                             }
                         }
                         .keyboardShortcut(engineShortcut(for: candidate), modifiers: [.command, .option])
                     }
                 } label: {
-                    pickerLabel(entryLabel: engine.label, symbol: "cpu")
+                    pickerLabel(entryLabel: engineName(engine), symbol: "cpu")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel("Engine: \(engine.label)")
+                .accessibilityLabel("Engine: \(engineName(engine))")
                 .help("Choose engine (⌘⌥1–4)")
 
                 Spacer(minLength: 8)
@@ -1492,7 +1502,7 @@ public struct ChatView: View {
                     if isWorkspace {
                         MacChatSetupCard(
                             symbol: "terminal",
-                            title: engine.label,
+                            title: engineName(engine),
                             message: "Resume an existing thread or type below to start one in this Mac's workspace."
                         )
                         Button("Resume Thread…") { showingSessions = true }

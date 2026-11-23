@@ -31,21 +31,76 @@ extension XCTestCase {
     static let snapshotGridWidth = 320
     static let snapshotGridHeight = 240
 
+    /// The file that asks a run to record baselines instead of comparing them.
+    static let recordFlagName = ".clutch-record-snapshots"
+
     /// True when the run records baselines instead of comparing them.
+    ///
+    /// The flag travels in a file at the root of the checkout rather than in
+    /// an environment variable, because the test runner does not inherit the
+    /// environment of the shell that started the run:  a variable exported
+    /// before `xcodebuild` never reaches the bundle that makes the
+    /// comparison, so a recording run would compare against a baseline that
+    /// was never written.  The path of this file is the path of the source
+    /// it was compiled from, so the checkout is always in reach.
     static var recordingSnapshots: Bool {
-        ProcessInfo.processInfo.environment["CLUTCH_RECORD_SNAPSHOTS"] == "1"
+        if ProcessInfo.processInfo.environment["CLUTCH_RECORD_SNAPSHOTS"] == "1" {
+            return true
+        }
+        for candidate in recordFlagCandidates() {
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Every place the flag may be, and every place it was looked for.
+    ///
+    /// The runner is sandboxed and the checkout may sit on a volume the
+    /// runner cannot read, so the flag is looked for in more than one place
+    /// and the scratch directory is always one of them.
+    static func recordFlagCandidates() -> [URL] {
+        var candidates: [URL] = [
+            checkoutRoot().appendingPathComponent(recordFlagName),
+            URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(recordFlagName),
+            URL(fileURLWithPath: "/tmp").appendingPathComponent(recordFlagName),
+        ]
+        if let override = ProcessInfo.processInfo.environment["CLUTCH_RECORD_FLAG_PATH"],
+           !override.isEmpty {
+            candidates.insert(URL(fileURLWithPath: override), at: 0)
+        }
+        return candidates
+    }
+
+    /// The root of the checkout the tests were compiled from.
+    ///
+    /// This file lives at `<checkout>/ios/UITests/Support`, so the root is
+    /// four directories up.
+    static func checkoutRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 
     /// Asserts that `element` matches the baseline named `name`.
     ///
     /// The element is captured rather than the screen, so a baseline does not
     /// depend on the size of the machine that produced it.
+    ///
+    /// A state with no baseline yet is skipped, loudly, rather than passed
+    /// quietly.  A skip says the state was not compared, and the result
+    /// bundle says so; a pass would say the surface was checked when it was
+    /// not, and a visual regression would pass the build.
     func assertSnapshot(
         _ name: String,
         of element: XCUIElement,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) {
+    ) throws {
         guard element.exists else {
             XCTFail(
                 "\(name) could not be captured: the element does not exist",
@@ -70,14 +125,25 @@ extension XCTestCase {
                 return
             }
             // There is no baseline to compare against yet.  That is not a
-            // pass and it is not a failure: it is a gap, and it says so.
-            // A machine with a simulator runtime records the baseline and
-            // the recording is lifted out of the result bundle by
+            // pass and it is not a failure: it is a gap, and it says so by
+            // skipping the test, so the result bundle shows a state that was
+            // never compared instead of a state that was checked.  A machine
+            // with a simulator runtime records the baseline and the recording
+            // is lifted out of the result bundle by
             // scripts/record-snapshot-baselines.sh.
             print(
                 "SNAPSHOT-GAP: no baseline named \(name).png; this state was not compared"
             )
-            return
+            let env = ProcessInfo.processInfo.environment["CLUTCH_RECORD_SNAPSHOTS"] ?? "<unset>"
+            let flags = Self.recordFlagCandidates()
+                .map { "\($0.path)=\(FileManager.default.fileExists(atPath: $0.path))" }
+                .joined(separator: " | ")
+            print("SNAPSHOT-STATE: env=\(env) flags=\(flags) tmp=\(NSTemporaryDirectory())")
+            throw XCTSkip(
+                "no baseline named \(name).png; this state was not compared",
+                file: file,
+                line: line
+            )
         }
 
         guard let baseline = Self.decode(baselineData), let shot = Self.decode(current) else {
@@ -125,7 +191,12 @@ extension XCTestCase {
 
     private static func recordBaseline(_ data: Data, named name: String) {
         let directory: URL
-        if let override = ProcessInfo.processInfo.environment["CLUTCH_SNAPSHOT_DIR"] {
+        // An empty override is not an override:  the script exports the
+        // variable whether or not a directory was asked for, and an empty
+        // path would write the baseline into whatever the runner's working
+        // directory happens to be.
+        if let override = ProcessInfo.processInfo.environment["CLUTCH_SNAPSHOT_DIR"],
+           !override.isEmpty {
             directory = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             let fallback = Bundle(for: XCUIScreen.self)

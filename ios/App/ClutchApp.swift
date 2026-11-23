@@ -5,15 +5,15 @@ struct ClutchApp: App {
     /// Light is the first-run default; System and Dark are available in Settings.
     @AppStorage("clutch_theme_preference") private var themePreference: String = "light"
 
+    #if os(macOS)
+    /// Brings the app forward for a UI test run, and does nothing otherwise.
+    @NSApplicationDelegateAdaptor(ClutchTestActivationDelegate.self) private var testActivation
+    #endif
+
     init() {
         #if os(iOS)
         // Sentry is linked into the iOS targets only; this file is shared with macOS.
         SentryTelemetry.start()
-        #endif
-        #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
-            HostStore.resetPersistedHosts()
-        }
         #endif
     }
 

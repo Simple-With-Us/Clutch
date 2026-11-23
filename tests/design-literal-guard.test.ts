@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -15,10 +16,15 @@ const LITERAL =
 
 type Allowlist = Record<string, Record<string, number>>;
 
+// The allowlist is a config file, and a config file that drifts in shape
+// fails here rather than halfway through a comparison.
+const AllowlistSchema = z.record(z.string(), z.record(z.string(), z.number()));
+
 function allowlist(): Allowlist {
-  return JSON.parse(
+  const raw: unknown = JSON.parse(
     readFileSync(join(ROOT, "tests/design-literal-allowlist.json"), "utf8"),
-  ) as Allowlist;
+  );
+  return AllowlistSchema.parse(raw);
 }
 
 function swiftFiles(): string[] {
@@ -39,8 +45,8 @@ function normalize(literal: string): string {
  * The design literal guard.
  *
  * The token layer exists so the two native apps draw one concept one way, and
- * three files use it while a hundred and seventy three literals are still
- * spread across fourteen others.  Nothing stopped the next one.
+ * the literals that are left are spread across the files the later passes
+ * have not reached yet.  Nothing stopped the next one.
  *
  * The guard is a ratchet rather than a blank slate.  The allowlist names every
  * literal that exists today, so the guard is green now and fails on a new
