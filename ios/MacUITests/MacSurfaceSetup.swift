@@ -193,7 +193,26 @@ final class MacSurfaceSetup {
             try? app.activate()
             Thread.sleep(forTimeInterval: 0.5)
         }
-        return false
+        // The element is there and the app is in front, but the automation
+        // session does not consider the control hittable:  a control that
+        // another element overlaps is not clickable through the element
+        // itself, while a click at its middle still reaches it.  So the
+        // click is made at the point the control is on.
+        guard element.exists else { return false }
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        return true
+    }
+
+    /// Dismisses a system panel that took the front of the session.
+    ///
+    /// A panel the system puts over an app (a text field's auto-complete
+    /// list, the character palette) is modal for the automation session:
+    /// the app behind it reads as a background app, and a control in a
+    /// background app cannot be clicked at all.  Escape is what closes
+    /// those panels, and it does nothing to the app itself.
+    func dismissSystemPanel() {
+        app.typeKey(.escape, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.2)
     }
 
     /// Stops the app and waits for it to go.

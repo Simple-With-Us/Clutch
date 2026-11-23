@@ -54,6 +54,13 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // The app is a window on a desktop that belongs to somebody else, and
         // a control another window covers cannot be tapped at all.
         setup.bringToFront()
+        // A panel the system puts over the app (a text field's auto-complete
+        // list, the character palette) is modal for the automation session:
+        // the app behind it reads as a background app, and a control in a
+        // background app cannot be clicked at all.  One of them is open
+        // over this app on the hosted runner, so it is closed before
+        // anything is tapped.
+        setup.dismissSystemPanel()
 
         // The fixture thread, by the name the stub gives it.  The name is
         // the identity of the fixture, so a capture says which sequence it
@@ -114,16 +121,19 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the Mac composer could not be typed into")
             return
         }
-        draft.typeText("Run the fixture turn")
-        // A slow runner can turn a held key into the system's accent menu,
-        // and that panel is modal:  it takes the click away from the
-        // surface and the app goes behind it.  Escape closes it, and the
-        // draft is read back afterwards, so a menu that swallowed the text
-        // is a failure rather than a silent empty turn.
-        app.typeKey(.escape, modifierFlags: [])
+        // The draft is filled by a paste and not by typing.  Typing holds
+        // keys down, and a slow runner turns a held key into the system's
+        // accent menu:  that panel is modal, it takes the click away from
+        // the surface, and the app goes behind it, so a control that is
+        // there cannot be clicked at all.  A paste sends no held key, and
+        // the draft is read back afterwards, so a draft that did not take
+        // the text is a failure rather than a silent empty turn.
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("Run the fixture turn", forType: .string)
+        app.typeKey("v", modifierFlags: [.command])
         XCTAssertTrue(
             (draft.value as? String)?.contains("Run the fixture turn") ?? false,
-            "the composer did not keep the typed text after the system panel was dismissed"
+            "the composer did not take the pasted text"
         )
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
