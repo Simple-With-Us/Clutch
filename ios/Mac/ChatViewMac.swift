@@ -40,6 +40,23 @@ enum MacSidebarWidth {
     }
 }
 
+/// How much of the transcript the Mac shows, kept between launches.
+///
+/// The reader picks this once and it stays:  a reader who wants the
+/// transcript short should not have to say so again on every thread.
+enum MacTranscriptVerbosity {
+    private static let key = "codes.clutch.mac-transcript-verbosity"
+
+    static var current: MacTranscriptModel.Verbosity {
+        let saved = UserDefaults.standard.string(forKey: key) ?? ""
+        return MacTranscriptModel.Verbosity(rawValue: saved) ?? .normal
+    }
+
+    static func save(_ verbosity: MacTranscriptModel.Verbosity) {
+        UserDefaults.standard.set(verbosity.rawValue, forKey: key)
+    }
+}
+
 /// One bubble from `GET /clutch/v1/thread`.
 struct ThreadBubble: Identifiable, Equatable, Decodable {
     var id: String
@@ -136,6 +153,11 @@ public enum MacSurface: String {
 /// live into a pending bubble before the authoritative refresh.
 public struct ChatView: View {
     @Environment(\.openWindow) private var openWindow
+    /// The commands the menu bar offers.
+    ///
+    /// The window registers what its commands do, so the menu bar can reach
+    /// them whether the thread rail is showing or hidden.
+    @Environment(MacWorkspaceCommands.self) private var commands
     /// Whether the user asked for reduced motion.  The sidebar slide is the
     /// one animation here, and it is skipped when it is on.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -145,20 +167,11 @@ public struct ChatView: View {
         case failed(String)
     }
 
-    struct Row: Identifiable, Equatable {
-        var id: String
-        var text: String
-        var date: Date
-        var fromAgent: Bool
-        var isCard: Bool
-        var isThought: Bool = false
-        /// Non-nil for tool-call rows: `running` / `completed` / `failed`.
-        var toolStatus: String? = nil
-        /// How deep the call sits under the call that made it.
-        var toolDepth: Int = 0
-        /// What the tool was asked to do, as the engine wrote it.
-        var toolInput: String? = nil
-    }
+    /// The rows the transcript shows.
+    ///
+    /// The rows are derived by `MacTranscriptModel`, so this view renders a
+    /// transcript instead of being one.
+    typealias Row = MacTranscriptModel.Row
 
     @State private var phase: Phase = .loading
     @State private var showingMuseSignIn = false
@@ -216,6 +229,14 @@ public struct ChatView: View {
     @State private var steering = false
     @State private var steeringSupported = false
     @State private var followLatest = true
+    @State private var verbosity: MacTranscriptModel.Verbosity = MacTranscriptVerbosity.current
+    /// Whether the panel on the right is showing.
+    @State private var showingInspector = false
+    /// The turns the reader folded away.
+    ///
+    /// The turns are held by their stable identity, so a turn the reader
+    /// folded stays folded when the thread grows and the turn numbers move.
+    @State private var collapsedTurns: Set<String> = []
 
     private struct QueuedMessage: Identifiable {
         let id = UUID()
@@ -422,62 +443,145 @@ public struct ChatView: View {
         return "Default Model"
     }
 
-    private var rows: [Row] {
-        if isWorkspace { return codeRows }
-        let promptRows = localPrompts.map {
-            Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
+    /// The transcript, derived from the state this view holds.
+    ///
+    /// The derivation lives in `MacTranscriptModel`, so this view renders a
+    /// transcript instead of being one, and the turn that is running is
+    /// part of that transcript rather than a pane beside it.
+    private var transcript: MacTranscriptModel {
+        var model = MacTranscriptModel()
+        model.workspace = isWorkspace
+        model.verbosity = verbosity
+        model.prompts = localPrompts.map {
+            MacTranscriptModel.Prompt(id: $0.id.uuidString, text: $0.text, at: $0.at)
         }
-        let bubbleRows = agentBubbles.map {
-            Row(id: $0.id, text: $0.text, date: $0.date, fromAgent: $0.senderUid != deviceUid, isCard: $0.kind == "card")
-        }
-        let toolRows = liveTools.map { tool in
-            Row(
-                id: "live-\(tool.id)",
-                text: tool.name,
-                date: Date(),
-                fromAgent: true,
-                isCard: false,
-                toolStatus: tool.status,
-                toolDepth: ToolCallDepth.depth(of: tool.id, parents: toolParents),
-                toolInput: tool.input
+        model.messages = agentBubbles.map {
+            MacTranscriptModel.Message(
+                id: $0.id,
+                text: $0.text,
+                date: $0.date,
+                fromAgent: $0.senderUid != deviceUid,
+                isCard: $0.kind == "card"
             )
         }
-        return (promptRows + bubbleRows).sorted { $0.date < $1.date } + toolRows
+        model.history = codeLoaded.enumerated().map { index, entry in
+            MacTranscriptModel.HistoryEntry(
+                id: MacTranscriptModel.stableIdentifier([
+                    entry.sessionId,
+                    entry.toolCallId ?? "entry",
+                    String(index),
+                    entry.at.map { String($0) } ?? "",
+                ]),
+                text: entry.text,
+                at: entry.at.map { Date(timeIntervalSince1970: $0 / 1000) },
+                fromAgent: entry.kind != "user_message_chunk",
+                isThought: entry.kind == "agent_thought_chunk",
+                isTool: entry.isTool,
+                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil,
+                toolDepth: entry.isTool ? ToolCallDepth.depth(of: entry.toolCallId, parents: toolParents) : 0,
+                toolInput: entry.toolInput,
+                toolOutput: entry.toolOutput
+            )
+        }
+        model.pending = codePending.map {
+            MacTranscriptModel.Prompt(id: $0.id.uuidString, text: $0.text, at: $0.at)
+        }
+        model.tools = liveTools.map { tool in
+            MacTranscriptModel.ToolCall(
+                id: tool.id,
+                name: tool.name,
+                status: tool.status,
+                depth: ToolCallDepth.depth(of: tool.id, parents: toolParents),
+                input: tool.input,
+                output: tool.output
+            )
+        }
+        model.live = MacTranscriptModel.Live(
+            text: streamingText,
+            thought: thoughtLine,
+            failure: sendError,
+            running: sending
+        )
+        return model
     }
 
-    /// MiniMax Code rows keep server order (replayed history is already
-    /// chronological); in-flight prompts and the live bubble append after.
-    private var codeRows: [Row] {
-        let parents = toolParents
-        var out = codeLoaded.enumerated().map { index, entry in
-            Row(
-                id: "code-\(index)-\(entry.text.hashValue)",
-                text: entry.text,
-                date: Date(),
-                fromAgent: entry.kind != "user_message_chunk",
-                isCard: false,
-                isThought: entry.kind == "agent_thought_chunk",
-                toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil,
-                toolDepth: entry.isTool ? ToolCallDepth.depth(of: entry.toolCallId, parents: parents) : 0,
-                toolInput: entry.toolInput
-            )
-        }
-        out += codePending.map {
-            Row(id: $0.id.uuidString, text: $0.text, date: $0.at, fromAgent: false, isCard: false)
-        }
-        out += liveTools.map { tool in
-            Row(
-                id: "live-\(tool.id)",
-                text: tool.name,
-                date: Date(),
-                fromAgent: true,
-                isCard: false,
-                toolStatus: tool.status,
-                toolDepth: ToolCallDepth.depth(of: tool.id, parents: parents),
-                toolInput: tool.input
-            )
+    /// The rows the transcript shows.
+    private var rows: [Row] { transcript.rows }
+
+    /// The transcript as the ledger shows it:  a header for each turn, then
+    /// the rows of that turn.
+    ///
+    /// The header comes before the first row of the turn, so a reader sees
+    /// where a turn began before they read what it did.
+    private var ledger: [MacLedgerItem] {
+        var out: [MacLedgerItem] = []
+        var seen: Set<Int> = []
+        for row in rows {
+            let number = row.turn ?? 1
+            let header = transcript.turns.first { $0.number == number }
+            if !seen.contains(number) {
+                seen.insert(number)
+                if let header { out.append(.header(header)) }
+            }
+            // A folded turn keeps its header and loses its rows.
+            if let header, collapsedTurns.contains(header.id) { continue }
+            out.append(.row(row))
         }
         return out
+    }
+
+    /// Folds a turn away, or opens it again.
+    private func toggleTurn(_ id: String) {
+        if collapsedTurns.contains(id) {
+            collapsedTurns.remove(id)
+        } else {
+            collapsedTurns.insert(id)
+        }
+    }
+
+    /// The name of the open thread, for the titlebar.
+    ///
+    /// A window called Workspace says nothing about what is in it, and a
+    /// thread has a name the engine gave it.
+    private var threadName: String {
+        if let preview = previewSession, let title = preview.title, !title.isEmpty {
+            return title
+        }
+        if let remoteId = codeRemoteId,
+           let session = sidebarSessions.first(where: { $0.sessionId == remoteId }) {
+            let title = session.displayTitle
+            if !title.isEmpty { return title }
+        }
+        return isWorkspace ? "Workspace" : "Agent Chat"
+    }
+
+    /// Tells the menu bar what this window's commands do.
+    ///
+    /// A menu item cannot reach the state of a view it does not own, so the
+    /// window says here what New Thread and Refresh Thread mean while it is
+    /// in front.
+    private func registerCommands() {
+        commands.newThread = {
+            if isWorkspace {
+                startMcodeThread()
+            } else {
+                draft = ""
+            }
+        }
+        commands.refresh = {
+            Task { await refreshThread() }
+        }
+        commands.newWindow = {
+            openNewThreadWindow()
+        }
+        commands.threadName = threadName
+    }
+
+    /// Where the focused match sits, in the words a reader uses.
+    private var findLocation: String? {
+        guard let focus = findFocusId, let location = transcript.location(of: focus) else { return nil }
+        if let tool = location.tool { return "Turn \(location.turn), tool \(tool)" }
+        return "Turn \(location.turn)"
     }
 
     /// Which call each tool call ran under.
@@ -575,7 +679,17 @@ public struct ChatView: View {
                         .frame(minWidth: 480)
                 }
             }
-            .navigationTitle(isWorkspace ? "Workspace" : "Agent Chat")
+            .navigationTitle(threadName)
+            .inspector(isPresented: $showingInspector) {
+                MacInspector(
+                    plan: plan,
+                    usage: activeUsage,
+                    contextLabel: currentContextOccupancyLabel,
+                    pendingApproval: pendingPermission,
+                    onAnswer: { answerPermission($0) }
+                )
+                .inspectorColumnWidth(min: 220, ideal: 260, max: 340)
+            }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
@@ -604,8 +718,21 @@ public struct ChatView: View {
                         .accessibilityLabel(showingSidebar ? "Hide Threads" : "Show Threads")
                         .help(showingSidebar ? "Hide threads" : "Show threads")
                     }
+                    Button {
+                        showingInspector.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.trailing")
+                    }
+                    .accessibilityLabel(showingInspector ? "Hide Inspector" : "Show Inspector")
+                    .help(showingInspector ? "Hide inspector" : "Show inspector")
                 }
             }
+        }
+        .onAppear {
+            registerCommands()
+        }
+        .onChange(of: threadName) { _, name in
+            commands.threadName = name
         }
         .task(id: activeHost?.pairingKey) {
             await prepare()
@@ -690,15 +817,16 @@ public struct ChatView: View {
                 findBar
             }
             Divider()
-            if hasActivity && !isPreviewingThread {
-                MacWorkspacePanels(responseText: streamingText) {
-                    threadSurface
-                } activity: {
-                    activitySurface
-                }
-            } else {
-                threadSurface
+            // The turn that is running is part of the transcript.  It used
+            // to stream into a pane that appeared mid-turn and then jumped
+            // into the transcript when the turn ended, so the reader had to
+            // follow the answer across the window to read it.
+            if !plan.isEmpty && !isPreviewingThread {
+                PlanPanel(entries: plan)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
             }
+            threadSurface
             if let request = pendingPermission, !isPreviewingThread {
                 PermissionCard(request: request) { optionId in
                     answerPermission(optionId)
@@ -759,47 +887,8 @@ public struct ChatView: View {
         }
     }
 
-    private var hasActivity: Bool {
-        sending || !plan.isEmpty || sendError != nil
-    }
-
     private var isPreviewingThread: Bool {
         previewSession != nil || previewLoadingId != nil || previewError != nil
-    }
-
-    private var activitySurface: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if sending {
-                if !streamingText.isEmpty {
-                    liveBubble
-                } else {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Working…")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 12)
-                }
-            }
-            if let thought = thoughtLine, !thought.isEmpty {
-                thoughtRow(thought)
-            }
-            Color.clear.frame(height: 1).id("current-response-end")
-            if let error = sendError {
-                Text(error)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12)
-            }
-            if !plan.isEmpty {
-                PlanPanel(entries: plan)
-                    .padding(.horizontal, 12)
-            }
-        }
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var queuedMessagesPanel: some View {
@@ -858,6 +947,11 @@ public struct ChatView: View {
             Text(findText.isEmpty ? "" : "\(findMatches.count) match\(findMatches.count == 1 ? "" : "es")")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+            if let findLocation {
+                Text(findLocation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
             Button {
                 stepFind(forward: false)
             } label: {
@@ -1094,6 +1188,28 @@ public struct ChatView: View {
                     .accessibilityLabel("Refresh Threads")
                     .help("Refresh Threads")
                 }
+
+                Menu {
+                    ForEach(MacTranscriptModel.Verbosity.allCases) { mode in
+                        Button {
+                            verbosity = mode
+                            MacTranscriptVerbosity.save(mode)
+                        } label: {
+                            if mode == verbosity {
+                                Label(mode.title, systemImage: "checkmark")
+                            } else {
+                                Text(mode.title)
+                            }
+                        }
+                    }
+                } label: {
+                    pickerLabel(entryLabel: verbosity.title, symbol: "text.alignleft")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("Transcript detail: \(verbosity.title)")
+                .help(verbosity.detail)
 
                 if let host = activeHost, let store {
                     HostSwitcher(host: host, store: store, compact: true)
@@ -1509,9 +1625,18 @@ public struct ChatView: View {
                     ScrollViewReader { proxy in
                         ScrollView {
                             LazyVStack(spacing: 10) {
-                                ForEach(rows) { row in
-                                    MacChatRow(row: row, isMatch: showFind && !findText.isEmpty && row.text.lowercased().contains(findText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()))
-                                        .id(row.id)
+                                ForEach(ledger) { item in
+                                    switch item {
+                                    case .header(let turn):
+                                        MacTurnHeader(
+                                            turn: turn,
+                                            isCollapsed: collapsedTurns.contains(turn.id),
+                                            onToggle: { toggleTurn(turn.id) }
+                                        )
+                                    case .row(let row):
+                                        MacChatRow(row: row, isMatch: showFind && !findText.isEmpty && row.text.lowercased().contains(findText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()))
+                                            .id(row.id)
+                                    }
                                 }
                             }
                             .padding(.horizontal, 12)
@@ -1544,25 +1669,6 @@ public struct ChatView: View {
                 }
             }
         }
-    }
-
-    private var liveBubble: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(streamingText)
-                    .font(.system(size: 13))
-                    .textSelection(.enabled)
-                ProgressView()
-                    .scaleEffect(0.6)
-                    .frame(width: 16, height: 8, alignment: .leading)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 12))
-            Spacer(minLength: 48)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
     }
 
     private func previewSurface(_ preview: SessionsClient.PreviewSession) -> some View {
@@ -1610,11 +1716,11 @@ public struct ChatView: View {
                         if entry.isVisible || entry.isTool {
                             MacChatRow(row: Row(
                                 id: "preview-\(index)",
+                                kind: entry.isTool ? .tool : .message,
                                 text: entry.text,
-                                date: Date(),
+                                date: entry.at.map { Date(timeIntervalSince1970: $0 / 1000) },
                                 fromAgent: !entry.isUser,
                                 isCard: false,
-                                isThought: false,
                                 toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil
                             ))
                         }
@@ -1657,20 +1763,6 @@ public struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(Color.clutchSecondaryBackground.opacity(0.7))
-    }
-
-    private func thoughtRow(_ thought: String) -> some View {
-        HStack(spacing: 6) {
-            ProgressView()
-                .scaleEffect(0.7)
-            Text(thought)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-                .lineLimit(2)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
     }
 
     // MARK: - Flow
@@ -2467,13 +2559,15 @@ public struct ChatView: View {
                             if !call.name.isEmpty { codeLoaded[index].text = call.name }
                             if let parent = call.parentId { codeLoaded[index].parentToolCallId = parent }
                             if let input = call.input { codeLoaded[index].toolInput = input }
+                            if let output = call.output { codeLoaded[index].toolOutput = output }
                         } else {
                             liveTurn.updateTool(
                                 id: call.id,
                                 name: call.name,
                                 status: call.status,
                                 parentId: call.parentId,
-                                input: call.input
+                                input: call.input,
+                                output: call.output
                             )
                         }
                     case .permission(let request):
@@ -2587,12 +2681,20 @@ public struct ChatView: View {
         }
     }
 
+    /// The role a row plays in an exported transcript.
+    private func exportRole(for row: Row) -> TranscriptExport.Entry.Role {
+        switch row.kind {
+        case .tool, .toolGroup: return .tool
+        case .thought: return .thought
+        case .live: return .assistant
+        case .failure: return .assistant
+        case .message: return row.fromAgent ? .assistant : .user
+        }
+    }
+
     private var transcriptMarkdown: String {
         let entries = rows.map { row in
-            TranscriptExport.Entry(
-                role: row.toolStatus != nil ? .tool : row.isThought ? .thought : row.fromAgent ? .assistant : .user,
-                text: row.text
-            )
+            TranscriptExport.Entry(role: exportRole(for: row), text: row.text)
         }
         let title = isWorkspace
             ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? "\(engine.label) Thread")
@@ -2841,6 +2943,92 @@ struct MacSessionsSheet: View {
     }
 }
 
+/// One item of the ledger:  a turn's header, or a row of that turn.
+enum MacLedgerItem: Identifiable {
+    case header(MacTranscriptModel.Turn)
+    case row(MacTranscriptModel.Row)
+
+    var id: String {
+        switch self {
+        case .header(let turn): return "turn-header-\(turn.id)"
+        case .row(let row): return row.id
+        }
+    }
+}
+
+/// The header of one turn in the transcript.
+///
+/// It carries the time, the prompt, how long the turn took and what it
+/// touched, so a reader can see the shape of a turn without opening it.
+struct MacTurnHeader: View {
+    let turn: MacTranscriptModel.Turn
+    let isCollapsed: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onToggle) {
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12, height: 16)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isCollapsed ? "Expand Turn \(turn.number)" : "Collapse Turn \(turn.number)")
+            Text(turn.summary)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+            if let startedAt = turn.startedAt {
+                Text(startedAt, style: .time)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            if let duration = turn.duration {
+                Text(MacTurnHeader.durationLabel(duration))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            if turn.toolCount > 0 {
+                Text("\(turn.toolCount) tool\(turn.toolCount == 1 ? "" : "s")")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            if turn.fileCount > 0 {
+                Text("\(turn.fileCount) file\(turn.fileCount == 1 ? "" : "s")")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary)
+    }
+
+    /// How long the turn took, in the words a reader uses.
+    static func durationLabel(_ duration: TimeInterval) -> String {
+        if duration < 1 { return "<1s" }
+        if duration < 60 { return "\(Int(duration.rounded()))s" }
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return seconds == 0 ? "\(minutes)m" : "\(minutes)m \(seconds)s"
+    }
+
+    /// What VoiceOver reads for the header.
+    private var accessibilitySummary: String {
+        var parts = ["Turn \(turn.number)", turn.summary]
+        if let startedAt = turn.startedAt {
+            parts.append(startedAt.formatted(date: .omitted, time: .shortened))
+        }
+        if let duration = turn.duration {
+            parts.append(MacTurnHeader.durationLabel(duration))
+        }
+        if turn.toolCount > 0 { parts.append("\(turn.toolCount) tool calls") }
+        if turn.fileCount > 0 { parts.append("\(turn.fileCount) files") }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// Thread bubble and user prompt rows.
 struct MacChatRow: View {
     var row: ChatView.Row
@@ -2851,75 +3039,151 @@ struct MacChatRow: View {
     @State private var copied = false
 
     var body: some View {
-        if let toolStatus = row.toolStatus {
-            ThreadToolCard(
-                name: row.text,
-                status: toolStatus,
-                depth: row.toolDepth,
-                input: row.toolInput
-            )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
-                )
-        } else if row.isThought {
-            HStack(alignment: .top, spacing: 6) {
-                Button {
-                    expanded.toggle()
-                } label: {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 12, height: 16)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(expanded ? "Collapse Thinking" : "Expand Thinking")
-                Text(row.text)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .lineLimit(expanded ? nil : 3)
-                Spacer(minLength: 48)
+        switch row.kind {
+        case .tool:
+            toolCard
+        case .toolGroup:
+            toolGroupCard
+        case .thought:
+            thoughtRow
+        case .live:
+            liveRow
+        case .failure:
+            failureRow
+        case .message:
+            messageRow
+        }
+    }
+
+    /// One tool call, as the card the thread surface uses.
+    private var toolCard: some View {
+        ThreadToolCard(
+            name: row.text,
+            status: row.toolStatus ?? "completed",
+            depth: row.toolDepth,
+            input: row.toolInput,
+            output: row.toolOutput
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+        )
+    }
+
+    /// A run of tool calls, counted.
+    ///
+    /// The group carries the outcome of the last call in the run, so the
+    /// reader sees whether the run worked without opening every call in it.
+    private var toolGroupCard: some View {
+        ThreadToolCard(
+            name: row.text,
+            status: row.toolStatus ?? "completed",
+            depth: row.toolDepth,
+            input: nil,
+            output: row.toolOutput
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+        )
+    }
+
+    /// The engine's reasoning for the turn.
+    private var thoughtRow: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Button {
+                expanded.toggle()
+            } label: {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 12, height: 16)
             }
-        } else {
-            HStack(alignment: .bottom, spacing: 6) {
-                if !row.fromAgent { Spacer(minLength: 48) }
-                if row.fromAgent, hovering || copied {
-                    copyButton
+            .buttonStyle(.plain)
+            .accessibilityLabel(expanded ? "Collapse Thinking" : "Expand Thinking")
+            Text(row.text)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .lineLimit(expanded ? nil : 3)
+            Spacer(minLength: 48)
+        }
+    }
+
+    /// The answer that is streaming right now.
+    ///
+    /// It is drawn like the answer it will become, so the reader does not
+    /// have to learn a second shape for the same words.
+    private var liveRow: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                ClutchMarkdownText(text: row.text, font: .system(size: 13))
+                if row.text == "Working…" {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .frame(width: 16, height: 8, alignment: .leading)
                 }
-                VStack(alignment: row.fromAgent ? .leading : .trailing, spacing: 3) {
-                    Text(row.text)
-                        .font(.system(size: 13))
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            row.fromAgent
-                                ? Color.clutchSecondaryBackground
-                                : Color.accentColor.opacity(0.15),
-                            in: RoundedRectangle(cornerRadius: 12)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
-                        )
-                    HStack(spacing: 6) {
-                        Text(row.date, style: .time)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.clutchSecondaryBackground, in: RoundedRectangle(cornerRadius: 12))
+            Spacer(minLength: 48)
+        }
+    }
+
+    /// The turn failed, and says why.
+    private var failureRow: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.red)
+            Text(row.text)
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+            Spacer(minLength: 48)
+        }
+    }
+
+    /// A message of the thread.
+    private var messageRow: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            if !row.fromAgent { Spacer(minLength: 48) }
+            if row.fromAgent, hovering || copied {
+                copyButton
+            }
+            VStack(alignment: row.fromAgent ? .leading : .trailing, spacing: 3) {
+                ClutchMarkdownText(text: row.text, font: .system(size: 13))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        row.fromAgent
+                            ? Color.clutchSecondaryBackground
+                            : Color.accentColor.opacity(0.15),
+                        in: RoundedRectangle(cornerRadius: 12)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
+                    )
+                HStack(spacing: 6) {
+                    if let date = row.date {
+                        Text(date, style: .time)
                             .font(.system(size: 9))
                             .foregroundStyle(.tertiary)
-                        if row.isCard {
-                            Text("TOOL SUMMARY")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(.secondary)
-                        }
+                    }
+                    if row.isCard {
+                        Text("TOOL SUMMARY")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.secondary)
                     }
                 }
-                if !row.fromAgent, hovering || copied {
-                    copyButton
-                }
-                if row.fromAgent { Spacer(minLength: 48) }
             }
-            .onHover { hovering = $0 }
+            if !row.fromAgent, hovering || copied {
+                copyButton
+            }
+            if row.fromAgent { Spacer(minLength: 48) }
         }
+        .onHover { hovering = $0 }
     }
 
     private var copyButton: some View {

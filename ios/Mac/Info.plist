@@ -54,5 +54,7 @@
 	<string>Clutch records audio while you hold to talk to dictate coding directives.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Clutch transcribes speech into coding directives and prompts.</string>
+	<key>SENTRY_DSN</key>
+	<string>$(SENTRY_DSN)</string>
 </dict>
 </plist>
