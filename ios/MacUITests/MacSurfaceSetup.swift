@@ -8,7 +8,7 @@ import XCTest
 /// running it happens to have paired.  The run also keeps its paired hosts
 /// in a preferences suite of its own, so it never unpairs the ones the owner
 /// has on this machine.
-final class MacSurfaceHarness {
+final class MacSurfaceSetup {
     /// The error an app that exited carries out of the window wait.
     ///
     /// Throwing it leaves the test, and a test that ends in an error is a

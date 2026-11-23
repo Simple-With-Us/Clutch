@@ -24,30 +24,30 @@ import XCTest
 /// catalog named.  The screenshots are kept as attachments for a human to
 /// look at.
 final class ClutchMacSurfaceUITests: XCTestCase {
-    private var harness: MacSurfaceHarness!
+    private var setup: MacSurfaceSetup!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        harness = try MacSurfaceHarness(test: self)
+        setup = try MacSurfaceSetup(test: self)
     }
 
     override func tearDownWithError() throws {
-        harness?.shutdown()
-        harness?.stub.stop()
-        harness = nil
+        setup?.shutdown()
+        setup?.stub.stop()
+        setup = nil
     }
 
     func testWorkspaceOpensAndListsTheStubThread() throws {
-        let app = harness.app
+        let app = setup.app
         app.launch()
 
-        try harness.waitForWindow()
+        try setup.waitForWindow()
 
         // The sidebar is the Mac app's own chrome.  Its presence says the
         // window rendered rather than sat on a spinner.
         guard app.staticTexts["Threads"].waitForExistence(timeout: 60) else {
-            harness.snap("mac-sidebar-missing")
-            harness.dump("mac-sidebar-tree")
+            setup.snap("mac-sidebar-missing")
+            setup.dump("mac-sidebar-tree")
             XCTFail("the Mac workspace did not draw its thread sidebar")
             return
         }
@@ -57,21 +57,21 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         // fake that.
         let thread = app.buttons["Thread, Fix The Login Redirect"].firstMatch
         if !thread.waitForExistence(timeout: 60) {
-            harness.snap("mac-workspace-threads-missing")
-            harness.dump("mac-workspace-threads-tree")
+            setup.snap("mac-workspace-threads-missing")
+            setup.dump("mac-workspace-threads-tree")
             XCTFail("the stub's thread did not appear in the Mac thread list")
             return
         }
 
-        harness.bringToFront()
-        harness.snap("mac-workspace-threads")
+        setup.bringToFront()
+        setup.snap("mac-workspace-threads")
     }
 
     func testWorkspaceShowsTheEngineCatalogTheStubServed() throws {
-        let app = harness.app
+        let app = setup.app
         app.launch()
 
-        try harness.waitForWindow()
+        try setup.waitForWindow()
 
         // The name of the engine comes from the catalog the stub answered
         // with.  The stub names its engine "Stub Engine", which no build of
@@ -79,13 +79,13 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         // the app read the catalog over the sidecar and drew it.
         let engine = app.staticTexts["Stub Engine"].firstMatch
         if !engine.waitForExistence(timeout: 60) {
-            harness.snap("mac-engine-missing")
-            harness.dump("mac-engine-tree")
+            setup.snap("mac-engine-missing")
+            setup.dump("mac-engine-tree")
             XCTFail("the engine the stub served did not appear in the Mac workspace")
             return
         }
 
-        harness.bringToFront()
-        harness.snap("mac-workspace-engine")
+        setup.bringToFront()
+        setup.snap("mac-workspace-engine")
     }
 }

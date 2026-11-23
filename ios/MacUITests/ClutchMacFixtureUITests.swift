@@ -15,17 +15,17 @@ import XCTest
 /// compared with each other:  the thread is named, the turn streams the same
 /// text, and the tool call is the same one.
 final class ClutchMacFixtureUITests: XCTestCase {
-    private var harness: MacSurfaceHarness!
+    private var setup: MacSurfaceSetup!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        harness = try MacSurfaceHarness(test: self, fixture: true)
+        setup = try MacSurfaceSetup(test: self, fixture: true)
     }
 
     override func tearDownWithError() throws {
-        harness?.shutdown()
-        harness?.stub.stop()
-        harness = nil
+        setup?.shutdown()
+        setup?.stub.stop()
+        setup = nil
     }
 
     /// Finds the first element whose label or value carries the given text.
@@ -40,27 +40,27 @@ final class ClutchMacFixtureUITests: XCTestCase {
     }
 
     func testTheFixtureTurnRunsStopsAtItsPermissionCardAndEndsInATranscript() throws {
-        let app = harness.app
+        let app = setup.app
         app.launch()
 
-        try harness.waitForWindow()
+        try setup.waitForWindow()
         // The app is a window on a desktop that belongs to somebody else, and
         // a control another window covers cannot be tapped at all.
-        harness.bringToFront()
+        setup.bringToFront()
 
         // The fixture thread, by the name the stub gives it.  The name is
         // the identity of the fixture, so a capture says which sequence it
         // captured.
         let thread = app.buttons["Thread, \(StubSidecar.fixtureSessionTitle)"].firstMatch
         guard thread.waitForExistence(timeout: 60) else {
-            harness.snap("mac-fixture-thread-missing")
-            harness.dump("mac-fixture-thread-tree")
+            setup.snap("mac-fixture-thread-missing")
+            setup.dump("mac-fixture-thread-tree")
             XCTFail("the fixture thread did not appear in the Mac thread list")
             return
         }
-        guard harness.tap(thread) else {
-            harness.snap("mac-fixture-thread-not-hittable")
-            harness.dump("mac-fixture-thread-tree")
+        guard setup.tap(thread) else {
+            setup.snap("mac-fixture-thread-not-hittable")
+            setup.dump("mac-fixture-thread-tree")
             XCTFail("the fixture thread could not be tapped")
             return
         }
@@ -69,14 +69,14 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // composer stays closed until the thread is resumed.
         let resume = app.buttons["Resume"].firstMatch
         guard resume.waitForExistence(timeout: 60) else {
-            harness.snap("mac-fixture-resume-missing")
-            harness.dump("mac-fixture-resume-tree")
+            setup.snap("mac-fixture-resume-missing")
+            setup.dump("mac-fixture-resume-tree")
             XCTFail("the fixture thread did not open its preview")
             return
         }
-        guard harness.tap(resume) else {
-            harness.snap("mac-fixture-resume-not-hittable")
-            harness.dump("mac-fixture-resume-tree")
+        guard setup.tap(resume) else {
+            setup.snap("mac-fixture-resume-not-hittable")
+            setup.dump("mac-fixture-resume-tree")
             XCTFail("the fixture thread's resume control could not be tapped")
             return
         }
@@ -86,8 +86,8 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // the streamed words are different on purpose.
         let replayed = carrying(app.staticTexts, "Fixture: reading")
         guard replayed.waitForExistence(timeout: 60) else {
-            harness.snap("mac-fixture-history-missing")
-            harness.dump("mac-fixture-history-tree")
+            setup.snap("mac-fixture-history-missing")
+            setup.dump("mac-fixture-history-tree")
             XCTFail("the fixture thread's replayed history did not appear")
             return
         }
@@ -96,28 +96,28 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // the phone share.
         let draft = app.descendants(matching: .any).matching(identifier: "message-draft").firstMatch
         guard draft.waitForExistence(timeout: 30) else {
-            harness.snap("mac-fixture-composer-missing")
-            harness.dump("mac-fixture-composer-tree")
+            setup.snap("mac-fixture-composer-missing")
+            setup.dump("mac-fixture-composer-tree")
             XCTFail("the Mac composer did not offer its draft field")
             return
         }
-        guard harness.tap(draft) else {
-            harness.snap("mac-fixture-composer-not-hittable")
-            harness.dump("mac-fixture-composer-tree")
+        guard setup.tap(draft) else {
+            setup.snap("mac-fixture-composer-not-hittable")
+            setup.dump("mac-fixture-composer-tree")
             XCTFail("the Mac composer could not be typed into")
             return
         }
         draft.typeText("Run the fixture turn")
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
-            harness.snap("mac-fixture-send-missing")
-            harness.dump("mac-fixture-send-tree")
+            setup.snap("mac-fixture-send-missing")
+            setup.dump("mac-fixture-send-tree")
             XCTFail("the Mac composer did not offer its send button")
             return
         }
-        guard harness.tap(send) else {
-            harness.snap("mac-fixture-send-not-hittable")
-            harness.dump("mac-fixture-send-tree")
+        guard setup.tap(send) else {
+            setup.snap("mac-fixture-send-not-hittable")
+            setup.dump("mac-fixture-send-tree")
             XCTFail("the Mac composer could not be sent from")
             return
         }
@@ -125,15 +125,15 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // Moment one:  the turn is running.
         let running = carrying(app.staticTexts, "Fixture running")
         guard running.waitForExistence(timeout: 60) else {
-            harness.snap("mac-fixture-running-missing")
-            harness.dump("mac-fixture-running-tree")
+            setup.snap("mac-fixture-running-missing")
+            setup.dump("mac-fixture-running-tree")
             XCTFail("the fixture turn did not show its running text")
             return
         }
         // The capture comes first:  the turn reaches its permission request
         // moments later, and a running-turn picture that already carries the
         // card is not a picture of the running turn.
-        harness.snap("mac-fixture-running")
+        setup.snap("mac-fixture-running")
         XCTAssertTrue(
             app.buttons["Stop"].firstMatch.waitForExistence(timeout: 30),
             "the composer did not swap its send button for a stop button while the turn ran"
@@ -144,8 +144,8 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // it.
         let permission = carrying(app.staticTexts, "Permission Needed")
         guard permission.waitForExistence(timeout: 60) else {
-            harness.snap("mac-fixture-permission-missing")
-            harness.dump("mac-fixture-permission-tree")
+            setup.snap("mac-fixture-permission-missing")
+            setup.dump("mac-fixture-permission-tree")
             XCTFail("the fixture turn did not show its permission card")
             return
         }
@@ -157,17 +157,17 @@ final class ClutchMacFixtureUITests: XCTestCase {
             carrying(app.buttons, "Allow once").waitForExistence(timeout: 30),
             "the permission card did not offer the engine's own options"
         )
-        harness.bringToFront()
-        harness.snap("mac-fixture-permission")
+        setup.bringToFront()
+        setup.snap("mac-fixture-permission")
 
         // The turn only ends once the card has been looked at.
-        harness.stub.releaseTurn()
+        setup.stub.releaseTurn()
 
         // Moment three:  the transcript the turn ended in.
         let final = carrying(app.staticTexts, StubSidecar.fixtureFinalText)
         guard final.waitForExistence(timeout: 60) else {
-            harness.snap("mac-fixture-transcript-missing")
-            harness.dump("mac-fixture-transcript-tree")
+            setup.snap("mac-fixture-transcript-missing")
+            setup.dump("mac-fixture-transcript-tree")
             XCTFail("the fixture turn did not end in its transcript")
             return
         }
@@ -176,10 +176,10 @@ final class ClutchMacFixtureUITests: XCTestCase {
             "the fixture turn's tool call did not reach the transcript"
         )
         XCTAssertTrue(
-            harness.waitForGone(app.buttons["Stop"].firstMatch, timeout: 30),
+            setup.waitForGone(app.buttons["Stop"].firstMatch, timeout: 30),
             "the composer still offered a stop button after the turn ended"
         )
-        harness.bringToFront()
-        harness.snap("mac-fixture-transcript")
+        setup.bringToFront()
+        setup.snap("mac-fixture-transcript")
     }
 }
