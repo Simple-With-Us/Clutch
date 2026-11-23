@@ -123,6 +123,14 @@ struct PermissionCard: View {
             .font(ClutchFont.bodyStrong)
             .frame(maxWidth: .infinity, minHeight: ClutchMetric.minTapTarget)
         }
+        // The engine's own option id is the button's name, so a test can ask
+        // for this one button instead of matching a word against every button
+        // in the app.  A word match has to ask the app for every button's
+        // label and value, and on a loaded runner with a turn running that
+        // evaluation times out and the test fails at the query rather than at
+        // the card.  The name on screen is the engine's to choose; this one is
+        // the app's.
+        .accessibilityIdentifier("permission-option-\(option.optionId)")
     }
 
     /// The engine's own name for the option, with an explicit Always marker

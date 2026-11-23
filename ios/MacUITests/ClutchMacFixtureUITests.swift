@@ -183,8 +183,13 @@ final class ClutchMacFixtureUITests: XCTestCase {
             carrying(app.staticTexts, "Run the login test suite").waitForExistence(timeout: 30),
             "the permission card did not say what the tool wanted"
         )
+        // The card's option button is asked for by its identifier, and not by
+        // matching a word against every button in the app:  a word match has
+        // to ask the app for every button's label and value, and on the
+        // hosted runner with a turn running that evaluation timed out and the
+        // test failed at the query instead of at the card.
         XCTAssertTrue(
-            carrying(app.buttons, "Allow once").waitForExistence(timeout: 30),
+            app.buttons["permission-option-fixture-allow-once"].waitForExistence(timeout: 30),
             "the permission card did not offer the engine's own options"
         )
         setup.bringToFront()
