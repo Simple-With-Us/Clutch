@@ -23,7 +23,7 @@ settings:
 packages:
   Sentry:
     url: https://github.com/getsentry/sentry-cocoa.git
-    from: "9.34.0"
+    from: "9.35.0"
   CometChatUIKitSwift:
     url: https://github.com/cometchat/cometchat-uikit-ios.git
     from: 5.2.4
