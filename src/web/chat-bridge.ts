@@ -1342,8 +1342,20 @@ function readString(value: unknown): string | null {
 /** How many changed lines a compact diff shows before it says how many more. */
 const EVIDENCE_DIFF_LINES = 3;
 
+/** How much of one side of an edit the evidence reads. */
+const EVIDENCE_EDIT_LIMIT = 20_000;
+
+/** What the diff says when the edit it read was cut. */
+const EVIDENCE_CUT_MARKER = "… the edit was cut here; more may have changed";
+
 /** How long one line of the evidence may be. */
 const EVIDENCE_LINE_LIMIT = 160;
+
+/** One side of an edit, and whether it was cut. */
+function boundedEdit(text: string): { text: string; cut: boolean } {
+  if (text.length <= EVIDENCE_EDIT_LIMIT) return { text, cut: false };
+  return { text: text.slice(0, EVIDENCE_EDIT_LIMIT), cut: true };
+}
 
 /** The lines a text holds, without the empty ones. */
 function contentLines(text: string | undefined): string[] {
@@ -1360,10 +1372,14 @@ function evidenceLine(line: string): string {
  * The owner reads the lines that change and not the whole file, so the
  * diff shows a few of them and says how many it left out.
  */
-export function compactDiff(oldText: string | undefined, newText: string | undefined): string | undefined {
+export function compactDiff(
+  oldText: string | undefined,
+  newText: string | undefined,
+  cut = false,
+): string | undefined {
   const before = contentLines(oldText);
   const after = contentLines(newText);
-  if (before.length === 0 && after.length === 0) return undefined;
+  if (before.length === 0 && after.length === 0) return cut ? EVIDENCE_CUT_MARKER : undefined;
   // The lines the two sides share at the head and at the tail did not
   // change, so the diff shows only the part in the middle:  a diff that
   // calls an unchanged line removed is a diff that lies.
@@ -1379,13 +1395,16 @@ export function compactDiff(oldText: string | undefined, newText: string | undef
   }
   const removed = before.slice(head, before.length - tail);
   const added = after.slice(head, after.length - tail);
-  if (removed.length === 0 && added.length === 0) return undefined;
+  if (removed.length === 0 && added.length === 0) return cut ? EVIDENCE_CUT_MARKER : undefined;
   const lines: string[] = [];
   for (const line of removed.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`- ${evidenceLine(line)}`);
   for (const line of added.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`+ ${evidenceLine(line)}`);
   const more =
     Math.max(0, removed.length - EVIDENCE_DIFF_LINES) + Math.max(0, added.length - EVIDENCE_DIFF_LINES);
   if (more > 0) lines.push(`… ${more} more line${more === 1 ? "" : "s"}`);
+  // An edit that was cut can still differ past the cut, so the diff says so
+  // rather than showing a change that is not there.
+  if (cut) lines.push(EVIDENCE_CUT_MARKER);
   return lines.join("\n");
 }
 
@@ -1404,12 +1423,18 @@ export function buildPermissionEvidence(rawInput: unknown): PermissionEvidence |
   // the client cuts the same way:  a cut text says that it was cut.
   const command = readString(record.command);
   const path = readString(record.file_path) ?? readString(record.path);
-  // The diff reads the whole edit, because an edit that differs only past a
-  // cut is still an edit:  the diff is bounded by how many lines it shows
-  // and how long each of them is, and the content that is left out is said.
+  // The diff reads a bounded part of the edit, because the engine's input
+  // is unbounded and the request is on the message path:  the part that was
+  // cut is said in the diff, so a change past the cut is not a change the
+  // owner is told does not exist.
+  const oldRaw = typeof record.old_string === "string" ? record.old_string : undefined;
+  const newRaw = typeof record.new_string === "string" ? record.new_string : undefined;
+  const oldEdit = oldRaw === undefined ? undefined : boundedEdit(oldRaw);
+  const newEdit = newRaw === undefined ? undefined : boundedEdit(newRaw);
   const diff = compactDiff(
-    typeof record.old_string === "string" ? record.old_string : undefined,
-    typeof record.new_string === "string" ? record.new_string : undefined,
+    oldEdit?.text,
+    newEdit?.text,
+    oldEdit?.cut === true || newEdit?.cut === true,
   );
   if (!command && !path && !diff) return undefined;
   return {

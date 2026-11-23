@@ -81,15 +81,25 @@ describe("permission evidence", () => {
     expect(permissionEvidenceFromParams({ toolCall: { title: 7 } })).toBeUndefined();
   });
 
-  it("shows a change that sits past the old cut", () => {
-    // An edit that differs only far into the file is still an edit, and the
-    // diff says so rather than showing nothing at all.
+  it("says that an edit was cut rather than showing a change that is not there", () => {
+    // The engine's input is unbounded and the request is on the message
+    // path, so the diff reads a bounded part of the edit.  A change past
+    // the cut is said, and not shown as nothing.
     const filler = "x".repeat(20_100);
     const oldText = `head\n${filler}\nlast`;
     const newText = `head\n${filler}\nchanged`;
-    const diff = compactDiff(oldText, newText);
-    expect(diff).toContain("- last");
-    expect(diff).toContain("+ changed");
+    const evidence = buildPermissionEvidence({ old_string: oldText, new_string: newText });
+    expect(evidence?.diff).toContain("the edit was cut here");
+    expect(evidence?.diff).not.toContain("- last");
+  });
+
+  it("shows the change of an edit that is not cut", () => {
+    const oldText = "head\nmiddle\nlast";
+    const newText = "head\nmiddle\nchanged";
+    const evidence = buildPermissionEvidence({ old_string: oldText, new_string: newText });
+    expect(evidence?.diff).toContain("- last");
+    expect(evidence?.diff).toContain("+ changed");
+    expect(evidence?.diff).not.toContain("cut");
   });
 
   it("shows a few changed lines and says how many it left out", () => {
