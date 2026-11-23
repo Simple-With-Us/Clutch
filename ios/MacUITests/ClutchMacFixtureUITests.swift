@@ -23,6 +23,13 @@ final class ClutchMacFixtureUITests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        // The turn is held open until the test says it has seen the card,
+        // so a test that failed before that leaves the stream waiting for
+        // as long as the stub allows.  The gate is opened here, so the
+        // stream ends and the stub can stop instead of holding its
+        // connection open into the next run.
+        setup?.stub.releaseTurn()
+        setup?.stub.armPermission()
         setup?.shutdown()
         setup?.stub.stop()
         setup = nil
@@ -130,14 +137,17 @@ final class ClutchMacFixtureUITests: XCTestCase {
             XCTFail("the fixture turn did not show its running text")
             return
         }
-        // The capture comes first:  the turn reaches its permission request
-        // moments later, and a running-turn picture that already carries the
-        // card is not a picture of the running turn.
-        setup.snap("mac-fixture-running")
         XCTAssertTrue(
             app.buttons["Stop"].firstMatch.waitForExistence(timeout: 30),
             "the composer did not swap its send button for a stop button while the turn ran"
         )
+        // The app is in front before the capture, so the picture is of the
+        // surface and not of whatever the desktop holds behind it.
+        setup.bringToFront()
+        setup.snap("mac-fixture-running")
+        // The turn asks for permission only once the test opens the gate, so
+        // a running-turn picture cannot carry the card that comes after it.
+        setup.stub.armPermission()
 
         // Moment two:  the permission card.  The turn is held at its
         // request until the test has looked at it, and nothing here answers

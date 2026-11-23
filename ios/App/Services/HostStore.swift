@@ -15,7 +15,7 @@ import WebKit
 @MainActor
 @Observable
 public final class HostStore {
-    public static let shared = HostStore(defaults: resolveDefaults())
+    public static let shared = HostStore()
 
     /// The preferences the app keeps its hosts in.
     ///
@@ -25,7 +25,16 @@ public final class HostStore {
     static func resolveDefaults() -> UserDefaults {
         #if DEBUG
         if let suite = DebugLaunch.defaultsSuite, !suite.isEmpty {
-            return UserDefaults(suiteName: suite) ?? .standard
+            // A suite that cannot be created must not fall back to the
+            // owner's own defaults:  the reset in the initializer would then
+            // clear the hosts the owner has on this machine, which is the
+            // harm the suite exists to prevent.  A suite name that cannot be
+            // created is a defect in the run, and the process stops here
+            // rather than touching state that belongs to somebody else.
+            guard let isolated = UserDefaults(suiteName: suite) else {
+                fatalError("the UI test defaults suite \(suite) could not be created")
+            }
+            return isolated
         }
         #endif
         return .standard
@@ -39,14 +48,23 @@ public final class HostStore {
 
     @ObservationIgnored private let defaults: UserDefaults
 
-    public init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    /// Creates a host store over the preferences it was given.
+    ///
+    /// A store that was not given preferences takes the same ones the shared
+    /// store takes, so a view that builds its own store honours the suite a
+    /// UI test asked for.  A store that was built over the owner's own
+    /// defaults while a test asked for an isolated suite would reset and
+    /// re-pair the owner's hosts, which is exactly what the suite is there
+    /// to prevent.
+    public init(defaults: UserDefaults? = nil) {
+        let resolved = defaults ?? Self.resolveDefaults()
+        self.defaults = resolved
         #if DEBUG
         // A UI test starts from first run.  The reset happens here rather
         // than in the app's initializer, so it always runs before the
         // hosts are loaded and no stale host can survive it.
         if ProcessInfo.processInfo.arguments.contains("-ClutchResetHosts") {
-            Self.resetPersistedHosts(defaults: defaults)
+            Self.resetPersistedHosts(defaults: resolved)
         }
         #endif
         load()

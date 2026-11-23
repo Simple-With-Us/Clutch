@@ -48,11 +48,33 @@ extension XCTestCase {
             return true
         }
         for candidate in recordFlagCandidates() {
-            if FileManager.default.fileExists(atPath: candidate.path) {
+            if isRecordFlag(at: candidate) {
                 return true
             }
         }
         return false
+    }
+
+    /// True when the file at the path is a record flag this run may trust.
+    ///
+    /// The flag can sit in a shared directory, so the mere existence of the
+    /// file is not enough:  any local process could drop a file there and
+    /// turn a comparison into a recording, and a recording writes a fresh
+    /// baseline instead of failing on a surface that changed.  The file has
+    /// to say what it is, and it has to belong to the user running the
+    /// tests.
+    private static func isRecordFlag(at url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return false
+        }
+        guard let owner = attributes[.ownerAccountID] as? NSNumber,
+              owner.uint32Value == getuid() else {
+            return false
+        }
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            return false
+        }
+        return contents.trimmingCharacters(in: .whitespacesAndNewlines) == "record"
     }
 
     /// Every place the flag may be, and every place it was looked for.
