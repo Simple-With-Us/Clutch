@@ -259,6 +259,9 @@ export function dshHostEventToUpdate(
       text: "",
       toolCallId: callId,
       toolStatus: result.failed ? "failed" : "completed",
+      // The answer is kept beside the call, so a card can show what came
+      // back and not only what the tool was asked.
+      ...(result.text ? { toolOutput: result.text } : {}),
     };
   }
 

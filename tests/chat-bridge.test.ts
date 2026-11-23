@@ -515,6 +515,53 @@ describe("normalizeSessionUpdate", () => {
     expect(compacted).toHaveLength(3);
     expect(compacted[1]).toMatchObject({ text: "write", toolStatus: "completed" });
   });
+
+  it("keeps the answer a tool gave beside the call that asked", () => {
+    const history = [
+      { sessionId: "s", kind: "tool_call" as const, text: "read_file", toolCallId: "t1", toolStatus: "running" as const, toolInput: "{\"path\":\"a.ts\"}" },
+      { sessionId: "s", kind: "tool_call_update" as const, text: "", toolCallId: "t1", toolStatus: "completed" as const, toolOutput: "export const a = 1" },
+    ];
+    const compacted = compactToolHistory(history);
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0]).toMatchObject({
+      text: "read_file",
+      toolInput: "{\"path\":\"a.ts\"}",
+      toolOutput: "export const a = 1",
+    });
+  });
+
+  it("does not let a later update erase the answer the first one carried", () => {
+    const history = [
+      { sessionId: "s", kind: "tool_call" as const, text: "bash", toolCallId: "t1", toolStatus: "running" as const },
+      { sessionId: "s", kind: "tool_call_update" as const, text: "", toolCallId: "t1", toolStatus: "completed" as const, toolOutput: "exit 0" },
+      { sessionId: "s", kind: "tool_call_update" as const, text: "", toolCallId: "t1", toolStatus: "completed" as const },
+    ];
+    const compacted = compactToolHistory(history);
+    expect(compacted[0].toolOutput).toBe("exit 0");
+  });
+
+  it("carries what a live tool call was asked and what it answered", () => {
+    const asked = normalizeSessionUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "read_file", rawInput: { path: "a.ts" } },
+    });
+    expect(asked).toMatchObject({ kind: "tool_call", toolInput: "{\"path\":\"a.ts\"}" });
+
+    const answered = normalizeSessionUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: { content: [{ type: "text", text: "hello" }] } },
+    });
+    expect(answered).toMatchObject({ kind: "tool_call_update", toolOutput: "{\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}" });
+  });
+
+  it("shows no input or output when the engine wrote neither", () => {
+    const update = normalizeSessionUpdate({
+      sessionId: "s",
+      update: { sessionUpdate: "tool_call", toolCallId: "t1", title: "read_file" },
+    });
+    expect(update).not.toHaveProperty("toolInput");
+    expect(update).not.toHaveProperty("toolOutput");
+  });
 });
 
 describe("attachments on the dsh bridges", () => {

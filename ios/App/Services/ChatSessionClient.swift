@@ -264,7 +264,8 @@ public struct ChatSessionClient {
                     // A tool that runs other tools is the parent of them, and
                     // the client shows the children hanging under it.
                     parentId: json["parentId"] as? String,
-                    input: json["input"] as? String
+                    input: json["input"] as? String,
+                    output: json["output"] as? String
                 )
             )
         case "done":

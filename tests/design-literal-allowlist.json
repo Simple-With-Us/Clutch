@@ -77,14 +77,7 @@
     ".system(size: 10)": 5
   },
   "ios/Mac/ChatViewMac.swift": {
-    ".system(size: 12)": 5,
-    ".system(size: 11, weight: .semibold)": 2,
-    ".system(size: 11)": 8,
     ".system(size: 10)": 6,
-    ".system(size: 12, weight: .semibold)": 3,
-    ".system(size: 9)": 2,
-    ".system(size: 9, weight: .bold)": 3,
-    "cornerRadius: 8": 2,
     ".system(size: 13)": 3,
     "cornerRadius: 12": 3,
     ".system(size: 13, weight: .semibold)": 1,
