@@ -135,6 +135,14 @@ final class ClutchMacFixtureUITests: XCTestCase {
             (draft.value as? String)?.contains("Run the fixture turn") ?? false,
             "the composer did not take the pasted text"
         )
+        // The composer has the focus now, and a field with the focus puts a
+        // panel of the system's own over the app (an auto-complete list),
+        // and a panel over the app is modal for the automation session:  the
+        // app behind it reads as a background app, and a control in a
+        // background app cannot be clicked at all.  So the panel is closed
+        // here, after the composer took the focus, and not only at the
+        // start of the run.
+        setup.dismissSystemPanel()
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
             setup.snap("mac-fixture-send-missing")
@@ -183,8 +191,20 @@ final class ClutchMacFixtureUITests: XCTestCase {
             carrying(app.staticTexts, "Run the login test suite").waitForExistence(timeout: 30),
             "the permission card did not say what the tool wanted"
         )
+        // The options are asked for by identifier, and not by a predicate
+        // over every button on the screen.
+        //
+        // A predicate makes the automation session read the label and the
+        // value of every button in the window before it can answer, and on
+        // a surface this busy that read does not come back:  the query
+        // times out with the card plainly on screen.  An identifier asks
+        // for one control, and the card gives each option the id the
+        // engine gave it, so the assertion is about the engine's own
+        // option and not about a word on a button.
         XCTAssertTrue(
-            carrying(app.buttons, "Allow once").waitForExistence(timeout: 30),
+            app.buttons[StubSidecar.permissionOptionIdentifier(StubSidecar.fixtureAllowOnceOptionId)]
+                .firstMatch
+                .waitForExistence(timeout: 30),
             "the permission card did not offer the engine's own options"
         )
         setup.bringToFront()
@@ -202,7 +222,9 @@ final class ClutchMacFixtureUITests: XCTestCase {
             return
         }
         XCTAssertTrue(
-            carrying(app.buttons, "read_file").waitForExistence(timeout: 30),
+            app.buttons[StubSidecar.toolCallIdentifier(StubSidecar.fixtureToolName)]
+                .firstMatch
+                .waitForExistence(timeout: 30),
             "the fixture turn's tool call did not reach the transcript"
         )
         XCTAssertTrue(

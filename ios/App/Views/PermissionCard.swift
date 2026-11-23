@@ -70,6 +70,7 @@ struct PermissionCard: View {
                 .buttonStyle(.bordered)
                 .tint(ClutchColor.danger)
                 .disabled(!canAnswer || isAnswering)
+                .accessibilityIdentifier(PermissionCard.denyOptionIdentifier)
             } else {
                 VStack(spacing: ClutchSpacing.base) {
                     ForEach(request.options) { option in
@@ -100,8 +101,16 @@ struct PermissionCard: View {
         .padding(ClutchSpacing.gutter)
         .background(ClutchColor.warningWash)
         .clipShape(RoundedRectangle(cornerRadius: ClutchRadius.bubble))
+        // The card is a container and not a label.
+        //
+        // A container that carries its own label asks the accessibility
+        // server to describe the card and its children together, and the
+        // children here are the engine's own options:  a button a surface
+        // cannot reach is an option the owner cannot pick.  The card's
+        // words are its own text, so VoiceOver reads them in order and
+        // every option stays an option of its own.
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(Text(Copy.gap("Permission Needed.", request.headline)))
+        .accessibilityIdentifier("permission-card")
         // A request the owner answered is gone, and one that could not be
         // answered is asked again: either way the card is live.
         .onChange(of: request.id) { _, _ in
@@ -123,6 +132,32 @@ struct PermissionCard: View {
             .font(ClutchFont.bodyStrong)
             .frame(maxWidth: .infinity, minHeight: ClutchMetric.minTapTarget)
         }
+        .accessibilityIdentifier(PermissionCard.optionIdentifier(for: option))
+    }
+
+    /// The identifier an option button carries.
+    ///
+    /// The engine names its own options, so the identifier is built from
+    /// the name the engine used:  a surface test can ask for the exact
+    /// option the engine asked for, and two engines that word the same
+    /// choice differently still get two different buttons.
+    ///
+    /// The rule here and the rule the surface tests use are the same one:
+    /// the engine's name, lowercased, with everything that is not a letter
+    /// or a number turned into a dash.
+    static func optionIdentifier(for option: AcpPermissionOption) -> String {
+        "permission-option-\(slug(option.optionId))"
+    }
+
+    /// The identifier the deny button carries, for an engine that offered
+    /// no options of its own.
+    static let denyOptionIdentifier = "permission-option-deny"
+
+    /// A name reduced to the letters and numbers an identifier can hold.
+    private static func slug(_ raw: String) -> String {
+        let lowered = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let mapped = lowered.map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        return String(mapped).split(separator: "-").joined(separator: "-")
     }
 
     /// The engine's own name for the option, with an explicit Always marker

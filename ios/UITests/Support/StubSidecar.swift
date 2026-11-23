@@ -37,6 +37,35 @@ final class StubSidecar {
     /// The text the fixture turn ends with.
     static let fixtureFinalText = "Fixture finished."
 
+    /// The id the engine gave the option that lets the fixture turn run.
+    static let fixtureAllowOnceOptionId = "fixture-allow-once"
+    /// The id the engine gave the option that refuses the request.
+    static let fixtureRejectOptionId = "fixture-reject-once"
+    /// The name the engine gave the tool the fixture turn calls.
+    static let fixtureToolName = "read_file"
+
+    /// The identifier the permission card gives the option with this id.
+    ///
+    /// The card builds the identifier from the engine's own id, reduced to
+    /// letters and numbers, and this is that same rule on the test side:  a
+    /// test that asked for a different string would wait for a control that
+    /// is never on the screen.
+    static func permissionOptionIdentifier(_ optionId: String) -> String {
+        "permission-option-" + slug(optionId)
+    }
+
+    /// The identifier a tool call carries.
+    static func toolCallIdentifier(_ toolName: String) -> String {
+        "tool-call-" + slug(toolName)
+    }
+
+    /// A name reduced to the letters and numbers an identifier can hold.
+    private static func slug(_ raw: String) -> String {
+        let lowered = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let mapped = lowered.map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        return String(mapped).split(separator: "-").joined(separator: "-")
+    }
+
     private(set) var port: Int = 0
     private var listenFD: Int32 = -1
     private var acceptThread: Thread?
@@ -384,7 +413,7 @@ final class StubSidecar {
         )
         write(
             event: "permission",
-            data: #"{"requestId":"fixture-request-1","title":"Run the login test suite","toolName":"shell","options":[{"optionId":"fixture-allow-once","kind":"allow_once","name":"Allow once"},{"optionId":"fixture-reject-once","kind":"reject_once","name":"Reject"}]}"#,
+            data: #"{"requestId":"fixture-request-1","title":"Run the login test suite","toolName":"shell","options":[{"optionId":"\#(Self.fixtureAllowOnceOptionId)","kind":"allow_once","name":"Allow once"},{"optionId":"\#(Self.fixtureRejectOptionId)","kind":"reject_once","name":"Reject"}]}"#,
             to: fd
         )
 

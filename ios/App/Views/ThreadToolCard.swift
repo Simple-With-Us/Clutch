@@ -37,6 +37,7 @@ public struct ThreadToolCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(accessibilitySummary)
+            .accessibilityIdentifier(ThreadToolCard.toolIdentifier(for: name))
             if expanded {
                 ScrollView {
                     VStack(alignment: .leading, spacing: ClutchSpacing.snug) {
@@ -64,6 +65,18 @@ public struct ThreadToolCard: View {
         // The tree: a call that ran other tools holds them under itself.
         .padding(.leading, ClutchSpacing.base + CGFloat(depth) * 14)
         .background(ClutchColor.surface, in: RoundedRectangle(cornerRadius: ClutchRadius.control))
+    }
+
+    /// The identifier a tool call carries.
+    ///
+    /// The tool's name is the engine's own, so it is reduced to the letters
+    /// and numbers an identifier can hold:  a surface test can ask for the
+    /// exact call the engine made without reading the whole transcript,
+    /// and the rule is the same one the surface tests use.
+    public static func toolIdentifier(for name: String) -> String {
+        let lowered = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let mapped = lowered.map { $0.isLetter || $0.isNumber ? $0 : "-" }
+        return "tool-call-" + String(mapped).split(separator: "-").joined(separator: "-")
     }
 
     /// What VoiceOver reads for the header.  The label carries the tool's
