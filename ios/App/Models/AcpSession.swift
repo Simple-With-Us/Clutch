@@ -79,6 +79,60 @@ public struct AcpPermissionOption: Decodable, Equatable, Sendable, Identifiable 
     }
 }
 
+/// One thing the owner reads before answering a permission request.
+public struct AcpPermissionEvidenceLine: Equatable, Sendable, Identifiable {
+    /// What the line holds, in the owner's words.
+    public var label: String
+    /// The command, the path or the diff.
+    public var text: String
+
+    public var id: String { label }
+
+    public init(label: String, text: String) {
+        self.label = label
+        self.text = text
+    }
+}
+
+/// What the tool wants to do, as the owner reads it before answering.
+///
+/// An approval the owner cannot read is not an approval, so the sidecar
+/// carries the command for a shell tool, the path for a file tool and a
+/// compact diff for an edit.  A request whose evidence is missing shows no
+/// evidence:  the card says what it knows and nothing more.
+public struct AcpPermissionEvidence: Decodable, Equatable, Sendable {
+    /// The command the tool wants to run.
+    public var command: String?
+    /// The path the tool wants to touch.
+    public var path: String?
+    /// The lines the tool wants to write, as a compact diff.
+    public var diff: String?
+
+    public init(command: String? = nil, path: String? = nil, diff: String? = nil) {
+        self.command = command
+        self.path = path
+        self.diff = diff
+    }
+
+    /// What the card shows, in the order the owner reads it.
+    ///
+    /// The command comes first because it is what the owner has to judge,
+    /// then the path the command touches, then the lines an edit writes.
+    public var lines: [AcpPermissionEvidenceLine] {
+        var out: [AcpPermissionEvidenceLine] = []
+        if let command = self.command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
+            out.append(AcpPermissionEvidenceLine(label: "Command", text: command))
+        }
+        if let path = self.path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+            out.append(AcpPermissionEvidenceLine(label: "Path", text: path))
+        }
+        if let diff = self.diff?.trimmingCharacters(in: .whitespacesAndNewlines), !diff.isEmpty {
+            out.append(AcpPermissionEvidenceLine(label: "Changes", text: diff))
+        }
+        return out
+    }
+}
+
 /// A permission request the engine is waiting on.
 ///
 /// The engine blocks until the request is answered, so the request travels
@@ -92,14 +146,23 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
     public var toolName: String
     /// The options the engine offers.
     public var options: [AcpPermissionOption]
+    /// What the tool wants to do, when the engine said enough to read it.
+    public var evidence: AcpPermissionEvidence?
 
     public var id: String { requestId }
 
-    public init(requestId: String, title: String, toolName: String, options: [AcpPermissionOption]) {
+    public init(
+        requestId: String,
+        title: String,
+        toolName: String,
+        options: [AcpPermissionOption],
+        evidence: AcpPermissionEvidence? = nil
+    ) {
         self.requestId = requestId
         self.title = title
         self.toolName = toolName
         self.options = options
+        self.evidence = evidence
     }
 
     /// The heading the card shows: what the tool wants, and which tool it is.

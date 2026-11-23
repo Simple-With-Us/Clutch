@@ -58,6 +58,24 @@ struct PermissionCard: View {
                     .font(ClutchFont.monoMicro)
                     .foregroundStyle(ClutchColor.textSecondary)
             }
+            // What the tool wants to do, so the owner can read it before
+            // answering.  An approval nobody can read is not an approval.
+            if let evidence = request.evidence, !evidence.lines.isEmpty {
+                VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
+                    ForEach(evidence.lines) { line in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(line.label)
+                                .font(ClutchFont.microStrong)
+                                .foregroundStyle(ClutchColor.textSecondary)
+                            Text(line.text)
+                                .font(ClutchFont.monoMicro)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .accessibilityIdentifier("permission-evidence")
+            }
             if request.options.isEmpty {
                 // An engine that offered no options can only be cancelled.
                 Button {
