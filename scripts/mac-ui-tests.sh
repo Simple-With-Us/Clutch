@@ -18,6 +18,17 @@ DERIVED_DATA="${CLUTCH_MAC_UI_DERIVED_DATA:-}"
 
 log() { printf 'mac-ui-tests: %s\n' "$1" >&2; }
 
+# A macOS UI test hosts a real window in the signed-in GUI session:  the run
+# brings the app to the front of that session, and on the owner's own machine
+# that is the desktop they are using.  The hosted runner has a session of its
+# own, so the gate belongs there.  A local run says so out loud and skips
+# rather than taking over the desktop, unless it is asked for by name.
+if [ "${CI:-}" != "true" ] && [ "${CLUTCH_MAC_UI_ALLOW_FOCUS:-}" != "1" ]; then
+  log "skipped: a macOS UI test would take over the front of the GUI session on this machine"
+  log "run it on the hosted runner, or set CLUTCH_MAC_UI_ALLOW_FOCUS=1 to run it here on purpose"
+  exit 10
+fi
+
 # Xcode hands environment variables prefixed with TEST_RUNNER_ to the test
 # runner process, so the snapshot flags travel that way.  Exporting them into
 # the shell alone leaves the runner without them, and the run compares
