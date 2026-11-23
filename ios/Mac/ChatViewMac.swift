@@ -905,7 +905,7 @@ public struct ChatView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Queued Messages (\(queuedMessages.count))")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(ClutchFont.microStrong)
                 Spacer()
                 if !sending {
                     Button("Send Next") {
@@ -919,7 +919,7 @@ public struct ChatView: View {
                     ForEach(queuedMessages) { message in
                         HStack(spacing: 8) {
                             Text(message.text)
-                                .font(.system(size: 11))
+                                .font(ClutchFont.micro)
                                 .lineLimit(1)
                             Spacer()
                             Button {
@@ -955,11 +955,11 @@ public struct ChatView: View {
                 .textFieldStyle(.plain)
                 .onSubmit { stepFind(forward: true) }
             Text(findText.isEmpty ? "" : "\(findMatches.count) match\(findMatches.count == 1 ? "" : "es")")
-                .font(.system(size: 11))
+                .font(ClutchFont.micro)
                 .foregroundStyle(.secondary)
             if let findLocation {
                 Text(findLocation)
-                    .font(.system(size: 11))
+                    .font(ClutchFont.micro)
                     .foregroundStyle(.secondary)
             }
             Button {
@@ -1029,12 +1029,12 @@ public struct ChatView: View {
             // The files of the working folder, the way the web canvas shows
             // them beside the thread rail.
             Button("Files") { showingFiles = true }
-                .font(.system(size: 11))
+                .font(ClutchFont.micro)
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
                 .help("Browse the files in the working folder")
             Button("Choose…") { chooseCwd() }
-                .font(.system(size: 11))
+                .font(ClutchFont.micro)
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
                 .help("Choose the working folder for the next new thread")
@@ -1042,14 +1042,14 @@ public struct ChatView: View {
                 cwdDraft = codeCwd ?? ""
                 showingCwdEditor = true
             }
-            .font(.system(size: 11))
+            .font(ClutchFont.micro)
             .buttonStyle(.plain)
             .foregroundStyle(.tint)
             .help("Type a working directory path")
             .popover(isPresented: $showingCwdEditor) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Working Directory")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(ClutchFont.captionStrong)
                     TextField("Path", text: $cwdDraft)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12, design: .monospaced))
@@ -1058,7 +1058,7 @@ public struct ChatView: View {
                         "Applies to the next new thread.",
                         "An open thread keeps the folder it was created in."
                     ))
-                        .font(.system(size: 11))
+                        .font(ClutchFont.micro)
                         .foregroundStyle(.secondary)
                         .frame(width: 340, alignment: .leading)
                     HStack {
@@ -1191,7 +1191,7 @@ public struct ChatView: View {
                         Task { await loadSidebarSessions() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(ClutchFont.microStrong)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -1298,7 +1298,7 @@ public struct ChatView: View {
                 HStack(spacing: 8) {
                     if engine == .mcode && !mcodeAvailable {
                         Label("MiniMax Code Not Found On Host", systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 11))
+                            .font(ClutchFont.micro)
                             .foregroundStyle(.orange)
                             .help("MiniMax Code is not installed or signed in on this host.")
                     }
@@ -1443,7 +1443,7 @@ public struct ChatView: View {
     private func metric(icon: String, value: String) -> some View {
         HStack(spacing: 3) {
             Image(systemName: icon)
-                .font(.system(size: 9))
+                .font(ClutchFont.micro)
                 .foregroundStyle(.tertiary)
             Text(value)
                 .font(.system(size: 10, design: .monospaced))
@@ -1455,20 +1455,20 @@ public struct ChatView: View {
     private func pickerLabel(entryLabel: String, symbol: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: symbol)
-                .font(.system(size: 11))
+                .font(ClutchFont.micro)
             Text(entryLabel)
-                .font(.system(size: 12, weight: .semibold))
+                .font(ClutchFont.captionStrong)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 280, alignment: .leading)
             Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .bold))
+                .font(ClutchFont.sectionLabel)
                 .foregroundColor(.secondary)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color.clutchSecondaryBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: ClutchRadius.control))
     }
 
     private func selectEngine(_ next: ChatEngine) {
@@ -2888,14 +2888,14 @@ struct MacSessionsSheet: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundColor(.orange)
                         Text(error)
-                            .font(.system(size: 12))
+                            .font(ClutchFont.caption)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                         Button("Retry") {
                             self.error = nil
                             Task { await refresh() }
                         }
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(ClutchFont.captionStrong)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -3021,33 +3021,33 @@ struct MacTurnHeader: View {
         HStack(spacing: 6) {
             Button(action: onToggle) {
                 Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(ClutchFont.sectionLabel)
                     .foregroundStyle(.tertiary)
                     .frame(width: 12, height: 16)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(isCollapsed ? "Expand Turn \(turn.number)" : "Collapse Turn \(turn.number)")
             Text(turn.summary)
-                .font(.system(size: 11, weight: .semibold))
+                .font(ClutchFont.microStrong)
                 .lineLimit(1)
             if let startedAt = turn.startedAt {
                 Text(startedAt, style: .time)
-                    .font(.system(size: 9))
+                    .font(ClutchFont.micro)
                     .foregroundStyle(.tertiary)
             }
             if let duration = turn.duration {
                 Text(MacTurnHeader.durationLabel(duration))
-                    .font(.system(size: 9))
+                    .font(ClutchFont.micro)
                     .foregroundStyle(.tertiary)
             }
             if turn.toolCount > 0 {
                 Text("\(turn.toolCount) tool\(turn.toolCount == 1 ? "" : "s")")
-                    .font(.system(size: 9))
+                    .font(ClutchFont.micro)
                     .foregroundStyle(.tertiary)
             }
             if turn.fileCount > 0 {
                 Text("\(turn.fileCount) file\(turn.fileCount == 1 ? "" : "s")")
-                    .font(.system(size: 9))
+                    .font(ClutchFont.micro)
                     .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
@@ -3117,7 +3117,7 @@ struct MacChatRow: View {
             output: row.toolOutput
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: ClutchRadius.control)
                 .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
         )
     }
@@ -3135,7 +3135,7 @@ struct MacChatRow: View {
             output: row.toolOutput
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: ClutchRadius.control)
                 .stroke(isMatch ? Color.accentColor : Color.clear, lineWidth: 2)
         )
     }
@@ -3147,14 +3147,14 @@ struct MacChatRow: View {
                 expanded.toggle()
             } label: {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(ClutchFont.sectionLabel)
                     .foregroundStyle(.tertiary)
                     .frame(width: 12, height: 16)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(expanded ? "Collapse Thinking" : "Expand Thinking")
             Text(row.text)
-                .font(.system(size: 12))
+                .font(ClutchFont.caption)
                 .foregroundColor(.secondary)
                 .lineLimit(expanded ? nil : 3)
             Spacer(minLength: 48)
@@ -3186,10 +3186,10 @@ struct MacChatRow: View {
     private var failureRow: some View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11))
+                .font(ClutchFont.micro)
                 .foregroundStyle(.red)
             Text(row.text)
-                .font(.system(size: 12))
+                .font(ClutchFont.caption)
                 .foregroundStyle(.red)
                 .textSelection(.enabled)
             Spacer(minLength: 48)
@@ -3220,12 +3220,12 @@ struct MacChatRow: View {
                 HStack(spacing: 6) {
                     if let date = row.date {
                         Text(date, style: .time)
-                            .font(.system(size: 9))
+                            .font(ClutchFont.micro)
                             .foregroundStyle(.tertiary)
                     }
                     if row.isCard {
                         Text("TOOL SUMMARY")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(ClutchFont.sectionLabel)
                             .foregroundColor(.secondary)
                     }
                 }
