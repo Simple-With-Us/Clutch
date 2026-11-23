@@ -104,7 +104,9 @@ describe("permission evidence", () => {
 
   it("never leaves half a character behind when it cuts a line", () => {
     // A long line with a pair at the cut is cut without splitting the pair.
-    const filler = "x".repeat(158);
+    // 159 characters and a pair is 161 units, so the cut lands inside the
+    // pair and the cut path is really walked.
+    const filler = "x".repeat(159);
     const evidence = buildPermissionEvidence({
       old_string: `${filler}\u{1F600}\n`,
       new_string: `${filler}\u{1F600}\nchanged\n`,
