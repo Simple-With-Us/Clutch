@@ -222,10 +222,25 @@ final class MacSurfaceSetup {
     /// list, the character palette) is modal for the automation session:
     /// the app behind it reads as a background app, and a control in a
     /// background app cannot be clicked at all.  Escape is what closes
-    /// those panels, and it does nothing to the app itself.
-    func dismissSystemPanel() {
+    /// those panels.
+    ///
+    /// The escape is not sent blind.  Escape also blurs the composer,
+    /// closes a popover and cancels whatever the app is doing, so the
+    /// composer is checked afterwards, and a dismissal that took the
+    /// composer's text with it is reported as the failure it is instead
+    /// of passing over a surface that is no longer the one under test.
+    ///
+    /// The helper says whether the dismissal was clean.
+    @discardableResult
+    func dismissSystemPanel(_ composer: XCUIElement? = nil) -> Bool {
         app.typeKey(.escape, modifierFlags: [])
         Thread.sleep(forTimeInterval: 0.2)
+        if let composer, let value = composer.value as? String, value.isEmpty {
+            // The dismissal took the composer's text with it, so the
+            // surface under test is not the surface the test meant.
+            return false
+        }
+        return true
     }
 
     /// Stops the app and waits for it to go.

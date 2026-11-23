@@ -142,7 +142,15 @@ final class ClutchMacFixtureUITests: XCTestCase {
         // background app cannot be clicked at all.  So the panel is closed
         // here, after the composer took the focus, and not only at the
         // start of the run.
-        setup.dismissSystemPanel()
+        //
+        // The composer is checked afterwards, because the escape that
+        // closes the panel also blurs the field, and a composer that lost
+        // its text would send an empty turn.
+        setup.dismissSystemPanel(draft)
+        XCTAssertTrue(
+            (draft.value as? String)?.contains("Run the fixture turn") ?? false,
+            "the composer lost its text when the panel was dismissed"
+        )
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
             setup.snap("mac-fixture-send-missing")
