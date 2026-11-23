@@ -112,7 +112,7 @@ final class AcpSessionTests: XCTestCase {
     func testDecodesTheEvidenceAPermissionCarries() throws {
         let payload = """
         {"requestId":"perm-8","title":"Run npm test","toolName":"bash",
-         "evidence":{"command":"npm test","path":"/tmp/clutch","diff":"- old\n+ new"},
+         "evidence":{"command":"npm test","path":"/tmp/clutch","diff":"- old\\n+ new"},
          "options":[{"optionId":"allow-once","kind":"allow_once","name":"Allow once"}]}
         """
         let event = ChatSessionClient.decode(event: "permission", payload: payload)
