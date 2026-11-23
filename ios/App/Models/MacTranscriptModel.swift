@@ -573,6 +573,31 @@ public struct MacTranscriptModel: Equatable, Sendable {
         }
     }
 
+    /// What a run of tool calls did, in one line.
+    ///
+    /// The count alone says how much happened and not what, so the line
+    /// names the kinds:  "3 files, 1 command, 1 test" says more in one
+    /// glance than "5 tool calls", and it is what a reader decides
+    /// whether to open the run on.
+    private func breakdown(of run: [Row]) -> String {
+        let kinds = run.map { MacTranscriptModel.ToolKind.classify($0.text) }
+        let files = kinds.filter { $0 == .file }.count
+        let commands = kinds.filter { $0 == .command }.count
+        let tests = kinds.filter { $0 == .test }.count
+        var parts: [String] = []
+        if files > 0 { parts.append("\(files) file\(files == 1 ? "" : "s")") }
+        if commands > 0 { parts.append("\(commands) command\(commands == 1 ? "" : "s")") }
+        if tests > 0 { parts.append("\(tests) test\(tests == 1 ? "" : "s")") }
+        let named = files + commands + tests
+        if named < run.count {
+            parts.append("\(run.count - named) more")
+        }
+        if parts.isEmpty {
+            return "\(run.count) tool call\(run.count == 1 ? "" : "s")"
+        }
+        return parts.joined(separator: ", ")
+    }
+
     /// Collapses each run of tool rows into one row.
     ///
     /// A turn calls its tools one after another, and one row per call
@@ -595,14 +620,14 @@ public struct MacTranscriptModel: Equatable, Sendable {
                 Row(
                     id: "group-\(first.id)",
                     kind: .toolGroup,
-                    text: "\(run.count) tool calls",
+                    text: breakdown(of: run),
                     date: first.date,
                     fromAgent: true,
                     isCard: false,
                     toolStatus: last.toolStatus,
                     toolDepth: first.toolDepth,
                     toolInput: nil,
-                    toolOutput: last.toolOutput,
+                    toolOutput: nil,
                     toolCount: run.count,
                     turn: first.turn
                 )

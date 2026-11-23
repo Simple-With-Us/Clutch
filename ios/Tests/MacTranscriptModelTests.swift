@@ -321,4 +321,35 @@ final class MacTranscriptModelTests: XCTestCase {
         XCTAssertEqual(model.turns[0].rowIDs, ["h1"])
         XCTAssertEqual(model.turns[1].rowIDs, ["h2", "h3"])
     }
+
+    func testACollapsedRunSaysWhatItDid() {
+        var model = self.model()
+        model.verbosity = .normal
+        model.history = [
+            MacTranscriptModel.HistoryEntry(id: "h1", text: "Do the work", fromAgent: false),
+            MacTranscriptModel.HistoryEntry(id: "h2", text: "read_file", isTool: true),
+            MacTranscriptModel.HistoryEntry(id: "h3", text: "edit_file", isTool: true),
+            MacTranscriptModel.HistoryEntry(id: "h4", text: "bash", isTool: true),
+            MacTranscriptModel.HistoryEntry(id: "h5", text: "run_tests", isTool: true),
+        ]
+
+        // The count alone says how much happened and not what, so the row
+        // names the kinds.
+        let group = model.rows.first { $0.kind == .toolGroup }
+        XCTAssertEqual(group?.text, "2 files, 1 command, 1 test")
+        XCTAssertEqual(group?.toolCount, 4)
+    }
+
+    func testACollapsedRunOfOneCallKeepsTheCall() {
+        var model = self.model()
+        model.verbosity = .normal
+        model.history = [
+            MacTranscriptModel.HistoryEntry(id: "h1", text: "Do the work", fromAgent: false),
+            MacTranscriptModel.HistoryEntry(id: "h2", text: "read_file", isTool: true),
+            MacTranscriptModel.HistoryEntry(id: "h3", text: "On it."),
+        ]
+
+        XCTAssertEqual(model.rows.count, 3)
+        XCTAssertEqual(model.rows[1].kind, .tool)
+    }
 }
