@@ -65,8 +65,19 @@ final class MacSurfaceSetup {
             + "&chat=\(StubSidecar.chatToken)&chatPort=\(port)"
     }
 
+    /// Attaches a picture of the surface under test.
+    ///
+    /// The attachment is the app's own window and not the screen.  A macOS
+    /// screenshot of the screen carries everything else on the desktop of
+    /// whoever is sitting at the machine, so a run on somebody else's screen
+    /// would put their private desktop into the result bundle and from there
+    /// into a reviewer's inbox.  The screen is only the fallback for a run
+    /// with no window to photograph, which is the state the window wait
+    /// reports.
     func snap(_ name: String) {
-        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        let window = app.windows.firstMatch
+        let image: XCUIScreenshot = window.exists ? window.screenshot() : XCUIScreen.main.screenshot()
+        let shot = XCTAttachment(screenshot: image)
         shot.name = name
         shot.lifetime = .keepAlways
         test.add(shot)
