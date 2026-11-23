@@ -115,6 +115,16 @@ final class ClutchMacFixtureUITests: XCTestCase {
             return
         }
         draft.typeText("Run the fixture turn")
+        // A slow runner can turn a held key into the system's accent menu,
+        // and that panel is modal:  it takes the click away from the
+        // surface and the app goes behind it.  Escape closes it, and the
+        // draft is read back afterwards, so a menu that swallowed the text
+        // is a failure rather than a silent empty turn.
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(
+            (draft.value as? String)?.contains("Run the fixture turn") ?? false,
+            "the composer did not keep the typed text after the system panel was dismissed"
+        )
         let send = app.buttons["Send Message"].firstMatch
         guard send.waitForExistence(timeout: 30) else {
             setup.snap("mac-fixture-send-missing")
