@@ -187,7 +187,6 @@ targets:
           # carries a foreign Contents/Resources/Info.plist with iOS-only keys.
           # This target's own plist is Mac/Info.plist (info.path below).
           - Info.plist
-          - SentryTelemetry.swift
           - Services/CometChatManager.swift
           - Views/ChatView.swift
           - Views/AgentMessagesVC.swift
@@ -196,6 +195,9 @@ targets:
       - path: Mac
       - path: Resources
       - path: Assets.xcassets
+    dependencies:
+      - package: Sentry
+        product: Sentry
     settings:
       base:
         PRODUCT_NAME: Clutch
@@ -218,6 +220,7 @@ targets:
         CFBundleName: Clutch
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SENTRY_DSN: $(SENTRY_DSN)
         LSApplicationCategoryType: public.app-category.developer-tools
         ITSAppUsesNonExemptEncryption: false
         NSHighResolutionCapable: true

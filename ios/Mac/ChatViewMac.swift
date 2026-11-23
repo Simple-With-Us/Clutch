@@ -2523,6 +2523,7 @@ public struct ChatView: View {
                         retainTurnOutput()
                         queuePaused = true
                         sendError = message
+                        ErrorReporting.turnFailed(engine: engine.sidecarId, message: message)
                         TurnNotifier.turnFinished(threadTitle: isWorkspace ? engine.label : (selectedModel ?? engine.label), failed: true)
                         return
                     }
@@ -2531,11 +2532,13 @@ public struct ChatView: View {
                 retainTurnOutput()
                 queuePaused = true
                 sendError = "The connection closed before a completion update arrived."
+                ErrorReporting.turnTransportFailed(engine: engine.sidecarId, reason: "stream-closed-before-completion")
             } catch {
                 guard !Task.isCancelled, turnGeneration == generation else { return }
                 retainTurnOutput()
                 queuePaused = true
                 sendError = error.localizedDescription
+                ErrorReporting.turnTransportFailed(engine: engine.sidecarId, error: error)
             }
         }
     }

@@ -33,13 +33,17 @@ enum SentryTelemetry {
             options.appHangTimeoutInterval = 2.0
             options.enableCaptureFailedRequests = true
             options.failedRequestStatusCodes = [HttpStatusCodeRange(min: 500, max: 599)]
+            options.sendDefaultPii = false
+            // Screenshot, view-hierarchy, and replay attachment exist only
+            // on iOS in sentry-cocoa; the macOS target shares this file.
+            #if os(iOS)
             options.attachScreenshot = false
             options.attachViewHierarchy = false
-            options.sendDefaultPii = false
             options.sessionReplay.sessionSampleRate = 0.01
             options.sessionReplay.onErrorSampleRate = 1.0
             options.sessionReplay.maskAllText = true
             options.sessionReplay.maskAllImages = true
+            #endif
         }
     }
 

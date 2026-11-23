@@ -168,6 +168,11 @@ fi
 if [[ -n "$MARKETING_VERSION_VALUE" ]]; then
   XCODE_ARGS+=("MARKETING_VERSION=${MARKETING_VERSION_VALUE}")
 fi
+# Sentry is inert without a DSN: the plist value stays empty and the SDK
+# start below no-ops, the same contract the TestFlight ship uses.
+if [[ -n "${SENTRY_DSN:-}" ]]; then
+  XCODE_ARGS+=("SENTRY_DSN=${SENTRY_DSN}")
+fi
 
 BUILT="$DD/Build/Products/${CONFIGURATION}/Clutch.app"
 # DerivedData persists now, so remove the previous product first: a build that
