@@ -80,7 +80,7 @@ xcodebuild -project Clutch.xcodeproj \
   -scheme "Clutch macOS" \
   -destination "platform=macOS" \
   -resultBundlePath "$RESULT_BUNDLE" \
-  "${DERIVED_ARGS[@]}" \
+  ${DERIVED_ARGS[@]+"${DERIVED_ARGS[@]}"} \
   CODE_SIGN_IDENTITY="-" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGNING_REQUIRED=YES \
