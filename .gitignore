@@ -42,3 +42,9 @@ project.xcworkspace/xcuserdata/
 xcuserdata/
 DerivedData/
 .build/
+
+# Test result bundles
+*.xcresult
+
+# Snapshot recording flag (written by the UI test scripts)
+.clutch-record-snapshots

@@ -311,6 +311,16 @@ public struct ChatView: View {
     /// Clutch can run has them.
     private var isWorkspace: Bool { surface == .workspace }
 
+    /// The name of an engine, from the catalog when the host published one.
+    ///
+    /// The catalog is the source of truth for these names, so a host that
+    /// calls an engine something else is shown as it calls it, which is what
+    /// the phone already does.  The built-in name stands in when there is no
+    /// catalog, or when the catalog does not mention this engine.
+    private func engineName(_ candidate: ChatEngine) -> String {
+        catalog?.descriptor(candidate.sidecarId)?.label ?? candidate.label
+    }
+
     /// The engines this host can run, from its catalog.  A host that answers
     /// with no catalog falls back to the built-in list, so the picker is
     /// never empty.
@@ -1058,20 +1068,20 @@ public struct ChatView: View {
                             selectEngine(candidate)
                         } label: {
                             if candidate == engine {
-                                Label(candidate.label, systemImage: "checkmark")
+                                Label(engineName(candidate), systemImage: "checkmark")
                             } else {
-                                Text(candidate.label)
+                                Text(engineName(candidate))
                             }
                         }
                         .keyboardShortcut(engineShortcut(for: candidate), modifiers: [.command, .option])
                     }
                 } label: {
-                    pickerLabel(entryLabel: engine.label, symbol: "cpu")
+                    pickerLabel(entryLabel: engineName(engine), symbol: "cpu")
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel("Engine: \(engine.label)")
+                .accessibilityLabel("Engine: \(engineName(engine))")
                 .help("Choose engine (⌘⌥1–4)")
 
                 Spacer(minLength: 8)
@@ -1492,7 +1502,7 @@ public struct ChatView: View {
                     if isWorkspace {
                         MacChatSetupCard(
                             symbol: "terminal",
-                            title: engine.label,
+                            title: engineName(engine),
                             message: "Resume an existing thread or type below to start one in this Mac's workspace."
                         )
                         Button("Resume Thread…") { showingSessions = true }
@@ -1626,15 +1636,60 @@ public struct ChatView: View {
         }
     }
 
+    /// The bar at the bottom of a previewed thread.
+    ///
+    /// The buttons have to stay reachable in a narrow window.  A row that
+    /// does not fit is not squeezed by the layout:  it is clipped by the
+    /// window, and a clipped button cannot be clicked at all, so the thread
+    /// cannot be resumed and the surface is broken rather than ugly.  The
+    /// row is therefore the first choice and a stacked layout is what the
+    /// bar falls back to.
     private func previewActionBar(for preview: SessionsClient.PreviewSession) -> some View {
+        ViewThatFits(in: .horizontal) {
+            previewActionRow(for: preview, stacked: false)
+            previewActionRow(for: preview, stacked: true)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.clutchSecondaryBackground.opacity(0.7))
+    }
+
+    @ViewBuilder
+    private func previewActionRow(
+        for preview: SessionsClient.PreviewSession,
+        stacked: Bool
+    ) -> some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 8) {
+                previewHint
+                previewButtons(for: preview)
+            }
+        } else {
+            HStack(spacing: 8) {
+                previewHint
+                previewButtons(for: preview)
+            }
+        }
+    }
+
+    /// What the bar says while the thread is only being previewed.
+    private var previewHint: some View {
         HStack(spacing: 8) {
             Label("Preview Only", systemImage: "eye")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
             Text("Resume to send messages in this thread.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            Spacer()
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// What the bar can be done with.
+    private func previewButtons(for preview: SessionsClient.PreviewSession) -> some View {
+        HStack(spacing: 8) {
             Button(codeRemoteId == nil ? "New Thread" : "Current Thread") {
                 returnFromPreview()
             }
@@ -1654,9 +1709,6 @@ public struct ChatView: View {
                             : "Resume this thread"
                 )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(Color.clutchSecondaryBackground.opacity(0.7))
     }
 
     private func thoughtRow(_ thought: String) -> some View {
@@ -1786,7 +1838,7 @@ public struct ChatView: View {
         }
         guard sidebarLoadingId != session.sessionId else { return }
         cancelSessionLoad()
-        let token = sessionLoadToken
+        let loadToken = sessionLoadToken
         if fromSidebar {
             sidebarLoadingId = session.sessionId
             sidebarError = nil
@@ -1798,7 +1850,7 @@ public struct ChatView: View {
         // visible thread's choices untouched.
         sessionLoadTask = Task {
             defer {
-                if sessionLoadToken == token {
+                if sessionLoadToken == loadToken {
                     sidebarLoadingId = nil
                     sessionLoadTask = nil
                 }
@@ -1809,11 +1861,11 @@ public struct ChatView: View {
                     cwd: session.cwd,
                     engine: target.sidecarId
                 )
-                guard !Task.isCancelled, sessionLoadToken == token,
+                guard !Task.isCancelled, sessionLoadToken == loadToken,
                       activeHost?.id == host.id, engine == target else { return }
                 adopt(chatId: loaded.chatId, remoteId: loaded.remoteSessionId, cwd: loaded.cwd, history: loaded.history, for: target, model: loaded.model, provider: loaded.provider, contextControls: loaded.contextControls)
             } catch {
-                guard !Task.isCancelled, sessionLoadToken == token else { return }
+                guard !Task.isCancelled, sessionLoadToken == loadToken else { return }
                 if fromSidebar {
                     failedSidebarSession = session
                     sidebarError = codeLoadErrorMessage(error, session: session)

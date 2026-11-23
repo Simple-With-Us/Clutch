@@ -50,8 +50,8 @@ final class ClutchChatTabUITests: XCTestCase {
 
         // The home list is the whole surface now; the agent conversation is
         // its first row rather than a tab.  The row is one combined element
-        // with one name, so the query finds that one element instead of
-        // guessing between two answers to the same label.
+        // with one name and one identifier, so the query finds that one
+        // element instead of guessing between two answers to the same label.
         let agentChat = app.descendants(matching: .any)
             .matching(identifier: "agent-chat-row")
             .firstMatch

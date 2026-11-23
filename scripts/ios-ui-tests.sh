@@ -28,6 +28,20 @@ source "$REPO_ROOT/scripts/lib/ios-simulator.sh"
 # against a baseline that was never recorded.
 export TEST_RUNNER_CLUTCH_RECORD_SNAPSHOTS="${CLUTCH_RECORD_SNAPSHOTS:-}"
 export TEST_RUNNER_CLUTCH_SNAPSHOT_DIR="${CLUTCH_SNAPSHOT_DIR:-}"
+export CLUTCH_RECORD_SNAPSHOTS="${CLUTCH_RECORD_SNAPSHOTS:-}"
+export CLUTCH_SNAPSHOT_DIR="${CLUTCH_SNAPSHOT_DIR:-}"
+
+# The test runner does not inherit the environment of this shell, so the
+# ask to record travels in a file at the root of the checkout.  The file
+# goes away when the run is over, so a later run compares instead.
+RECORD_FLAG="$REPO_ROOT/.clutch-record-snapshots"
+if [ "${CLUTCH_RECORD_SNAPSHOTS:-}" = "1" ]; then
+  printf 'record\n' > "$RECORD_FLAG"
+  # The runner is sandboxed and may not be able to read the checkout, so
+  # the flag goes to the scratch directory as well.
+  printf 'record\n' > "${TMPDIR:-/tmp}/.clutch-record-snapshots"
+  trap 'rm -f "$RECORD_FLAG" "${TMPDIR:-/tmp}/.clutch-record-snapshots"' EXIT
+fi
 
 cd "$IOS_DIR" || exit 1
 xcodegen generate || exit 1

@@ -17,16 +17,74 @@ import WebKit
 public final class HostStore {
     public static let shared = HostStore()
 
+    /// The preferences the app keeps its hosts in.
+    ///
+    /// A UI test names a suite of its own, so a test run never unpairs the
+    /// hosts the owner has on this machine.  Everything else uses the app's
+    /// own suite.
+    static func resolveDefaults() -> UserDefaults {
+        #if DEBUG
+        if let suite = DebugLaunch.defaultsSuite, !suite.isEmpty {
+            // A suite that cannot be created must not fall back to the
+            // owner's own defaults:  the reset in the initializer would then
+            // clear the hosts the owner has on this machine, which is the
+            // harm the suite exists to prevent.  A suite name that cannot be
+            // created is a defect in the run, and the process stops here
+            // rather than touching state that belongs to somebody else.
+            guard let isolated = UserDefaults(suiteName: suite) else {
+                fatalError("the UI test defaults suite \(suite) could not be created")
+            }
+            return isolated
+        }
+        #endif
+        return .standard
+    }
+
     static let storageKey = "codes.clutch.hosts.v3"
     static let activeKey = "codes.clutch.activeHost.v3"
+
+    /// The preferences that have already been cleared in this process.
+    ///
+    /// A UI test starts from first run, and the reset happens once for
+    /// each set of preferences:  a second store over the same suite must
+    /// not clear the hosts that were paired after the first one was
+    /// built, and a store over a different suite must still get its own
+    /// first run.
+    private static var clearedPreferences: Set<String> = []
+
+    /// What a set of preferences is called, for the reset that happens once.
+    ///
+    /// The key is the suite's name and not the identity of the object,
+    /// because two calls to `UserDefaults(suiteName:)` make two objects
+    /// over one suite, and both of them belong to the same first run.
+    private static func resetKey(for defaults: UserDefaults) -> String {
+        if defaults === UserDefaults.standard { return "standard" }
+        if let suite = DebugLaunch.defaultsSuite, !suite.isEmpty { return suite }
+        return "preferences-\(ObjectIdentifier(defaults).hashValue)"
+    }
 
     public private(set) var hosts: [ClutchHost] = []
     public private(set) var activeHostID: UUID?
 
     @ObservationIgnored private let defaults: UserDefaults
 
-    public init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
+    /// Creates a host store over the preferences it was given.
+    ///
+    /// A store that was not given preferences takes the same ones the shared
+    /// store takes, so a view that builds its own store honours the suite a
+    /// UI test asked for.  A store that was built over the owner's own
+    /// defaults while a test asked for an isolated suite would reset and
+    /// re-pair the owner's hosts, which is exactly what the suite is there
+    /// to prevent.
+    public init(defaults: UserDefaults? = nil) {
+        let resolved = defaults ?? Self.resolveDefaults()
+        self.defaults = resolved
+        #if DEBUG
+        // A UI test starts from first run.  The reset happens here rather
+        // than in the app's initializer, so it always runs before the
+        // hosts are loaded and no stale host can survive it.
+        Self.resetForFirstRun(defaults: resolved)
+        #endif
         load()
     }
 
@@ -42,7 +100,7 @@ public final class HostStore {
     @discardableResult
     public func pair(_ payload: PairingPayload) -> ClutchHost {
         if let index = hosts.firstIndex(where: { $0.isSameOrigin(payload.origin) }) {
-            if let token = payload.launchToken { hosts[index].pendingLaunchToken = token }
+            if let launchToken = payload.launchToken { hosts[index].pendingLaunchToken = launchToken }
             if let chat = payload.chatToken { hosts[index].chatToken = chat }
             if let port = payload.chatPort { hosts[index].chatPort = port }
             if let kind = payload.kind { hosts[index].kind = kind }
@@ -100,6 +158,25 @@ public final class HostStore {
 
     #if DEBUG
     /// UI tests start from first run.  Must run before `shared` is created.
+    /// Clears the hosts of a set of preferences once, when a run asked for
+    /// a first-run start.
+    ///
+    /// The reset happens once for each set of preferences:  the Mac app
+    /// builds more than one store, and a second store over the same suite
+    /// would clear the hosts the first one paired, while a store over a
+    /// different suite still has to get its own first run.
+    ///
+    /// It is a function of its own so the behaviour can be tested without
+    /// a launch argument.
+    static func resetForFirstRun(
+        defaults: UserDefaults,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) {
+        guard arguments.contains("-ClutchResetHosts") else { return }
+        guard clearedPreferences.insert(resetKey(for: defaults)).inserted else { return }
+        resetPersistedHosts(defaults: defaults)
+    }
+
     static func resetPersistedHosts(defaults: UserDefaults = .standard) {
         if let data = defaults.data(forKey: storageKey),
            let decoded = try? JSONDecoder().decode([ClutchHost].self, from: data) {
@@ -126,10 +203,30 @@ public final class HostStore {
         }
         attachCredentials()
         #if os(macOS)
+        // A UI test pairs the app with its stub from a launch argument, and
+        // a test must not adopt the machine's own launch URL or the
+        // machine's own token, so both are left alone when the run named a
+        // link of its own.
+        if pairForUITest() {
+            return
+        }
         adoptLocalLaunchURL()
         backfillLocalChatToken()
         #endif
     }
+
+    #if os(macOS)
+    /// Pairs the app with the link a UI test named, and reports whether it
+    /// did.
+    @discardableResult
+    private func pairForUITest() -> Bool {
+        guard let raw = DebugLaunch.pairingLink,
+              case .success(var payload) = PairingLink.parse(raw) else { return false }
+        if payload.chatToken == nil { payload.chatToken = localChatToken() }
+        _ = pair(payload)
+        return true
+    }
+    #endif
 
     #if os(macOS)
     private func localClutchHome() -> String {
@@ -155,8 +252,8 @@ public final class HostStore {
     /// zero-config behavior the Dock shell had. Only fills an empty store;
     /// never touches an existing pairing.
     private func adoptLocalLaunchURL() {
-        guard hosts.isEmpty else { return }
         let path = (localClutchHome() as NSString).appendingPathComponent("web-launch-url")
+        guard hosts.isEmpty else { return }
         guard let raw = try? String(contentsOfFile: path, encoding: .utf8),
               case .success(var payload) = PairingLink.parse(raw) else { return }
         if payload.chatToken == nil { payload.chatToken = localChatToken() }

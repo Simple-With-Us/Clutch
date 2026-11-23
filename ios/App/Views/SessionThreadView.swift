@@ -649,7 +649,7 @@ public struct SessionThreadView: View {
 
             if let note = model.catalog?.descriptor(model.engine)?.note {
                 Image(systemName: "info.circle")
-                    .font(ClutchFont.footnote)
+                    .font(ClutchFont.micro)
                     .foregroundStyle(.secondary)
                     .help(note)
             }
@@ -1029,7 +1029,7 @@ public struct SessionThreadView: View {
     private func queuedPromptPill(_ queued: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "tray.and.arrow.down")
-                .font(ClutchFont.footnote)
+                .font(ClutchFont.micro)
                 .foregroundStyle(.secondary)
             Text(queued)
                 .font(ClutchFont.caption)
@@ -1096,13 +1096,13 @@ public struct SessionThreadView: View {
                         Image(systemName: "photo")
                             .font(ClutchFont.micro)
                         Text(attachment.displayName)
-                            .font(ClutchFont.footnote)
+                            .font(ClutchFont.micro)
                             .lineLimit(1)
                         Button {
                             model.attachments.removeAll { $0.id == attachment.id }
                         } label: {
                             Image(systemName: "xmark.circle.fill")
-                                .font(ClutchFont.footnote)
+                                .font(ClutchFont.micro)
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
