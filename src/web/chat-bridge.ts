@@ -1287,6 +1287,37 @@ export interface PermissionOption {
   name: string;
 }
 
+/**
+ * What the tool wants to do, in the words the owner reads before answering.
+ *
+ * An approval the owner cannot read is not an approval, so the sidecar
+ * carries the command for a shell tool, the path for a file tool and a
+ * compact diff for an edit.  Nothing larger crosses the wire, and a field
+ * the engine sent that this file does not name never reaches the client.
+ */
+export interface PermissionEvidence {
+  /** The command the tool wants to run. */
+  command?: string;
+  /** The path the tool wants to touch. */
+  path?: string;
+  /** The lines the tool wants to write, as a compact diff. */
+  diff?: string;
+}
+
+/**
+ * What the owner reads about a permission request, read from the engine's own
+ * params.
+ *
+ * The params are untrusted, so they are parsed against the known shape
+ * first:  a field this file does not name is dropped here and never
+ * reaches the client.
+ */
+export function permissionEvidenceFromParams(params: unknown): PermissionEvidence | undefined {
+  const parsed = PermissionParamsSchema.safeParse(params);
+  if (!parsed.success) return undefined;
+  return buildPermissionEvidence(parsed.data.toolCall?.rawInput);
+}
+
 /** A permission request the engine is waiting on. */
 export interface PermissionRequest {
   /** The id the client answers with. */
@@ -1299,12 +1330,190 @@ export interface PermissionRequest {
   toolName: string;
   /** The options the engine offers. */
   options: PermissionOption[];
+  /** What the tool wants to do, when the engine said enough for the owner to read it. */
+  evidence?: PermissionEvidence;
 }
 
 /** Read one string field out of an unknown value, or null. */
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
+
+/** How many changed lines a compact diff shows before it says how many more. */
+const EVIDENCE_DIFF_LINES = 3;
+
+/** How much of one side of an edit the evidence reads. */
+const EVIDENCE_EDIT_LIMIT = 20_000;
+
+/** What the diff says when the edit it read was cut. */
+const EVIDENCE_CUT_MARKER = "… the edit was cut here; more may have changed";
+
+/** How long one line of the evidence may be. */
+const EVIDENCE_LINE_LIMIT = 160;
+
+/** One side of an edit, and whether it was cut.
+ *
+ * The cut is at a line boundary, because a cut inside a line compares two
+ * halves of a line as two different lines and says the edit changed when
+ * it did not.  The cut never leaves half a character behind either:  a
+ * character that is half of a pair is not a character, and it misrenders
+ * on the card.
+ */
+function boundedEdit(text: string): { text: string; cut: boolean } {
+  if (text.length <= EVIDENCE_EDIT_LIMIT) return { text, cut: false };
+  let head = text.slice(0, EVIDENCE_EDIT_LIMIT);
+  const newline = head.lastIndexOf("\n");
+  if (newline >= 0) head = head.slice(0, newline + 1);
+  if (head.length > 0) {
+    const last = head.charCodeAt(head.length - 1);
+    // A high surrogate at the end is half of a pair, and the other half is
+    // past the cut.
+    if (last >= 0xd800 && last <= 0xdbff) head = head.slice(0, -1);
+  }
+  return { text: head, cut: true };
+}
+
+/** The lines a text holds, without the empty ones. */
+function contentLines(text: string | undefined): string[] {
+  return (text ?? "").split("\n").filter((line) => line.trim().length > 0);
+}
+
+/** One line of evidence, cut to a length a card can hold.
+ *
+ * The cut never leaves half of a character behind:  a character that is
+ * half of a pair is not a character, and it misrenders on the card.
+ */
+function evidenceLine(line: string): string {
+  if (line.length <= EVIDENCE_LINE_LIMIT) return line;
+  let cut = line.slice(0, EVIDENCE_LINE_LIMIT);
+  const last = cut.charCodeAt(cut.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
+/** A compact diff of what an edit would write.
+ *
+ * The owner reads the lines that change and not the whole file, so the
+ * diff shows a few of them and says how many it left out.
+ */
+export function compactDiff(
+  oldText: string | undefined,
+  newText: string | undefined,
+  cut = false,
+): string | undefined {
+  const before = contentLines(oldText);
+  const after = contentLines(newText);
+  if (before.length === 0 && after.length === 0) return undefined;
+  // The lines the two sides share at the head and at the tail did not
+  // change, so the diff shows only the part in the middle:  a diff that
+  // calls an unchanged line removed is a diff that lies.
+  let head = 0;
+  while (head < before.length && head < after.length && before[head] === after[head]) head += 1;
+  let tail = 0;
+  while (
+    tail < before.length - head &&
+    tail < after.length - head &&
+    before[before.length - 1 - tail] === after[after.length - 1 - tail]
+  ) {
+    tail += 1;
+  }
+  const removed = before.slice(head, before.length - tail);
+  const added = after.slice(head, after.length - tail);
+  // The two sides read the same, so the change may be past the cut:  an
+  // edit that was cut says so even when what was read did not differ.
+  if (removed.length === 0 && added.length === 0) return cut ? EVIDENCE_CUT_MARKER : undefined;
+  // A line that was added or taken away moves the lines around it, so the
+  // diff says the line that was added or taken away rather than the same
+  // lines twice:  a change the owner reads as three changed lines is a
+  // change the owner was not shown.
+  let shownRemoved = removed;
+  let shownAdded = added;
+  if (
+    removed.length > 0 &&
+    added.length === removed.length + 1 &&
+    added.slice(1).every((line, index) => line === removed[index])
+  ) {
+    shownRemoved = [];
+    shownAdded = added.slice(0, 1);
+  } else if (
+    added.length > 0 &&
+    removed.length === added.length + 1 &&
+    removed.slice(1).every((line, index) => line === added[index])
+  ) {
+    shownRemoved = removed.slice(0, 1);
+    shownAdded = [];
+  }
+  const lines: string[] = [];
+  for (const line of shownRemoved.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`- ${evidenceLine(line)}`);
+  for (const line of shownAdded.slice(0, EVIDENCE_DIFF_LINES)) lines.push(`+ ${evidenceLine(line)}`);
+  const more =
+    Math.max(0, shownRemoved.length - EVIDENCE_DIFF_LINES) + Math.max(0, shownAdded.length - EVIDENCE_DIFF_LINES);
+  if (more > 0) lines.push(`… ${more} more line${more === 1 ? "" : "s"}`);
+  // An edit larger than the evidence reads may still change past the cut,
+  // so the diff says so beside the lines it could align.
+  if (cut) lines.push(EVIDENCE_CUT_MARKER);
+  return lines.join("\n");
+}
+
+/**
+ * What the tool wants to do, read from the input the engine sent.
+ *
+ * The input is untrusted, so only the fields this file names are read and
+ * only what the owner needs is kept:  the command, the path and the diff.
+ * A tool whose input says none of those has no evidence, and the card says
+ * so rather than showing something the engine never wrote.
+ */
+export function buildPermissionEvidence(rawInput: unknown): PermissionEvidence | undefined {
+  if (typeof rawInput !== "object" || rawInput === null || Array.isArray(rawInput)) return undefined;
+  const record = rawInput as Record<string, unknown>;
+  // The limits live here, where the evidence is built, so every path into
+  // the client cuts the same way:  a cut text says that it was cut.
+  const command = readString(record.command);
+  const path = readString(record.file_path) ?? readString(record.path);
+  // The diff reads a bounded part of the edit, because the engine's input
+  // is unbounded and the request is on the message path:  the part that was
+  // cut is said in the diff, so a change past the cut is not a change the
+  // owner is told does not exist.
+  const oldRaw = typeof record.old_string === "string" ? record.old_string : undefined;
+  const newRaw = typeof record.new_string === "string" ? record.new_string : undefined;
+  const oldEdit = oldRaw === undefined ? undefined : boundedEdit(oldRaw);
+  const newEdit = newRaw === undefined ? undefined : boundedEdit(newRaw);
+  const diff = compactDiff(
+    oldEdit?.text,
+    newEdit?.text,
+    oldEdit?.cut === true || newEdit?.cut === true,
+  );
+  if (!command && !path && !diff) return undefined;
+  return {
+    ...(command ? { command: bounded(command, 2_000) } : {}),
+    ...(path ? { path: bounded(path, 1_000) } : {}),
+    ...(diff ? { diff } : {}),
+  };
+}
+
+/**
+ * Cuts a text to a length a card can hold.
+ *
+ * A cut text says that it was cut, because an approval of half a command
+ * is a claim about the command and not about the whole of it.
+ */
+export function bounded(value: string, limit: number): string {
+  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+}
+
+/** The tool call a permission request is about.
+ *
+ * The tool's own input is kept as it arrives and read where the evidence is
+ * built:  a shape this file does not understand must not make the request
+ * unreadable, because a request that is dropped leaves the engine waiting
+ * on an answer that never comes.
+ */
+const PermissionToolCallSchema = z.object({
+  toolCallId: z.string().optional(),
+  title: z.string().optional(),
+  kind: z.string().optional(),
+  rawInput: z.unknown().optional(),
+});
 
 /**
  * The shape of a permission request as an engine sends it.
@@ -1316,13 +1525,7 @@ function readString(value: unknown): string | null {
 const PermissionParamsSchema = z
   .object({
     sessionId: z.string().optional(),
-    toolCall: z
-      .object({
-        toolCallId: z.string().optional(),
-        title: z.string().optional(),
-        kind: z.string().optional(),
-      })
-      .optional(),
+    toolCall: PermissionToolCallSchema.optional(),
     options: z
       .array(
         z.object({
@@ -1808,17 +2011,22 @@ export class Bridge implements MuseAuthBridge {
    * before, so a caller that never asked for this feature sees no change.
    */
   private holdPermissionRequest(id: number | string, params: Record<string, unknown>): void {
+    // A request the engine sent in a shape this file does not understand is
+    // still a request the engine is blocked on, so it is held and answered
+    // rather than dropped:  a dropped request leaves the engine waiting.
     const parsed = PermissionParamsSchema.safeParse(params);
-    if (!parsed.success) return;
-    const options = parsePermissionOptions(parsed.data.options);
-    const toolCall = parsed.data.toolCall ?? {};
+    const data: z.infer<typeof PermissionParamsSchema> = parsed.success ? parsed.data : {};
+    const options = parsePermissionOptions(data.options);
+    const toolCall: z.infer<typeof PermissionToolCallSchema> = data.toolCall ?? {};
     const title = readString(toolCall.title) ?? "";
+    const evidence = buildPermissionEvidence(toolCall.rawInput);
     const request: PermissionRequest = {
       requestId: `perm-${(permissionCounter += 1)}`,
-      sessionId: readString(parsed.data.sessionId) ?? "",
+      sessionId: readString(data.sessionId) ?? "",
       title,
       toolName: readString(toolCall.kind) ?? (title || "Tool call"),
       options,
+      ...(evidence ? { evidence } : {}),
     };
     this.pendingPermissions.set(request.requestId, { bridgeRequestId: id, options });
     if (!this.onPermission) {
@@ -3595,6 +3803,7 @@ async function main(): Promise<void> {
             title: request.title,
             toolName: request.toolName,
             options: request.options,
+            ...(request.evidence ? { evidence: request.evidence } : {}),
           });
           // The engine waits, so a client that never answers must not hang
           // the turn: the sidecar falls back to the allow-once it has always

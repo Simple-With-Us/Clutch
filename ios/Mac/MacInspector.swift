@@ -80,6 +80,21 @@ struct MacInspector: View {
                 .font(ClutchFont.caption)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+            // What the tool wants to do, so the owner can read it before
+            // answering.
+            if let evidence = request.evidence, !evidence.lines.isEmpty {
+                ForEach(evidence.lines) { line in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(line.label)
+                            .font(ClutchFont.microStrong)
+                            .foregroundStyle(ClutchColor.textSecondary)
+                        Text(line.text)
+                            .font(ClutchFont.monoMicro)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
             ForEach(request.options) { option in
                 Button(option.name) {
                     onAnswer(option.optionId)

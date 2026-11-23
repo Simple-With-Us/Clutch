@@ -109,6 +109,42 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(request.options[1].allows)
     }
 
+    func testDecodesTheEvidenceAPermissionCarries() throws {
+        let payload = """
+        {"requestId":"perm-8","title":"Run npm test","toolName":"bash",
+         "evidence":{"command":"npm test","path":"/tmp/clutch","diff":"- old\\n+ new"},
+         "options":[{"optionId":"allow-once","kind":"allow_once","name":"Allow once"}]}
+        """
+        let event = ChatSessionClient.decode(event: "permission", payload: payload)
+        guard case .permission(let request) = event else {
+            return XCTFail("expected a permission event, got \(String(describing: event))")
+        }
+        // The owner reads the command, the path and the diff before answering.
+        XCTAssertEqual(request.evidence?.command, "npm test")
+        XCTAssertEqual(request.evidence?.path, "/tmp/clutch")
+        XCTAssertEqual(request.evidence?.diff, "- old\n+ new")
+        XCTAssertEqual(request.evidence?.lines.map { $0.label }, ["Command", "Path", "Changes"])
+    }
+
+    func testAPermissionWithNoEvidenceShowsNoEvidence() throws {
+        let payload = """
+        {"requestId":"perm-9","title":"Run a command","toolName":"bash","options":[]}
+        """
+        let event = ChatSessionClient.decode(event: "permission", payload: payload)
+        guard case .permission(let request) = event else {
+            return XCTFail("expected a permission event, got \(String(describing: event))")
+        }
+        // A request the engine said nothing more about shows nothing more.
+        XCTAssertNil(request.evidence)
+        XCTAssertEqual(request.evidence?.lines.count ?? 0, 0)
+    }
+
+    func testTheEvidenceSkipsWhatIsEmpty() {
+        let evidence = AcpPermissionEvidence(command: "  ", path: "/tmp/clutch", diff: "")
+        XCTAssertEqual(evidence.lines.map { $0.label }, ["Path"])
+        XCTAssertEqual(evidence.lines.first?.text, "/tmp/clutch")
+    }
+
     func testDecodesThePlanFromTheStream() throws {
         let payload = """
         {"entries":[{"content":"Read the failing test","priority":"high","status":"in_progress"},

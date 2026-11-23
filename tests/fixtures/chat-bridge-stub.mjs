@@ -214,6 +214,12 @@ rl.on("line", (line) => {
         method: "session/request_permission",
         params: {
           sessionId,
+          toolCall: {
+            toolCallId: "call-1",
+            title: "Run npm test",
+            kind: "bash",
+            rawInput: { command: "npm test" },
+          },
           options: [
             { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
             { optionId: "reject-once", name: "Reject", kind: "reject_once" },
