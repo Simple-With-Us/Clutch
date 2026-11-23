@@ -19,6 +19,22 @@ The north star from that document stands:
 
 That sentence carries one tension this program has to live inside, and it is worth naming before it becomes a surprise.  One tap from the Lock Screen can be a Deny, or it can be a deep link into the app.  It cannot be an informed Allow, because an informed allow needs the command, the path or the diff in front of the owner, and the Lock Screen is the wrong place for that.  The answer is one tap away; the signature takes an unlock and two more.
 
+## The inventory behind the program
+
+The programme is the sequencing; the catalogue is the inventory.  `docs/plans/ui-improvements-catalog.md` is the OpenCode seat's living document (PR #307), and it carries every improvement brainstormed for the native apps across the four-specialist review, the peer sub-threads and the passes that have landed.  It is where an idea goes when it is real, and this document is where it goes when it is scheduled.
+
+The mapping is mostly settled, and it is worth writing down so two seats do not build the same thing twice:
+
+| Pass | Catalogue items |
+|---|---|
+| Pass 1, honest ground | L1 (the Mac UI test target), J3 (the CI literal ratchet), and the accessibility remainder I1 to I4 that the ratchet makes visible |
+| Pass 2, Mac parity and a readable transcript | G3 (`MacTranscriptModel`), D11 (the activity pane), D7 (the fabricated timestamps), D10 (the Session Deck), D9 on the Mac (the Turn Cockpit), D1, D2 and D3 (verbosity, markdown, typed tool cards) |
+| Pass 3, the phone as the attention surface | B2 and B3 (the unlock before an allow, and the evidence an approval shows), B1 remainder (the actionable notification), H1 to H3 (the Live Activity, the Lock Screen accessory, the Control Center action) |
+
+The catalogue names items that no pass owns yet, and the programme should not quietly absorb them:  G1 and G2 (the menu bar, the `Settings` scene, `⌘,` and shortcuts that are not bound to buttons that disappear), D12 (a readable transcript width on iPad), D13 (a new thread from a summary), E2 (return-to-send honesty), F5 (the Mac rail refreshes itself) and F6 (one host store rather than two over one defaults key).  F6 is half-answered by the host store change in this branch: both stores now resolve the same preferences, but they are still two stores.
+
+The catalogue also says plainly where the weight is:  the Mac structural fixes, the approval-evidence remainder, the ambient surfaces and the accessibility remainder.  The first of those is Pass 2, which is the reason Pass 2 exists.
+
 ## Where the app stands today
 
 Measured in this lane against base `126342b`, not assumed.
