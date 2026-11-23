@@ -45,9 +45,12 @@ for test in manifest:
         source = attachment.get("exportedFileName")
         if not source:
             continue
-        # The test asks for "Baselines/<name>.png", so the extension goes on.
-        # A lifted file under any other name is never found, and every later
-        # run stays in SNAPSHOT-GAP.
+        # The bundle looks a baseline up as Baselines/<name>.png, so the
+        # lifted file has to carry that name.  The "-baseline" suffix is the
+        # attachment's marker, not part of the baseline's name, and the
+        # result bundle may or may not put an index and an identifier after
+        # it.  A lifted file under any other name is never found, and every
+        # later run stays in SNAPSHOT-GAP.
         target = os.path.join(dest, match.group("stem") + ".png")
         shutil.copyfile(os.path.join(work, source), target)
         written.append(target)

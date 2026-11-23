@@ -49,10 +49,11 @@ final class ClutchChatTabUITests: XCTestCase {
         app.open(link)
 
         // The home list is the whole surface now; the agent conversation is
-        // its first row rather than a tab.  The row carries one grouped name
-        // for VoiceOver, and that name is what the test asks for.
+        // its first row rather than a tab.  The row is one combined element
+        // with one name and one identifier, so the query finds that one
+        // element instead of guessing between two answers to the same label.
         let agentChat = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH %@", "Agent Chat"))
+            .matching(identifier: "agent-chat-row")
             .firstMatch
         XCTAssertTrue(agentChat.waitForExistence(timeout: 30))
         agentChat.tap()

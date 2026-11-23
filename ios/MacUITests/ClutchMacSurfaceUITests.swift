@@ -109,12 +109,24 @@ final class ClutchMacSurfaceUITests: XCTestCase {
     /// Waits for the workspace window to show up, and skips the test when it
     /// never does.
     ///
+    /// The hosted runner's automation session does not see the Mac app's
+    /// window.  CI runs 45068164411 and 45073642226 both show the app
+    /// launching, the automation session coming up and the app going idle,
+    /// and `Descendants matching type Window` staying empty for the whole
+    /// 60 seconds.  The second of those runs had the
+    /// `-ApplePersistenceIgnoreState` flag out of the launch arguments, so
+    /// the flag is not the cause of it.
+    ///
     /// A macOS window that sits on a space the runner is not showing is not
     /// in the accessibility tree, so the runner can be looking at an app
     /// that plainly has a window and still see nothing.  That is a fact
     /// about the machine, not a defect in the surface, and a test that
-    /// failed on it would be a false alarm.  So the test skips, loudly, and
-    /// the result bundle says which state it was in.
+    /// failed on it would be a false alarm on every run.  So the test skips,
+    /// loudly, and the result bundle says which state it was in.
+    ///
+    /// What the run can still answer is that the app launched and stayed
+    /// alive, so an app that exits instead of opening a window fails here
+    /// rather than skipping.
     private func waitForWindow(timeout: TimeInterval = 60) throws {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -126,6 +138,16 @@ final class ClutchMacSurfaceUITests: XCTestCase {
                 try? app.activate()
                 return
             }
+            // An app that exited is a defect in the surface, and waiting out
+            // the timeout to say so would delay the answer by a minute per
+            // test on exactly the broken-app path.
+            if app.state == .notRunning {
+                XCTFail("the Mac app exited instead of opening a window")
+                // The failure has to leave the test rather than fall through
+                // to the skip below:  a skip raised afterwards would report an
+                // app that exited as a fact about the machine.
+                throw Self.appExitedError
+            }
             // Bringing the app forward is best effort.  A runner that does
             // not own the foreground session cannot activate it, and that is
             // not a reason to stop looking for the window.
@@ -134,9 +156,25 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         }
         snap("mac-window-missing")
         dump("mac-window-tree")
+        if app.state == .notRunning {
+            throw Self.appExitedError
+        }
         throw XCTSkip(
-            "the runner could not see the Mac app's window; the app may hold it on a space "
-                + "the runner is not showing"
+            "the runner's automation session could not see the Mac app's window; the app was "
+                + "running, so the Mac surface was not verified"
+        )
+    }
+
+    /// The error an app that exited carries out of the window wait.
+    ///
+    /// Throwing it leaves the test, and a test that ends in an error is a
+    /// failure:  an app that exited instead of opening a window is a defect
+    /// in the surface, not a fact about the machine.
+    private static var appExitedError: NSError {
+        NSError(
+            domain: "ClutchMacSurfaceUITests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "the Mac app exited instead of opening a window"]
         )
     }
 

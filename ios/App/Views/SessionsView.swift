@@ -382,11 +382,6 @@ public struct SessionsView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Agent Chat")
                         .font(.system(size: 12, weight: .semibold))
-                        // The row is one thing to a VoiceOver user, so the
-                        // title carries the whole name and the subtitle is
-                        // not read a second time on its own.
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Agent Chat, The always-there conversation")
                     Text("The always-there conversation")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
@@ -396,6 +391,14 @@ public struct SessionsView: View {
             }
             .frame(minHeight: 44)
             .tag(HomeSelection.agentChat)
+            // The row is one thing to VoiceOver, not three:  the icon, the
+            // title and the subtitle are combined into a single element with
+            // one name, the way a thread row names itself.  The row behaves
+            // as a button because tapping it opens the agent conversation.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Agent Chat, The always-there conversation")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("agent-chat-row")
         }
         #endif
     }

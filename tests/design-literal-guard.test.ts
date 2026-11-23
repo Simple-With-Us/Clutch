@@ -16,8 +16,10 @@ const LITERAL =
 
 type Allowlist = Record<string, Record<string, number>>;
 
-// The allowlist is a config file, and a config file that drifts in shape
-// fails here rather than halfway through a comparison.
+// The allowlist is a file in the repository, so its shape is a trust
+// boundary:  a schema means a drifted file fails here, loudly, instead of
+// quietly allowing a literal it should not or quietly forbidding one it
+// should.
 const AllowlistSchema = z.record(z.string(), z.record(z.string(), z.number()));
 
 function allowlist(): Allowlist {
