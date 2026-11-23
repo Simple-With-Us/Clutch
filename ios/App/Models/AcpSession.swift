@@ -362,19 +362,23 @@ public struct AcpToolCall: Equatable, Sendable {
     public var parentId: String?
     /// What the tool was asked to do, as the engine wrote it.
     public var input: String?
+    /// What the tool answered, as the engine wrote it.
+    public var output: String?
 
     public init(
         id: String,
         name: String,
         status: String,
         parentId: String? = nil,
-        input: String? = nil
+        input: String? = nil,
+        output: String? = nil
     ) {
         self.id = id
         self.name = name
         self.status = status
         self.parentId = parentId
         self.input = input
+        self.output = output
     }
 }
 
@@ -389,8 +393,20 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     public var parentToolCallId: String?
     /// What the tool was asked to do, as the engine wrote it.
     public var toolInput: String?
+    /// What the tool answered, as the engine wrote it.
+    ///
+    /// The input says what the call was asked and the output says what came
+    /// back.  A card that carries only the input shows a question; a card
+    /// that carries both shows the work.
+    public var toolOutput: String?
     /// Present on a `plan` entry: the plan the engine last reported.
     public var plan: [AcpPlanEntry]?
+    /// The time the engine recorded the entry, in epoch milliseconds.
+    ///
+    /// A replayed entry carries the time it happened.  An entry with no
+    /// time says so, and the client shows no time rather than the time the
+    /// entry was read back.
+    public var at: Double?
 
     public init(
         sessionId: String,
@@ -400,7 +416,9 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
         toolStatus: String? = nil,
         parentToolCallId: String? = nil,
         toolInput: String? = nil,
-        plan: [AcpPlanEntry]? = nil
+        toolOutput: String? = nil,
+        plan: [AcpPlanEntry]? = nil,
+        at: Double? = nil
     ) {
         self.sessionId = sessionId
         self.kind = kind
@@ -409,7 +427,9 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
         self.toolStatus = toolStatus
         self.parentToolCallId = parentToolCallId
         self.toolInput = toolInput
+        self.toolOutput = toolOutput
         self.plan = plan
+        self.at = at
     }
 
     public var isTool: Bool { kind == "tool_call" || kind == "tool_call_update" }

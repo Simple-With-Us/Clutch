@@ -23,6 +23,8 @@ struct ThreadBubbleItem: Identifiable, Equatable {
     var toolCallId: String? = nil
     /// What the tool was asked to do, as the engine wrote it.
     var toolInput: String? = nil
+    /// What the tool answered, as the engine wrote it.
+    var toolOutput: String? = nil
 }
 
 @MainActor
@@ -234,7 +236,8 @@ final class SessionThreadModel {
                             name: call.name,
                             status: call.status,
                             parentId: call.parentId,
-                            input: call.input
+                            input: call.input,
+                            output: call.output
                         )
                     case .permission(let request):
                         // The engine is blocked on this request until the
@@ -382,13 +385,21 @@ final class SessionThreadModel {
 
     /// Tool updates rewrite the card minted for that call, so a long-running
     /// tool shows one card moving running → completed, not a pile of rows.
-    private func upsertTool(id: String, name: String, status: String, parentId: String?, input: String?) {
+    private func upsertTool(
+        id: String,
+        name: String,
+        status: String,
+        parentId: String?,
+        input: String?,
+        output: String? = nil
+    ) {
         let key = id.isEmpty ? "tool-\(name)" : "tool-\(id)"
         if let index = bubbles.firstIndex(where: { $0.id == key }) {
             bubbles[index].toolStatus = status
             if !name.isEmpty { bubbles[index].text = name }
             if let parentId { bubbles[index].toolParentId = parentId }
             if let input { bubbles[index].toolInput = input }
+            if let output { bubbles[index].toolOutput = output }
         } else {
             bubbles.append(ThreadBubbleItem(
                 id: key,
@@ -397,7 +408,8 @@ final class SessionThreadModel {
                 toolStatus: status,
                 toolParentId: parentId,
                 toolCallId: id.isEmpty ? nil : id,
-                toolInput: input
+                toolInput: input,
+                toolOutput: output
             ))
         }
     }
@@ -444,7 +456,8 @@ final class SessionThreadModel {
                     toolStatus: entry.toolStatus ?? "completed",
                     toolParentId: entry.parentToolCallId,
                     toolCallId: entry.toolCallId,
-                    toolInput: entry.toolInput
+                    toolInput: entry.toolInput,
+                    toolOutput: entry.toolOutput
                 )
             }
             guard entry.isVisible else { return nil }
@@ -1164,7 +1177,8 @@ struct ThreadBubbleRow: View {
                 name: bubble.text,
                 status: bubble.toolStatus ?? "completed",
                 depth: depth,
-                input: bubble.toolInput
+                input: bubble.toolInput,
+                output: bubble.toolOutput
             )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)

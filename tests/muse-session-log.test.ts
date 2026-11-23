@@ -52,9 +52,30 @@ describe("Muse session log parser", () => {
       { sessionId: SESSION_ID, kind: "user_message_chunk", text: "Invented user text" },
       { sessionId: SESSION_ID, kind: "agent_message_chunk", text: "Invented assistant text" },
       { sessionId: SESSION_ID, kind: "tool_call", text: "read_file", toolCallId: "call-1", toolStatus: "running" },
-      { sessionId: SESSION_ID, kind: "tool_call_update", text: "Invented tool result", toolCallId: "call-1", toolStatus: "completed" },
+      { sessionId: SESSION_ID, kind: "tool_call_update", text: "Invented tool result", toolCallId: "call-1", toolStatus: "completed", toolOutput: "Invented tool result" },
     ]);
+    // The runtime log redacts the arguments of a call, so the parser must
+    // not surface them:  there is nothing there to show.
     expect(parsed.transcript.join(" ")).not.toContain("private args omitted");
+  });
+
+  it("carries the time the engine recorded and leaves a record with no time alone", () => {
+    // The engine writes its log in microseconds, and the time it recorded
+    // is the time the message happened:  a replay that shows the time it
+    // was read back tells the reader that an old thread happened now.
+    const timed = JSON.stringify({
+      record_type: "event",
+      payload_type: "runtime.session",
+      payload: { event: { kind: "assistant_message_committed", text: "Timed text" } },
+      sequence: 3,
+      recorded_at: 1_793_727_876_526_813,
+    });
+    const parsed = parseMuseSessionLog([timed, userRecord("Untimed text", 4)].join("\n"), SESSION_ID);
+
+    expect(parsed.transcript[0]?.at).toBe(1_793_727_876_527);
+    // A record with no recorded time carries none, rather than one that
+    // was made up from the moment it was read.
+    expect(parsed.transcript[1]?.at).toBeUndefined();
   });
 
   it("deduplicates provider usage IDs and excludes estimates and unreported totals", () => {
