@@ -236,7 +236,7 @@ final class MacTranscriptModelTests: XCTestCase {
     func testATurnCarriesTheTimeItStartedAndHowLongItTook() {
         var model = self.model()
         model.history = [
-            MacTranscriptModel.HistoryEntry(id: "h1", text: "Do the work", fromAgent: false, at: Date(timeIntervalSince1970: 1_000)),
+            MacTranscriptModel.HistoryEntry(id: "h1", text: "Do the work", at: Date(timeIntervalSince1970: 1_000), fromAgent: false),
             MacTranscriptModel.HistoryEntry(id: "h2", text: "On it.", at: Date(timeIntervalSince1970: 1_030)),
         ]
 
