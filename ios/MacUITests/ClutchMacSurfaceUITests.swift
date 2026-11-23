@@ -24,170 +24,30 @@ import XCTest
 /// catalog named.  The screenshots are kept as attachments for a human to
 /// look at.
 final class ClutchMacSurfaceUITests: XCTestCase {
-    private var app: XCUIApplication!
-    private var stub: StubSidecar!
+    private var harness: MacSurfaceHarness!
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        stub = StubSidecar()
-        try stub.start()
-
-        app = XCUIApplication()
-        // The window size and the rail width are both restored from the last
-        // run on the machine, so the app is asked to open at a fixed size and
-        // to drop the saved rail width.  That is what makes the surface
-        // under test the same surface on every machine.
-        //
-        // `-ApplePersistenceIgnoreState` is deliberately not used here:  it
-        // tells AppKit to ignore the saved state, and a SwiftUI app that
-        // ignores its saved state opens no window at all, which leaves the
-        // test with nothing to look at and every run skipped.
-        app.launchArguments = [
-            "-ClutchResetHosts",
-            "-ClutchWindowSize", "1040x760",
-            // The pairing travels as a launch argument rather than as a file
-            // the test writes:  the test runner's container is protected, so
-            // a file it writes is not readable from the app.  The link
-            // points at the stub and never at a real install.
-            "-ClutchPairingLink", Self.pairingLink(for: stub.port),
-            // The app keeps its paired hosts in preferences, so the run is
-            // given a suite of its own.  Without this the test would unpair
-            // the hosts the owner has on this machine.
-            "-ClutchDefaultsSuite", "codes.clutch.macos.uitest",
-        ]
+        harness = try MacSurfaceHarness(test: self)
     }
 
     override func tearDownWithError() throws {
-        app?.terminate()
-        stub?.stop()
-        app = nil
-        stub = nil
-    }
-
-    /// The pairing link for the stub, with the chat port it listens on.
-    ///
-    /// A code server has no web port of its own, so the origin port is the
-    /// chat port:  that is the only port behind the name.
-    private static func pairingLink(for port: Int) -> String {
-        "clutch://pair?h=127.0.0.1&tls=0&kind=mcode"
-            + "&chat=\(StubSidecar.chatToken)&chatPort=\(port)"
-    }
-
-    private func snap(_ name: String) {
-        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        shot.name = name
-        shot.lifetime = .keepAlways
-        add(shot)
-    }
-
-    private func dump(_ name: String) {
-        let tree = XCTAttachment(string: app.debugDescription)
-        tree.name = name
-        tree.lifetime = .keepAlways
-        add(tree)
-    }
-
-    /// Brings the app to the front of the machine.
-    ///
-    /// The app under test is a window on a desktop that belongs to somebody
-    /// else, and a screenshot of that window shows whatever else is on the
-    /// desktop as well.  Bringing the app forward is what makes the
-    /// attachment worth looking at.
-    ///
-    /// This is best effort.  A runner that does not own the foreground
-    /// session cannot bring an app forward, and the attachment is still
-    /// worth having.
-    private func bringToFront() {
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline {
-            try? app.activate()
-            if app.state == .runningForeground { return }
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-    }
-
-    /// Waits for the workspace window to show up, and skips the test when it
-    /// never does.
-    ///
-    /// The hosted runner's automation session does not see the Mac app's
-    /// window.  CI runs 45068164411 and 45073642226 both show the app
-    /// launching, the automation session coming up and the app going idle,
-    /// and `Descendants matching type Window` staying empty for the whole
-    /// 60 seconds.  The second of those runs had the
-    /// `-ApplePersistenceIgnoreState` flag out of the launch arguments, so
-    /// the flag is not the cause of it.
-    ///
-    /// A macOS window that sits on a space the runner is not showing is not
-    /// in the accessibility tree, so the runner can be looking at an app
-    /// that plainly has a window and still see nothing.  That is a fact
-    /// about the machine, not a defect in the surface, and a test that
-    /// failed on it would be a false alarm on every run.  So the test skips,
-    /// loudly, and the result bundle says which state it was in.
-    ///
-    /// What the run can still answer is that the app launched and stayed
-    /// alive, so an app that exits instead of opening a window fails here
-    /// rather than skipping.
-    private func waitForWindow(timeout: TimeInterval = 60) throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if app.windows.count > 0 {
-                // A background app's controls are disabled, so the app is
-                // brought forward before anything is tapped.  This is best
-                // effort:  a runner that does not own the foreground
-                // session cannot activate it, and the window is still there.
-                try? app.activate()
-                return
-            }
-            // An app that exited is a defect in the surface, and waiting out
-            // the timeout to say so would delay the answer by a minute per
-            // test on exactly the broken-app path.
-            if app.state == .notRunning {
-                XCTFail("the Mac app exited instead of opening a window")
-                // The failure has to leave the test rather than fall through
-                // to the skip below:  a skip raised afterwards would report an
-                // app that exited as a fact about the machine.
-                throw Self.appExitedError
-            }
-            // Bringing the app forward is best effort.  A runner that does
-            // not own the foreground session cannot activate it, and that is
-            // not a reason to stop looking for the window.
-            try? app.activate()
-            Thread.sleep(forTimeInterval: 1)
-        }
-        snap("mac-window-missing")
-        dump("mac-window-tree")
-        if app.state == .notRunning {
-            throw Self.appExitedError
-        }
-        throw XCTSkip(
-            "the runner's automation session could not see the Mac app's window; the app was "
-                + "running, so the Mac surface was not verified"
-        )
-    }
-
-    /// The error an app that exited carries out of the window wait.
-    ///
-    /// Throwing it leaves the test, and a test that ends in an error is a
-    /// failure:  an app that exited instead of opening a window is a defect
-    /// in the surface, not a fact about the machine.
-    private static var appExitedError: NSError {
-        NSError(
-            domain: "ClutchMacSurfaceUITests",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "the Mac app exited instead of opening a window"]
-        )
+        harness?.shutdown()
+        harness?.stub.stop()
+        harness = nil
     }
 
     func testWorkspaceOpensAndListsTheStubThread() throws {
+        let app = harness.app
         app.launch()
 
-        try waitForWindow()
+        try harness.waitForWindow()
 
         // The sidebar is the Mac app's own chrome.  Its presence says the
         // window rendered rather than sat on a spinner.
         guard app.staticTexts["Threads"].waitForExistence(timeout: 60) else {
-            snap("mac-sidebar-missing")
-            dump("mac-sidebar-tree")
+            harness.snap("mac-sidebar-missing")
+            harness.dump("mac-sidebar-tree")
             XCTFail("the Mac workspace did not draw its thread sidebar")
             return
         }
@@ -197,20 +57,21 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         // fake that.
         let thread = app.buttons["Thread, Fix The Login Redirect"].firstMatch
         if !thread.waitForExistence(timeout: 60) {
-            snap("mac-workspace-threads-missing")
-            dump("mac-workspace-threads-tree")
+            harness.snap("mac-workspace-threads-missing")
+            harness.dump("mac-workspace-threads-tree")
             XCTFail("the stub's thread did not appear in the Mac thread list")
             return
         }
 
-        bringToFront()
-        snap("mac-workspace-threads")
+        harness.bringToFront()
+        harness.snap("mac-workspace-threads")
     }
 
     func testWorkspaceShowsTheEngineCatalogTheStubServed() throws {
+        let app = harness.app
         app.launch()
 
-        try waitForWindow()
+        try harness.waitForWindow()
 
         // The name of the engine comes from the catalog the stub answered
         // with.  The stub names its engine "Stub Engine", which no build of
@@ -218,13 +79,13 @@ final class ClutchMacSurfaceUITests: XCTestCase {
         // the app read the catalog over the sidecar and drew it.
         let engine = app.staticTexts["Stub Engine"].firstMatch
         if !engine.waitForExistence(timeout: 60) {
-            snap("mac-engine-missing")
-            dump("mac-engine-tree")
+            harness.snap("mac-engine-missing")
+            harness.dump("mac-engine-tree")
             XCTFail("the engine the stub served did not appear in the Mac workspace")
             return
         }
 
-        bringToFront()
-        snap("mac-workspace-engine")
+        harness.bringToFront()
+        harness.snap("mac-workspace-engine")
     }
 }

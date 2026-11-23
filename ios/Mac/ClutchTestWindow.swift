@@ -70,21 +70,57 @@ extension View {
 /// This is a debug-only hook.  It does nothing unless the run asked for a
 /// window size, so a shipped build never takes this path.
 final class ClutchTestActivationDelegate: NSObject, NSApplicationDelegate {
+    /// How long the app keeps bringing itself forward, in half-second ticks.
+    private static let forwardTicks = 40
+    private var forwardTimer: Timer?
+    private var forwardTicks = 0
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard DebugLaunch.windowSize != nil else { return }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         // SwiftUI opens the window of its scene when the app is activated,
         // and an app that was started by running its binary never receives
-        // that event.  Asking LaunchServices to open the app is what
-        // delivers it:  LaunchServices finds the running instance and
-        // activates it, and the window comes up.
+        // that event.  Asking the running app to activate itself is what
+        // delivers it.
+        //
+        // It has to be this app and not a second copy of it:  asking
+        // LaunchServices to open the bundle would find no registered running
+        // instance, because the app was started by running its binary rather
+        // than through LaunchServices, and would launch a second copy.  The
+        // second copy takes the foreground, the first one is left with a
+        // window the automation session cannot see, and the run reports a
+        // machine that cannot host the test instead of the surface.
+        NSRunningApplication.current.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        // Activating ourselves is not always enough:  an app started by
+        // running its binary is not a frontmost application, and macOS lets
+        // only a frontmost application take the foreground.  Asking
+        // LaunchServices to open the bundle is the system-mediated way in,
+        // and LaunchServices activates the running instance of the bundle
+        // rather than launching a second copy of it.
         Self.activateThroughLaunchServices()
-        for delay in [0.2, 0.5, 1.0, 2.0] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                Self.orderWindowsIn()
+
+        // The window is created a moment after the app is activated, and a
+        // window created while the app is still in the background lands on a
+        // space the runner is not showing.  A window on another space is not
+        // in the accessibility tree at all, so the runner sees an app with no
+        // window even though it has one.
+        //
+        // So the app keeps bringing itself forward for a while after it
+        // launches:  every window that appears is moved to the space the
+        // runner is showing and ordered in front of it.  A one-shot ordering
+        // loses the race with the window being created.
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.forwardTicks += 1
+            Self.orderWindowsIn()
+            if self.forwardTicks >= Self.forwardTicks {
+                self.forwardTimer?.invalidate()
+                self.forwardTimer = nil
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        forwardTimer = timer
     }
 
     /// Asks LaunchServices to activate this app.
