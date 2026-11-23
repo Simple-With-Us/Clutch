@@ -21,4 +21,20 @@ final class ErrorReportingTests: XCTestCase {
         XCTAssertTrue(line.contains("mcode"))
         XCTAssertTrue(line.contains("FakeTransportError"))
     }
+
+    func testRedactionStripsUrlsAndPaths() {
+        XCTAssertEqual(
+            ErrorReporting.redacted("fetch https://provider.example/v1/chat?key=abc failed"),
+            "fetch [url] failed"
+        )
+        XCTAssertEqual(
+            ErrorReporting.redacted("open /private/tmp/clutch/x failed"),
+            "open [path] failed"
+        )
+    }
+
+    func testRedactionLeavesSafeCopyAlone() {
+        let safe = "Muse request failed (ACP code -32603)."
+        XCTAssertEqual(ErrorReporting.redacted(safe), safe)
+    }
 }

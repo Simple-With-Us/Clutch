@@ -11,12 +11,14 @@ import Sentry
 /// automatic hook sees — an ACP error from the sidecar would otherwise be
 /// visible only on the device where it happened.
 ///
-/// Privacy: only the sidecar's safe display copy travels (engine name and
-/// the failure line the owner already reads — never prompt, transcript,
-/// path, or token text).  Transport error descriptions can embed URLs, so
-/// only the error's type name travels for those.
+/// Privacy: URLs and absolute paths are redacted from every message at
+/// this boundary — Muse copy arrives safe, but other engines forward raw
+/// provider text that can embed URLs or paths.  Prompt, transcript, and
+/// token text never travel: only the failure line the owner already reads.
+/// Transport error descriptions can embed URLs, so only the error's type
+/// name travels for those.
 public enum ErrorReporting {
-    /// A turn the engine refused or failed, with the sidecar's safe copy.
+    /// A turn the engine refused or failed, redacted for travel.
     public static func turnFailed(engine: String, message: String) {
         report(turnMessage(engine: engine, message: message))
     }
@@ -35,7 +37,23 @@ public enum ErrorReporting {
     /// The report line for an engine failure.  Pure, so the shape is pinned
     /// without touching the telemetry backend.
     public static func turnMessage(engine: String, message: String) -> String {
-        "[turn-failed engine=\(engine)] \(message)"
+        "[turn-failed engine=\(engine)] \(redacted(message))"
+    }
+
+    /// Strip URLs and absolute paths from a message.  Safe copy passes
+    /// through untouched; raw provider text loses its exfiltratable parts.
+    public static func redacted(_ message: String) -> String {
+        var out = message.replacingOccurrences(
+            of: "https?://\\S+",
+            with: "[url]",
+            options: .regularExpression
+        )
+        out = out.replacingOccurrences(
+            of: "(^|[\\s(])(~?/(?:[^/\\s]+/)*[^/\\s]*)",
+            with: "$1[path]",
+            options: .regularExpression
+        )
+        return out
     }
 
     /// The report line for a transport failure: the error's type only.
@@ -54,8 +72,10 @@ public enum ErrorReporting {
 }
 
 /// A reportable failure line.  A dedicated error type keeps turn failures
-/// grouped apart from crashes in the issue stream.
-private struct ReportedFailure: Error, CustomStringConvertible {
+/// grouped apart from crashes in the issue stream, and `LocalizedError`
+/// is what Sentry reads through the NSError bridge — without it every
+/// report would carry the same generic description.
+private struct ReportedFailure: Error, LocalizedError {
     let message: String
-    var description: String { message }
+    var errorDescription: String? { message }
 }

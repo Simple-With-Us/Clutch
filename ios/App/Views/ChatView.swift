@@ -1090,8 +1090,11 @@ struct ChatInputBar: View {
             }
         }
         .confirmationDialog("Attach", isPresented: $showAttachMenu, titleVisibility: .hidden) {
-            Button("Choose Photo") { showPhotoPicker = true }
-            Button("Choose File") { showFilePicker = true }
+            // The pickers open after the dialog dismisses: presenting
+            // synchronously from the action can drop the second
+            // presentation while the dismissal is still in flight.
+            Button("Choose Photo") { DispatchQueue.main.async { showPhotoPicker = true } }
+            Button("Choose File") { DispatchQueue.main.async { showFilePicker = true } }
             Button("Paste Image Or File") { Task { await pasteClipboard() } }
             Button("Cancel", role: .cancel) {}
         }
