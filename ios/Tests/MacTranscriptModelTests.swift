@@ -95,7 +95,9 @@ final class MacTranscriptModelTests: XCTestCase {
 
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows[0].kind, .toolGroup)
-        XCTAssertEqual(rows[0].text, "3 tool calls")
+        // The line names what the run did, and a call the classifier does
+        // not know is counted rather than guessed at.
+        XCTAssertEqual(rows[0].text, "2 files, 1 more")
         XCTAssertEqual(rows[0].toolCount, 3)
         // The group carries the outcome of the run.
         XCTAssertEqual(rows[0].toolStatus, "failed")
