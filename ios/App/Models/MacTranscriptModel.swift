@@ -32,19 +32,15 @@ public struct MacTranscriptModel: Equatable, Sendable {
         /// The engines name their tools after what they do, so the name is
         /// the only thing there is to go on.  The names are read the way the
         /// engines write them:  `read_file`, `edit_file`, `apply_patch`,
-        /// `bash`, `run_tests`.
+        /// `bash`, `run_tests`.  The card reads the same name the same
+        /// way, so the two never disagree about what a call was.
         public static func classify(_ name: String) -> ToolKind {
-            let n = name.lowercased()
-            if n.contains("test") { return .test }
-            if n.contains("file") || n.contains("patch")
-                || n.hasPrefix("read") || n.hasPrefix("write") || n.hasPrefix("edit") {
-                return .file
+            switch TypedToolCard.classify(name: name) {
+            case .fileRead, .fileEdit: return .file
+            case .shell: return .command
+            case .test: return .test
+            case .unknown: return .other
             }
-            if n.contains("bash") || n.contains("shell") || n.contains("exec")
-                || n.contains("command") || n.contains("terminal") || n.hasPrefix("run") {
-                return .command
-            }
-            return .other
         }
     }
 
@@ -130,6 +126,11 @@ public struct MacTranscriptModel: Equatable, Sendable {
         guard let index = rows.firstIndex(where: { $0.id == rowID }) else { return nil }
         let row = rows[index]
         let turn = row.turn ?? 1
+        // A row that is not a call has no call number:  saying "tool 1"
+        // about a sentence would be a number about the wrong thing.
+        guard row.kind == .tool else {
+            return TurnLocation(turn: turn, tool: nil, kind: row.kind)
+        }
         var tool = 0
         for candidate in rows {
             guard (candidate.turn ?? 1) == turn else { continue }
@@ -138,7 +139,7 @@ public struct MacTranscriptModel: Equatable, Sendable {
                 if candidate.id == rowID { break }
             }
         }
-        return TurnLocation(turn: turn, tool: tool == 0 ? nil : tool, kind: row.kind)
+        return TurnLocation(turn: turn, tool: tool, kind: row.kind)
     }
 
     /// Numbers the turns of the transcript.

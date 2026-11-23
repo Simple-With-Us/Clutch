@@ -134,25 +134,50 @@ public struct TypedToolCard: Equatable, Sendable {
     /// The name is read first because the engines name their tools after
     /// what they do, and the arguments are read next because a tool called
     /// `run` can be a command or a test.
+    ///
+    /// The name is read as words and not as letters:  a tool called
+    /// `send_thread` ends in the letters of `read` and is not a file read,
+    /// and a tool that reads a file is called `read_file` and not
+    /// `thread_read`.
     public static func classify(name: String, fields: JSONFields = JSONFields(fields: [:])) -> Kind {
-        let n = name.lowercased()
-        if n.contains("test") || fields.string(["test_name", "testName", "test_path"]) != nil {
+        let words = Self.words(in: name)
+        if words.contains("test") || words.contains("tests")
+            || fields.string(["test_name", "testName", "test_path"]) != nil {
             return .test
         }
-        if n.contains("read") && !n.contains("edit") && !n.contains("write") {
-            return .fileRead
-        }
-        if n.contains("edit") || n.contains("write") || n.contains("patch") || n.contains("apply") {
+        if words.contains("edit") || words.contains("write")
+            || words.contains("patch") || words.contains("apply") {
             return .fileEdit
         }
-        if n.contains("bash") || n.contains("shell") || n.contains("exec")
-            || n.contains("command") || n.contains("terminal") || n.hasPrefix("run") {
+        if words.contains("read") || words.contains("file") || words.contains("files") {
+            return .fileRead
+        }
+        if words.contains("bash") || words.contains("shell") || words.contains("exec")
+            || words.contains("command") || words.contains("run") || words.contains("terminal") {
             return .shell
         }
-        if n.hasPrefix("read") { return .fileRead }
         if fields.string(["command", "cmd"]) != nil { return .shell }
         if fields.string(["old_string", "oldString", "new_string", "newString"]) != nil { return .fileEdit }
         return .unknown
+    }
+
+    /// The words a tool's name is made of.
+    ///
+    /// The engines write the name in snake case, in kebab case and in
+    /// camel case, and a name can be prefixed with the server that owns
+    /// the tool, so the words are read however they are separated.
+    private static func words(in name: String) -> Set<String> {
+        var out: Set<String> = []
+        var current = ""
+        for character in name.lowercased() {
+            if character.isLetter || character.isNumber {
+                current.append(character)
+            } else {
+                if !current.isEmpty { out.insert(current); current = "" }
+            }
+        }
+        if !current.isEmpty { out.insert(current) }
+        return out
     }
 
     /// The headline the card shows.
