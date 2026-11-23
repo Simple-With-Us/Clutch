@@ -71,7 +71,21 @@ extension View {
 /// window size, so a shipped build never takes this path.
 final class ClutchTestActivationDelegate: NSObject, NSApplicationDelegate {
     /// How long the app keeps bringing itself forward, in half-second ticks.
-    private static let forwardTicks = 40
+    ///
+    /// The window is a UI test's whole subject, and a UI test spends its
+    /// first minute looking at it:  a run that opens a thread, previews it
+    /// and then resumes it is still tapping buttons long after a window
+    /// that only came forward for twenty seconds has fallen behind
+    /// whatever the session put in front of it.  A control in a background
+    /// app is not clickable at all, so the run would fail on the machine
+    /// rather than on the surface.
+    private static let forwardTicks = 240
+    /// How often, in ticks, the app asks for the foreground again.
+    ///
+    /// Ordering the windows in is not the same as being the frontmost app:
+    /// a panel that took the foreground (a menu, an alert, another window)
+    /// leaves the app behind it, and the app has to ask its way back.
+    private static let activateEveryTicks = 20
     private var forwardTimer: Timer?
     private var forwardTicks = 0
 
@@ -114,6 +128,14 @@ final class ClutchTestActivationDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.forwardTicks += 1
             Self.orderWindowsIn()
+            if self.forwardTicks % Self.activateEveryTicks == 0 {
+                // The app asks for the foreground again every few seconds:
+                // a menu, an alert or another window can take it, and a
+                // background app's controls cannot be clicked at all.
+                NSRunningApplication.current.activate(
+                    options: [.activateAllWindows, .activateIgnoringOtherApps]
+                )
+            }
             if self.forwardTicks >= Self.forwardTicks {
                 self.forwardTimer?.invalidate()
                 self.forwardTimer = nil
