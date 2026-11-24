@@ -37,7 +37,7 @@ import { join } from "node:path";
 import type { Engine } from "../shared/engine-types.ts";
 import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, supportsThreads } from "../shared/engine-types.ts";
 import { loadEnginePlugins } from "../shared/engines/index.ts";
-import { isRetiredModelId } from "../shared/retired-model-ids.ts";
+import { isRetiredModelId, rewriteRetiredModelId } from "../shared/retired-model-ids.ts";
 import { museContributorModelId } from "./muse-launch-options.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
@@ -814,9 +814,15 @@ function scopeFor(sources: CatalogSources): CatalogProbeScope {
  * and the two differ for MiniMax Code (`m:minimax:…:v:`) and for Muse
  * (provider-qualified `muse-model:[…]`).  An unknown id is passed through
  * unchanged so a fresh model still works before the catalog catches up.
+ *
+ * A retired id is the one exception to the pass-through: it is rewritten
+ * onto its live replacement first (src/shared/retired-model-ids.ts), so a
+ * selection saved before the retirement resolves to the replacement's
+ * value instead of handing the dead spelling to the engine or the dsh
+ * host.
  */
 export function resolveModelValue(catalog: EngineCatalog, engine: Engine, requested: string): string | null {
-  const trimmed = requested.trim();
+  const trimmed = rewriteRetiredModelId(requested.trim());
   if (!trimmed) return null;
   const descriptor = catalog.engines.find((entry) => entry.id === engine);
   if (!descriptor) return trimmed;
@@ -835,7 +841,7 @@ export function resolveModelValue(catalog: EngineCatalog, engine: Engine, reques
  * the second form gets its turn before the choice is given up on.
  */
 export function resolveModelAltValue(catalog: EngineCatalog, engine: Engine, requested: string): string | null {
-  const trimmed = requested.trim();
+  const trimmed = rewriteRetiredModelId(requested.trim());
   if (!trimmed) return null;
   const descriptor = catalog.engines.find((entry) => entry.id === engine);
   if (!descriptor) return null;
