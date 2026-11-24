@@ -729,10 +729,12 @@ public struct ChatView: View {
                         // answer goes back, so it is held on screen and the
                         // owner is woken for it: a stalled approval is the
                         // one event a turn-end notification can never cover.
-                        // A request that did not go on the screen has no
+                        // A request that has already been answered has no
                         // card to answer, so it raises no notification and
-                        // no activity row.
-                        guard pendingPermissions.arrive(request) else { break }
+                        // no activity row.  A request that is already on
+                        // screen still has its card and still has the engine
+                        // blocked on it, so the owner is woken for it again.
+                        guard pendingPermissions.arrive(request).leavesACardToAnswer else { break }
                         permissionTick += 1
                         TurnNotifier.permissionRequest(
                             threadTitle: activeHost?.name ?? "Agent",

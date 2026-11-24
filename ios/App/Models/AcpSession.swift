@@ -287,6 +287,36 @@ public struct AcpPermissionAnswer: Equatable, Sendable {
         "The request you answered changed before the answer went out, so it was not sent."
 }
 
+/// What one arrival did to the cards a surface is holding.
+///
+/// The arrival is not one thing but three, and the caller has to be able to
+/// tell them apart:  a request that has just arrived is a card to answer, a
+/// request that is already on screen is a card that is still waiting for an
+/// answer, and a request that has already been answered has no card at all.
+/// The last one is the only arrival that raises nothing, because there is
+/// nothing to raise for.
+public enum PermissionArrival: Equatable, Sendable {
+    /// The request went on screen as a new card.
+    case shown
+    /// The request was already on screen, so the card is still there and the
+    /// engine is still blocked on it.
+    case alreadyOnScreen
+    /// The request was already answered, so there is no card to answer.
+    case alreadyAnswered
+}
+
+extension PermissionArrival {
+    /// Whether this arrival leaves a card the owner has not answered.
+    ///
+    /// A request that has already been answered has no card left, so it
+    /// wakes nobody:  there is nothing for the owner to answer, and the
+    /// answer has already gone back.  A request that is already on screen
+    /// still has its card and still has the engine blocked on it, so the
+    /// owner is woken for it again:  the first wake-up may have gone
+    /// unnoticed, and the turn is still stalled until the card is answered.
+    public var leavesACardToAnswer: Bool { self != .alreadyAnswered }
+}
+
 /// The permission requests one surface is holding, oldest first.
 ///
 /// The engine asks one question at a time, but a second request can land
@@ -320,22 +350,24 @@ public struct PermissionRequests: Equatable, Sendable {
         requests.first { $0.requestId == requestId }
     }
 
-    /// Puts a request on screen, and says whether it went on.
+    /// Puts a request on screen, and says what the arrival was.
     ///
     /// A request that is already on screen, or that this surface has already
-    /// answered, is a no-op:  the card stays one card per request, and an
-    /// answered request does not come back as a question nobody is waiting
-    /// for any more.
+    /// answered, adds no second card:  the card stays one card per request,
+    /// and an answered request does not come back as a question nobody is
+    /// waiting for any more.
     ///
-    /// The answer matters to the caller:  a request that did not go on must
-    /// not raise a notification or an activity row, because there is no card
-    /// for the owner to answer.
+    /// The two refusals are not the same thing, and the caller has to be able
+    /// to tell them apart.  A request that is already on screen is still a
+    /// card the owner has not answered and an engine that is still blocked
+    /// on it, so the owner is still woken for it.  A request that has already
+    /// been answered has no card left to answer, so it raises nothing.
     @discardableResult
-    public mutating func arrive(_ request: AcpPermissionRequest) -> Bool {
-        guard !acknowledged.contains(request.requestId) else { return false }
-        guard !requests.contains(where: { $0.requestId == request.requestId }) else { return false }
+    public mutating func arrive(_ request: AcpPermissionRequest) -> PermissionArrival {
+        guard !acknowledged.contains(request.requestId) else { return .alreadyAnswered }
+        guard !requests.contains(where: { $0.requestId == request.requestId }) else { return .alreadyOnScreen }
         requests.append(request)
-        return true
+        return .shown
     }
 
     /// Clears the request one acknowledgment names, and nothing else.

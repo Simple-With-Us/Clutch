@@ -1160,9 +1160,12 @@ final class NewThreadModel {
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen and the
                         // owner is woken for it.
-                        // A request that did not go on the screen has no
-                        // card to answer, so it raises no notification.
-                        guard pendingPermissions.arrive(request) else { break }
+                        // A request that has already been answered has no
+                        // card to answer, so it raises no notification.  A
+                        // request that is already on screen still has its
+                        // card and still has the engine blocked on it, so
+                        // the owner is woken for it again.
+                        guard pendingPermissions.arrive(request).leavesACardToAnswer else { break }
                         TurnNotifier.permissionRequest(
                             threadTitle: "New Thread",
                             payload: PermissionNotificationPayload.make(

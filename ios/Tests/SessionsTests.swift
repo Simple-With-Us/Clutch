@@ -876,10 +876,10 @@ final class PermissionAcknowledgementTests: XCTestCase {
         var requests = PermissionRequests()
         requests.arrive(request("perm-1"))
 
-        // The same request is one card, so the second arrival is refused and
-        // the caller is told, because there is no card to answer.
-        XCTAssertFalse(requests.arrive(request("perm-1")))
-        XCTAssertTrue(requests.arrive(request("perm-2")))
+        // The same request is one card, so the second arrival adds no card
+        // and the caller is told which arrival it was.
+        XCTAssertEqual(requests.arrive(request("perm-1")), .alreadyOnScreen)
+        XCTAssertEqual(requests.arrive(request("perm-2")), .shown)
         XCTAssertEqual(requests.count, 2)
     }
 
@@ -890,8 +890,45 @@ final class PermissionAcknowledgementTests: XCTestCase {
 
         // The owner already answered it, so a second card would invite a
         // second answer, and the caller is told the card did not go on.
-        XCTAssertFalse(requests.arrive(request("perm-1")))
+        XCTAssertEqual(requests.arrive(request("perm-1")), .alreadyAnswered)
         XCTAssertEqual(requests.count, 0)
+    }
+
+    func testARequestAlreadyOnScreenStillLeavesACardToAnswer() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+
+        // The engine can ask again about a request that is already on
+        // screen.  The card is still there and the engine is still blocked
+        // on it, so the owner is still woken for it:  the arrival that adds
+        // no second card is not the arrival that raises nothing.
+        let arrival = requests.arrive(request("perm-1"))
+
+        XCTAssertEqual(arrival, .alreadyOnScreen)
+        XCTAssertTrue(arrival.leavesACardToAnswer)
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testAnAnsweredRequestLeavesNoCardToAnswer() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+        requests.acknowledge(requestId: "perm-1")
+
+        // The answer has already gone back and the card is gone, so there
+        // is nothing for the owner to answer and nothing to wake them for.
+        let arrival = requests.arrive(request("perm-1"))
+
+        XCTAssertEqual(arrival, .alreadyAnswered)
+        XCTAssertFalse(arrival.leavesACardToAnswer)
+    }
+
+    func testANewRequestLeavesACardToAnswer() {
+        var requests = PermissionRequests()
+
+        let arrival = requests.arrive(request("perm-1"))
+
+        XCTAssertEqual(arrival, .shown)
+        XCTAssertTrue(arrival.leavesACardToAnswer)
     }
 
     func testTheSiblingApprovalTakesTheNewTitle() {
