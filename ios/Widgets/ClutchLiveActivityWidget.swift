@@ -27,11 +27,11 @@ struct ClutchLiveActivityWidget: Widget {
                 }
             } compactLeading: {
                 Image(systemName: context.state.waitingCount > 0 ? "hand.raised.fill" : "circle.dotted")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(ClutchFont.captionStrong)
                     .foregroundStyle(context.state.waitingCount > 0 ? .orange : .white.opacity(0.8))
             } compactTrailing: {
                 Text("\(context.state.waitingCount + context.state.runningCount)")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(ClutchFont.bodyStrong)
                     .monospacedDigit()
                     .foregroundStyle(.white)
             } minimal: {
@@ -49,7 +49,7 @@ struct ClutchActivitySummaryView: View {
 
     var body: some View {
         Text(ClutchActivitySummary.text(waiting: state.waitingCount, running: state.runningCount))
-            .font(.system(size: 15, weight: .semibold))
+            .font(ClutchFont.headline)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -68,15 +68,15 @@ struct ClutchActivitySessionList: View {
             ForEach(state.sessions) { session in
                 HStack(spacing: 6) {
                     Image(systemName: session.status == .waiting ? "hand.raised.fill" : "circle.dotted")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(ClutchFont.captionStrong)
                         .foregroundStyle(session.status == .waiting ? .orange : .white.opacity(0.7))
                     Text(session.title.isEmpty ? "Untitled Thread" : session.title)
-                        .font(.system(size: 13))
+                        .font(ClutchFont.footnote)
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     Text(session.status == .waiting ? "Waiting" : "Running")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(ClutchFont.micro)
                         .foregroundStyle(.white.opacity(0.6))
                 }
             }

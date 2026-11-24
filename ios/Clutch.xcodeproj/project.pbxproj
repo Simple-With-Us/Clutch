@@ -83,6 +83,7 @@
 		6F4A2FFF8AD6723A7487EDF0 /* HostGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F505EC3C61ABCA07E83DD6C1 /* HostGateView.swift */; };
 		70719A791028BCE4F8C4E4E3 /* ToolCallTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE0625DAE9B39504259351DA /* ToolCallTreeTests.swift */; };
 		7105FF8A8E9981B158E4EC5A /* PermissionNotificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BA161828495CFF9A25F45B /* PermissionNotificationTests.swift */; };
+		710F0B3A2BBBED7F93D0C28F /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
 		7154E4EC70079318D196927F /* EngineSignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C325C08C6F8A642FCFBB20B /* EngineSignInView.swift */; };
 		72F7ED7E80202F75060E3EC2 /* ClutchApprovalCountWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80A82A1860E5B04E033CA71F /* ClutchApprovalCountWidget.swift */; };
 		73D3DCD3F800891032C2922E /* Baselines in Resources */ = {isa = PBXBuildFile; fileRef = AF6AC89BB34D870CE471240E /* Baselines */; };
@@ -201,6 +202,7 @@
 		F5F6B101BB12D696F5684113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D88017536E50AA8E88A5F36 /* Assets.xcassets */; };
 		F6FA743C967C96776991A3E8 /* SessionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E37F50A879712AF7F22B092 /* SessionsView.swift */; };
 		F77C102DD5D2859E51C87624 /* ClutchApprovalsControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F1A8045F8A7F121143D2AA3 /* ClutchApprovalsControl.swift */; };
+		F8AB3CEA3262577B686E9E94 /* ClutchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E916FA19E4055DD59D74CC /* ClutchTheme.swift */; };
 		FAEC962DC8DD35B89069B8AB /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 938B47BD908994DA59A18C0A /* ChatMessage.swift */; };
 		FB1FA20093CEB7B9D54B2D66 /* ChatTurnBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC6F8D9DAC104DB1E70F9274 /* ChatTurnBufferTests.swift */; };
 		FB7DDC0078149E1F28CCFF5C /* TurnNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED98C7FFAEA49E7BD86886F /* TurnNotifier.swift */; };
@@ -1147,7 +1149,9 @@
 				F77C102DD5D2859E51C87624 /* ClutchApprovalsControl.swift in Sources */,
 				E347B52E28B054CE187D256A /* ClutchLiveActivityWidget.swift in Sources */,
 				2136643891F29B8D160D53D7 /* ClutchShared.swift in Sources */,
+				F8AB3CEA3262577B686E9E94 /* ClutchTheme.swift in Sources */,
 				83D7750E247621E25DE47413 /* ClutchWidgets.swift in Sources */,
+				710F0B3A2BBBED7F93D0C28F /* Platform.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

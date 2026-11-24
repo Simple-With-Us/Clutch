@@ -38,14 +38,14 @@ struct ApprovalsView: View {
                             } label: {
                                 HStack(spacing: 8) {
                                     Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(size: 12))
+                                        .font(ClutchFont.caption)
                                         .foregroundStyle(ClutchColor.warning)
                                     VStack(alignment: .leading, spacing: 1) {
                                         Text(approval.title)
-                                            .font(.system(size: 12, weight: .semibold))
+                                            .font(ClutchFont.captionStrong)
                                             .lineLimit(1)
                                         Text("Wants approval")
-                                            .font(.system(size: 10))
+                                            .font(ClutchFont.micro)
                                             .foregroundStyle(.secondary)
                                     }
                                     Spacer(minLength: 0)
@@ -68,7 +68,7 @@ struct ApprovalsView: View {
                                         .scaleEffect(0.7)
                                         .frame(width: 14, height: 14)
                                     Text(run.title)
-                                        .font(.system(size: 12, weight: .semibold))
+                                        .font(ClutchFont.captionStrong)
                                         .lineLimit(1)
                                     Spacer(minLength: 0)
                                 }

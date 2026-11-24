@@ -252,6 +252,11 @@ targets:
     sources:
       - path: Widgets
       - path: Shared
+      # The design-token layer comes with the extension, so the lock screen
+      # and the island draw the same concept the app draws.  Platform.swift
+      # is here because the token layer's system colours live in it.
+      - path: App/Design
+      - path: App/Platform.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.ios.widgets

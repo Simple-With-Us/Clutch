@@ -60,13 +60,13 @@ struct ClutchApprovalCountView: View {
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 1) {
                 Text("Clutch")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(ClutchFont.captionStrong)
                 Text("\(entry.snapshot.waitingCount) Waiting")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(ClutchFont.title)
                     .monospacedDigit()
                 if entry.snapshot.runningCount > 0 {
                     Text("\(entry.snapshot.runningCount) Running")
-                        .font(.system(size: 11))
+                        .font(ClutchFont.micro)
                         .monospacedDigit()
                 }
             }
@@ -74,7 +74,7 @@ struct ClutchApprovalCountView: View {
             ZStack {
                 AccessoryWidgetBackground()
                 Text("\(entry.snapshot.waitingCount)")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(ClutchFont.title)
                     .monospacedDigit()
             }
         }

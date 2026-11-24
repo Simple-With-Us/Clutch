@@ -26,6 +26,14 @@ public final class ClutchActivityController {
 
     /// The activity this device is showing, when there is one.
     private var activity: Activity<ClutchActivityAttributes>?
+    /// The state the activity is carrying, so an unchanged state is not
+    /// published again.
+    private var publishedState: ClutchActivityAttributes.ContentState?
+    /// Whether a request is already in flight.
+    ///
+    /// The request is asynchronous, and two refreshes that arrive together
+    /// would otherwise both find no activity and ask for two.
+    private var isRequesting = false
     /// Whether the watch is already running.
     private var isWatching = false
 
@@ -41,6 +49,10 @@ public final class ClutchActivityController {
         isWatching = true
         if activity == nil {
             activity = Activity<ClutchActivityAttributes>.activities.first
+            if let activity {
+                publishedState = activity.content.state
+                watch(activity)
+            }
         }
         watch()
         refresh()
@@ -64,11 +76,13 @@ public final class ClutchActivityController {
     /// store holds every host this device talks to, and another host's
     /// approval is not this host's business.  With no host picked there is
     /// nothing to scope to, so every host's work is counted.
+    ///
+    /// A thread that is waiting on the owner is not also running:  the
+    /// engine is blocked, and counting it twice would say there is more
+    /// work than there is.
     private func currentSnapshot() -> ClutchApprovalSnapshot {
-        let hostId = HostStore.shared.activeHostID
-        let approvals = TurnActivity.shared.approvals.filter { hostId == nil || $0.hostId == hostId }
-        let runs = TurnActivity.shared.runs.filter { hostId == nil || $0.hostId == hostId }
-        return ClutchApprovalSnapshot(waitingCount: approvals.count, runningCount: runs.count)
+        let (waiting, running) = currentWork()
+        return ClutchApprovalSnapshot(waitingCount: waiting.count, runningCount: running.count)
     }
 
     /// The state the Live Activity shows.
@@ -76,21 +90,35 @@ public final class ClutchActivityController {
     /// The titles are the thread names, and nothing else about the request
     /// is read:  the tool name and the evidence stay behind the tap.
     private func currentState() -> ClutchActivityAttributes.ContentState {
+        let (waiting, running) = currentWork()
+        return ClutchActivityAttributes.ContentState(
+            waiting: waiting.map { ClutchActivitySession(id: $0.sessionId, title: $0.title, status: .waiting) },
+            running: running.map { ClutchActivitySession(id: $0.sessionId, title: $0.title, status: .running) }
+        )
+    }
+
+    /// The waiting and the running work, with the overlap taken out.
+    ///
+    /// A thread that is waiting on the owner is still in the store's runs,
+    /// because the turn has not ended:  it is blocked, not working.  It is
+    /// counted once, as waiting, or the island would say a thread is both.
+    private func currentWork() -> ([TurnActivityApproval], [TurnActivityRun]) {
         let hostId = HostStore.shared.activeHostID
-        let waiting = TurnActivity.shared.approvals
-            .filter { hostId == nil || $0.hostId == hostId }
-            .map { ClutchActivitySession(id: $0.sessionId, title: $0.title, status: .waiting) }
-        let running = TurnActivity.shared.runs
-            .filter { hostId == nil || $0.hostId == hostId }
-            .map { ClutchActivitySession(id: $0.sessionId, title: $0.title, status: .running) }
-        return ClutchActivityAttributes.ContentState(waiting: waiting, running: running)
+        let approvals = TurnActivity.shared.approvals.filter { hostId == nil || $0.hostId == hostId }
+        let runs = TurnActivity.shared.runs.filter { hostId == nil || $0.hostId == hostId }
+        return ClutchActivityWork.split(approvals: approvals, runs: runs)
     }
 
     /// Writes the count for the Lock Screen accessory and asks it to redraw.
+    ///
+    /// The reload is asked for when the counts moved, not when the
+    /// timestamp moved:  a timestamp that changes on every write would
+    /// ask the widget system to redraw for a count that did not change.
     private func write(_ snapshot: ClutchApprovalSnapshot) {
         let previous = ClutchSharedStore.read()
         ClutchSharedStore.write(snapshot)
-        guard previous != snapshot else { return }
+        guard previous.waitingCount != snapshot.waitingCount ||
+                previous.runningCount != snapshot.runningCount else { return }
         WidgetCenter.shared.reloadTimelines(ofKind: ClutchShared.approvalCountWidgetKind)
     }
 
@@ -105,22 +133,74 @@ public final class ClutchActivityController {
         if state.waitingCount == 0 && state.runningCount == 0 {
             guard let activity else { return }
             self.activity = nil
-            Task { await activity.end(nil, dismissalPolicy: .immediate) }
+            publishedState = nil
+            Task { @MainActor in
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
             return
         }
         if let activity {
-            Task { await activity.update(content) }
-        } else {
-            Task {
+            // An unchanged state is not published again:  every update is
+            // an inter-process call and a re-render, and a turn that
+            // re-reports itself would pay for both on every event.
+            guard !sameState(publishedState, state) else { return }
+            publishedState = state
+            Task { @MainActor in
+                await activity.update(content)
+            }
+        } else if !isRequesting {
+            isRequesting = true
+            Task { @MainActor in
                 do {
-                    activity = try Activity.request(attributes: ClutchActivityAttributes(),
-                                                    content: content,
-                                                    pushType: nil)
+                    let activity = try Activity.request(attributes: ClutchActivityAttributes(),
+                                                        content: content,
+                                                        pushType: nil)
+                    self.activity = activity
+                    self.publishedState = state
+                    self.watch(activity)
                 } catch {
                     // A live activity that cannot start is a missing
                     // convenience, not a failure worth interrupting the
                     // owner over:  the notification and the list still say
                     // what is waiting.
+                }
+                self.isRequesting = false
+            }
+        }
+    }
+
+    /// Whether two states say the same thing.
+    ///
+    /// The timestamp is not part of the comparison:  it records when the
+    /// state was written, not what it says.
+    private func sameState(_ lhs: ClutchActivityAttributes.ContentState?,
+                           _ rhs: ClutchActivityAttributes.ContentState) -> Bool {
+        guard let lhs else { return false }
+        return lhs.waitingCount == rhs.waitingCount
+            && lhs.runningCount == rhs.runningCount
+            && lhs.sessions == rhs.sessions
+    }
+
+    /// Watches one activity, so a dismissed one is replaced rather than
+    /// updated into nothing.
+    ///
+    /// The owner can swipe an activity away, and the system can end one
+    /// when its time is up.  Either way the activity is gone, and the
+    /// controller has to stop believing it is still there:  an update to a
+    /// finished activity does nothing, and the island would never come
+    /// back.
+    private func watch(_ activity: Activity<ClutchActivityAttributes>) {
+        Task { @MainActor in
+            for await state in activity.activityStateUpdates {
+                switch state {
+                case .dismissed, .ended, .stale:
+                    if self.activity?.id == activity.id {
+                        self.activity = nil
+                        self.publishedState = nil
+                    }
+                    return
+                default:
+                    continue
                 }
             }
         }
@@ -142,6 +222,21 @@ public final class ClutchActivityController {
                 self?.watch()
             }
         }
+    }
+}
+
+/// The waiting and the running work, with the overlap taken out.
+///
+/// A thread that is waiting on the owner is still in the store's runs,
+/// because the turn has not ended:  it is blocked, not working.  It is
+/// counted once, as waiting, or the island would say a thread is both
+/// waiting and running, and would show it twice.
+enum ClutchActivityWork {
+    /// Splits the store's entries into what is waiting and what is running.
+    static func split(approvals: [TurnActivityApproval],
+                      runs: [TurnActivityRun]) -> (waiting: [TurnActivityApproval], running: [TurnActivityRun]) {
+        let waitingIds = Set(approvals.map(\.sessionId))
+        return (approvals, runs.filter { !waitingIds.contains($0.sessionId) })
     }
 }
 #endif

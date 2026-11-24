@@ -61,6 +61,33 @@ final class ClutchActivityTests: XCTestCase {
         XCTAssertFalse(text.contains("rm -rf"))
     }
 
+    // MARK: - The waiting and the running work
+
+    func testAThreadWaitingOnTheOwnerIsNotAlsoRunning() {
+        // The turn has not ended while the approval is open, so the store
+        // holds the thread in both lists.  Counting it twice would say
+        // there is more work than there is, and the island would show it
+        // twice.
+        let hostId = UUID()
+        let approval = TurnActivityApproval(hostId: hostId, sessionId: "s1", title: "Needs Me")
+        let run = TurnActivityRun(hostId: hostId, sessionId: "s1", title: "Needs Me")
+
+        let split = ClutchActivityWork.split(approvals: [approval], runs: [run])
+
+        XCTAssertEqual(split.waiting.count, 1)
+        XCTAssertTrue(split.running.isEmpty)
+    }
+
+    func testARunningThreadThatIsNotWaitingIsStillRunning() {
+        let hostId = UUID()
+        let run = TurnActivityRun(hostId: hostId, sessionId: "s2", title: "Working")
+
+        let split = ClutchActivityWork.split(approvals: [], runs: [run])
+
+        XCTAssertTrue(split.waiting.isEmpty)
+        XCTAssertEqual(split.running.count, 1)
+    }
+
     // MARK: - The shared count
 
     func testSnapshotRoundTripsThroughTheSharedContainer() {
