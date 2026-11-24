@@ -92,7 +92,15 @@ struct RootView: View {
             }
         }
         .onOpenURL { url in
-            if case .success(let payload) = PairingLink.parse(url.absoluteString) {
+            if let link = ThreadLink.parse(url) {
+                // A link that names a thread opens that thread, and the host
+                // it belongs to when the link names one.
+                if let hostId = link.hostId,
+                   let host = store.hosts.first(where: { $0.id == hostId }) {
+                    store.activate(host)
+                }
+                ThreadLinkRouter.shared.request(link)
+            } else if case .success(let payload) = PairingLink.parse(url.absoluteString) {
                 store.pair(payload)
             }
         }

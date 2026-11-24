@@ -225,6 +225,14 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
         options.filter { $0.effect != .allowAlways }
     }
 
+    /// The option that refuses this request, when the engine offered one.
+    ///
+    /// A missing option id cancels the request, which is what a deny amounts
+    /// to when the engine offered no reject option of its own.
+    public var denyOptionId: String? {
+        options.first(where: { $0.isReject })?.optionId
+    }
+
     /// The options the phone does not offer, and why the Mac keeps them.
     ///
     /// The phone names these instead of dropping them without a word, so
