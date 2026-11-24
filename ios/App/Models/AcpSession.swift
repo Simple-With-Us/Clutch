@@ -357,6 +357,12 @@ public struct PermissionRequests: Equatable, Sendable {
     /// and an answered request does not come back as a question nobody is
     /// waiting for any more.
     ///
+    /// A request that arrives again under an id that is already on screen
+    /// replaces the card it names, so the card on screen is the one the
+    /// engine is waiting on now:  the engine can send the same question with
+    /// new terms, and an owner who is shown the old terms would approve
+    /// something the engine did not ask for.
+    ///
     /// The two refusals are not the same thing, and the caller has to be able
     /// to tell them apart.  A request that is already on screen is still a
     /// card the owner has not answered and an engine that is still blocked
@@ -365,7 +371,10 @@ public struct PermissionRequests: Equatable, Sendable {
     @discardableResult
     public mutating func arrive(_ request: AcpPermissionRequest) -> PermissionArrival {
         guard !acknowledged.contains(request.requestId) else { return .alreadyAnswered }
-        guard !requests.contains(where: { $0.requestId == request.requestId }) else { return .alreadyOnScreen }
+        if let index = requests.firstIndex(where: { $0.requestId == request.requestId }) {
+            requests[index] = request
+            return .alreadyOnScreen
+        }
         requests.append(request)
         return .shown
     }

@@ -833,6 +833,28 @@ final class PermissionAcknowledgementTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
     }
 
+    func testARequestThatArrivesAgainWithNewTermsReplacesTheCardOnScreen() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+
+        // The engine asked the same question again with new terms, and the
+        // engine is blocked on the new ones.  The card on screen is replaced,
+        // so the owner approves what the engine is waiting on now and not
+        // what it sent before.
+        let updated = AcpPermissionRequest(
+            requestId: "perm-1",
+            title: "Run a different command",
+            toolName: "bash",
+            options: [AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once")]
+        )
+        let arrival = requests.arrive(updated)
+
+        XCTAssertEqual(arrival, .alreadyOnScreen)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.title, "Run a different command")
+        XCTAssertEqual(requests.first?.requestId, "perm-1")
+    }
+
     func testTheActivityStateIsClearedForTheRequestTheAcknowledgmentNames() {
         let activity = TurnActivity()
         let hostId = UUID()
