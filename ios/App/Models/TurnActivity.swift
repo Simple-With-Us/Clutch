@@ -69,6 +69,14 @@ public final class TurnActivity {
             &approvals,
             TurnActivityApproval(hostId: hostId, sessionId: sessionId, requestId: requestId, title: title)
         )
+        // The title is the thread's name, so it belongs to the thread and not
+        // to the one request that happened to arrive:  a thread that was
+        // renamed while two requests were waiting would otherwise keep the
+        // old name on the row the home list shows.
+        for index in approvals.indices
+        where approvals[index].hostId == hostId && approvals[index].sessionId == sessionId {
+            approvals[index].title = title
+        }
     }
 
     /// Clears the approval one acknowledgment names, and nothing else.

@@ -248,7 +248,10 @@ final class SessionThreadModel {
                         // the home list's "Needs You" section, and the owner
                         // is woken for it — a stalled approval is the one
                         // event a turn-end notification can never cover.
-                        pendingPermissions.arrive(request)
+                        // A request that did not go on the screen has no
+                        // card to answer, so it raises no activity row and
+                        // no notification.
+                        guard pendingPermissions.arrive(request) else { break }
                         permissionTick += 1
                         TurnActivity.shared.approvalArrived(
                             hostId: host.id,

@@ -856,6 +856,56 @@ final class PermissionAcknowledgementTests: XCTestCase {
         XCTAssertEqual(activity.approvals.map(\.requestId), ["perm-1"])
     }
 
+    func testTheAnsweredIdsGoWhenTheTurnEnds() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+        requests.acknowledge(requestId: "perm-1")
+
+        // The engine numbers its requests from one each time it starts, so a
+        // later turn can present the same id for a different question.  The
+        // card that was suppressed because the id was already answered would
+        // leave the engine waiting for an answer nobody can give.
+        requests.clearAll()
+
+        requests.arrive(request("perm-1"))
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.requestId, "perm-1")
+    }
+
+    func testARequestThatDidNotArriveSaysSo() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+
+        // The same request is one card, so the second arrival is refused and
+        // the caller is told, because there is no card to answer.
+        XCTAssertFalse(requests.arrive(request("perm-1")))
+        XCTAssertTrue(requests.arrive(request("perm-2")))
+        XCTAssertEqual(requests.count, 2)
+    }
+
+    func testAnAlreadyAnsweredRequestIsRefused() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+        requests.acknowledge(requestId: "perm-1")
+
+        // The owner already answered it, so a second card would invite a
+        // second answer, and the caller is told the card did not go on.
+        XCTAssertFalse(requests.arrive(request("perm-1")))
+        XCTAssertEqual(requests.count, 0)
+    }
+
+    func testTheSiblingApprovalTakesTheNewTitle() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Old name")
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "New name")
+
+        // The title is the thread's name, so the row the home list shows
+        // carries the name the thread has now, not the name it had when the
+        // first request arrived.
+        XCTAssertEqual(activity.approvals.map(\.title), ["New name", "New name"])
+    }
+
     func testTheWholeActivityStateGoesWhenTheTurnEnds() {
         let activity = TurnActivity()
         let hostId = UUID()

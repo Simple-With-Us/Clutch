@@ -320,16 +320,22 @@ public struct PermissionRequests: Equatable, Sendable {
         requests.first { $0.requestId == requestId }
     }
 
-    /// Puts a request on screen.
+    /// Puts a request on screen, and says whether it went on.
     ///
     /// A request that is already on screen, or that this surface has already
     /// answered, is a no-op:  the card stays one card per request, and an
     /// answered request does not come back as a question nobody is waiting
     /// for any more.
-    public mutating func arrive(_ request: AcpPermissionRequest) {
-        guard !acknowledged.contains(request.requestId) else { return }
-        guard !requests.contains(where: { $0.requestId == request.requestId }) else { return }
+    ///
+    /// The answer matters to the caller:  a request that did not go on must
+    /// not raise a notification or an activity row, because there is no card
+    /// for the owner to answer.
+    @discardableResult
+    public mutating func arrive(_ request: AcpPermissionRequest) -> Bool {
+        guard !acknowledged.contains(request.requestId) else { return false }
+        guard !requests.contains(where: { $0.requestId == request.requestId }) else { return false }
         requests.append(request)
+        return true
     }
 
     /// Clears the request one acknowledgment names, and nothing else.
@@ -348,13 +354,20 @@ public struct PermissionRequests: Equatable, Sendable {
         return true
     }
 
-    /// Takes every request off the screen.
+    /// Takes every request off the screen, and forgets what was answered.
     ///
     /// A turn that ended cannot answer a question any more, so the cards go
     /// with it rather than sitting there inviting an answer that lands
     /// nowhere.
+    ///
+    /// The answered ids go with them:  the engine numbers its requests from
+    /// one each time it starts, so a later turn can present the same id for
+    /// a different question, and a card that was suppressed because the id
+    /// was already answered would leave the engine waiting for an answer
+    /// nobody can give.
     public mutating func clearAll() {
         requests.removeAll()
+        acknowledged.removeAll()
     }
 }
 
