@@ -463,8 +463,11 @@ public struct SessionsView: View {
     /// The activity store holds every host this device talks to, so it is
     /// read by host: another host's approval is not this host's business.
     private var pendingApprovals: [TurnActivityApproval] {
-        let listed = Set(visibleSessions.map(\.sessionId))
-        return TurnActivity.shared.approvals.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
+        TurnActivity.approvalsForHomeList(
+            TurnActivity.shared.approvals,
+            hostId: host.id,
+            listedSessions: Set(visibleSessions.map(\.sessionId))
+        )
     }
 
     /// Runs this device is streaming on the host on screen, minus the ones
@@ -1062,7 +1065,7 @@ final class NewThreadModel {
     /// The engine asks one question at a time, but a second request can land
     /// before the first is answered, so the queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
-    var pendingPermissions: [AcpPermissionRequest] = []
+    var pendingPermissions = PermissionRequests()
     /// How many answers did not reach the engine.
     ///
     /// The card offers the request again when this count moves, so a failed
@@ -1104,7 +1107,12 @@ final class NewThreadModel {
             if answered {
                 // The card only goes away once the answer is on its way, so a
                 // failed answer can be tried again.
-                pendingPermissions.removeFirst()
+                //
+                // The card that goes is the card the answer named:  the
+                // request id says which one it is, so the card on screen
+                // and the card the owner answered can never be different by
+                // accident.
+                pendingPermissions.acknowledge(requestId: answer.requestId)
             } else {
                 errorText = "The permission answer did not reach the engine."
                 permissionAnswerFailures += 1
@@ -1152,7 +1160,12 @@ final class NewThreadModel {
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen and the
                         // owner is woken for it.
-                        pendingPermissions.append(request)
+                        // A request that has already been answered has no
+                        // card to answer, so it raises no notification.  A
+                        // request that is already on screen still has its
+                        // card and still has the engine blocked on it, so
+                        // the owner is woken for it again.
+                        guard pendingPermissions.arrive(request).leavesACardToAnswer else { break }
                         TurnNotifier.permissionRequest(
                             threadTitle: "New Thread",
                             payload: PermissionNotificationPayload.make(
@@ -1166,7 +1179,7 @@ final class NewThreadModel {
                         plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
-                        pendingPermissions.removeAll()
+                        pendingPermissions.clearAll()
                         // The folder worked, so the next New Thread starts here.
                         RecentFolderStore.add(workingFolder, forHost: host.id)
                     case .usage:
@@ -1176,7 +1189,7 @@ final class NewThreadModel {
                     case .failed(let message):
                         errorText = message
                         ErrorReporting.turnFailed(engine: engine, message: message)
-                        pendingPermissions.removeAll()
+                        pendingPermissions.clearAll()
                     }
                 }
             } catch {
@@ -1207,7 +1220,7 @@ final class NewThreadModel {
         }
         sendTask?.cancel()
         sendTask = nil
-        pendingPermissions.removeAll()
+        pendingPermissions.clearAll()
         isSending = false
     }
 }
