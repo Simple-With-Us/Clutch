@@ -113,6 +113,8 @@ public struct SessionsView: View {
     /// Where the detail pane is pointed: a thread, the agent conversation,
     /// or nothing.  The agent conversation is a destination now, not a tab.
     @State private var selection: HomeSelection = .none
+    /// The thread a link asked for, waiting for this surface to take it.
+    @State private var threadLinkRouter = ThreadLinkRouter.shared
     @State private var isStartingThread = false
     @State private var newThreadFolder: String = ""
     @State private var isShowingFiles = false
@@ -138,6 +140,15 @@ public struct SessionsView: View {
             sidebar
         } detail: {
             detail
+        }
+        .onChange(of: threadLinkRouter.pending) { _, _ in
+            openPendingThread()
+        }
+        .onAppear {
+            // A link can arrive before this surface exists, so the thread it
+            // names is opened when the surface appears as well as when the
+            // link changes.
+            openPendingThread()
         }
         .task(id: host.pairingKey) {
             catalogRequestGeneration += 1
@@ -605,6 +616,15 @@ public struct SessionsView: View {
 
     private var engineLabel: String {
         catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
+    }
+
+    /// Opens the thread a link asked for.
+    ///
+    /// The link is taken rather than read, so the thread is opened once and
+    /// not again by whatever surface happens to be on screen next.
+    private func openPendingThread() {
+        guard let link = threadLinkRouter.take() else { return }
+        selection = .thread(link.sessionId)
     }
 
     // MARK: - Detail
@@ -1133,7 +1153,15 @@ final class NewThreadModel {
                         // answer goes back, so it is held on screen and the
                         // owner is woken for it.
                         pendingPermissions.append(request)
-                        TurnNotifier.permissionRequest(threadTitle: "New Thread")
+                        TurnNotifier.permissionRequest(
+                            threadTitle: "New Thread",
+                            payload: PermissionNotificationPayload.make(
+                                hostId: host.id,
+                                sessionId: chatId,
+                                requestId: request.requestId,
+                                denyOptionId: request.denyOptionId
+                            )
+                        )
                     case .plan(let entries):
                         plan = entries
                     case .done(_, _, let remote):
