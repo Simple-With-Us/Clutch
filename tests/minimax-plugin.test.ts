@@ -48,26 +48,25 @@ describe("the shipped MiniMax plugin", () => {
 
   it("opens the engine-wide image gate and keeps per-model truth exact", async () => {
     const support = await loadMinimax();
-    // The gate is only the fallback for a row the catalog does not list, and
-    // M3 really does take images.  The per-model map is what stops a
-    // consumer offering an attachment the M2.7 family would refuse.
-    // MiniMax-M3.1-Flash is the stable successor to the retired
-    // MiniMax-M3.1-Flash-Preview (2026-10-18, BF-2494) and is multimodal
-    // too, so it carries its own row here.
+    // The gate is only the fallback for a row the catalog does not list.
+    // The per-model map is what stops a consumer offering an attachment
+    // the M2.7 family would refuse.  MiniMax-M3.1-Flash is the stable
+    // successor to the retired MiniMax-M3.1-Flash-Preview (2026-10-18,
+    // BF-2494) and is multimodal, so it carries its own row here.
+    // MiniMax-M3's row left with its catalog row when M3 was retired
+    // fleet-wide (MiniMax is M3.1 only, owner ruling 2026-11-21/22).
     expect(support.images).toBe(true);
     expect(support.perModelImages).toEqual({
       "MiniMax-M3.1-Flash": true,
-      "MiniMax-M3": true,
       "MiniMax-M2.7-highspeed": false,
       "MiniMax-M2.7": false,
     });
   });
 
-  it("gives MiniMax-M3 and MiniMax-M3.1-Flash their own effort ranges", async () => {
+  it("gives MiniMax-M3.1-Flash its own effort range", async () => {
     const support = await loadMinimax();
     expect(support.effortLevels).toEqual(["none"]);
     expect(support.perModelEffortLevels).toEqual({
-      "MiniMax-M3": ["none", "low", "medium", "high", "max"],
       "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
     });
   });
@@ -100,11 +99,11 @@ describe("the shipped MiniMax plugin", () => {
     expect(fresh.CLUTCH_MINIMAX_API_KEY_NAME).toBe("MINIMAX_API_KEY");
 
     const chosen: Record<string, string | undefined> = {
-      CLUTCH_MINIMAX_MODEL: "MiniMax-M3",
+      CLUTCH_MINIMAX_MODEL: "MiniMax-M2.7",
       CLUTCH_MINIMAX_API_KEY_NAME: "OTHER_KEY",
     };
     support.transformEnv!(chosen);
-    expect(chosen.CLUTCH_MINIMAX_MODEL).toBe("MiniMax-M3");
+    expect(chosen.CLUTCH_MINIMAX_MODEL).toBe("MiniMax-M2.7");
     expect(chosen.CLUTCH_MINIMAX_API_KEY_NAME).toBe("OTHER_KEY");
   });
 
@@ -177,7 +176,7 @@ describe("the MiniMax plugin and the compiled driver agree", () => {
     const cases: Array<Record<string, string | undefined>> = [
       {},
       { MINIMAX_API_KEY: "k" },
-      { CLUTCH_MINIMAX_MODEL: "MiniMax-M3" },
+      { CLUTCH_MINIMAX_MODEL: "MiniMax-M2.7" },
       { CLUTCH_MINIMAX_API_KEY_NAME: "OTHER_KEY", OTHER_KEY: "k" },
     ];
     for (const start of cases) {

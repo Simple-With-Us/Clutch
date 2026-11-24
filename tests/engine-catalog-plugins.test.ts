@@ -143,7 +143,8 @@ describe("engine plugin wiring", () => {
     const catalog = await buildEngineCatalog(sources(report));
     const minimax = catalog.engines.find((engine) => engine.id === "minimax");
     // The MiniMax plugin lists a model the minimax-headless profile does
-    // not declare, so the profile keeps owning the list.
-    expect(minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M3.1-Flash", "MiniMax-M3"]);
+    // not declare, so the profile keeps owning the list.  MiniMax-M3 left
+    // both lists when it was retired fleet-wide (M3.1 only, 2026-11-21/22).
+    expect(minimax?.models.map((model) => model.id)).toEqual(["MiniMax-M3.1-Flash"]);
   });
 });

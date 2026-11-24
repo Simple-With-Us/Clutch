@@ -37,6 +37,7 @@ import { join } from "node:path";
 import type { Engine } from "../shared/engine-types.ts";
 import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, supportsThreads } from "../shared/engine-types.ts";
 import { loadEnginePlugins } from "../shared/engines/index.ts";
+import { isRetiredModelId } from "../shared/retired-model-ids.ts";
 import { museContributorModelId } from "./muse-launch-options.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
@@ -244,7 +245,6 @@ const DSH_MODELS: Record<string, EngineModel[]> = {
   ],
   minimax: [
     { id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", value: "MiniMax-M3.1-Flash" },
-    { id: "MiniMax-M3", label: "MiniMax-M3", value: "MiniMax-M3" },
   ],
 };
 
@@ -746,7 +746,13 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
       effortLevels = probed?.initialized ? probed.efforts : effortLevels;
     }
 
-    const mergedModels = mergePluginModels(models, pluginModelsFor(sources, engine));
+    // A live probe or a plugin can keep serving a retired row after the
+    // shipped lists drop it (the host's installed CLI owns its own
+    // catalog), so drop the rows the retired map names before anything
+    // downstream can offer them (src/shared/retired-model-ids.ts).
+    const mergedModels = mergePluginModels(models, pluginModelsFor(sources, engine)).filter(
+      (model) => !isRetiredModelId(model.id),
+    );
     // Judged after the plugin merge, so a declared catalog never shows beside
     // a note saying there is none.
     if (engine === "zcode" && available && !note && !mergedModels.length) {
