@@ -44,7 +44,11 @@ describe("minimaxSupport", () => {
     expect(minimaxSupport.driverKind).toBe("minimaxAgent");
     expect(minimaxSupport.mcpServers).toBe(true);
     expect(STATIC_MINIMAX_MODELS.default).toBe("MiniMax-M3.1-Flash");
-    expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id)).toContain("MiniMax-M3");
+    expect(STATIC_MINIMAX_MODELS.options.map((option) => option.id)).toEqual([
+      "MiniMax-M3.1-Flash",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.7",
+    ]);
   });
 
   it("advertises the working MiniMax-M3.1-Flash replacement", () => {
@@ -86,6 +90,20 @@ describe("minimaxSupport", () => {
     expect(readFileSync(join(ROOT, NATIVE_PICKERS[0]), "utf8"), NATIVE_PICKERS[0])
       .toContain("MiniMax-M3.1-Flash");
   });
+  it("does not offer the retired MiniMax-M3 from the native model pickers", () => {
+    // MiniMax-M3 was retired fleet-wide (owner ruling 2026-11-21/22:
+    // MiniMax is M3.1 only, M3 must not be used).  The native pickers and
+    // the dock app name their rows as literals, so the catalog guard above
+    // does not reach them.  The check uses the quoted id: the live
+    // "MiniMax-M3.1-Flash" contains the retired stem as a substring and
+    // must keep passing.
+    for (const picker of [...NATIVE_PICKERS, ...NATIVE_CATALOGS]) {
+      expect(readFileSync(join(ROOT, picker), "utf8"), picker)
+        .not.toContain('"MiniMax-M3"');
+    }
+    expect(readFileSync(join(ROOT, "src/web/dock-app/ClutchWindow.swift"), "utf8"), "ClutchWindow.swift")
+      .not.toContain("'MiniMax-M3'");
+  });
 });
 
 describe("classifyMinimaxError", () => {
@@ -98,24 +116,24 @@ describe("classifyMinimaxError", () => {
 });
 
 describe("minimaxEffortLevelsForModel", () => {
-  it("gives MiniMax-M3 the full effort range and falls back for M2.7", async () => {
+  it("gives MiniMax-M3.1-Flash its own range and falls back for the rest", async () => {
     const { minimaxEffortLevelsForModel } = await import("../src/minimax/acp/driver.ts");
-    expect(minimaxEffortLevelsForModel("MiniMax-M3")).toEqual(["none", "low", "medium", "high", "max"]);
     // M3.1 Flash forces thinking on, so its list starts at "low" and runs
     // through max — there is no "none" level for it.
     expect(minimaxEffortLevelsForModel("MiniMax-M3.1-Flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // MiniMax-M3's own range left with its catalog row when M3 was
+    // retired; the id now falls back to the driver default like any
+    // unlisted model (a saved M3 selection rewrites onto M3.1-Flash
+    // before it reaches this lookup).
+    expect(minimaxEffortLevelsForModel("MiniMax-M3")).toEqual(["none"]);
     expect(minimaxEffortLevelsForModel("MiniMax-M2.7")).toEqual(["none"]);
     expect(minimaxEffortLevelsForModel("MiniMax-M2.7-highspeed")).toEqual(["none"]);
     expect(minimaxEffortLevelsForModel("unknown-model")).toEqual(["none"]);
   });
 
   it("declares the per-model map on minimaxSupport", () => {
-    expect(minimaxSupport.perModelEffortLevels?.["MiniMax-M3"]).toEqual([
-      "none",
-      "low",
-      "medium",
-      "high",
-      "max",
-    ]);
+    expect(minimaxSupport.perModelEffortLevels).toEqual({
+      "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
+    });
   });
 });

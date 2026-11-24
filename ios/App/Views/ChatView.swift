@@ -471,7 +471,6 @@ public struct ChatView: View {
         ],
         "minimax": [
             EngineModel(id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", value: "MiniMax-M3.1-Flash"),
-            EngineModel(id: "MiniMax-M3", label: "MiniMax-M3", value: "MiniMax-M3"),
         ],
     ]
 

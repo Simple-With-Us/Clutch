@@ -602,4 +602,29 @@ describe("resolveModelValue", () => {
     expect(resolveModelValue(catalog, "muse", "muse-brand-new")).toBe("muse-brand-new");
     expect(resolveModelValue(catalog, "muse", "  ")).toBe(null);
   });
+
+  it("resolves a saved retired id onto the live replacement's value", () => {
+    // A selection saved before MiniMax-M3 was retired names the dead id.
+    // It must land on the M3.1-Flash row's value, not pass the retired
+    // spelling through to the engine or the dsh host.
+    const withMinimax: EngineCatalog = {
+      engines: [
+        ...catalog.engines,
+        {
+          id: "minimax",
+          label: "MiniMax",
+          available: true,
+          supportsThreads: false,
+          models: [
+            { id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", value: "MiniMax-M3.1-Flash" },
+          ],
+          effortLevels: ["low"],
+          effortConfigId: "reasoning_effort",
+          modelConfigId: "model",
+        },
+      ],
+    };
+    expect(resolveModelValue(withMinimax, "minimax", "MiniMax-M3")).toBe("MiniMax-M3.1-Flash");
+    expect(resolveModelValue(withMinimax, "minimax", "MiniMax-M3.1-Flash")).toBe("MiniMax-M3.1-Flash");
+  });
 });
