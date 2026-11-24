@@ -1,0 +1,116 @@
+import XCTest
+@testable import Clutch
+
+/// The Live Activity's contract with the owner.
+///
+/// The tests here are about what the surfaces say.  The activity shows
+/// without being opened, so the rule it has to keep is small and strict:
+/// thread names and a status, and nothing about the request itself.
+final class ClutchActivityTests: XCTestCase {
+    // MARK: - The summary line
+
+    func testSummaryNamesWhatIsWaitingAndWhatIsRunning() {
+        XCTAssertEqual(ClutchActivitySummary.text(waiting: 2, running: 1), "2 Waiting, 1 Running")
+    }
+
+    func testSummaryNamesOnlyTheHalfThatIsHappening() {
+        XCTAssertEqual(ClutchActivitySummary.text(waiting: 3, running: 0), "3 Waiting")
+        XCTAssertEqual(ClutchActivitySummary.text(waiting: 0, running: 2), "2 Running")
+    }
+
+    func testSummarySaysAllQuietWhenNothingIsHappening() {
+        XCTAssertEqual(ClutchActivitySummary.text(waiting: 0, running: 0), "All Quiet")
+    }
+
+    // MARK: - The published state
+
+    func testStateCountsEveryApprovalEvenWhenOnlyThreeSessionsFit() {
+        let waiting = (1...5).map {
+            ClutchActivitySession(id: "s\($0)", title: "Thread \($0)", status: .waiting)
+        }
+        let state = ClutchActivityAttributes.ContentState(waiting: waiting, running: [])
+
+        XCTAssertEqual(state.waitingCount, 5)
+        XCTAssertEqual(state.sessions.count, 3)
+    }
+
+    func testStatePutsTheApprovalsBeforeTheRuns() {
+        let waiting = [ClutchActivitySession(id: "w1", title: "Needs Me", status: .waiting)]
+        let running = [ClutchActivitySession(id: "r1", title: "Working", status: .running)]
+        let state = ClutchActivityAttributes.ContentState(waiting: waiting, running: running)
+
+        XCTAssertEqual(state.sessions.map(\.title), ["Needs Me", "Working"])
+        XCTAssertEqual(state.sessions.map(\.status), [.waiting, .running])
+    }
+
+    func testStateCarriesTitlesAndStatusesAndNothingElse() {
+        // The state is what the lock screen renders, so the fields it has
+        // are the fields the lock screen may show.  A tool name, a command
+        // or a path has no field here to live in.
+        let session = ClutchActivitySession(id: "s1", title: "Refactor The Parser", status: .waiting)
+        let state = ClutchActivityAttributes.ContentState(
+            waiting: [session],
+            running: []
+        )
+
+        XCTAssertEqual(state.sessions.first?.title, "Refactor The Parser")
+        XCTAssertEqual(state.sessions.first?.status, .waiting)
+        let encoded = try? JSONEncoder().encode(state)
+        let text = encoded.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        XCTAssertFalse(text.contains("bash"))
+        XCTAssertFalse(text.contains("rm -rf"))
+    }
+
+    // MARK: - The shared count
+
+    func testSnapshotRoundTripsThroughTheSharedContainer() {
+        let suite = "codes.clutch.tests.snapshot.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            return XCTFail("the test suite could not be created")
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let snapshot = ClutchApprovalSnapshot(waitingCount: 2, runningCount: 1)
+        ClutchSharedStore.write(snapshot, to: defaults)
+
+        XCTAssertEqual(ClutchSharedStore.read(from: defaults), snapshot)
+    }
+
+    func testAnUnwrittenContainerReadsAsNothingWaiting() {
+        let suite = "codes.clutch.tests.empty.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            return XCTFail("the test suite could not be created")
+        }
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(ClutchSharedStore.read(from: defaults), .empty)
+    }
+
+    func testTheSharedContainerCarriesCountsAndNoTitles() {
+        // The Lock Screen shows a number.  A thread title in the container
+        // would be a thread title on a lock screen.
+        let snapshot = ClutchApprovalSnapshot(waitingCount: 1, runningCount: 0)
+        let data = try? JSONEncoder().encode(snapshot)
+        let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+
+        XCTAssertFalse(text.contains("title"))
+        XCTAssertFalse(text.contains("tool"))
+    }
+
+    // MARK: - The link
+
+    func testTheApprovalsLinkIsReadAndOtherLinksAreNot() {
+        XCTAssertTrue(ClutchApprovalsLink.matches(ClutchApprovalsLink.url))
+        XCTAssertFalse(ClutchApprovalsLink.matches(URL(string: "clutch://thread/abc")!))
+        XCTAssertFalse(ClutchApprovalsLink.matches(URL(string: "https://clutch.codes/approvals")!))
+    }
+
+    @MainActor
+    func testTheRouterTakesTheRequestOnce() {
+        let router = ApprovalsLinkRouter()
+        router.request()
+
+        XCTAssertTrue(router.take())
+        XCTAssertFalse(router.take())
+    }
+}

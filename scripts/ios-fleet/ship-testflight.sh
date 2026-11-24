@@ -1609,7 +1609,12 @@ if [[ "$MANUAL_SIGN" -eq 1 ]]; then
   _installer="${IOS_INSTALL_PROFILES_SCRIPT:-${REPO_ROOT}/scripts/ios-install-appstore-profiles.sh}"
   [[ -f "$_installer" ]] || die "manual signing needs ${_installer}"
   log "manual App Store signing: skipping Xcode's provisioning service"
-  IOS_APPSTORE_PROFILES_MAP="$PROFILE_MAP" bash "$_installer" \
+  # Clutch's app and its widget extension share one App Group, so every
+  # profile has to carry it.  The installer refuses a profile that does not,
+  # which is the point:  a profile without the group signs an app whose
+  # entitlements ask for it, and the archive fails at the worst moment.
+  REQUIRED_APP_GROUP="${IOS_REQUIRED_APP_GROUP:-group.codes.clutch.ios}"
+  IOS_APPSTORE_PROFILES_MAP="$PROFILE_MAP" IOS_REQUIRED_APP_GROUP="$REQUIRED_APP_GROUP" bash "$_installer" \
     || die "could not install the App Store profiles named in ${PROFILE_MAP}"
   PROVISION_UPDATE_FLAGS=()
   ASC_AUTH_FLAGS=()

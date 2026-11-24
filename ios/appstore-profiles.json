@@ -1,3 +1,4 @@
 {
-  "codes.clutch.ios": "Clutch iOS App Store (API)"
+  "codes.clutch.ios": "Clutch iOS App Store With App Group (API)",
+  "codes.clutch.ios.widgets": "Clutch Widgets App Store (API)"
 }

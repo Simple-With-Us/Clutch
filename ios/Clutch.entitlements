@@ -2,5 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- The widget extension and the app share one container, so the count
+	     the app writes is the count the Lock Screen shows. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.codes.clutch.ios</string>
+	</array>
 </dict>
 </plist>
