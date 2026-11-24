@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct ClutchApp: App {
@@ -21,6 +22,10 @@ struct ClutchApp: App {
         // Sentry links both native targets; without a DSN the start below
         // is a no-op, so local and CI builds without one behave as before.
         SentryTelemetry.start()
+        // The delegate is what lets an action on a notification answer the
+        // request, and it has to be in place before a notification arrives:
+        // a notification can be what launched the app.
+        UNUserNotificationCenter.current().delegate = ClutchNotificationDelegate.shared
     }
 
     var body: some Scene {
