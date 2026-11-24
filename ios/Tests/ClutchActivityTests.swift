@@ -88,6 +88,20 @@ final class ClutchActivityTests: XCTestCase {
         XCTAssertEqual(split.running.count, 1)
     }
 
+    func testAThreadOnAnotherHostIsStillRunning() {
+        // Two hosts can hold a session with the same id, and one host's
+        // waiting thread is not the other host's running thread.
+        let hostA = UUID()
+        let hostB = UUID()
+        let approval = TurnActivityApproval(hostId: hostA, sessionId: "s1", title: "Needs Me")
+        let run = TurnActivityRun(hostId: hostB, sessionId: "s1", title: "Working")
+
+        let split = ClutchActivityWork.split(approvals: [approval], runs: [run])
+
+        XCTAssertEqual(split.waiting.count, 1)
+        XCTAssertEqual(split.running.count, 1)
+    }
+
     // MARK: - The shared count
 
     func testSnapshotRoundTripsThroughTheSharedContainer() {

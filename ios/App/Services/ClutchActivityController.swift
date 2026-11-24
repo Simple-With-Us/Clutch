@@ -233,10 +233,15 @@ public final class ClutchActivityController {
 /// waiting and running, and would show it twice.
 enum ClutchActivityWork {
     /// Splits the store's entries into what is waiting and what is running.
+    ///
+    /// The overlap is keyed by the entry's own id, which carries the host
+    /// as well as the session:  two hosts can hold a session with the same
+    /// id, and one host's waiting thread is not the other host's running
+    /// thread.
     static func split(approvals: [TurnActivityApproval],
                       runs: [TurnActivityRun]) -> (waiting: [TurnActivityApproval], running: [TurnActivityRun]) {
-        let waitingIds = Set(approvals.map(\.sessionId))
-        return (approvals, runs.filter { !waitingIds.contains($0.sessionId) })
+        let waitingIds = Set(approvals.map(\.id))
+        return (approvals, runs.filter { !waitingIds.contains($0.id) })
     }
 }
 #endif
