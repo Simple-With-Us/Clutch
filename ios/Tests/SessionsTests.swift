@@ -769,3 +769,126 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertTrue(AcpSessionInfo.newestFirst([]).isEmpty)
     }
 }
+
+/// The local update that follows a permission acknowledgment.
+///
+/// The acknowledgment names the request it answers, so it clears the card
+/// for that request and the activity state that belongs to it, and nothing
+/// else.  Everything here is local state:  no host is asked anything, and
+/// the assertions are about the device's own state.
+@MainActor
+final class PermissionAcknowledgementTests: XCTestCase {
+    private func request(_ id: String) -> AcpPermissionRequest {
+        AcpPermissionRequest(
+            requestId: id,
+            title: "Run a command",
+            toolName: "bash",
+            options: [AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once")]
+        )
+    }
+
+    func testAnAcknowledgmentClearsOnlyTheCardItNames() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+        requests.arrive(request("perm-2"))
+
+        XCTAssertTrue(requests.acknowledge(requestId: "perm-1"))
+
+        // The card that went is the card the answer named, and the card
+        // behind it is still on screen.
+        XCTAssertEqual(requests.requests.map(\.requestId), ["perm-2"])
+        XCTAssertEqual(requests.first?.requestId, "perm-2")
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testAcknowledgingACardThatIsNotOnScreenChangesNothing() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+
+        // A request that is not on screen is a no-op:  nothing is cleared,
+        // nothing is recorded and nothing is raised.
+        XCTAssertFalse(requests.acknowledge(requestId: "perm-missing"))
+        XCTAssertEqual(requests.requests.map(\.requestId), ["perm-1"])
+        XCTAssertTrue(requests.acknowledged.isEmpty)
+    }
+
+    func testAnAnsweredRequestDoesNotComeBackAsACard() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+        requests.acknowledge(requestId: "perm-1")
+
+        // The engine asked again about a request that was already answered:
+        // the card does not come back, because the owner already answered
+        // it and a second card would invite a second answer.
+        requests.arrive(request("perm-1"))
+
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testTheSameRequestIsOneCard() {
+        var requests = PermissionRequests()
+        requests.arrive(request("perm-1"))
+        requests.arrive(request("perm-1"))
+
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testTheActivityStateIsClearedForTheRequestTheAcknowledgmentNames() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "Fix the test")
+
+        activity.approvalAcknowledged(hostId: hostId, sessionId: "s-1", requestId: "perm-1")
+
+        // The other request's own activity state is still there:  the
+        // acknowledgment named one request and cleared one request.
+        XCTAssertEqual(activity.approvals.map(\.requestId), ["perm-2"])
+    }
+
+    func testAcknowledgingAnApprovalThatIsNotThereChangesNothing() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
+
+        activity.approvalAcknowledged(hostId: hostId, sessionId: "s-1", requestId: "perm-missing")
+
+        XCTAssertEqual(activity.approvals.map(\.requestId), ["perm-1"])
+    }
+
+    func testTheWholeActivityStateGoesWhenTheTurnEnds() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "Fix the test")
+
+        activity.approvalsCleared(hostId: hostId, sessionId: "s-1")
+
+        XCTAssertTrue(activity.approvals.isEmpty)
+    }
+
+    func testTheHomeListShowsOneRowForAThreadWaitingOnTwoRequests() {
+        let hostId = UUID()
+        let otherHost = UUID()
+        let approvals = [
+            TurnActivityApproval(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test"),
+            TurnActivityApproval(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "Fix the test"),
+            TurnActivityApproval(hostId: hostId, sessionId: "s-2", requestId: "perm-3", title: "Fix the test"),
+            TurnActivityApproval(hostId: otherHost, sessionId: "s-3", requestId: "perm-4", title: "Fix the test"),
+        ]
+
+        let rows = TurnActivity.approvalsForHomeList(approvals, hostId: hostId, listedSessions: [])
+
+        // One row per thread, and another host's approval is not this
+        // host's business.
+        XCTAssertEqual(rows.map(\.sessionId), ["s-1", "s-2"])
+
+        // A thread the list already shows is not shown twice.
+        let listed = TurnActivity.approvalsForHomeList(
+            approvals,
+            hostId: hostId,
+            listedSessions: ["s-1"]
+        )
+        XCTAssertEqual(listed.map(\.sessionId), ["s-2"])
+    }
+}

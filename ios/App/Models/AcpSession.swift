@@ -287,6 +287,77 @@ public struct AcpPermissionAnswer: Equatable, Sendable {
         "The request you answered changed before the answer went out, so it was not sent."
 }
 
+/// The permission requests one surface is holding, oldest first.
+///
+/// The engine asks one question at a time, but a second request can land
+/// before the first is answered, so the surface keeps the earlier one on
+/// screen instead of dropping it behind the newer card.
+///
+/// Every request carries the id the engine gave it, and the acknowledgment
+/// names that id, so the card that goes is the card the owner answered and
+/// not merely the first one on screen:  a queue of requests does not lose a
+/// card because a later one was answered.
+public struct PermissionRequests: Equatable, Sendable {
+    /// The requests on screen, oldest first.
+    public private(set) var requests: [AcpPermissionRequest] = []
+    /// The requests this surface has answered.
+    ///
+    /// An engine that asks the same question twice gets one card, so an
+    /// answered request does not come back as a second card the owner would
+    /// answer a second time.
+    public private(set) var acknowledged: Set<String> = []
+
+    public init() {}
+
+    /// The request on screen.
+    public var first: AcpPermissionRequest? { requests.first }
+    /// How many requests are waiting behind the one on screen.
+    public var count: Int { requests.count }
+    public var isEmpty: Bool { requests.isEmpty }
+
+    /// The request one id names, when it is on screen.
+    public func request(for requestId: String) -> AcpPermissionRequest? {
+        requests.first { $0.requestId == requestId }
+    }
+
+    /// Puts a request on screen.
+    ///
+    /// A request that is already on screen, or that this surface has already
+    /// answered, is a no-op:  the card stays one card per request, and an
+    /// answered request does not come back as a question nobody is waiting
+    /// for any more.
+    public mutating func arrive(_ request: AcpPermissionRequest) {
+        guard !acknowledged.contains(request.requestId) else { return }
+        guard !requests.contains(where: { $0.requestId == request.requestId }) else { return }
+        requests.append(request)
+    }
+
+    /// Clears the request one acknowledgment names, and nothing else.
+    ///
+    /// The acknowledgment is this device's own state, so the request id
+    /// alone says which card and which activity entry it clears:  no
+    /// round-trip to the host is needed to work out what the acknowledgment
+    /// means.  A request that is not on screen is a no-op:  nothing changes,
+    /// no other request is cleared and nothing is raised, so an answer for a
+    /// card that has already gone cannot take another card with it.
+    @discardableResult
+    public mutating func acknowledge(requestId: String) -> Bool {
+        guard let index = requests.firstIndex(where: { $0.requestId == requestId }) else { return false }
+        requests.remove(at: index)
+        acknowledged.insert(requestId)
+        return true
+    }
+
+    /// Takes every request off the screen.
+    ///
+    /// A turn that ended cannot answer a question any more, so the cards go
+    /// with it rather than sitting there inviting an answer that lands
+    /// nowhere.
+    public mutating func clearAll() {
+        requests.removeAll()
+    }
+}
+
 /// Real token accounting for one session, as reported by the engine.
 ///
 /// Every field is optional because the sidecar omits what it could not read.

@@ -56,7 +56,7 @@ public struct ChatView: View {
     /// The engine asks one question at a time, but a second request can land
     /// before the first is answered, so the queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
-    @State private var pendingPermissions: [AcpPermissionRequest] = []
+    @State private var pendingPermissions = PermissionRequests()
     /// How many answers did not reach the engine.
     ///
     /// The card offers the request again when this count moves, so a failed
@@ -637,7 +637,12 @@ public struct ChatView: View {
             if answered {
                 // The card only goes away once the answer is on its way, so a
                 // failed answer can be tried again.
-                pendingPermissions.removeFirst()
+                //
+                // The card that goes is the card the answer named:  the
+                // request id says which one it is, so the card on screen
+                // and the card the owner answered can never be different by
+                // accident.
+                pendingPermissions.acknowledge(requestId: answer.requestId)
             } else {
                 sendError = "The permission answer did not reach the engine."
                 permissionAnswerFailures += 1
@@ -724,7 +729,7 @@ public struct ChatView: View {
                         // answer goes back, so it is held on screen and the
                         // owner is woken for it: a stalled approval is the
                         // one event a turn-end notification can never cover.
-                        pendingPermissions.append(request)
+                        pendingPermissions.arrive(request)
                         permissionTick += 1
                         TurnNotifier.permissionRequest(
                             threadTitle: activeHost?.name ?? "Agent",
@@ -740,7 +745,7 @@ public struct ChatView: View {
                     case .done(let stop, let id, _):
                         sessionId = id
                         thoughtLine = nil
-                        pendingPermissions.removeAll()
+                        pendingPermissions.clearAll()
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         // The host ends a turn with its own name for it, and
@@ -758,7 +763,7 @@ public struct ChatView: View {
                         break // compaction controls are shown on the Mac workspace
                     case .failed(let message):
                         thoughtLine = nil
-                        pendingPermissions.removeAll()
+                        pendingPermissions.clearAll()
                         sendError = message
                         ErrorReporting.turnFailed(engine: selectedEngine, message: message)
                     }
@@ -850,7 +855,7 @@ public struct ChatView: View {
         // A stopped turn cannot answer a question any more, so the card goes
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
-        pendingPermissions.removeAll()
+        pendingPermissions.clearAll()
         // The queued text is the owner's to send or edit, so it goes back to
         // the composer instead of waiting hidden for a later turn.
         restoreQueuedPrompt()
