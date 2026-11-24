@@ -89,6 +89,10 @@ public struct ChatView: View {
     /// value to fire on.
     @State private var turnTick = 0
     @State private var permissionTick = 0
+    /// When each on-screen request last woke the owner, by request id, so a
+    /// re-emitted request re-wakes at most once per interval instead of on
+    /// every arrival.
+    @State private var permissionNotifiedAt: [String: Date] = [:]
     @State private var isShowingHosts = false
 
     let activeHost: ClutchHost?
@@ -734,7 +738,20 @@ public struct ChatView: View {
                         // no activity row.  A request that is already on
                         // screen still has its card and still has the engine
                         // blocked on it, so the owner is woken for it again.
-                        guard pendingPermissions.arrive(request).leavesACardToAnswer else { break }
+                        let arrival = pendingPermissions.arrive(request)
+                        guard arrival.leavesACardToAnswer else { break }
+                        // A retrying engine can re-emit a request that is
+                        // already on screen many times over.  The card stays
+                        // either way, but the wake-up is coalesced:  a
+                        // re-arrival inside the interval raises no second
+                        // notification and no second haptic for a card the
+                        // owner can already see.
+                        if arrival == .alreadyOnScreen,
+                           let lastNotified = permissionNotifiedAt[request.requestId],
+                           Date().timeIntervalSince(lastNotified) < 30 {
+                            break
+                        }
+                        permissionNotifiedAt[request.requestId] = Date()
                         permissionTick += 1
                         TurnNotifier.permissionRequest(
                             threadTitle: activeHost?.name ?? "Agent",
@@ -751,6 +768,7 @@ public struct ChatView: View {
                         sessionId = id
                         thoughtLine = nil
                         pendingPermissions.clearAll()
+                        permissionNotifiedAt.removeAll()
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: activeHost?.name ?? "Agent")
                         // The host ends a turn with its own name for it, and
