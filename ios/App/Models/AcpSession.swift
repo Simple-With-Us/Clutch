@@ -245,9 +245,14 @@ public struct AcpPermissionRequest: Decodable, Equatable, Sendable, Identifiable
     ///
     /// The request can turn over while the owner is confirming it, and an
     /// answer for a request that is gone must not approve the request that
-    /// took its place.
+    /// took its place.  The same id can also come back with new terms, so
+    /// the option the owner picked has to be one this request still
+    /// offers:  an option the new terms dropped is not applied to them.
+    /// A nil option id cancels the request, which every request accepts.
     public func accepts(_ answer: AcpPermissionAnswer) -> Bool {
-        answer.requestId == requestId
+        guard answer.requestId == requestId else { return false }
+        guard let optionId = answer.optionId else { return true }
+        return options.contains { $0.optionId == optionId }
     }
 
     /// The heading the card shows: what the tool wants, and which tool it is.
@@ -372,7 +377,16 @@ public struct PermissionRequests: Equatable, Sendable {
     public mutating func arrive(_ request: AcpPermissionRequest) -> PermissionArrival {
         guard !acknowledged.contains(request.requestId) else { return .alreadyAnswered }
         if let index = requests.firstIndex(where: { $0.requestId == request.requestId }) {
-            requests[index] = request
+            // A re-arrival carrying the very same terms changes nothing, so
+            // the card is left exactly as it stands:  replacing it with an
+            // equal request would only republish the surface for no change.
+            // A re-arrival with different terms does replace the card, for
+            // the reason above — and an answer the owner made against the
+            // old terms is then held to the new card by `accepts(_:)`, which
+            // drops it when the option it names is no longer offered.
+            if requests[index] != request {
+                requests[index] = request
+            }
             return .alreadyOnScreen
         }
         requests.append(request)
