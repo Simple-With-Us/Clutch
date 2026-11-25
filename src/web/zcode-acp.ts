@@ -76,6 +76,13 @@ function executableFile(path: string): boolean {
 /** A JavaScript entry, which the bridge runs with its own Node rather than executing. */
 const JS_ENTRY = /\.(cjs|mjs|js)$/;
 
+/**
+ * A path separator in an explicit CLI name.  Windows takes a backslash as one;
+ * on POSIX a backslash is an ordinary file-name character, so a name holding
+ * one is still a bare command the bridge spawns through PATH.
+ */
+const PATH_SEPARATOR = process.platform === "win32" ? /[\\/]/ : /\//;
+
 function pathDirs(env: Env): string[] {
   return (env.PATH ?? "").split(delimiter).filter(Boolean);
 }
@@ -150,7 +157,7 @@ export function resolveZcodeCli(env: Env = process.env): string | null {
   const explicit = env.ZCODE_BIN?.trim() || env.CLUTCH_ZCODE_CLI?.trim();
   const candidates = !explicit
     ? zcodeCliCandidates(env)
-    : /[\\/]/.test(explicit)
+    : PATH_SEPARATOR.test(explicit)
       ? [explicit]
       : pathDirs(env).map((dir) => join(dir, explicit));
   for (const candidate of candidates) {
