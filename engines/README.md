@@ -146,46 +146,75 @@ intersection and leaves the rest unmapped.
 
 ## zcode
 
-Z Code joins `mcode` and `muse` as a code engine: the sidecar spawns its CLI
-over ACP v1 stdio (`zcode acp`), and the engine keeps its own resumable
-threads the way the other two do.  There is no launcher script and no bridge —
-Z Code has no backend selection to resolve, so the launcher is the CLI itself,
-exactly as `mcode` is.  `CLUTCH_CHAT_LAUNCHER_ZCODE` overrides the whole
-launcher and `CLUTCH_ZCODE_CLI` names a CLI the default search
-(`~/.local/bin`, `~/.zcode/bin`, then PATH) missed.
+Z Code joins `mcode` and `muse` as a code engine, and the engine keeps its own
+resumable threads the way the other two do.  Unlike `mcode`, Z Code's CLI has
+no ACP command:  `zcode acp` exits with `Unknown command: acp` on every release
+(C-129).  The CLI speaks the ZCode Protocol through `zcode app-server --stdio`,
+and ACP comes from the `zcode-acp-server` bridge
+(<https://github.com/william0wang/zcode-acp>), the same bridge BotFleet's ZCode
+ACP engine runs:
+
+```
+sidecar (ACP v1 stdio)  ->  zcode-acp-server  ->  zcode app-server --stdio
+```
+
+```sh
+npm install -g zcode-acp-server   # Node 22 or later
+```
+
+The sidecar launches the bridge, not the CLI (`src/web/zcode-acp.ts`).  It
+finds the bridge next to the Node it runs on, then in the usual npm prefixes,
+then on PATH;  `CLUTCH_ZCODE_ACP_CLI` names one the search missed.  It also
+resolves the Z Code CLI the bridge drives (`CLUTCH_ZCODE_CLI`, `~/.local/bin`,
+`~/.zcode/bin`, PATH, then the desktop app bundle) and hands the bridge its
+real path in `ZCODE_BIN`.  That matters on a Mac:  a CLI launched straight out
+of `ZCode.app` cannot find its built-in provider table, the bridge supplies it
+only when it can see the real `zcode.cjs`, and a `zcode` symlink on PATH hides
+that path.  `CLUTCH_CHAT_LAUNCHER_ZCODE` still overrides the whole launcher.
+
+### Sign-in
+
+The bridge reads the Z Code app's own sign-in (`~/.zcode/v2/config.json`) or
+an account saved with `zcode-acp setup --provider zai` (`~/.zcode/v2/acp-accounts.json`),
+and never a key from the environment.  The sidecar strips `ANTHROPIC_API_KEY`
+and the z.ai and GLM key variables from the bridge's environment, because the
+bridge would otherwise let an inherited key override that sign-in and move the
+turn off the Coding Plan.  An engine without a sign-in this check can see stays
+in the picker with a note, because the app's newer sign-in keeps no key in that
+file and the bridge settles it on the first turn.
 
 ### Why a manifest and not a module
 
-Everything Z Code needs today is data: one declared model, generic provider
-error patterns, and the credential rule.  The declarative tier expresses all
-of it, so there is no `zcode.engine.mjs` and nothing for a parity test to
-pin.  When a live Z Code session proves behaviour a manifest cannot express,
-that is the point to move to the programmatic tier.
+Everything the plugin has to say about Z Code is data:  one declared model,
+generic provider error patterns, the bridge's install line and the sign-in
+note.  The launch logic that is not data (the bridge and CLI search, the
+environment) lives in the sidecar, so there is no `zcode.engine.mjs`.
 
 ### The declared catalog is a placeholder by design
 
 The manifest declares one model (`glm-5.3`) because a manifest must ship a
-catalog, and no Z Code CLI was installed on the machine that wrote it.  The
-catalog probe (`src/web/engine-catalog.ts`) includes `zcode` in its targets:
-on the first host with a working CLI, a throwaway `session/new` reads the
-engine's own `configOptions` and its list replaces the declared one, exactly
-as MiniMax Code's does.  `images` is declared `false` for the same reason —
-an unproven engine must not promise image attachments its ACP session may
-drop; flip it on evidence.
+catalog.  The catalog probe (`src/web/engine-catalog.ts`) includes `zcode` in
+its targets:  on the first host with a working bridge, a throwaway
+`session/new` reads the engine's own `configOptions` and its list replaces the
+declared one, exactly as MiniMax Code's does.  The probe starts the bridge in
+the same environment a turn gets, and reads the thinking level from the
+bridge's `thought` option (`low`, `high`, `max` for GLM-5.3).  `images` stays
+`false` until a live session proves the attachment path.
 
 ### Where it runs
 
-Local spawns first, and the remote story is the standard one: a server host
-runs the sidecar with the Z Code CLI installed and signed in, and the apps
-reach it over Tailscale HTTPS.  See `docs/zcode-server.md`.  There is no SSH
-transport in Clutch and this engine adds none.
+Local spawns first, and the remote story is the standard one:  a server host
+runs the sidecar with the bridge and the Z Code CLI installed and signed in,
+and the apps reach it over Tailscale HTTPS.  See `docs/zcode-server.md`.  There
+is no SSH transport in Clutch and this engine adds none.
 
 ### What is verified, and what is not
 
-The manifest loads, maps onto the `zcode` engine id, and merges its declared
-models into the picker (`tests/zcode-plugin.test.ts`), and the sidecar paths
-it rides are the same ones the mcode and muse tests drive.  **Not verified: a
-live turn.**  No Z Code CLI was installed on the authoring machine, so
-`zcode acp` is the assumed command — it is the shape every other code engine
-speaks — and the launcher overrides exist precisely so an operator can point
-the engine at the real thing without a code change if the assumption misses.
+The bridge's behaviour is read off its published source (0.94.0):  the
+`zcode-acp-server` bin is the stdio server with no arguments, it launches
+`zcode app-server --stdio`, it resolves the CLI from `ZCODE_BIN`, PATH and the
+app bundles, and it injects the provider table only for a `.cjs` entry.  The
+sidecar's launcher, availability check and spawn environment are covered by
+`tests/zcode-acp.test.ts` and `tests/engine-availability.test.ts`.  **Not
+verified:  a live turn.**  No host with the Z Code app ran a turn through
+Clutch while this was written;  the first one confirms the fix end to end.
