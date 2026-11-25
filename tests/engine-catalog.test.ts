@@ -106,6 +106,36 @@ lines.on("line", (line) => {
     const result = await probeEngineOptions(stub, [], dir, "reasoningEffort", 2_000);
     expect(result).toEqual({ models: [], efforts: [], supportsThreads: false, initialized: false });
   });
+
+  it("starts the engine in the environment it is given", async () => {
+    // The Z Code probe passes the bridge's own environment (the CLI's real
+    // path, no foreign API keys), so the probe sees what a turn sees.
+    const dir = mkdtempSync(join(tmpdir(), "clutch-acp-probe-env-"));
+    const stub = join(dir, "probe-env.mjs");
+    writeFileSync(stub, `#!/usr/bin/env node
+import readline from "node:readline";
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id === 1) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { agentCapabilities: {} } }) + "\\n");
+  } else if (message.id === 2) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { sessionId: "probe", configOptions: [
+      { id: "model", options: [{ name: process.env.PROBE_MARKER ?? "missing", value: "seen" }] },
+    ] } }) + "\\n");
+  } else if (message.id === 3) {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: 3, result: {} }) + "\\n");
+  }
+});
+`);
+    chmodSync(stub, 0o755);
+    try {
+      const result = await probeEngineOptions(stub, [], dir, "thought", 5_000, { ...process.env, PROBE_MARKER: "from-env" });
+      expect(result.models.map((model) => model.id)).toEqual(["from-env"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("mergeMuseModels", () => {
@@ -218,7 +248,7 @@ describe("buildEngineCatalog", () => {
         minimax: { command: "minimax", args: [] },
         mcode: { command: "mcode", args: ["acp"] },
         muse: { command: "muse", args: [] },
-        zcode: { command: "zcode", args: ["acp"] },
+        zcode: { command: "zcode-acp-server", args: [] },
       },
       // No probe runs here: the launchers are not executable in the test.
       available: { deepseek: true, minimax: true, mcode: false, muse: false, zcode: false },
@@ -234,6 +264,11 @@ describe("buildEngineCatalog", () => {
     expect(muse.available).toBe(false);
     expect(muse.effortConfigId).toBe("reasoningEffort");
     expect(muse.effortLevels).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    // Z Code's thinking level is the zcode-acp-server bridge's "thought"
+    // option (C-129), not MiniMax Code's "thinkingEffort".
+    const zcode = catalog.engines[4];
+    expect(zcode.effortConfigId).toBe("thought");
+    expect(zcode.effortLevels).toEqual(["low", "high", "max"]);
   });
 
   it("never starts Muse on repeated catalog misses and exposes only the contributor allowlist", async () => {
@@ -372,7 +407,7 @@ describe("buildEngineCatalog", () => {
         minimax: { command: "minimax", args: [] },
         mcode: { command: "mcode", args: ["acp"] },
         muse: { command: "muse", args: [] },
-        zcode: { command: "zcode", args: ["acp"] },
+        zcode: { command: "zcode-acp-server", args: [] },
       },
       // An engine that is not installed here still lists its threads: the
       // capability belongs to the engine, not to this machine's copy of it.
@@ -492,7 +527,7 @@ lines.on("line", (line) => {
       launchers: {
         deepseek: { command: "/unused", args: [] }, minimax: { command: "/unused", args: [] },
         mcode: { command: "/unused", args: [] }, muse: { command: "/never-start-muse", args: [] },
-        zcode: { command: "/unused", args: ["acp"] },
+        zcode: { command: "/unused", args: [] },
       },
       available: { deepseek: false, minimax: false, mcode: false, muse: false, zcode: false },
       probeCwd: "/unused",
