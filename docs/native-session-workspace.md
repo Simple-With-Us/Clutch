@@ -10,6 +10,12 @@ Context occupancy is separate: only ACP's reported used-token count and context-
 
 Diagnostics correlate each Clutch turn with its native session ID.  Session snapshots use custom nonbilling attributes; they are not emitted as new per-call token usage.  Compaction records contain status only.  Prompts, tool arguments, transcript text and compaction summaries are excluded from telemetry.  Local retention and receiver acceptance do not prove Sentry receipt or Usage Monitor ledger ingestion; those delivery boundaries require separate verification.
 
+## Projects Across Hosts And Coding Tools
+
+Open **Projects** from the native toolbar, create a project, and choose **Add Threads**.  Pick a paired host and coding tool, then add its saved threads.  Repeat for any other host or tool without switching the main workspace.  Each entry shows its source, and opening it previews the original thread before you choose **Resume This Thread**.
+
+Projects are saved on the device that creates them; membership is not synced between devices.  Removing a reference does not archive, delete, or move the original thread.  Existing host-local sidebar projects stay in place.  If a host is unavailable or forgotten, its references remain in the project and are never opened on a different host.
+
 ## Server Connections
 
 The native app connects to the server's Clutch HTTP sidecar, which owns a local stdio ACP connection to Muse.  A bare server URL does not provide the native chat credential.  Import the existing code-server pairing link from the sidecar service user's `$CLUTCH_HOME/server-pairing-link.txt` through the app's pairing flow.  The link contains a secret and must not be printed, posted or placed in a command argument.  Pairing and browsing do not send a model prompt.

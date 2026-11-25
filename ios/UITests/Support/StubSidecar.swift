@@ -49,6 +49,7 @@ final class StubSidecar {
     private var acceptThread: Thread?
     /// True when the stub serves the synthetic fixture turn.
     private let fixture: Bool
+    private let projectEngine: String?
     /// The fixture turn holds its stream open at the permission request
     /// until the test releases it, so the card stays on screen long enough
     /// to be looked at.
@@ -65,8 +66,9 @@ final class StubSidecar {
         case couldNotStart
     }
 
-    init(fixture: Bool = false) {
+    init(fixture: Bool = false, projectEngine: String? = nil) {
         self.fixture = fixture
+        self.projectEngine = projectEngine
     }
 
     /// Lets the fixture turn finish.
@@ -294,6 +296,35 @@ final class StubSidecar {
 
         if path.hasPrefix("/clutch/v1/health") {
             return StubBody(status: 200, json: #"{"ok":true,"engines":["mcode"]}"#)
+        }
+        if let projectEngine, path.hasPrefix("/clutch/v1/engines") {
+            let engines = """
+            {"engines":[{"id":"\(projectEngine)","label":"Fixture \(projectEngine)","available":true,
+            "models":[],"effortLevels":[],"effortConfigId":"thinkingEffort","modelConfigId":"model"}]}
+            """
+            return StubBody(status: 200, json: engines)
+        }
+        if let projectEngine, path.hasPrefix("/clutch/v1/sessions") {
+            let query = URLComponents(string: path)?.queryItems ?? []
+            guard query.contains(where: { $0.name == "engine" && $0.value == projectEngine }) else {
+                return StubBody(status: 400, json: #"{"error":"wrong fixture engine"}"#)
+            }
+            if path.hasPrefix("/clutch/v1/sessions/preview") {
+                guard query.contains(where: { $0.name == "sessionId" && $0.value == "same" }),
+                      query.contains(where: { $0.name == "cwd" && $0.value == "/fixture/\(projectEngine)" }) else {
+                    return StubBody(status: 400, json: #"{"error":"wrong fixture thread or folder"}"#)
+                }
+                let preview = """
+                {"remoteSessionId":"same","cwd":"/fixture/\(projectEngine)",
+                "history":[{"sessionId":"same","kind":"assistant","text":"Preview from \(projectEngine)"}],
+                "running":false,"truncated":false}
+                """
+                return StubBody(status: 200, json: preview)
+            }
+            let sessions = """
+            {"sessions":[{"sessionId":"same","cwd":"/fixture/\(projectEngine)","title":"Thread \(projectEngine)"}]}
+            """
+            return StubBody(status: 200, json: sessions)
         }
         if path.hasPrefix("/clutch/v1/engines") {
             let engines = """

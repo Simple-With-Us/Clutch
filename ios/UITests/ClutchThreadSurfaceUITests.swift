@@ -80,4 +80,61 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         snap("ios-find-match")
         try assertSnapshot("ios-find-match", of: app.windows.firstMatch)
     }
+
+    func testProjectCombinesThreadsFromDifferentHostsAndCodingTools() throws {
+        let mac = StubSidecar(projectEngine: "mcode")
+        let server = StubSidecar(projectEngine: "muse")
+        try mac.start()
+        defer { mac.stop() }
+        try server.start()
+        defer { server.stop() }
+
+        func tap(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+            let control = app.descendants(matching: .any).matching(identifier: label).firstMatch
+            XCTAssertTrue(control.waitForExistence(timeout: 20), label, file: file, line: line)
+            control.tap()
+        }
+
+        func pair(_ host: StubSidecar, name: String) throws {
+            let link = try XCTUnwrap(URL(string:
+                "clutch://pair?h=127.0.0.1&tls=0&kind=mcode&name=\(name)&chat=\(StubSidecar.chatToken)&chatPort=\(host.port)"))
+            app.open(link)
+            XCTAssertTrue(app.buttons["Host: \(name)"].firstMatch.waitForExistence(timeout: 20))
+        }
+
+        func back(from title: String) {
+            let bar = app.navigationBars[title]
+            XCTAssertTrue(bar.waitForExistence(timeout: 20))
+            bar.buttons.firstMatch.tap()
+        }
+
+        app.launch()
+        try pair(mac, name: "FixtureMac")
+        try pair(server, name: "FixtureServer")
+        tap("clutch-projects")
+        tap("clutch-projects-create")
+        let field = app.alerts.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20))
+        field.tap()
+        field.typeText("Mixed Fleet \(UUID().uuidString.prefix(6))")
+        tap("Create")
+
+        tap("clutch-project-add-threads")
+        tap("clutch-project-host-FixtureMac")
+        tap("clutch-project-add-mcode-same")
+        back(from: "FixtureMac")
+        tap("clutch-project-host-FixtureServer")
+        tap("clutch-project-add-muse-same")
+        back(from: "FixtureServer")
+        back(from: "Choose A Host")
+
+        XCTAssertTrue(app.staticTexts["FixtureMac · MiniMax Code"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["FixtureServer · Muse Code"].exists)
+        snap("ios-cross-host-project")
+        tap("clutch-project-member-mcode-same")
+        XCTAssertTrue(app.staticTexts["Preview from mcode"].waitForExistence(timeout: 20))
+        back(from: "Thread mcode")
+        tap("clutch-project-member-muse-same")
+        XCTAssertTrue(app.staticTexts["Preview from muse"].waitForExistence(timeout: 20))
+    }
 }
