@@ -143,13 +143,23 @@ describe("dshModelOptionValue resolves against what the session advertised", () 
   });
 
   it("answers every catalog row that the install serves with a value dsh accepts", () => {
-    const stockServed = ["DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro", "MiniMax-M3", "MiniMax-M2.7-highspeed"];
+    const stockServed = ["DeepSeek-V4.1-Flash", "DeepSeek-V4.1-Pro", "MiniMax-M2.7-highspeed"];
     for (const id of stockServed) {
       expect(dshAccepts(STOCK, dshModelOptionValue(id, STOCK)), id).toBe(true);
     }
-    for (const id of ["DeepSeek-V4.1-Pro", "MiniMax-M3", "MiniMax-M2.7-highspeed"]) {
+    for (const id of ["DeepSeek-V4.1-Pro", "MiniMax-M2.7-highspeed"]) {
       expect(dshAccepts(OWNER_OVERRIDE, dshModelOptionValue(id, OWNER_OVERRIDE)), id).toBe(true);
     }
+  });
+
+  it("rewrites a saved MiniMax-M3 selection onto the live M3.1-Flash row", () => {
+    // MiniMax-M3 is retired fleet-wide (owner ruling 2026-11-21/22:
+    // MiniMax is M3.1 only).  An install that declares the live
+    // replacement serves the rewritten selection; one that declares only
+    // the retired row refuses up front rather than running a model the
+    // fleet no longer uses.
+    expect(dshModelOptionValue("MiniMax-M3", OWNER_OVERRIDE)).toBe(route("minimax", "MiniMax-M3.1-Flash"));
+    expect(() => dshModelOptionValue("MiniMax-M3", STOCK)).toThrow(DshModelNotOfferedError);
   });
 
   // Tier logic is pure matching; whether DeepSeek serves the matched name is
@@ -190,12 +200,12 @@ describe("dshModelOptionValue resolves against what the session advertised", () 
         type: "select",
         options: [
           { value: route("deepseek-official", "deepseek-flash"), name: "DeepSeek-V4.1-Flash" },
-          { value: route("minimax", "MiniMax-M3"), name: "MiniMax-M3" },
+          { value: route("minimax", "MiniMax-M2.7-highspeed"), name: "MiniMax-M2.7-highspeed" },
         ],
       },
     ];
     expect(dshModelOptionValue("DeepSeek-V4.1-Flash", flat)).toBe(route("deepseek-official", "deepseek-flash"));
-    expect(dshModelOptionValue("MiniMax-M3", flat)).toBe(route("minimax", "MiniMax-M3"));
+    expect(dshModelOptionValue("MiniMax-M2.7-highspeed", flat)).toBe(route("minimax", "MiniMax-M2.7-highspeed"));
   });
 
   it("tolerates human spellings of a DeepSeek model", () => {
@@ -263,25 +273,25 @@ describe("a model the session does not offer", () => {
   });
 
   it("names the route when another provider declares the model", () => {
-    // MiniMax-M3 exists, but only under a provider this bot does not route
+    // MiniMax-M2.7 exists, but only under a provider this bot does not route
     // through.  Sending it there would use another route's credentials and
     // billing, so it stays refused; the message must not read as a
     // contradiction next to a list that seems to contain it.
     const catalog = advertise({
       "deepseek-official": [["deepseek-flash", "DeepSeek-V4.1-Flash"]],
-      "minimax-cn": [["MiniMax-M3", "MiniMax-M3"]],
+      "minimax-cn": [["MiniMax-M2.7", "MiniMax-M2.7"]],
     });
     let error: unknown;
     try {
-      dshModelOptionValue("MiniMax-M3", catalog);
+      dshModelOptionValue("MiniMax-M2.7", catalog);
     } catch (caught) {
       error = caught;
     }
     expect(error).toBeInstanceOf(DshModelNotOfferedError);
     const typed = error as DshModelNotOfferedError;
     expect(typed.elsewhere).toEqual(["minimax-cn"]);
-    expect(typed.offered).toContain("minimax-cn/MiniMax-M3");
-    expect(typed.message).toContain("MiniMax-M3 is declared only under minimax-cn");
+    expect(typed.offered).toContain("minimax-cn/MiniMax-M2.7");
+    expect(typed.message).toContain("MiniMax-M2.7 is declared only under minimax-cn");
     expect(classifyDshError(typed)).toBe("model_catalog_outage");
   });
 
@@ -333,7 +343,9 @@ describe("nothing advertised to resolve against", () => {
     for (const spelling of ["DeepSeek-V4.1-Pro", "deepseek-pro", "deepseek-v4-pro"]) {
       expect(dshModelOptionValue(spelling), spelling).toBe(wire("deepseek-official", "deepseek-v4-pro"));
     }
-    expect(dshModelOptionValue("MiniMax-M3")).toBe(wire("minimax", "MiniMax-M3"));
+    // The retired-id rewrite applies on this fallback path too: a saved
+    // MiniMax-M3 selection is built as the live M3.1-Flash value.
+    expect(dshModelOptionValue("MiniMax-M3")).toBe(wire("minimax", "MiniMax-M3.1-Flash"));
     expect(dshModelOptionValue("DeepSeek-V4.1-Flash", undefined)).toBe(wire("deepseek-official", "deepseek-flash"));
   });
 

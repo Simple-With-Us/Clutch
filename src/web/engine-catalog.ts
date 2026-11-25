@@ -37,6 +37,7 @@ import { join } from "node:path";
 import type { Engine } from "../shared/engine-types.ts";
 import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, supportsThreads } from "../shared/engine-types.ts";
 import { loadEnginePlugins } from "../shared/engines/index.ts";
+import { isRetiredModelId, rewriteRetiredModelId } from "../shared/retired-model-ids.ts";
 import { museContributorModelId } from "./muse-launch-options.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
@@ -244,7 +245,6 @@ const DSH_MODELS: Record<string, EngineModel[]> = {
   ],
   minimax: [
     { id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", value: "MiniMax-M3.1-Flash" },
-    { id: "MiniMax-M3", label: "MiniMax-M3", value: "MiniMax-M3" },
   ],
 };
 
@@ -746,7 +746,13 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
       effortLevels = probed?.initialized ? probed.efforts : effortLevels;
     }
 
-    const mergedModels = mergePluginModels(models, pluginModelsFor(sources, engine));
+    // A live probe or a plugin can keep serving a retired row after the
+    // shipped lists drop it (the host's installed CLI owns its own
+    // catalog), so drop the rows the retired map names before anything
+    // downstream can offer them (src/shared/retired-model-ids.ts).
+    const mergedModels = mergePluginModels(models, pluginModelsFor(sources, engine)).filter(
+      (model) => !isRetiredModelId(model.id),
+    );
     // Judged after the plugin merge, so a declared catalog never shows beside
     // a note saying there is none.
     if (engine === "zcode" && available && !note && !mergedModels.length) {
@@ -808,9 +814,15 @@ function scopeFor(sources: CatalogSources): CatalogProbeScope {
  * and the two differ for MiniMax Code (`m:minimax:…:v:`) and for Muse
  * (provider-qualified `muse-model:[…]`).  An unknown id is passed through
  * unchanged so a fresh model still works before the catalog catches up.
+ *
+ * A retired id is the one exception to the pass-through: it is rewritten
+ * onto its live replacement first (src/shared/retired-model-ids.ts), so a
+ * selection saved before the retirement resolves to the replacement's
+ * value instead of handing the dead spelling to the engine or the dsh
+ * host.
  */
 export function resolveModelValue(catalog: EngineCatalog, engine: Engine, requested: string): string | null {
-  const trimmed = requested.trim();
+  const trimmed = rewriteRetiredModelId(requested.trim());
   if (!trimmed) return null;
   const descriptor = catalog.engines.find((entry) => entry.id === engine);
   if (!descriptor) return trimmed;
@@ -829,7 +841,7 @@ export function resolveModelValue(catalog: EngineCatalog, engine: Engine, reques
  * the second form gets its turn before the choice is given up on.
  */
 export function resolveModelAltValue(catalog: EngineCatalog, engine: Engine, requested: string): string | null {
-  const trimmed = requested.trim();
+  const trimmed = rewriteRetiredModelId(requested.trim());
   if (!trimmed) return null;
   const descriptor = catalog.engines.find((entry) => entry.id === engine);
   if (!descriptor) return null;

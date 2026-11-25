@@ -159,6 +159,7 @@
 		BBD5DD21F1527DA995140810 /* EngineCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52735AD5D1B2F9E98C6D68A5 /* EngineCatalog.swift */; };
 		BCF5B6E6848DA3059F9A713C /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
 		BDDE6D9B4BFB3B9F31D879EC /* MuseContextPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 285F711440ABD3B32DEC1547 /* MuseContextPolicy.swift */; };
+		BE77738D1465DE74C35AC2EE /* ClutchActivityWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB1E8CCD63FC770188DD2B3 /* ClutchActivityWork.swift */; };
 		C2B3EB590F01E7322FEAC4FB /* ClutchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E916FA19E4055DD59D74CC /* ClutchTheme.swift */; };
 		C98833B27EF97136742BC786 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81457A11AE35E90469E20EF /* ChatView.swift */; };
 		CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C52DEAAF7A31217501C449 /* SessionsClient.swift */; };
@@ -192,6 +193,7 @@
 		E9F5DFB8FB8CE7F7CA2F35FD /* HostProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC4915BE0E639FD34ED398C /* HostProbe.swift */; };
 		EB0276C4D30CA42F541433C7 /* ApprovalsLinkRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62ECE6D9B526818EBF07A3BF /* ApprovalsLinkRouter.swift */; };
 		EBA8FBEA11C56526DED46E0C /* RecentFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A12B9A826FDC8B5B82481FD /* RecentFolders.swift */; };
+		ECC5E23C72532310D3204406 /* ClutchActivityWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB1E8CCD63FC770188DD2B3 /* ClutchActivityWork.swift */; };
 		ED56A1AB7AD99DBCC2F079DC /* InfisicalSettingsModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601066F3077C541FA16667C9 /* InfisicalSettingsModels.swift */; };
 		ED78429D4F7ED0F8262BAD75 /* ThreadPinStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79BAAC684EAEAAE3855E127D /* ThreadPinStore.swift */; };
 		EFE8566E11BCA32B10DC3C1E /* RecentFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A12B9A826FDC8B5B82481FD /* RecentFolders.swift */; };
@@ -345,6 +347,7 @@
 		9A12B9A826FDC8B5B82481FD /* RecentFolders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentFolders.swift; sourceTree = "<group>"; };
 		9AC4915BE0E639FD34ED398C /* HostProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProbe.swift; sourceTree = "<group>"; };
 		9ACF4B282838514406995172 /* ThreadSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadSidebar.swift; sourceTree = "<group>"; };
+		9EB1E8CCD63FC770188DD2B3 /* ClutchActivityWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchActivityWork.swift; sourceTree = "<group>"; };
 		9FB096CE7DC8183522B3A435 /* ClutchMarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchMarkdownText.swift; sourceTree = "<group>"; };
 		A0DF821A380B5C95FDA2B3E4 /* ClutchActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClutchActivityController.swift; sourceTree = "<group>"; };
 		A1562029EE9639C83A604CF0 /* MacBusySendMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacBusySendMode.swift; sourceTree = "<group>"; };
@@ -519,6 +522,7 @@
 				47157EED16C92CC4990C03F8 /* AttachmentPaste.swift */,
 				9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */,
 				A0DF821A380B5C95FDA2B3E4 /* ClutchActivityController.swift */,
+				9EB1E8CCD63FC770188DD2B3 /* ClutchActivityWork.swift */,
 				C182639A35D271331937928A /* CometChatManager.swift */,
 				14F95C2CF5C00F334F1B87D3 /* DebugLaunch.swift */,
 				6C52D1A65B23047FCDBB2582 /* DictationController.swift */,
@@ -941,6 +945,7 @@
 				C98833B27EF97136742BC786 /* ChatView.swift in Sources */,
 				79053D01F5F975D860ED761B /* ClutchActivityAttributes.swift in Sources */,
 				7EEFC08F22A07EA8F05DFCF4 /* ClutchActivityController.swift in Sources */,
+				ECC5E23C72532310D3204406 /* ClutchActivityWork.swift in Sources */,
 				218A167CAF93CB70A5F65247 /* ClutchApp.swift in Sources */,
 				85FE6D6A9B15CBBE47D30D40 /* ClutchHost.swift in Sources */,
 				DBA7A7F34F173990BDC8EA1C /* ClutchMarkdownText.swift in Sources */,
@@ -1033,6 +1038,7 @@
 				74FC1D82C57F66465E8C41FD /* ChatViewMac.swift in Sources */,
 				E567E72D71AEFA958DF7AC84 /* ClutchActivityAttributes.swift in Sources */,
 				04B670D98D7050AFAE86A516 /* ClutchActivityController.swift in Sources */,
+				BE77738D1465DE74C35AC2EE /* ClutchActivityWork.swift in Sources */,
 				B2B00BC850F55C4E250BA2CE /* ClutchApp.swift in Sources */,
 				8F2E011FE99CABF8C774B69D /* ClutchHost.swift in Sources */,
 				9492196DA90F87F8E27E865D /* ClutchMarkdownText.swift in Sources */,

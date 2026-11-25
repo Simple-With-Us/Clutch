@@ -231,7 +231,7 @@ Pass 3 is last because it is the only pass with infrastructure risk.  It should
 
 - Work happens in `~/apps/lanes/Clutch/minimax-ui-ux-power` on `minimax/ui-ux-power`.  Never in `/Users/jay/Code/Clutch` and never in another seat's lane.
 - The seat identity is MM.  Posts carry the MM header and the `claimed:MM` board label.
-- GitHub work goes through the Fleet Tools relay under this seat's own identity, through `~/apps/mm-git.sh`.  `gh` is a fallback, used only when the relay cannot do a step, and the gap is logged in the Fleet GitOps deficiencies document.
+- GitHub work goes through Fleet Tools/simple-git (`gr_*`) through ST-MCP with your own seat identity for every GitHub operation.  If an operation is missing or refused, stop that operation and record the exact verb, seat, error or refusal, and proof in the [Fleet Tool Deficiencies log](https://linear.app/simple-with-us/document/gr-fleet-tool-deficiencies-gh-fallback-log-4735fb0d5d01).  If the outcome is unknown, read back the exact target before retrying.  Do not use `gh`, the owner's login, or another seat as a fallback.
 - Linear issue C-137 is the umbrella.  Each pass gets its own issue, its own branch, its own PR and its own review gate.
 - Commit messages, PR bodies and Zulip posts carry the sentence gap, and the copy rules in `FLEET-UI-COPY.md` apply to every user-visible string.
 - Measure before refactoring the streaming path.

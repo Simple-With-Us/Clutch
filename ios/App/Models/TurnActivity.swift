@@ -1,7 +1,12 @@
 import Foundation
 import Observation
 
-/// One approval the engine is waiting on, keyed by host and session.
+/// One approval the engine is waiting on, keyed by host, session and request.
+///
+/// The request is part of the key because a session can be waiting on more
+/// than one request:  an acknowledgment names the request it answers, so the
+/// activity state it clears has to be the state of that request and not of
+/// every request the session happens to be holding.
 public struct TurnActivityApproval: Identifiable, Equatable, Sendable {
     /// The host the approval came from.
     ///
@@ -10,12 +15,15 @@ public struct TurnActivityApproval: Identifiable, Equatable, Sendable {
     /// activity of the host on screen and nobody else's.
     public var hostId: UUID
     public var sessionId: String
+    /// The permission request the engine is waiting on.
+    public var requestId: String
     public var title: String
-    public var id: String { "\(hostId)|\(sessionId)" }
+    public var id: String { "\(hostId)|\(sessionId)|\(requestId)" }
 
-    public init(hostId: UUID, sessionId: String, title: String) {
+    public init(hostId: UUID, sessionId: String, requestId: String, title: String) {
         self.hostId = hostId
         self.sessionId = sessionId
+        self.requestId = requestId
         self.title = title
     }
 }
@@ -55,14 +63,58 @@ public final class TurnActivity {
 
     public init() {}
 
-    /// Records (or refreshes) the approval one session is waiting on.
-    public func approvalArrived(hostId: UUID, sessionId: String, title: String) {
-        upsert(&approvals, TurnActivityApproval(hostId: hostId, sessionId: sessionId, title: title))
+    /// Records (or refreshes) the approval one request is waiting on.
+    public func approvalArrived(hostId: UUID, sessionId: String, requestId: String, title: String) {
+        upsert(
+            &approvals,
+            TurnActivityApproval(hostId: hostId, sessionId: sessionId, requestId: requestId, title: title)
+        )
+        // The title is the thread's name, so it belongs to the thread and not
+        // to the one request that happened to arrive:  a thread that was
+        // renamed while two requests were waiting would otherwise keep the
+        // old name on the row the home list shows.
+        for index in approvals.indices
+        where approvals[index].hostId == hostId && approvals[index].sessionId == sessionId {
+            approvals[index].title = title
+        }
     }
 
-    /// Clears the approval for one session, whatever answered it.
-    public func approvalResolved(hostId: UUID, sessionId: String) {
+    /// Clears the approval one acknowledgment names, and nothing else.
+    ///
+    /// A request that is not on the list is a no-op:  nothing changes and no
+    /// other request's approval is cleared, so an acknowledgment for a card
+    /// that has already gone cannot take another card's row with it.
+    public func approvalAcknowledged(hostId: UUID, sessionId: String, requestId: String) {
+        approvals.removeAll {
+            $0.hostId == hostId && $0.sessionId == sessionId && $0.requestId == requestId
+        }
+    }
+
+    /// Clears every approval the session was waiting on, whatever ended it.
+    public func approvalsCleared(hostId: UUID, sessionId: String) {
         approvals.removeAll { $0.hostId == hostId && $0.sessionId == sessionId }
+    }
+
+    /// The approvals the home list shows, one row per thread.
+    ///
+    /// A thread waiting on two requests is one row and not two:  the row
+    /// opens the thread, and the card in it is the one the owner answers.
+    /// Another host's approvals are not this host's business, and a thread
+    /// the list already shows is not shown twice.
+    public static func approvalsForHomeList(
+        _ approvals: [TurnActivityApproval],
+        hostId: UUID,
+        listedSessions: Set<String>
+    ) -> [TurnActivityApproval] {
+        var listed = Set<String>()
+        var rows: [TurnActivityApproval] = []
+        for approval in approvals {
+            guard approval.hostId == hostId else { continue }
+            guard !listedSessions.contains(approval.sessionId) else { continue }
+            guard listed.insert(approval.sessionId).inserted else { continue }
+            rows.append(approval)
+        }
+        return rows
     }
 
     /// Records (or refreshes) the turn one session is streaming.

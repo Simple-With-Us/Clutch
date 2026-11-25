@@ -34,14 +34,14 @@ export {
 const MINIMAX_EFFORT_LEVELS = ["none"] as const satisfies readonly EffortLevel[];
 
 /**
- * Per-model effort levels for MiniMax models.  MiniMax-M3 advertises the
- * full reasoning-effort range; MiniMax-M3.1-Flash forces thinking on, so its
- * list starts at "low"; the M2.7 family stays on the driver default
- * ("none") via fallback.  Adjust the M3 list if the provider documents a
- * different supported set.
+ * Per-model effort levels for MiniMax models.  MiniMax-M3.1-Flash forces
+ * thinking on, so its list starts at "low"; the M2.7 family stays on the
+ * driver default ("none") via fallback.  MiniMax-M3 carried its own range
+ * until it was retired fleet-wide (MiniMax is M3.1 only, owner ruling
+ * 2026-11-21/22); a saved M3 selection rewrites onto M3.1-Flash before it
+ * reaches this lookup (src/shared/retired-model-ids.ts).
  */
 const MINIMAX_PER_MODEL_EFFORT_LEVELS = {
-  "MiniMax-M3": ["none", "low", "medium", "high", "max"],
   "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 } as const satisfies Readonly<Record<string, readonly EffortLevel[]>>;
 
@@ -59,19 +59,21 @@ export function minimaxEffortLevelsForModel(modelId: string): readonly EffortLev
 
 /** Per-model image support, keyed by catalog id.
  *
- *  The installed pi-ai catalog is the authority: it declares MiniMax-M3 as
- *  `input: [text, image]` and the whole M2.7 family as `input: [text]`.  A
- *  row absent here inherits the engine-wide {@link minimaxSupport.images}
- *  answer.
+ *  The installed pi-ai catalog is the authority: it declares the whole
+ *  M2.7 family as `input: [text]`.  A row absent here inherits the
+ *  engine-wide {@link minimaxSupport.images} answer.
  *
  *  MiniMax-M3.1-Flash is the stable successor to the retired
  *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
  *  the direct route, and it declares `input: [text, image, video]`.  The
  *  Preview id was retired on 2026-10-18 (BF-2494 /
- *  minimax/drop-m31-flash-preview) and must not come back. */
+ *  minimax/drop-m31-flash-preview) and must not come back.
+ *
+ *  MiniMax-M3's row left with its catalog row when M3 was retired
+ *  fleet-wide (MiniMax is M3.1 only, owner ruling 2026-11-21/22); a saved
+ *  M3 selection rewrites onto M3.1-Flash, whose row above answers for it. */
 export const MINIMAX_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
   "MiniMax-M3.1-Flash": true,
-  "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
 };
@@ -85,7 +87,6 @@ export const STATIC_MINIMAX_MODELS: ModelCatalog = {
       contextWindow: 1_000_000,
       images: true,
     },
-    { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",
       label: "MiniMax M2.7 Highspeed",
@@ -135,7 +136,7 @@ export const minimaxSupport: AcpSupport = {
   displayName: "Clutch (MiniMax)",
   // Engine-wide fallback, not the per-model answer: every row in the catalog
   // below carries its own exact `images`, and a consumer that resolves one
-  // model reads that row.  M3 and M3.1 Flash take images, so this matches the
+  // model reads that row.  M3.1 Flash takes images, so this matches the
   // documented AcpSupport default of yes, which is what a row absent from the
   // catalog would inherit anyway.
   images: true,
