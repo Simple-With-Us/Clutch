@@ -629,7 +629,7 @@ export async function engineAvailability(
   // Z Code's launcher is its ACP bridge rather than the engine itself, so a
   // missing launcher names the bridge's install line.
   const missingLauncher = engine === "zcode"
-    ? `${label} needs its ACP bridge on this host.  Run ${ZCODE_ACP_INSTALL}.`
+    ? `${label} needs its ACP bridge on this host.\\u00A0 Run ${ZCODE_ACP_INSTALL}.`
     : `${label} is not installed on this host.`;
   if (launcher.command.includes("/")) {
     if (!existsSync(launcher.command)) {
