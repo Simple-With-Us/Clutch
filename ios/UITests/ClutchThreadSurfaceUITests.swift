@@ -125,6 +125,8 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         back(from: "FixtureMac")
         tap("clutch-project-host-FixtureServer")
         tap("clutch-project-add-muse-same")
+        tap("Load More Threads")
+        tap("clutch-project-add-muse-older")
         back(from: "FixtureServer")
         back(from: "Choose A Host")
 
@@ -136,5 +138,8 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         back(from: "Thread mcode")
         tap("clutch-project-member-muse-same")
         XCTAssertTrue(app.staticTexts["Preview from muse"].waitForExistence(timeout: 20))
+        back(from: "Thread muse")
+        tap("clutch-project-member-muse-older")
+        XCTAssertTrue(app.staticTexts["Older preview from muse"].waitForExistence(timeout: 20))
     }
 }

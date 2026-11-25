@@ -146,7 +146,8 @@ private struct ProjectThreadPicker: View {
     @State private var status: String?
     @State private var loading = false
     @State private var query = ""
-    @State private var limit = 100
+    @State private var limit = SessionsClient.SessionListLimit.initial
+    @State private var hasMore = false
     @State private var retry = 0
 
     private struct Request: Hashable {
@@ -165,7 +166,7 @@ private struct ProjectThreadPicker: View {
                         Text(labels[id] ?? EngineLabels.label(for: id)).tag(id)
                     }
                 }
-                .onChange(of: engine) { _, _ in limit = 100 }
+                .onChange(of: engine) { _, _ in limit = SessionsClient.SessionListLimit.initial }
             }
             if loading || (engine.isEmpty && status == nil) {
                 ProgressView()
@@ -192,8 +193,13 @@ private struct ProjectThreadPicker: View {
                     .accessibilityIdentifier("clutch-project-add-\(engine)-\(session.sessionId)")
                     .disabled(added || store.storageError)
                 }
-                if sessions.count >= limit && limit < 1000 {
-                    Button("Load More Threads") { limit += 100 }
+                if hasMore {
+                    if let next = SessionsClient.SessionListLimit.next(after: limit) {
+                        Button("Load More Threads") { limit = next }
+                    } else {
+                        Text("This host may have older threads beyond the list limit.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -227,13 +233,14 @@ private struct ProjectThreadPicker: View {
         listEngine = nil
         status = nil
         do {
-            let listed = try await SessionsClient(host: host).list(engine: request.engine, limit: request.limit)
+            let page = try await SessionsClient(host: host).listPage(engine: request.engine, limit: request.limit)
             guard !Task.isCancelled, host.pairingKey == request.pairingKey,
                   engine == request.engine, limit == request.limit, retry == request.retry else { return }
             var seen = Set<String>()
-            sessions = AcpSessionInfo.newestFirst(listed).filter {
+            sessions = AcpSessionInfo.newestFirst(page.sessions).filter {
                 !$0.sessionId.isEmpty && seen.insert($0.sessionId).inserted
             }
+            hasMore = page.hasMore
             listEngine = request.engine
             loading = false
         } catch {

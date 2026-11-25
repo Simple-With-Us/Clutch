@@ -310,19 +310,28 @@ final class StubSidecar {
                 return StubBody(status: 400, json: #"{"error":"wrong fixture engine"}"#)
             }
             if path.hasPrefix("/clutch/v1/sessions/preview") {
-                guard query.contains(where: { $0.name == "sessionId" && $0.value == "same" }),
+                let sessionID = query.first(where: { $0.name == "sessionId" })?.value
+                guard sessionID == "same" || (projectEngine == "muse" && sessionID == "older"),
                       query.contains(where: { $0.name == "cwd" && $0.value == "/fixture/\(projectEngine)" }) else {
                     return StubBody(status: 400, json: #"{"error":"wrong fixture thread or folder"}"#)
                 }
+                let id = sessionID ?? "same"
+                let message = id == "older" ? "Older preview from muse" : "Preview from \(projectEngine)"
                 let preview = """
-                {"remoteSessionId":"same","cwd":"/fixture/\(projectEngine)",
-                "history":[{"sessionId":"same","kind":"assistant","text":"Preview from \(projectEngine)"}],
+                {"remoteSessionId":"\(id)","cwd":"/fixture/\(projectEngine)",
+                "history":[{"sessionId":"\(id)","kind":"assistant","text":"\(message)"}],
                 "running":false,"truncated":false}
                 """
                 return StubBody(status: 200, json: preview)
             }
+            let limit = query.first(where: { $0.name == "limit" })?.value.flatMap(Int.init) ?? 100
+            let canShowOlder = projectEngine == "muse" && limit > 100
+            let older = canShowOlder
+                ? #",{"sessionId":"older","cwd":"/fixture/muse","title":"Older Muse Thread"}"#
+                : ""
             let sessions = """
-            {"sessions":[{"sessionId":"same","cwd":"/fixture/\(projectEngine)","title":"Thread \(projectEngine)"}]}
+            {"sessions":[{"sessionId":"same","cwd":"/fixture/\(projectEngine)","title":"Thread \(projectEngine)"}\(older)],
+            "hasMore":\(projectEngine == "muse" && !canShowOlder)}
             """
             return StubBody(status: 200, json: sessions)
         }
