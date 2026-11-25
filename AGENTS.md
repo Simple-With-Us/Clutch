@@ -33,7 +33,7 @@ The web UI is the upstream `dsh web` binary — `scripts/start-web.sh` execs `cl
 
 ## Seat Identity And Branches
 
-Post and claim as your own seat tag — `[CLAUDE]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`).  This app is Clutch, acronym `C`, Zulip `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced.  The retired `[MINIMAX]` tag and `minimax/*` prefix belong to the old MiniMax-only seat and must not be reintroduced.  Being inside another seat's worktree does not change your identity; do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/FLEET-PROTOCOL.md` § Overview and § Message Structure.
+Post and claim as your own seat tag — `[CLAUDE]`, `[MC]`, `[MONET]`, `[CODEX]`, `[AG]`, `[GROK]`, `[CURSOR]` — never a hardcoded one.  Branch prefixes follow the seat (`claude/*`, `muse-code/*`, `monet/*`, `codex/*`, `grok/*`, `ag/*`, `cursor/*`).  This app is Clutch, acronym `C`, Zulip `repo: clutch`; the retired `[HARNESS]` tag and `harness/*` prefix belong to the old name and must not be reintroduced.  The retired `[MINIMAX]` tag and `minimax/*` prefix belong to the old MiniMax-only seat and must not be reintroduced.  Being inside another seat's worktree does not change your identity — Muse Code is seat `[MC]` (branch `muse-code/*`, lane folder `muse-code-*`), never `[CLAUDE]`, which is Claude Code (branch `claude/*`) — and do not claim or land that lane's work from there.  Canonical: `/Users/jay/apps/FLEET-PROTOCOL.md` § Overview and § Message Structure.
 
 ## Linear Comes First
 
