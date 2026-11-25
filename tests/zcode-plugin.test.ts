@@ -35,7 +35,9 @@ describe("the shipped Z Code plugin", () => {
     expect(support.driverKind).toBe("zcodeAgent");
     expect(support.displayName).toBe("Z Code");
     expect(support.nativeSource).toBe("zcode.acp");
-    expect(support.defaultCli).toBe("zcode");
+    // Z Code's own CLI has no ACP command (C-129); ACP comes from the
+    // zcode-acp-server bridge, which drives `zcode app-server --stdio`.
+    expect(support.defaultCli).toBe("zcode-acp-server");
   });
 
   it("declares a default model the options list contains", async () => {
@@ -45,13 +47,14 @@ describe("the shipped Z Code plugin", () => {
     expect(ids).toContain("glm-5.3");
   });
 
-  it("authenticates from the environment and continues without a key", async () => {
+  it("leaves sign-in to the bridge and continues without one", async () => {
     const { support } = await loadZcode();
     expect(support.authFailure).toBe("continue");
-    // The CLI's own login is a credential too, so the plugin declares the
-    // key check without gating the engine on it.
-    expect(support.isAuthenticated?.({})).toBe(false);
-    expect(support.isAuthenticated?.({ ZAI_API_KEY: "present" })).toBe(true);
+    // The bridge reads Z Code's own sign-in from disk and never reads a key
+    // from the environment, so no variable can stand for a sign-in.
+    expect(support.isAuthenticated).toBeUndefined();
+    expect(support.loginNote).toContain("zcode-acp setup --provider zai");
+    expect(support.credentialEnv).not.toContain("ZAI_API_KEY");
   });
 
   it("classifies the failure text every provider shares", async () => {
@@ -63,10 +66,14 @@ describe("the shipped Z Code plugin", () => {
     expect(support.classifyError?.({ message: "something else" })).toBeUndefined();
   });
 
-  it("ships no installer command until the CLI's own one is known", async () => {
+  it("installs the ACP bridge with npm on every platform", async () => {
     const { support } = await loadZcode();
-    // Inventing an npm package name here would tell the owner to install
-    // something that may not exist; the docs name the CLI instead.
-    expect(support.install).toBeUndefined();
+    expect(support.install?.command).toEqual({
+      darwin: "npm install -g zcode-acp-server",
+      linux: "npm install -g zcode-acp-server",
+      win32: "npm install -g zcode-acp-server",
+    });
+    expect(support.install?.needsNode).toBe(true);
+    expect(support.install?.docsUrl).toBe("https://github.com/william0wang/zcode-acp");
   });
 });
