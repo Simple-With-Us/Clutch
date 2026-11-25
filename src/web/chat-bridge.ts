@@ -33,7 +33,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createPrivateKey, randomBytes, timingSafeEqual } from "node:crypto";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, type Dirent } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -59,6 +59,15 @@ import { isTrustedHostHeader, tailnetDnsName, trustedAuthoritySet } from "./pair
 import { readTailnetStatus } from "./tailnet-status.ts";
 import { handleQuotasRequest } from "./quotas-route.ts";
 import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
+import {
+  ActivityPushRelay,
+  ActivityTokenStore,
+  handleActivityTokensRequest,
+  type ActivitySnapshot,
+  type ActivityThreadApproval,
+  type ActivityThreadRun,
+} from "./activityPushRelay.ts";
+import { ApnsClient, CLUTCH_IOS_PUSH_TOPIC } from "./apnsClient.ts";
 import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink, isThreadUid, THREAD_MESSAGE_LIMIT_DEFAULT, THREAD_MESSAGE_LIMIT_MAX, type StreamSink } from "./cometchat-relay.ts";
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
@@ -107,6 +116,8 @@ const TOKEN_FILE = process.env.CLUTCH_CHAT_TOKEN_FILE ?? join(CLUTCH_HOME, "chat
 /** Where the engine keeps its session logs — the only place real usage lives. */
 const DSH_HOME = process.env.CLUTCH_DSH_HOME ?? join(CLUTCH_HOME, "dsh");
 const SESSION_META_FILE = process.env.CLUTCH_SESSION_META_FILE ?? sessionMetaPath(CLUTCH_HOME);
+/** Where the phone's Live Activity push registrations live. */
+const ACTIVITY_TOKEN_FILE = process.env.CLUTCH_ACTIVITY_TOKEN_FILE ?? join(CLUTCH_HOME, "activity-tokens.json");
 
 /**
  * The folder a thread works in when the client did not name one.
@@ -2473,6 +2484,27 @@ export function parsePromptImages(raw: unknown): Array<{ mimeType: string; data:
   return images;
 }
 
+/**
+ * Wait for a promise, but not forever.
+ *
+ * A host that does not answer must not hold the island's state back:  the
+ * thread keeps its fallback title and the push still goes out.
+ */
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("the host did not answer in time")), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    // A late answer is not an error:  the race has already settled.
+    void work.catch(() => undefined);
+  }
+}
+
 async function main(): Promise<void> {
   const token = loadOrMintToken();
   // Clutch's own settings (Infisical is the sole source of truth).  The bridge
@@ -2506,6 +2538,19 @@ async function main(): Promise<void> {
 
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
+  /**
+   * Tells the Live Activity relay that the sidecar's knowledge moved.
+   *
+   * The relay pushes what the island shows, so every place the waiting or the
+   * running work changes is a place the phone has to hear about:  an approval
+   * arrived, one was answered, a turn started, a turn ended.
+   */
+  function notifyActivityPush(): void {
+    // A push is a courtesy to the island, never a turn failure:  the relay
+    // swallows its own errors, and this catch is the backstop that keeps a
+    // surprise from surfacing as an unhandled rejection in the sidecar.
+    void activityPush.notify().catch(() => undefined);
+  }
   const knownModelMetadata = new Map<string, SessionModelMetadata>();
   const modelMetadataKey = (engine: Engine, remoteSessionId: string): string => `${engine}\u0000${remoteSessionId}`;
   const rememberModelMetadata = (engine: Engine, remoteSessionId: string, metadata: SessionModelMetadata | null): void => {
@@ -2518,11 +2563,18 @@ async function main(): Promise<void> {
   // one over the top of it: `danger-full-access` (the default) means the
   // engine never asks, and anything else means it asks and the native app
   // answers.
-  const bridgeEnv = {
+  const bridgeEnv: Record<string, string | undefined> = {
     ...process.env,
     CLUTCH_RUNTIME_ROOT: ROOT,
     DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? "danger-full-access",
   };
+  // The APNs signing key is the sidecar's own business:  it is read from the
+  // settings cache, and it must not ride into every engine the sidecar
+  // spawns.  The two ids are names rather than secrets, and they are the
+  // relay's business too, so the whole trio is stripped here.
+  delete bridgeEnv.APNS_KEY_P8_BASE64;
+  delete bridgeEnv.APNS_KEY_ID;
+  delete bridgeEnv.APNS_TEAM_ID;
   // CometChat relay is additive: SSE stays the primary transport, and the
   // relay only runs when the backend is configured AND the caller names a
   // target. Backend-only key; never leaves this process.
@@ -2557,6 +2609,7 @@ async function main(): Promise<void> {
           // The turn owns the request from here on, so an answer is only
           // accepted when it names a request this turn raised.
           target.pendingPermissions.set(request.requestId, request);
+          notifyActivityPush();
           target.permission(request);
           return;
         }
@@ -2634,6 +2687,145 @@ async function main(): Promise<void> {
   }
 
   /**
+   * The host id the island's threads are keyed by.
+   *
+   * The phone keys a thread by the host and the session, because two hosts
+   * can hold a session with the same id.  The sidecar is one host, so its
+   * threads share one id.
+   */
+  const ACTIVITY_HOST_ID = "local";
+
+  /** How long the host's own thread titles are kept before they are read again. */
+  const ACTIVITY_TITLE_TTL_MS = 20_000;
+
+  /** How long the host has to answer a title request. */
+  const ACTIVITY_TITLE_TIMEOUT_MS = 2_000;
+
+  /** The title a thread has when nothing else names it. */
+  const ACTIVITY_FALLBACK_TITLE = "Thread";
+
+  /**
+   * The names of the threads, as the phone would show them.
+   *
+   * The phone's title is the one Clutch stores for the thread, and the host's
+   * own title is the fallback:  the same two sources the sidecar's session
+   * list reads, so the island says what the thread list says.  The host's
+   * titles cost a call and change slowly, so they are cached.
+   */
+  let activityTitleCache: { at: number; titles: Map<string, string> } | null = null;
+  async function activityThreadTitles(ids: string[]): Promise<Map<string, string>> {
+    const titles = new Map<string, string>();
+    const meta = loadSessionMeta(SESSION_META_FILE);
+    for (const id of ids) {
+      const title = meta.sessions[id]?.title;
+      if (title) titles.set(id, title);
+    }
+    const missing = ids.filter((id) => !titles.has(id));
+    if (missing.length === 0) return titles;
+    const now = Date.now();
+    if (!activityTitleCache || now - activityTitleCache.at > ACTIVITY_TITLE_TTL_MS) {
+      const cache = { at: now, titles: new Map<string, string>() };
+      activityTitleCache = cache;
+      try {
+        const listed = await withTimeout(
+          hostClient.run((client) => listDshHostSessions(client, { limit: 200 })),
+          ACTIVITY_TITLE_TIMEOUT_MS,
+        );
+        for (const row of listed) {
+          if (row.title) cache.titles.set(row.sessionId, row.title);
+        }
+      } catch {
+        /* the host is not answering:  the thread keeps its fallback title */
+      }
+    }
+    for (const id of missing) {
+      const title = activityTitleCache?.titles.get(id);
+      if (title) titles.set(id, title);
+    }
+    return titles;
+  }
+
+  /**
+   * The work the island shows.
+   *
+   * The sidecar's own knowledge:  the turns it is running and the approvals
+   * they are waiting on.  A thread waiting on the owner is blocked rather
+   * than working, so the split counts it once, as waiting; and a thread that
+   * waits on two requests is one thread and one row.
+   *
+   * The title is the thread's name.  The tool a request is about, the reason
+   * it gives and the directory it runs in never reach this state, because
+   * the island shows without being opened.
+   */
+  async function activitySnapshot(): Promise<ActivitySnapshot> {
+    const threadIds = new Set<string>();
+    for (const session of sessions.values()) {
+      const threadId = session.resumeSessionId ?? session.bridgeSessionId;
+      if (threadId) threadIds.add(threadId);
+    }
+    const titles = await activityThreadTitles([...threadIds]);
+    const approvals: ActivityThreadApproval[] = [];
+    const runs: ActivityThreadRun[] = [];
+    const running = new Set<string>();
+    for (const session of sessions.values()) {
+      const threadId = session.resumeSessionId ?? session.bridgeSessionId;
+      if (!threadId) continue;
+      const title = titles.get(threadId) ?? ACTIVITY_FALLBACK_TITLE;
+      for (const request of session.pendingPermissions.values()) {
+        approvals.push({
+          hostId: ACTIVITY_HOST_ID,
+          sessionId: threadId,
+          requestId: request.requestId,
+          title,
+        });
+      }
+      if (!session.busy) continue;
+      // One row per thread:  two turns on one thread are one thread.
+      if (running.has(threadId)) continue;
+      running.add(threadId);
+      runs.push({ hostId: ACTIVITY_HOST_ID, sessionId: threadId, title });
+    }
+    return { approvals, runs };
+  }
+
+  /**
+   * The relay that keeps a backgrounded phone's Live Activity current.
+   *
+   * It is part of the sidecar:  no daemon, no second process and no new
+   * port.  It pushes only when the APNs settings are all there, and the
+   * registrations are accepted either way, so a phone that paired before the
+   * key was in place is ready when it is.
+   */
+  const activityTokens = new ActivityTokenStore(ACTIVITY_TOKEN_FILE);
+  const apnsKeyId = settings.get("APNS_KEY_ID").trim();
+  const apnsTeamId = settings.get("APNS_TEAM_ID").trim();
+  const apnsKeyP8 = settings.get("APNS_KEY_P8_BASE64").trim();
+  let apnsClient: ApnsClient | null = null;
+  if (apnsKeyId && apnsTeamId && apnsKeyP8) {
+    try {
+      const pem = Buffer.from(apnsKeyP8, "base64").toString("utf8");
+      apnsClient = new ApnsClient({
+        keyId: apnsKeyId,
+        teamId: apnsTeamId,
+        privateKey: createPrivateKey(pem),
+        topic: CLUTCH_IOS_PUSH_TOPIC,
+      });
+    } catch {
+      // The key could not be read.  The reason is never the key.
+      apnsClient = null;
+    }
+  }
+  if (apnsClient) log("activity push relay armed");
+  else log("activity push relay disabled: APNS_KEY_ID, APNS_TEAM_ID and APNS_KEY_P8_BASE64 are not all set");
+  const activityPush = new ActivityPushRelay({
+    store: activityTokens,
+    enabled: apnsClient !== null,
+    sender: apnsClient,
+    snapshot: () => activitySnapshot(),
+    onLog: (message) => log(message),
+  });
+
+  /**
    * Hand one host approval to the turn that owns it.
    *
    * The host asks every connected client, so a question about a thread
@@ -2666,6 +2858,7 @@ async function main(): Promise<void> {
     // The turn owns the request from here on, so an answer is only accepted
     // when it names a request this turn raised.
     target.pendingPermissions.set(request.requestId, request);
+    notifyActivityPush();
     target.permission(request);
   }
 
@@ -2681,7 +2874,10 @@ async function main(): Promise<void> {
       const relay = await hostApprovals();
       const ok = await relay.answer(approval.eventId, outcome);
       // Keep the request retryable until the host accepts the answer.
-      if (ok) session.hostApprovals.delete(requestId);
+      if (ok) {
+        session.hostApprovals.delete(requestId);
+        notifyActivityPush();
+      }
       return ok;
     } catch (err) {
       log(`host approval answer failed request=${requestId} message=${(err as Error).message.slice(0, 120)}`);
@@ -2706,6 +2902,7 @@ async function main(): Promise<void> {
         }
       }
     }
+    notifyActivityPush();
   }
 
   /**
@@ -3085,6 +3282,7 @@ async function main(): Promise<void> {
         session.permissionTimers.delete(requestId);
       }
       session.pendingPermissions.delete(requestId);
+      notifyActivityPush();
       // The turn knows how to answer: a bridge turn answers the bridge, and a
       // turn that runs in the host answers the host.
       const answered = (await session.answerPermission?.(requestId, optionId)) ?? false;
@@ -3185,6 +3383,7 @@ async function main(): Promise<void> {
     // write-through), consumed by the native Hosts and Settings sheet.
     if (await handleQuotasRequest(req, res, url.pathname, token)) return;
     if (await handleInfisicalSettingsRequest(req, res, url.pathname, { settings })) return;
+    if (await handleActivityTokensRequest(req, res, url.pathname, token, activityPush)) return;
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/sessions") {
       const requestedEngine = url.searchParams.get("engine");
@@ -3760,6 +3959,7 @@ async function main(): Promise<void> {
 
       const active = session;
       active.busy = true;
+      notifyActivityPush();
       active.diagnostics = turnDiagnostics;
       // Engine diagnostics ride the bridge as [stderr]-prefixed message
       // chunks (the Shellular-visible contract). On a polished surface they
@@ -3874,6 +4074,7 @@ async function main(): Promise<void> {
         delete active.diagnostics;
         stopUsage();
         active.busy = false;
+        notifyActivityPush();
         active.stream = null;
         if (active.bridgeSessionId) bridges.get(engine)?.clearActiveTurn(active.bridgeSessionId);
         active.permission = null;

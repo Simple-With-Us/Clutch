@@ -36,6 +36,34 @@ public final class ClutchActivityController {
     private var isRequesting = false
     /// Whether the watch is already running.
     private var isWatching = false
+    /// The task that watches the activity's push tokens.
+    private var pushTokenTask: Task<Void, Never>?
+    /// The session this app run calls itself.
+    ///
+    /// The host keeps the registration under it, so a later launch can tell
+    /// its own registration from one an earlier launch left behind.
+    private let sessionId = UUID().uuidString
+
+    /// The keychain account one activity's push token sits under.
+    ///
+    /// ActivityKit hands out a token per activity, so the entry is keyed by
+    /// the activity id and taken away when that activity ends:  a stale
+    /// token re-registered under a new activity id would fail every push.
+    static func pushTokenAccount(for activityId: String) -> String {
+        "activity.pushToken.\(activityId)"
+    }
+
+    /// Which APNs the pushes belong to.
+    ///
+    /// A debug build talks to Apple's sandbox and a shipped build to the
+    /// real one, and a token for one is refused by the other.
+    static var pushEnvironment: String {
+        #if DEBUG
+        return "Sandbox"
+        #else
+        return "Production"
+        #endif
+    }
 
     public init() {}
 
@@ -52,6 +80,13 @@ public final class ClutchActivityController {
             if let activity {
                 publishedState = activity.content.state
                 watch(activity)
+                watchPushToken(activity)
+                // The host keeps a registration until the phone takes it
+                // away, so this activity's last token is offered again on
+                // every launch.
+                if let token = KeychainStore.read(Self.pushTokenAccount(for: activity.id)) {
+                    register(token, for: activity.id)
+                }
             }
         }
         watch()
@@ -134,6 +169,7 @@ public final class ClutchActivityController {
             guard let activity else { return }
             self.activity = nil
             publishedState = nil
+            unregister(activityId: activity.id)
             Task { @MainActor in
                 await activity.end(nil, dismissalPolicy: .immediate)
             }
@@ -152,12 +188,11 @@ public final class ClutchActivityController {
             isRequesting = true
             Task { @MainActor in
                 do {
-                    let activity = try Activity.request(attributes: ClutchActivityAttributes(),
-                                                        content: content,
-                                                        pushType: nil)
+                    let activity = try self.requestActivity(content: content, pushToken: true)
                     self.activity = activity
                     self.publishedState = state
                     self.watch(activity)
+                    self.watchPushToken(activity)
                 } catch {
                     // A live activity that cannot start is a missing
                     // convenience, not a failure worth interrupting the
@@ -198,10 +233,93 @@ public final class ClutchActivityController {
                         self.activity = nil
                         self.publishedState = nil
                     }
+                    if state == .ended || state == .dismissed {
+                        self.unregister(activityId: activity.id)
+                    }
                     return
                 default:
                     continue
                 }
+            }
+        }
+    }
+
+    /// Starts the activity, with a push token when the build can have one.
+    ///
+    /// A build without the push capability cannot ask for a token, and the
+    /// activity is worth having without one:  it is asked for again without
+    /// it, and the island still works.
+    private func requestActivity(
+        content: ActivityContent<ClutchActivityAttributes.ContentState>,
+        pushToken: Bool
+    ) throws -> Activity<ClutchActivityAttributes> {
+        let type: PushType? = pushToken ? .token : nil
+        do {
+            return try Activity.request(attributes: ClutchActivityAttributes(),
+                                        content: content,
+                                        pushType: type)
+        } catch {
+            guard pushToken else { throw error }
+            return try Activity.request(attributes: ClutchActivityAttributes(),
+                                        content: content,
+                                        pushType: nil)
+        }
+    }
+
+    /// Watches the push token the system gives this activity.
+    ///
+    /// The token is what the host pushes to, so it is registered as soon as
+    /// it arrives and again on every launch:  the host keeps the
+    /// registration until the phone takes it away.
+    private func watchPushToken(_ activity: Activity<ClutchActivityAttributes>) {
+        pushTokenTask?.cancel()
+        pushTokenTask = Task { @MainActor in
+            for await tokenData in activity.pushTokenUpdates {
+                let token = tokenData.map { String(format: "%02x", $0) }.joined()
+                self.register(token, for: activity.id)
+            }
+        }
+    }
+
+    /// Tells every paired host about this activity's push token.
+    ///
+    /// The phone can be paired with more than one host, and each host runs
+    /// its own sidecar, so each one is told:  the host that has the work is
+    /// the host that pushes it.
+    private func register(_ token: String, for activityId: String) {
+        _ = KeychainStore.write(token, account: Self.pushTokenAccount(for: activityId))
+        let deviceUid = CometChatManager.shared.deviceUid()
+        for host in HostStore.shared.hosts {
+            Task { @MainActor in
+                await ClutchActivityPushRegistration.register(
+                    host: host,
+                    deviceUid: deviceUid,
+                    activityId: activityId,
+                    pushToken: token,
+                    environment: Self.pushEnvironment,
+                    sessionId: self.sessionId
+                )
+            }
+        }
+    }
+
+    /// Takes the registration away from every paired host.
+    ///
+    /// The host keeps a registration until the phone says otherwise, and a
+    /// registration for an activity that is gone is a push nobody wants.
+    /// The stored token goes with it:  an activity that ended has no token
+    /// worth re-offering on the next launch.
+    private func unregister(activityId: String) {
+        KeychainStore.delete(Self.pushTokenAccount(for: activityId))
+        let deviceUid = CometChatManager.shared.deviceUid()
+        for host in HostStore.shared.hosts {
+            Task { @MainActor in
+                await ClutchActivityPushRegistration.unregister(
+                    host: host,
+                    deviceUid: deviceUid,
+                    activityId: activityId,
+                    sessionId: self.sessionId
+                )
             }
         }
     }
@@ -222,6 +340,78 @@ public final class ClutchActivityController {
                 self?.watch()
             }
         }
+    }
+}
+
+/// Registers one Live Activity's push token with a paired host.
+///
+/// The registration is behind the same credential as the rest of the
+/// sidecar's API:  the chat token the pairing brought.  A host that is not
+/// there is not an error:  the registration is offered again on the next
+/// launch.
+enum ClutchActivityPushRegistration {
+    /// The route the registrations live on.
+    static let path = "/clutch/v1/activity-tokens"
+
+    /// Tells a host about the activity's push token.
+    static func register(
+        host: ClutchHost,
+        deviceUid: String,
+        activityId: String,
+        pushToken: String,
+        environment: String,
+        sessionId: String
+    ) async {
+        await send(
+            host: host,
+            method: "PUT",
+            body: [
+                "deviceUid": deviceUid,
+                "activityId": activityId,
+                "pushToken": pushToken,
+                "environment": environment,
+                "sessionId": sessionId,
+                // The Live Activity carries no stored attributes, so there is
+                // nothing to send but the empty set of them.
+                "attributes": [String: Any](),
+            ]
+        )
+    }
+
+    /// Takes the registration away again.
+    static func unregister(
+        host: ClutchHost,
+        deviceUid: String,
+        activityId: String,
+        sessionId: String
+    ) async {
+        await send(
+            host: host,
+            method: "DELETE",
+            body: [
+                "deviceUid": deviceUid,
+                "activityId": activityId,
+                "sessionId": sessionId,
+            ]
+        )
+    }
+
+    /// One request to one host.
+    private static func send(host: ClutchHost, method: String, body: [String: Any]) async {
+        guard let token = host.chatToken, !token.isEmpty else { return }
+        var components = URLComponents()
+        components.scheme = host.origin.scheme
+        components.host = host.origin.host
+        components.port = host.chatPort
+        components.path = path
+        guard let url = components.url else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 10
+        _ = try? await URLSession.shared.data(for: request)
     }
 }
 #endif
