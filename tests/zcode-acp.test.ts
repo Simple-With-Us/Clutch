@@ -100,6 +100,15 @@ describe("resolveZcodeCli", () => {
     expect(resolveZcodeCli({ HOME: root, PATH: bin, ZCODE_BIN: "zcode-missing" })).toBeNull();
   });
 
+  it.skipIf(process.platform === "win32")("treats a backslash as part of a bare name on POSIX, not as a path", () => {
+    const root = tempDir();
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const onPath = executable(join(bin, "z\\code"));
+
+    expect(resolveZcodeCli({ HOME: root, PATH: bin, ZCODE_BIN: "z\\code" })).toBe(onPath);
+  });
+
   it("requires a non-JavaScript entry to be executable, but not a zcode.cjs the bridge runs with Node", () => {
     const root = tempDir();
     const plain = join(root, "zcode");
