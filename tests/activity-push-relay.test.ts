@@ -499,3 +499,129 @@ describe("the activity token route", () => {
     expect(state.status).toBe(0);
   });
 });
+
+describe("the push relay delivery guarantees", () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("drops the waiting push when the work returns to a state the phone has", async () => {
+    // A is delivered, B is coalesced into a timer, and the work settles
+    // back to A before the timer fires.  Without the cancel, the island
+    // would walk back to B — a state that stopped being true.
+    const store = new ActivityTokenStore(join(home(), "activity-tokens.json"));
+    store.put(registration());
+    const sent: unknown[] = [];
+    let approvals: ActivityThreadApproval[] = [];
+    const relay = new ActivityPushRelay({
+      store,
+      enabled: true,
+      sender: {
+        sendLiveActivity: async (request) => {
+          sent.push(request.payload);
+          return { status: 200 };
+        },
+      },
+      snapshot: () => ({ approvals, runs: [] }),
+      now: () => 1_700_000_000_000,
+      minIntervalMs: 20,
+    });
+
+    await relay.notify();
+    await relay.settled();
+    expect(sent).toHaveLength(1);
+
+    approvals = [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
+    await relay.notify(); // waits on the interval
+    approvals = [];
+    await relay.notify(); // back to the delivered state: the wait is off
+    await sleep(60);
+    await relay.settled();
+    expect(sent).toHaveLength(1);
+  });
+
+  it("retries a transiently failing push until it lands", async () => {
+    const store = new ActivityTokenStore(join(home(), "activity-tokens.json"));
+    store.put(registration());
+    const statuses = [503, 200];
+    let attempts = 0;
+    let approvals: ActivityThreadApproval[] = [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
+    const relay = new ActivityPushRelay({
+      store,
+      enabled: true,
+      sender: {
+        sendLiveActivity: async () => ({ status: statuses[Math.min(attempts++, statuses.length - 1)]! }),
+      },
+      snapshot: () => ({ approvals, runs: [] }),
+      now: () => 1_700_000_000_000,
+      minIntervalMs: 0,
+      retryBaseMs: 5,
+    });
+
+    await relay.notify();
+    await sleep(60);
+    await relay.settled();
+    expect(attempts).toBe(2);
+
+    // The retry landed, so the state is remembered and no third push rides.
+    await relay.notify();
+    await relay.settled();
+    expect(attempts).toBe(2);
+    void approvals;
+  });
+
+  it("spends a capped number of retries before waiting for the next change", async () => {
+    const store = new ActivityTokenStore(join(home(), "activity-tokens.json"));
+    store.put(registration());
+    let attempts = 0;
+    const relay = new ActivityPushRelay({
+      store,
+      enabled: true,
+      sender: {
+        sendLiveActivity: async () => {
+          attempts += 1;
+          return { status: 429 };
+        },
+      },
+      snapshot: () => ({ approvals: [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }] as ActivityThreadApproval[], runs: [] }),
+      now: () => 1_700_000_000_000,
+      minIntervalMs: 0,
+      retryBaseMs: 5,
+      retryLimit: 2,
+    });
+
+    await relay.notify();
+    await sleep(80);
+    await relay.settled();
+    // The first push and two retries; the throttle is not a broken pipe.
+    expect(attempts).toBe(3);
+
+    // With the budget spent, only a state change tries again.
+    await relay.notify();
+    await relay.settled();
+    expect(attempts).toBe(3);
+  });
+
+  it("does not retry a push Apple rejected for good", async () => {
+    const store = new ActivityTokenStore(join(home(), "activity-tokens.json"));
+    store.put(registration());
+    let attempts = 0;
+    const relay = new ActivityPushRelay({
+      store,
+      enabled: true,
+      sender: {
+        sendLiveActivity: async () => {
+          attempts += 1;
+          return { status: 410, reason: "Unregistered" };
+        },
+      },
+      snapshot: () => ({ approvals: [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }] as ActivityThreadApproval[], runs: [] }),
+      now: () => 1_700_000_000_000,
+      minIntervalMs: 0,
+      retryBaseMs: 5,
+    });
+
+    await relay.notify();
+    await sleep(60);
+    await relay.settled();
+    expect(attempts).toBe(1);
+  });
+});

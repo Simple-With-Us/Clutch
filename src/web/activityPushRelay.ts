@@ -50,6 +50,24 @@ const MAX_TOKEN_LENGTH = 512;
  */
 export const ACTIVITY_PUSH_MIN_INTERVAL_MS = 2_000;
 
+/** The retries a transiently failing push gets before the relay waits for the next state change. */
+export const ACTIVITY_PUSH_TRANSIENT_RETRIES = 2;
+
+/** The base wait between retry attempts, doubled per attempt. */
+export const ACTIVITY_PUSH_RETRY_BASE_MS = 15_000;
+
+/**
+ * Whether APNs said "the same push may go through later".
+ *
+ * Zero is the transport failure the client reports for a socket that never
+ * answered, 429 is Apple's throttle and 503 is its own server;  anything
+ * else, 410 for an unregistered token above all, says the push itself is
+ * the problem and a retry would fail the same way.
+ */
+export function isTransientPushStatus(status: number): boolean {
+  return status === 0 || status === 429 || status === 503;
+}
+
 /** The attributes type the payload names. */
 export const ACTIVITY_ATTRIBUTES_TYPE = "ClutchActivityAttributes";
 
@@ -423,6 +441,10 @@ export interface ActivityPushRelayOptions {
   readonly now?: () => number;
   /** The shortest interval between two pushes to the same token. */
   readonly minIntervalMs?: number;
+  /** The retries a transiently failing push gets. */
+  readonly retryLimit?: number;
+  /** The base wait between retry attempts;  doubled per attempt. */
+  readonly retryBaseMs?: number;
   /** Where the relay's own diagnostics go. */
   readonly onLog?: (message: string) => void;
 }
@@ -446,6 +468,12 @@ export class ActivityPushRelay {
 
   /** The state a waiting push will carry, per token. */
   private readonly pendingPayloads = new Map<string, { registration: ActivityTokenRegistration; payload: LiveActivityPushPayload; comparable: string }>();
+
+  /** The retries spent per token, so a persistent failure stops hammering. */
+  private readonly attempts = new Map<string, number>();
+
+  /** The state each token's retry count belongs to:  a new state re-arms it. */
+  private readonly attemptState = new Map<string, string>();
 
   /** The pushes that are in flight. */
   private readonly inFlight = new Set<Promise<void>>();
@@ -475,15 +503,22 @@ export class ActivityPushRelay {
   /** Take one registration away. */
   unregister(deviceUid: string, activityId: string): boolean {
     const key = registrationKey(deviceUid, activityId);
+    this.cancelPending(key);
+    this.lastSent.delete(key);
+    this.lastSentAt.delete(key);
+    return this.options.store.remove(deviceUid, activityId);
+  }
+
+  /** Drop whatever push is waiting for one token, and its retry count. */
+  private cancelPending(key: string): void {
     const timer = this.pending.get(key);
     if (timer) {
       clearTimeout(timer);
       this.pending.delete(key);
     }
     this.pendingPayloads.delete(key);
-    this.lastSent.delete(key);
-    this.lastSentAt.delete(key);
-    return this.options.store.remove(deviceUid, activityId);
+    this.attempts.delete(key);
+    this.attemptState.delete(key);
   }
 
   /**
@@ -509,8 +544,13 @@ export class ActivityPushRelay {
     const comparable = comparableActivityState(contentState);
     for (const registration of registrations) {
       const key = registrationKey(registration.deviceUid, registration.activityId);
-      // A state the phone already has is not worth a push.
-      if (this.lastSent.get(key) === comparable) continue;
+      // A state the phone already has is not worth a push — and a waiting
+      // push of an older state must not go out after the work moved back,
+      // or the island ends on a state that is no longer true.
+      if (this.lastSent.get(key) === comparable) {
+        this.cancelPending(key);
+        continue;
+      }
       const payload = buildLiveActivityPayload({
         event: "update",
         timestampSeconds,
@@ -553,6 +593,15 @@ export class ActivityPushRelay {
     // A push carrying this state is already waiting:  it will carry the
     // newest state, so there is nothing to add.
     if (this.pendingPayloads.get(key)?.comparable === comparable) return;
+    // A state the phone does not have yet starts its own attempt cycle.  A
+    // state whose retries are already spent waits for a real change rather
+    // than getting a fresh budget from every call that re-observes it.
+    if (this.attemptState.get(key) !== comparable) {
+      this.attempts.delete(key);
+      this.attemptState.set(key, comparable);
+    } else if ((this.attempts.get(key) ?? 0) >= (this.options.retryLimit ?? ACTIVITY_PUSH_TRANSIENT_RETRIES)) {
+      return;
+    }
     const minInterval = this.options.minIntervalMs ?? ACTIVITY_PUSH_MIN_INTERVAL_MS;
     const last = this.lastSentAt.get(key);
     const wait = last === undefined ? 0 : Math.max(0, minInterval - (now - last));
@@ -590,6 +639,7 @@ export class ActivityPushRelay {
     const waiting = this.pendingPayloads.get(key);
     if (!waiting) return;
     this.pendingPayloads.delete(key);
+    this.attemptState.set(key, waiting.comparable);
     this.lastSentAt.set(key, this.options.now?.() ?? Date.now());
     const sender = this.options.sender;
     if (!sender) return;
@@ -605,14 +655,44 @@ export class ActivityPushRelay {
       });
       if (result.status === 200) {
         this.lastSent.set(key, waiting.comparable);
+        this.attempts.delete(key);
+        this.attemptState.delete(key);
         return;
       }
-      // The state was not delivered, so it is not remembered:  the next
-      // change tries again.
+      // The state was not delivered, so it is not remembered.
       this.log(`activity push failed status=${result.status} reason=${result.reason ?? "unknown"}`);
+      if (isTransientPushStatus(result.status)) this.retryLater(key, waiting);
     } catch {
+      // A throw is the transport never answering:  the same push may go
+      // through later, so it joins the transient path.
       this.log("activity push failed");
+      this.retryLater(key, waiting);
     }
+  }
+
+  /**
+   * Queue one failed push again, if it may succeed and nothing newer waits.
+   *
+   * The wait doubles per attempt and the attempts are capped, so a
+   * persistent failure settles back into "wait for the next state change"
+   * instead of hammering Apple with the same payload.
+   */
+  private retryLater(key: string, waiting: { registration: ActivityTokenRegistration; payload: LiveActivityPushPayload; comparable: string }): void {
+    const limit = this.options.retryLimit ?? ACTIVITY_PUSH_TRANSIENT_RETRIES;
+    const attempt = this.attempts.get(key) ?? 0;
+    if (attempt >= limit) return;
+    // A newer state already queued or timed for this token carries its own
+    // push;  retrying the older payload over it would put the island back.
+    if (this.pendingPayloads.has(key) || this.pending.has(key)) return;
+    this.attempts.set(key, attempt + 1);
+    this.pendingPayloads.set(key, waiting);
+    const base = this.options.retryBaseMs ?? ACTIVITY_PUSH_RETRY_BASE_MS;
+    const timer = setTimeout(() => {
+      this.pending.delete(key);
+      void this.send(key);
+    }, base * 2 ** attempt);
+    timer.unref?.();
+    this.pending.set(key, timer);
   }
 
   private log(message: string): void {
