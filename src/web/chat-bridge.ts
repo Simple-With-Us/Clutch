@@ -122,6 +122,8 @@ function defaultCwd(): string {
 interface Launcher {
   command: string;
   args: string[];
+  /** Set when an operator's CLUTCH_CHAT_LAUNCHER_<ENGINE> replaced the shipped launcher. */
+  override?: boolean;
 }
 
 /**
@@ -192,7 +194,7 @@ const LAUNCHERS: Record<Engine, Launcher> = {
   // ./zcode-acp.ts).  CLUTCH_ZCODE_ACP_CLI names a bridge the default search
   // missed, and CLUTCH_ZCODE_CLI still names the Z Code CLI the bridge drives.
   zcode: zcodeLauncherOverride
-    ? { command: zcodeLauncherOverride, args: [] }
+    ? { command: zcodeLauncherOverride, args: [], override: true }
     : { command: defaultZcodeAcpServer(), args: [] },
 };
 
@@ -686,7 +688,10 @@ export async function engineAvailability(
     // A full launcher override (test hooks, unusual installs) is the
     // operator's own command, which may drive neither the bridge nor the CLI,
     // so neither the CLI nor the sign-in the bridge reads is checked for it.
-    if (env.CLUTCH_CHAT_LAUNCHER_ZCODE?.trim()) return { available: true };
+    // The mark is read off the launcher this check was handed, the same one
+    // the health route and the spawn use, and the existence check above has
+    // already run against the override's own command.
+    if (launcher.override) return { available: true };
     // The bridge drives the Z Code CLI, so the CLI has to be here too.
     if (!resolveZcodeCli(env)) {
       return { available: false, note: `${label} is not installed on this host.\u00A0 Install the Z Code app or CLI.` };
@@ -2990,7 +2995,7 @@ async function main(): Promise<void> {
           ok: true,
           engines: ENGINE_ORDER,
           mcode: { available: mcodeAvailable() },
-          zcode: { available: zcodeAvailable() && (Boolean(zcodeLauncherOverride) || resolveZcodeCli() !== null) },
+          zcode: { available: zcodeAvailable() && (LAUNCHERS.zcode.override === true || resolveZcodeCli() !== null) },
           tailnetHost,
           activeTurns: [...sessions.values()].filter((session) => session.busy).length,
           diagnostics: await diagnostics.status(),
