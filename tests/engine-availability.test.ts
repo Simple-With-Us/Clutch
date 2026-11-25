@@ -219,6 +219,10 @@ describe("engine availability", () => {
     // The override's own command still has to exist.
     const missing = { ...launchers, zcode: { command: join(host.home, "no-such-launcher"), args: [], override: true } };
     await expect(engineAvailability("zcode", { ...host.context, env, launchers: missing })).resolves.toMatchObject({ available: false });
+
+    // A directory is not a launcher the spawn can run.
+    const folder = { ...launchers, zcode: { command: host.home, args: [], override: true } };
+    await expect(engineAvailability("zcode", { ...host.context, env, launchers: folder })).resolves.toMatchObject({ available: false });
   });
 
   it("keeps Z Code in the picker without a sign-in and says how to sign in", async () => {
