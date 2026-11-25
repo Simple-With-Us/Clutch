@@ -39,6 +39,7 @@ import { ENGINE_LABELS, ENGINE_ORDER, isDshHostedEngine, supportsThreads } from 
 import { loadEnginePlugins } from "../shared/engines/index.ts";
 import { isRetiredModelId, rewriteRetiredModelId } from "../shared/retired-model-ids.ts";
 import { museContributorModelId } from "./muse-launch-options.ts";
+import { zcodeSpawnEnv } from "./zcode-acp.ts";
 
 /** One model an engine can run, with the exact value its config option takes. */
 export interface EngineModel {
@@ -252,9 +253,11 @@ const EFFORT_LEVELS: Record<string, string[]> = {
   deepseek: ["none", "low", "medium", "high", "xhigh", "max"],
   minimax: ["none", "low", "medium", "high", "xhigh", "max"],
   mcode: ["default", "low", "medium", "high", "xhigh", "max"],
-  // Same family as mcode until a live probe advertises Z Code's own list; an
-  // effort the session does not offer is refused without failing the turn.
-  zcode: ["default", "low", "medium", "high", "xhigh", "max"],
+  // The thinking levels the zcode-acp-server bridge advertises for GLM-5.3
+  // (its "thought" option).  A live probe replaces them with the session's
+  // own list;  an effort the session does not offer is refused without
+  // failing the turn.
+  zcode: ["low", "high", "max"],
 };
 
 const EFFORT_CONFIG_IDS: Record<string, string> = {
@@ -262,9 +265,8 @@ const EFFORT_CONFIG_IDS: Record<string, string> = {
   minimax: "reasoning_effort",
   mcode: "thinkingEffort",
   muse: "reasoningEffort",
-  // Same config id family as mcode until a live Z Code session advertises
-  // its own; a wrong guess costs the effort levels only, never the models.
-  zcode: "thinkingEffort",
+  // The zcode-acp-server bridge names its thinking-level option "thought".
+  zcode: "thought",
 };
 const MUSE_CONTRIBUTOR_EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh"];
 
@@ -456,12 +458,13 @@ export function probeEngineOptions(
   cwd: string,
   effortConfigId = "reasoning_effort",
   timeoutMs = 60_000,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<ProbeResult> {
   return new Promise((resolvePromise) => {
     const child = spawn(command, args, {
       stdio: ["pipe", "pipe", "ignore"],
       cwd,
-      env: process.env,
+      env,
     });
     let buffer = "";
     let settled = false;
@@ -712,6 +715,10 @@ async function buildCatalogEntry(sources: CatalogSources): Promise<Omit<CacheEnt
         launcher.args,
         sources.probeCwd,
         EFFORT_CONFIG_IDS[engine] ?? "reasoning_effort",
+        60_000,
+        // The probe starts Z Code the way a turn does, so it sees the same
+        // CLI and sign-in (src/web/zcode-acp.ts).
+        engine === "zcode" ? zcodeSpawnEnv(process.env) : process.env,
       );
       probes.set(engine, result);
     }),
