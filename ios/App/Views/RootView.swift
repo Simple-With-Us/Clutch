@@ -83,6 +83,10 @@ struct RootView: View {
                             await store.refreshStatuses()
                             await checkGate(host)
                         }
+                        // The engines may have worked while the app was
+                        // away, so the island and the Lock Screen count are
+                        // republished when the app comes forward.
+                        ClutchActivityController.shared.refresh()
                     }
                 #endif
             } else {
@@ -100,6 +104,11 @@ struct RootView: View {
                     store.activate(host)
                 }
                 ThreadLinkRouter.shared.request(link)
+            } else if ClutchApprovalsLink.matches(url) {
+                // A link that names the approvals list opens that list: it
+                // is what the Live Activity and the Control Center action
+                // use, so the way back into the app is one shape.
+                ApprovalsLinkRouter.shared.request()
             } else if case .success(let payload) = PairingLink.parse(url.absoluteString) {
                 store.pair(payload)
             }

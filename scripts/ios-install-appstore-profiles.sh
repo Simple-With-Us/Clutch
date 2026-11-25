@@ -5,7 +5,9 @@
 # Map: ios/appstore-profiles.json  { "<bundle id>": "<profile name>" }
 # Names must equal PROVISIONING_PROFILE_SPECIFIER in ios/project.yml Release.
 #
-# Clutch has no App Group entitlements; IOS_REQUIRED_APP_GROUP defaults empty.
+# Clutch's app and its widget extension share one App Group, so the profile
+# has to carry it; IOS_REQUIRED_APP_GROUP names the group the profiles must
+# include, and the installer refuses a profile that does not.
 set +o xtrace
 set -euo pipefail
 umask 077

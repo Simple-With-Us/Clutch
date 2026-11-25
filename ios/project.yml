@@ -33,9 +33,12 @@ targets:
     platform: iOS
     sources:
       - path: App
+      - path: Shared
       - path: Resources
       - path: Assets.xcassets
     dependencies:
+      - target: ClutchWidgets
+        embed: true
       - package: CometChatUIKitSwift
         product: CometChatUIKitSwift
       - package: Sentry
@@ -95,6 +98,10 @@ targets:
         NSMicrophoneUsageDescription: Clutch records audio while you hold to talk to dictate coding directives.
         NSSpeechRecognitionUsageDescription: Clutch transcribes speech into coding directives and prompts.
         NSFaceIDUsageDescription: Clutch checks that it is you before a tool runs on this phone.
+        # The Live Activity shows what the engines are doing on the lock
+        # screen and in the island.  Without this key the system refuses to
+        # start one, so the island simply never appears.
+        NSSupportsLiveActivities: true
         NSBonjourServices:
           - _clutch._tcp
           - _minimax._tcp
@@ -194,6 +201,7 @@ targets:
           - Views/PairingScannerSheet.swift
           - Views/Components
       - path: Mac
+      - path: Shared
       - path: Resources
       - path: Assets.xcassets
     dependencies:
@@ -238,11 +246,53 @@ targets:
         NSLocalNetworkUsageDescription: Clutch connects to the Clutch server or MiniMax Code on your local network.
         NSMicrophoneUsageDescription: Clutch records audio while you hold to talk to dictate coding directives.
         NSSpeechRecognitionUsageDescription: Clutch transcribes speech into coding directives and prompts.
+  ClutchWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Shared
+      # The design-token layer comes with the extension, so the lock screen
+      # and the island draw the same concept the app draws.  Platform.swift
+      # is here because the token layer's system colours live in it.
+      - path: App/Design
+      - path: App/Platform.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.ios.widgets
+        DEVELOPMENT_TEAM: CC8UTF7ATG
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "202610290000"
+        SWIFT_VERSION: '5.9'
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ENABLE_ON_DEMAND_RESOURCES: false
+        SKIP_INSTALL: true
+        INFOPLIST_KEY_CFBundleDisplayName: Clutch Widgets
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "Clutch Widgets App Store (API)"
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: Clutch Widgets
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widgets/ClutchWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.codes.clutch.ios
 schemes:
   Clutch:
     build:
       targets:
         Clutch: all
+        ClutchWidgets: all
         ClutchTests: [test]
         ClutchUITests: [test]
     run:
