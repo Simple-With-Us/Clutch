@@ -210,13 +210,15 @@ describe("engine availability", () => {
     const host = fixture();
     // CLUTCH_CHAT_LAUNCHER_ZCODE replaces the whole launcher, so the CLI the
     // bridge would drive and the bridge's sign-in are not this host's concern.
-    const env = {
-      ...host.context.env,
-      ZCODE_BIN: join(host.home, "no-such-zcode"),
-      CLUTCH_CHAT_LAUNCHER_ZCODE: process.execPath,
-    };
+    // The sidecar marks that launcher, and the check reads the mark.
+    const env = { ...host.context.env, ZCODE_BIN: join(host.home, "no-such-zcode") };
+    const launchers = { ...host.context.launchers!, zcode: { command: process.execPath, args: [], override: true } };
 
-    await expect(engineAvailability("zcode", { ...host.context, env })).resolves.toEqual({ available: true });
+    await expect(engineAvailability("zcode", { ...host.context, env, launchers })).resolves.toEqual({ available: true });
+
+    // The override's own command still has to exist.
+    const missing = { ...launchers, zcode: { command: join(host.home, "no-such-launcher"), args: [], override: true } };
+    await expect(engineAvailability("zcode", { ...host.context, env, launchers: missing })).resolves.toMatchObject({ available: false });
   });
 
   it("keeps Z Code in the picker without a sign-in and says how to sign in", async () => {
