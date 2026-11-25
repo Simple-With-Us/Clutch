@@ -162,6 +162,8 @@ The reason to be native on the phone.  The engine is on the Mac, the phone is o
 
 **The ambient surfaces are in #318.**  The Live Activity names up to three threads and a status under the same redaction the notification follows, and it says how much is waiting and how much is running, so a phone that is face down still says whether the engine is stuck.  The Lock Screen accessory shows a count and a count only:  no thread name, no tool name, no request.  The Control Center action opens the approvals list through the same `clutch://approvals` link the island uses, so there is one way into the app and one shape to keep true.  The island is updated from the app while the app runs, and a phone that has put the app in the background stops updating it:  that is what the host push relay is for, and it is the last piece of this pass.
 
+**Main moved the approval to the request, and the ambient surfaces followed.**  Main keys an approval by the request as well as by the host and the session, because one session can wait on more than one request and an acknowledgment names the request it answers.  The surfaces count threads and not requests, so the overlap between a waiting thread and its own run is keyed by the thread, which is the host and the session, and a thread waiting on two requests is one row and not two.  The approvals list reads the same split, so a thread blocked on the owner is not listed as running as well.  The split lives in `ios/App/Services/ClutchActivityWork.swift` and not in the Live Activity's own file, because the Mac shows the same split and the Mac has no Live Activity.
+
 ### 3.1 Carry the evidence to the client
 
 The blocker, and the change that makes the rest possible.

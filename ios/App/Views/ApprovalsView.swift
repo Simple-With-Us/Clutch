@@ -11,18 +11,20 @@ struct ApprovalsView: View {
     /// Opens the thread an approval belongs to.
     let onOpenThread: (String) -> Void
 
-    /// The approvals this host is waiting on.
-    private var approvals: [TurnActivityApproval] {
-        TurnActivity.shared.approvals.filter { $0.hostId == host.id }
-    }
-
-    /// The turns this host is streaming.
-    private var runs: [TurnActivityRun] {
-        TurnActivity.shared.runs.filter { $0.hostId == host.id }
+    /// What this host is waiting on and what it is running.
+    ///
+    /// The split takes a thread that is waiting on the owner out of the
+    /// running list, because the turn has not ended:  the thread is
+    /// blocked, not working, and it is one row and not two.
+    private var work: (waiting: [TurnActivityApproval], running: [TurnActivityRun]) {
+        ClutchActivityWork.split(
+            approvals: TurnActivity.shared.approvals.filter { $0.hostId == host.id },
+            runs: TurnActivity.shared.runs.filter { $0.hostId == host.id }
+        )
     }
 
     var body: some View {
-        if approvals.isEmpty && runs.isEmpty {
+        if work.waiting.isEmpty && work.running.isEmpty {
             ContentUnavailableView(
                 "Nothing Waiting",
                 systemImage: "checkmark.circle",
@@ -30,9 +32,9 @@ struct ApprovalsView: View {
             )
         } else {
             List {
-                if !approvals.isEmpty {
+                if !work.waiting.isEmpty {
                     Section("Needs You") {
-                        ForEach(approvals) { approval in
+                        ForEach(work.waiting) { approval in
                             Button {
                                 onOpenThread(approval.sessionId)
                             } label: {
@@ -57,9 +59,9 @@ struct ApprovalsView: View {
                         }
                     }
                 }
-                if !runs.isEmpty {
+                if !work.running.isEmpty {
                     Section("Running") {
-                        ForEach(runs) { run in
+                        ForEach(work.running) { run in
                             Button {
                                 onOpenThread(run.sessionId)
                             } label: {

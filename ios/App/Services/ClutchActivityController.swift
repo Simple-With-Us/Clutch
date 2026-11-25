@@ -224,24 +224,4 @@ public final class ClutchActivityController {
         }
     }
 }
-
-/// The waiting and the running work, with the overlap taken out.
-///
-/// A thread that is waiting on the owner is still in the store's runs,
-/// because the turn has not ended:  it is blocked, not working.  It is
-/// counted once, as waiting, or the island would say a thread is both
-/// waiting and running, and would show it twice.
-enum ClutchActivityWork {
-    /// Splits the store's entries into what is waiting and what is running.
-    ///
-    /// The overlap is keyed by the entry's own id, which carries the host
-    /// as well as the session:  two hosts can hold a session with the same
-    /// id, and one host's waiting thread is not the other host's running
-    /// thread.
-    static func split(approvals: [TurnActivityApproval],
-                      runs: [TurnActivityRun]) -> (waiting: [TurnActivityApproval], running: [TurnActivityRun]) {
-        let waitingIds = Set(approvals.map(\.id))
-        return (approvals, runs.filter { !waitingIds.contains($0.id) })
-    }
-}
 #endif

@@ -69,7 +69,7 @@ final class ClutchActivityTests: XCTestCase {
         // there is more work than there is, and the island would show it
         // twice.
         let hostId = UUID()
-        let approval = TurnActivityApproval(hostId: hostId, sessionId: "s1", title: "Needs Me")
+        let approval = TurnActivityApproval(hostId: hostId, sessionId: "s1", requestId: "r1", title: "Needs Me")
         let run = TurnActivityRun(hostId: hostId, sessionId: "s1", title: "Needs Me")
 
         let split = ClutchActivityWork.split(approvals: [approval], runs: [run])
@@ -88,12 +88,28 @@ final class ClutchActivityTests: XCTestCase {
         XCTAssertEqual(split.running.count, 1)
     }
 
+    func testAThreadWaitingOnTwoRequestsIsOneThreadAndNotTwo() {
+        // The engine can hold a session that waits on more than one request,
+        // and the approval's own id carries the request:  the thread is
+        // still one thread, the island shows it once, and the run that is
+        // blocked behind it is not counted as running as well.
+        let hostId = UUID()
+        let first = TurnActivityApproval(hostId: hostId, sessionId: "s1", requestId: "r1", title: "Needs Me")
+        let second = TurnActivityApproval(hostId: hostId, sessionId: "s1", requestId: "r2", title: "Needs Me")
+        let run = TurnActivityRun(hostId: hostId, sessionId: "s1", title: "Needs Me")
+
+        let split = ClutchActivityWork.split(approvals: [first, second], runs: [run])
+
+        XCTAssertEqual(split.waiting.count, 1)
+        XCTAssertTrue(split.running.isEmpty)
+    }
+
     func testAThreadOnAnotherHostIsStillRunning() {
         // Two hosts can hold a session with the same id, and one host's
         // waiting thread is not the other host's running thread.
         let hostA = UUID()
         let hostB = UUID()
-        let approval = TurnActivityApproval(hostId: hostA, sessionId: "s1", title: "Needs Me")
+        let approval = TurnActivityApproval(hostId: hostA, sessionId: "s1", requestId: "r1", title: "Needs Me")
         let run = TurnActivityRun(hostId: hostB, sessionId: "s1", title: "Working")
 
         let split = ClutchActivityWork.split(approvals: [approval], runs: [run])
