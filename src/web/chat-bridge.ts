@@ -685,7 +685,7 @@ export async function engineAvailability(
   if (engine === "zcode") {
     // The bridge drives the Z Code CLI, so the CLI has to be here too.
     if (!resolveZcodeCli(env)) {
-      return { available: false, note: `${label} is not installed on this host.  Install the Z Code app or CLI.` };
+      return { available: false, note: `${label} is not installed on this host.\u00A0 Install the Z Code app or CLI.` };
     }
     // Same reasoning as Muse: the sign-in the bridge reads is the Z Code
     // app's own, or a saved `zcode-acp setup` account, and the file check
@@ -695,7 +695,7 @@ export async function engineAvailability(
     if (!zcodeSignedIn(env)) {
       return {
         available: true,
-        note: `${label} needs a sign-in.  Sign in through the Z Code app, or run ${ZCODE_ACP_SETUP} as the user this sidecar runs as.`,
+        note: `${label} needs a sign-in.\u00A0 Sign in through the Z Code app, or run ${ZCODE_ACP_SETUP} as the user this sidecar runs as.`,
       };
     }
     return { available: true };
