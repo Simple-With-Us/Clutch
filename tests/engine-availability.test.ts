@@ -206,6 +206,19 @@ describe("engine availability", () => {
     expect(zcode.note).toContain("not installed");
   });
 
+  it("trusts a full Z Code launcher override without the CLI or a sign-in", async () => {
+    const host = fixture();
+    // CLUTCH_CHAT_LAUNCHER_ZCODE replaces the whole launcher, so the CLI the
+    // bridge would drive and the bridge's sign-in are not this host's concern.
+    const env = {
+      ...host.context.env,
+      ZCODE_BIN: join(host.home, "no-such-zcode"),
+      CLUTCH_CHAT_LAUNCHER_ZCODE: process.execPath,
+    };
+
+    await expect(engineAvailability("zcode", { ...host.context, env })).resolves.toEqual({ available: true });
+  });
+
   it("keeps Z Code in the picker without a sign-in and says how to sign in", async () => {
     const host = fixture();
     const cli = executable(join(host.home, "zcode.cjs"));
