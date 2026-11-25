@@ -36,9 +36,12 @@ describe("model option round-trip", () => {
     expect(dshModelIdFromOptionValue(value)).toBe("deepseek-flash");
 
     expect(dshProviderForModel("MiniMax-M3")).toBe(DSH_MINIMAX_PROVIDER_ID);
+    // MiniMax-M3 is retired fleet-wide: a saved selection naming it
+    // rewrites onto MiniMax-M3.1-Flash at the send path, so the value
+    // that reaches the engine is the live model's.
     const mmValue = dshModelOptionValue("MiniMax-M3");
-    expect(mmValue).toBe('["minimax","MiniMax-M3"]');
-    expect(dshModelIdFromOptionValue(mmValue)).toBe("MiniMax-M3");
+    expect(mmValue).toBe('["minimax","MiniMax-M3.1-Flash"]');
+    expect(dshModelIdFromOptionValue(mmValue)).toBe("MiniMax-M3.1-Flash");
 
     const mm27Value = dshModelOptionValue("MiniMax-M2.7");
     expect(mm27Value).toBe('["minimax","MiniMax-M2.7"]');
@@ -83,7 +86,6 @@ describe("dshSupport", () => {
       "DeepSeek-V4.1-Flash",
       "DeepSeek-V4.1-Pro",
       "MiniMax-M3.1-Flash",
-      "MiniMax-M3",
       "MiniMax-M2.7-highspeed",
     ]);
     expect(DSH_MINIMUM_ACP_VERSION).toBe("0.1.5-rc.1");

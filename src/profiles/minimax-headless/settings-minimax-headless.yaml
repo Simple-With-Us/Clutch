@@ -15,10 +15,15 @@ agent-default-model:
 # MiniMax models ride the llm-pi-ai provider namespace inside @deepseek-ai/dsh.
 # apiKeyEnv must match MINIMAX_API_KEY (loaded by minimax-acp / credentials.yaml).
 #
-# Model list is the owner-facing set: M3.1 Flash, M3 and M2.7 Highspeed.  M2.7
-# (non-highspeed) stays out — M3 dominates on context.  M2.7-highspeed keeps a
-# place because it is the same 204,800 context at exactly 2x M3's price; the
-# picker badges it so the cost is visible up front.
+# Model list is the owner-facing set: M3.1 Flash and M2.7 Highspeed.  M2.7
+# (non-highspeed) stays out.  M2.7-highspeed keeps a place because it is the
+# same 204,800 context at exactly 2x the retired M3's price; the picker
+# badges it so the cost is visible up front.
+#
+# MiniMax-M3 was removed under the fleet M3.1-only ruling (owner ruling
+# 2026-11-21/22: MiniMax is M3.1 only, M3 must not be used).  Do not re-add
+# it; a saved selection naming it rewrites to MiniMax-M3.1-Flash at load
+# (src/shared/retired-model-ids.ts).
 #
 # M3.1 Flash is the default (owner ruling 2026-10-20:  all fleet MiniMax use goes
 # to MiniMax-M3.1-Flash).  It forces thinking on, so its effort list runs low
@@ -36,18 +41,6 @@ llm-pi-ai:
           apiKeyEnv: MINIMAX_API_KEY,
           models:
             [
-              {
-                  id: MiniMax-M3,
-                  name: MiniMax-M3,
-                  contextWindow: 1000000,
-                  maxTokens: 128000,
-                  reasoningEfforts:
-                    {
-                      low: low,
-                      medium: medium,
-                      high: high
-                    }
-                },
               {
                   id: MiniMax-M3.1-Flash,
                   name: MiniMax-M3.1-Flash,

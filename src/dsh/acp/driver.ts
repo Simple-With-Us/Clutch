@@ -27,6 +27,7 @@ import type { EffortLevel, ModelCatalog, ProviderErrorCode } from "../../shared/
 import type { AcpSupport } from "../../shared/acp-core.ts";
 import { isDshEngineCli } from "./mcp-patch.ts";
 import { DshModelNotOfferedError, dshCanonicalWireModelId, resolveDshModelOption } from "./model-options.ts";
+import { rewriteRetiredModelId } from "../../shared/retired-model-ids.ts";
 
 export { isDshEngineCli } from "./mcp-patch.ts";
 export {
@@ -38,6 +39,7 @@ export {
   resolveDshModelOption,
 } from "./model-options.ts";
 export type { DshAdvertisedModel, DshModelMatch, DshResolvedModel } from "./model-options.ts";
+export { isRetiredModelId, rewriteRetiredModelId } from "../../shared/retired-model-ids.ts";
 
 /** Current DSH exposes its standard ACP v1 server as a profile.  Core still
  * puts BotFleet mounts in session/new.mcpServers.  Stock dsh-acp rejects a
@@ -255,12 +257,20 @@ export function dshProviderForModel(model: string): string {
  * ids such as `DeepSeek-V4.1-Flash` become `deepseek-flash`; MiniMax and other
  * non-DeepSeek models pass through unchanged).  A session that offers models
  * but not this one throws {@link DshModelNotOfferedError}, classified as a
- * model-catalog outage. */
+ * model-catalog outage.
+ *
+ * A retired picker id is rewritten onto its live replacement first
+ * ({@link rewriteRetiredModelId}): a saved selection can still name
+ * `MiniMax-M3` or the retired `deepseek-v4-flash` spelling, and the
+ * retired spelling must never reach an engine — the selection resolves
+ * as the replacement model, or fails as not offered when the install
+ * declares only the retired row. */
 export function dshModelOptionValue(model: string, advertised?: unknown): string {
-  const provider = dshProviderForModel(model);
+  const live = rewriteRetiredModelId(model);
+  const provider = dshProviderForModel(live);
   return (
-    resolveDshModelOption(model, provider, advertised)?.value ??
-    JSON.stringify([provider, dshCanonicalWireModelId(model)])
+    resolveDshModelOption(live, provider, advertised)?.value ??
+    JSON.stringify([provider, dshCanonicalWireModelId(live)])
   );
 }
 
@@ -302,7 +312,7 @@ function currentConfigValue(result: unknown, configId: string): unknown {
  * Each row's `images` agrees with the modality the route actually declares, so
  * a consumer that reads the catalog never offers an attachment the model would
  * refuse.  `deepseek-flash` declares `inputModalities: [text, image]` and the
- * three MiniMax rows on the `minimax` route are pinned by
+ * MiniMax rows on the `minimax` route are pinned by
  * {@link DSH_PER_MODEL_IMAGES}; `deepseek-v4-pro` and M2.7 are text-only. */
 export const STATIC_DSH_MODELS: ModelCatalog = {
   default: "DeepSeek-V4.1-Flash",
@@ -310,7 +320,6 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
     { id: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash", images: true },
     { id: "DeepSeek-V4.1-Pro", label: "DeepSeek-V4.1-Pro", images: false },
     { id: "MiniMax-M3.1-Flash", label: "MiniMax-M3.1-Flash", contextWindow: 1_000_000, images: true },
-    { id: "MiniMax-M3", label: "MiniMax-M3", contextWindow: 1_048_576, images: true },
     { id: "MiniMax-M2.7-highspeed", label: "MiniMax-M2.7-highspeed", contextWindow: 204_800, images: false },
   ],
 };
@@ -319,8 +328,8 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
  *  `images` answer would be wrong.
  *
  *  These are facts about the provider, not preferences: the installed pi-ai
- *  catalog declares MiniMax-M3 as text+image and the M2.7 family as
- *  text-only, and DeepSeek's own catalog declares Flash text+image and Pro
+ *  catalog declares the M2.7 family as text-only, and DeepSeek's own
+ *  catalog declares Flash text+image and Pro
  *  text-only.  A consumer that resolves one model reads its own row here
  *  rather than the engine-wide {@link dshSupport.images} answer, which is
  *  only the fallback for a model the catalog does not list.
@@ -329,12 +338,15 @@ export const STATIC_DSH_MODELS: ModelCatalog = {
  *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
  *  the direct route, and it declares `input: [text, image, video]`.  The
  *  Preview id was retired on 2026-10-18 (BF-2494 /
- *  minimax/drop-m31-flash-preview) and must not come back. */
+ *  minimax/drop-m31-flash-preview) and must not come back.
+ *
+ *  MiniMax-M3's row left with its catalog row when M3 was retired
+ *  fleet-wide (MiniMax is M3.1 only, owner ruling 2026-11-21/22); a saved
+ *  M3 selection rewrites onto M3.1-Flash before any lookup reads this map. */
 export const DSH_PER_MODEL_IMAGES: Readonly<Record<string, boolean>> = {
   "DeepSeek-V4.1-Flash": true,
   "DeepSeek-V4.1-Pro": false,
   "MiniMax-M3.1-Flash": true,
-  "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
 };
 
@@ -407,7 +419,7 @@ export const dshSupport: AcpSupport = {
   // Engine-wide fallback, not the per-model answer: every row in the catalog
   // above carries its own exact `images`, and a consumer that resolves one
   // model reads that row (BotFleet folds the map in as
-  // `model?.images ?? capabilities?.images`).  Flash and both MiniMax M3 rows
+  // `model?.images ?? capabilities?.images`).  Flash and the MiniMax-M3.1-Flash row
   // take images, so this matches the documented AcpSupport default of yes,
   // which is what a model absent from the catalog would inherit anyway.
   images: true,

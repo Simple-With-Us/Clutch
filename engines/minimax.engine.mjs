@@ -35,32 +35,36 @@ const MINIMAX_API_KEY_NAME_ENV = "CLUTCH_MINIMAX_API_KEY_NAME";
 const MINIMAX_DEFAULT_BASE_URL = "https://api.minimax.io/v1";
 const MINIMAX_DEFAULT_MODEL = "MiniMax-M3.1-Flash";
 
-/** Engine-wide effort levels.  M3 overrides this with its own list; every other
- *  row keeps the driver default of `none` because the provider takes the level
- *  through `output_config.effort` and the M2.7 family has no extra budgets to
- *  offer. */
+/** Engine-wide effort levels.  M3.1-Flash overrides this with its own list;
+ *  every other row keeps the driver default of `none` because the provider
+ *  takes the level through `output_config.effort` and the M2.7 family has
+ *  no extra budgets to offer. */
 const EFFORT_LEVELS = ["none"];
 
-/** Per-model effort overrides.  MiniMax-M3 advertises the full reasoning range;
- *  MiniMax-M3.1-Flash forces thinking on, so its list starts at `low`; the
- *  M2.7 family stays on `none` by falling back to {@link EFFORT_LEVELS}. */
+/** Per-model effort overrides.  MiniMax-M3.1-Flash forces thinking on, so
+ *  its list starts at `low`; the M2.7 family stays on `none` by falling
+ *  back to {@link EFFORT_LEVELS}.  MiniMax-M3 carried its own range until
+ *  it was retired fleet-wide (MiniMax is M3.1 only, owner ruling
+ *  2026-11-21/22); a saved M3 selection rewrites onto M3.1-Flash before it
+ *  reaches this lookup (src/shared/retired-model-ids.ts). */
 const PER_MODEL_EFFORT_LEVELS = {
-  "MiniMax-M3": ["none", "low", "medium", "high", "max"],
   "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /** Per-model image support.  These are provider facts, not preferences: the
- *  installed pi-ai catalog declares MiniMax-M3 as `input: [text, image]` and the
- *  whole M2.7 family as text-only.
+ *  installed pi-ai catalog declares the whole M2.7 family as text-only.
  *
  *  MiniMax-M3.1-Flash is the stable successor to the retired
  *  MiniMax-M3.1-Flash-Preview: the MiniMax API lists it on the managed and
  *  the direct route, and it declares `input: [text, image, video]`.  The
  *  Preview id was retired on 2026-10-18 (BF-2494 /
- *  minimax/drop-m31-flash-preview) and must not come back. */
+ *  minimax/drop-m31-flash-preview) and must not come back.
+ *
+ *  MiniMax-M3's row left with its catalog row when M3 was retired
+ *  fleet-wide (MiniMax is M3.1 only, owner ruling 2026-11-21/22); a saved
+ *  M3 selection rewrites onto M3.1-Flash, whose row above answers for it. */
 const PER_MODEL_IMAGES = {
   "MiniMax-M3.1-Flash": true,
-  "MiniMax-M3": true,
   "MiniMax-M2.7-highspeed": false,
   "MiniMax-M2.7": false,
 };
@@ -74,7 +78,6 @@ const MODELS = {
       contextWindow: 1_000_000,
       images: true,
     },
-    { id: "MiniMax-M3", label: "MiniMax M3", contextWindow: 1_048_576, images: true },
     {
       id: "MiniMax-M2.7-highspeed",
       label: "MiniMax M2.7 Highspeed",

@@ -265,7 +265,7 @@ public struct ChatView: View {
     /// The engine asks one question at a time, but a second request can land
     /// before the first is answered.  The queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card.
-    @State private var pendingPermissions: [AcpPermissionRequest] = []
+    @State private var pendingPermissions = PermissionRequests()
     /// How many answers were dropped because the request they named was no
     /// longer the one on screen.
     @State private var permissionStaleAnswers = 0
@@ -1898,7 +1898,7 @@ public struct ChatView: View {
         codeLoaded = []
         codePending = []
         plan = []
-        pendingPermissions.removeAll()
+        pendingPermissions.clearAll()
         queuePaused = false
         draft = ""
         draftBase = ""
@@ -2674,7 +2674,7 @@ public struct ChatView: View {
                     case .permission(let request):
                         // The engine is blocked on this request until the
                         // answer goes back, so it is held on screen.
-                        pendingPermissions.append(request)
+                        pendingPermissions.arrive(request)
                     case .plan(let entries):
                         plan = entries
                     case .contextControls(let controls):
@@ -2778,7 +2778,7 @@ public struct ChatView: View {
             steering = false
             turnGeneration = UUID()
             thoughtLine = nil
-            pendingPermissions.removeAll()
+            pendingPermissions.clearAll()
         }
     }
 
@@ -2850,7 +2850,12 @@ public struct ChatView: View {
                 // The card only goes away once the answer is on its way, so a
                 // failed answer can be tried again instead of stranding the
                 // engine on a question nobody can see any more.
-                pendingPermissions.removeFirst()
+                //
+                // The card that goes is the card the answer named, and the
+                // "Needs You" row in the inspector goes with it, because
+                // both are the same request:  the request id says which one
+                // it is.
+                pendingPermissions.acknowledge(requestId: answer.requestId)
             } else {
                 sendError = "The permission answer did not reach the engine."
             }
@@ -2870,7 +2875,7 @@ public struct ChatView: View {
         // A stopped turn cannot answer a question any more, so the card goes
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
-        pendingPermissions.removeAll()
+        pendingPermissions.clearAll()
     }
 }
 

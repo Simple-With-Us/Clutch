@@ -244,9 +244,9 @@ describe("PUT /clutch/v1/infisical — service tokens", () => {
 describe("PUT /clutch/v1/infisical — managed setting write-through", () => {
   it("writes a non-secret key through to Infisical", async () => {
     const settings = makeSettings();
-    const { status, body } = await call("PUT", { setting: { key: OPEN_KEY, value: "MiniMax-M3" } }, settings);
+    const { status, body } = await call("PUT", { setting: { key: OPEN_KEY, value: "MiniMax-M2.7" } }, settings);
     expect(status).toBe(200);
-    expect(settings.set).toHaveBeenCalledWith(OPEN_KEY, "MiniMax-M3");
+    expect(settings.set).toHaveBeenCalledWith(OPEN_KEY, "MiniMax-M2.7");
     expect(body.settingSaved).toBe(OPEN_KEY);
     expect(body.restartRequired).toBe(false);
   });

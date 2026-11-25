@@ -73,7 +73,7 @@ final class SessionThreadModel {
     /// before the first is answered.  The queue keeps the earlier one on
     /// screen instead of dropping it behind the newer card, where it would
     /// only be answered by the fallback timer.
-    var pendingPermissions: [AcpPermissionRequest] = []
+    var pendingPermissions = PermissionRequests()
     /// How many answers did not reach the engine.
     ///
     /// The card offers the request again when this count moves, so a failed
@@ -248,9 +248,19 @@ final class SessionThreadModel {
                         // the home list's "Needs You" section, and the owner
                         // is woken for it — a stalled approval is the one
                         // event a turn-end notification can never cover.
-                        pendingPermissions.append(request)
+                        // A request that has already been answered has no
+                        // card to answer, so it raises no activity row and
+                        // no notification.  A request that is already on
+                        // screen still has its card and still has the engine
+                        // blocked on it, so the owner is woken for it again.
+                        guard pendingPermissions.arrive(request).leavesACardToAnswer else { break }
                         permissionTick += 1
-                        TurnActivity.shared.approvalArrived(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
+                        TurnActivity.shared.approvalArrived(
+                            hostId: host.id,
+                            sessionId: session.sessionId,
+                            requestId: request.requestId,
+                            title: session.displayTitle
+                        )
                         TurnNotifier.permissionRequest(
                             threadTitle: session.displayTitle,
                             payload: PermissionNotificationPayload.make(
@@ -264,8 +274,8 @@ final class SessionThreadModel {
                         plan = entries
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
-                        pendingPermissions.removeAll()
-                        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                        pendingPermissions.clearAll()
+                        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
                         TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
@@ -277,8 +287,8 @@ final class SessionThreadModel {
                     case .failed(let message):
                         sendError = message
                         ErrorReporting.turnFailed(engine: engine, message: message)
-                        pendingPermissions.removeAll()
-                        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                        pendingPermissions.clearAll()
+                        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
                         TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
@@ -292,7 +302,7 @@ final class SessionThreadModel {
                     ErrorReporting.turnTransportFailed(engine: engine, error: error)
                 }
                 TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
-                TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
             }
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
@@ -363,9 +373,17 @@ final class SessionThreadModel {
                 // The card only goes away once the answer is on its way, so a
                 // failed answer can be tried again instead of stranding the
                 // engine on a question nobody can see any more.
-                pendingPermissions.removeFirst()
-                if pendingPermissions.isEmpty {
-                    TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+                //
+                // The card that goes is the card the answer named, and the
+                // activity state that goes with it is that request's own
+                // state:  the request id says both, so the update is local
+                // and takes nothing else with it.
+                if pendingPermissions.acknowledge(requestId: answer.requestId) {
+                    TurnActivity.shared.approvalAcknowledged(
+                        hostId: host.id,
+                        sessionId: session.sessionId,
+                        requestId: answer.requestId
+                    )
                 }
             } else {
                 sendError = "The permission answer did not reach the engine."
@@ -389,13 +407,13 @@ final class SessionThreadModel {
         // A stopped turn cannot answer a question any more, so the card goes
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
-        pendingPermissions.removeAll()
+        pendingPermissions.clearAll()
         // The prompt held for the stopped turn goes with it: it was written
         // for a turn that is not running, and the next turn must not carry
         // it out on its own.
         queuedPrompt = nil
         supportsSteering = false
-        TurnActivity.shared.approvalResolved(hostId: host.id, sessionId: session.sessionId)
+        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
         TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
         turnTick += 1
         isSending = false
