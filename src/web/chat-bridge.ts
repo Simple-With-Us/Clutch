@@ -690,8 +690,13 @@ export async function engineAvailability(
     // so neither the CLI nor the sign-in the bridge reads is checked for it.
     // The mark is read off the launcher this check was handed, the same one
     // the health route and the spawn use, and the existence check above has
-    // already run against the override's own command.
-    if (launcher.override) return { available: true };
+    // already run against the override's own command.  A path also has to be
+    // a file the spawn can run:  that check accepts a directory.
+    if (launcher.override) {
+      return launcher.command.includes("/") && !executableFile(launcher.command)
+        ? { available: false, note: `${label} is not installed on this host.` }
+        : { available: true };
+    }
     // The bridge drives the Z Code CLI, so the CLI has to be here too.
     if (!resolveZcodeCli(env)) {
       return { available: false, note: `${label} is not installed on this host.\u00A0 Install the Z Code app or CLI.` };
