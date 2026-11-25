@@ -5,7 +5,7 @@
   "displayName": "Z Code",
   "defaultCli": "zcode-acp-server",
   "nativeSource": "zcode.acp",
-  "loginNote": "Z Code needs a sign-in.  Sign in through the Z Code app, or run zcode-acp setup --provider zai as the user this sidecar runs as.",
+  "loginNote": "Z Code needs a sign-in.\u00A0 Sign in through the Z Code app, or run zcode-acp setup --provider zai as the user this sidecar runs as.",
   "install": {
     "command": {
       "darwin": "npm install -g zcode-acp-server",
