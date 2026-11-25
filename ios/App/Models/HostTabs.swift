@@ -3,9 +3,9 @@ import Foundation
 /// The tabs the native apps show, and the ones a host can take away.
 ///
 /// The phone shows Workspace, Chat, Host and Fleet Recall; the Mac shows
-/// Workspace, Agent Chat, Host and Fleet Recall.  A code-server host has no
+/// Workspace, Quick Chat, Host and Fleet Recall.  A code-server host has no
 /// dsh host behind it, so the Host console goes away on both.  The Mac also
-/// loses its Agent Chat, because that surface talks to the dsh host; the
+/// loses its Quick Chat, because that surface talks to the dsh host; the
 /// phone keeps its Chat tab, which is the surface a code server is for.
 enum HostTabs {
     /// Which app the tabs belong to.

@@ -136,6 +136,17 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     /// contract behind it.
     public var isMiniMaxCodeOnly: Bool { kind == .codeServer }
 
+    /// True when the sidecar runs on this machine, so a sidecar path names
+    /// a file this app can open.
+    ///
+    /// Loopback only: a Tailscale or LAN address is another machine even
+    /// when it is reachable without the internet, and treating its paths as
+    /// local opens a wrong file or none at all.
+    public var isLocal: Bool {
+        let host = (origin.host ?? "").lowercased()
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
     /// The identity of a pairing, as the surfaces key their loads by.
     ///
     /// Re-pairing the same host replaces the tokens, and a surface that kept
