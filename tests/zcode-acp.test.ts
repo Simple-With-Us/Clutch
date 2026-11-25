@@ -90,6 +90,29 @@ describe("resolveZcodeCli", () => {
     expect(resolveZcodeCli({ HOME: root, PATH: bin, ZCODE_BIN: join(root, "missing") })).toBeNull();
   });
 
+  it("looks an explicit bare name up on PATH, the way the bridge spawns it", () => {
+    const root = tempDir();
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const onPath = executable(join(bin, "zcode"));
+
+    expect(resolveZcodeCli({ HOME: root, PATH: bin, CLUTCH_ZCODE_CLI: "zcode" })).toBe(onPath);
+    expect(resolveZcodeCli({ HOME: root, PATH: bin, ZCODE_BIN: "zcode-missing" })).toBeNull();
+  });
+
+  it("requires a non-JavaScript entry to be executable, but not a zcode.cjs the bridge runs with Node", () => {
+    const root = tempDir();
+    const plain = join(root, "zcode");
+    writeFileSync(plain, "#!/bin/sh\nexit 0\n");
+    chmodSync(plain, 0o644);
+    const script = join(root, "zcode.cjs");
+    writeFileSync(script, "module.exports = {};\n");
+    chmodSync(script, 0o644);
+
+    expect(resolveZcodeCli({ HOME: root, PATH: "", ZCODE_BIN: plain })).toBeNull();
+    expect(resolveZcodeCli({ HOME: root, PATH: "", ZCODE_BIN: script })).toBe(script);
+  });
+
   it("ignores a directory named zcode", () => {
     const root = tempDir();
     const bin = join(root, "bin");
