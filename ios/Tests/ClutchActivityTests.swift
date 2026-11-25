@@ -61,6 +61,51 @@ final class ClutchActivityTests: XCTestCase {
         XCTAssertFalse(text.contains("rm -rf"))
     }
 
+    // MARK: - The state the host pushes
+
+    func testTheStateCarriesTheTimestampAsSecondsSince2001() {
+        // A pushed content-state is decoded by the system with its default
+        // strategies, where a Date is seconds since 2001-01-01, so the app
+        // writes exactly that:  no custom coding, the same shape the
+        // system expects when it decodes the host's push.
+        let state = ClutchActivityAttributes.ContentState(
+            waitingCount: 1,
+            runningCount: 0,
+            sessions: [ClutchActivitySession(id: "s1", title: "Needs Me", status: .waiting)],
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let data = try? JSONEncoder().encode(state)
+        let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+
+        // 1_700_000_000 - 978_307_200:  the same moment on Apple's scale.
+        XCTAssertTrue(text.contains("721692800"))
+        let decoded = try? JSONDecoder().decode(ClutchActivityAttributes.ContentState.self, from: data ?? Data())
+        XCTAssertEqual(decoded?.updatedAt.timeIntervalSince1970, 1_700_000_000)
+    }
+
+    func testTheStateReadsTheShapeTheHostPushes() {
+        // The host writes the state as the system reads it:  the counts,
+        // the sessions with their status, and the timestamp on Apple's
+        // date scale (seconds since 2001), because that is the coding a
+        // pushed content-state is decoded with.
+        let json = """
+        {"waitingCount":1,"runningCount":2,"sessions":[{"id":"s1","title":"Needs Me","status":"waiting"}],"updatedAt":721692800}
+        """
+
+        let decoded = try? JSONDecoder().decode(
+            ClutchActivityAttributes.ContentState.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertEqual(decoded?.waitingCount, 1)
+        XCTAssertEqual(decoded?.runningCount, 2)
+        XCTAssertEqual(decoded?.sessions.count, 1)
+        XCTAssertEqual(decoded?.sessions.first?.id, "s1")
+        XCTAssertEqual(decoded?.sessions.first?.status, .waiting)
+        XCTAssertEqual(decoded?.updatedAt.timeIntervalSince1970, 1_700_000_000)
+    }
+
     // MARK: - The waiting and the running work
 
     func testAThreadWaitingOnTheOwnerIsNotAlsoRunning() {

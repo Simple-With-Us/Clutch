@@ -43,6 +43,15 @@ public struct ClutchActivityAttributes: ActivityAttributes {
                 updatedAt: updatedAt
             )
         }
+
+        /// The state as the host's push carries it.
+        ///
+        /// The coding is the synthesized default, and that is the contract:
+        /// ActivityKit decodes a pushed content-state with Apple's standard
+        /// strategies, where a `Date` is seconds since 2001-01-01.  The host
+        /// writes its timestamp on that scale, so the phone reads the moment
+        /// the host meant.  A custom `CodingKey` layout here would be read
+        /// by the system as the default one, which is why there is none.
     }
 
     public init() {}

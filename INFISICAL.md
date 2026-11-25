@@ -62,6 +62,7 @@ Secrets (placeholders below — Jay fills real values in the Infisical UI; nothi
 | `MAC_CERT_P12_BASE64` | secret | — | Optional Developer ID Application identity for signed `Clutch.app` CI builds. |
 | `MAC_CERT_PASSWORD` | secret | — | Password for `MAC_CERT_P12_BASE64`. |
 | `CLUTCH_TELEMETRY_AUTHORIZATION` | secret | — | Authorization header for Clutch's registered hub producer; never a user or another producer's bearer |
+| `APNS_KEY_P8_BASE64` | secret | — | Base64 APNs provider key (.p8) the sidecar signs Live Activity pushes with.  Missing = the push relay is disabled and the registrations are still accepted. |
 
 Env config:
 
@@ -87,6 +88,8 @@ Env config:
 | `CLUTCH_ZCODE_CLI` | config | `zcode` | Path to the Z Code CLI the sidecar spawns (`zcode acp`), when the default search misses it |
 | `CLUTCH_CHAT_LAUNCHER_ZCODE` | config | — | Full launcher override for Z Code (test hooks and unusual installs) |
 | `CLUTCH_AGENT_PROXY_CA_CERT_PATH` | config | — | Optional CA certificate path for Agent Proxy TLS MITM |
+| `APNS_KEY_ID` | config | — | Apple APNs key id for the Live Activity push relay;  missing = the relay is disabled |
+| `APNS_TEAM_ID` | config | — | Apple developer team id for the Live Activity push relay;  missing = the relay is disabled |
 
 Knobs:
 
