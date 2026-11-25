@@ -74,12 +74,42 @@ public struct SessionsClient {
         }
     }
 
-    public func list(engine: String = "mcode", limit: Int = 100, includingArchived: Bool = false, folder: String? = nil, includeDescendants: Bool = true) async throws -> [AcpSessionInfo] {
+    /// The threads on one page, for a caller that only wants the rows.
+    ///
+    /// A page is the sidecar's answer, and the sidecar also says whether
+    /// older threads exist beyond it.  A caller that throws that answer away
+    /// cannot tell a complete list from a cut one, so a surface that shows
+    /// the list uses `listPage` instead.
+    public func list(engine: String = "mcode", limit: Int = SessionListLimit.initial, includingArchived: Bool = false, folder: String? = nil, includeDescendants: Bool = true) async throws -> [AcpSessionInfo] {
+        try await listPage(
+            engine: engine,
+            limit: limit,
+            includingArchived: includingArchived,
+            folder: folder,
+            includeDescendants: includeDescendants
+        ).sessions
+    }
+
+    /// One page of threads, with the sidecar's own answer on whether older
+    /// threads exist beyond it.
+    ///
+    /// The flag says that more exist and never how many, so a caller that
+    /// shows it must not turn it into a total.
+    public func listPage(
+        engine: String = "mcode",
+        limit: Int = SessionListLimit.initial,
+        includingArchived: Bool = false,
+        folder: String? = nil,
+        includeDescendants: Bool = true
+    ) async throws -> SessionListPage {
         var comps = try base()
         comps.path = "/clutch/v1/sessions"
+        // The sidecar serves at most `maximum` rows a page, so asking for
+        // more asks for the same page again.
+        let requested = min(limit, SessionListLimit.maximum)
         var items = [
             URLQueryItem(name: "engine", value: engine),
-            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "limit", value: String(requested)),
         ]
         if includingArchived { items.append(URLQueryItem(name: "archived", value: "include")) }
         if let folder, !folder.isEmpty {
@@ -92,8 +122,81 @@ public struct SessionsClient {
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
             throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
         }
-        struct Payload: Decodable { var sessions: [AcpSessionInfo] }
-        return (try? JSONDecoder().decode(Payload.self, from: data))?.sessions ?? []
+        return Self.decodeSessionList(data, limit: requested)
+    }
+
+    /// The body of a sessions page.
+    ///
+    /// A body without the flag is a page with nothing more in it rather than
+    /// a broken answer:  the flag is newer than some hosts' answers, and a
+    /// missing one must not throw the whole page away.
+    static func decodeSessionList(_ data: Data, limit: Int) -> SessionListPage {
+        struct Payload: Decodable {
+            var sessions: [AcpSessionInfo]
+            var hasMore: Bool
+            enum CodingKeys: String, CodingKey { case sessions, hasMore }
+            init(from decoder: Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                sessions = try container.decode([AcpSessionInfo].self, forKey: .sessions)
+                hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+            }
+        }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            return SessionListPage(sessions: [], hasMore: false, limit: limit)
+        }
+        return SessionListPage(sessions: payload.sessions, hasMore: payload.hasMore, limit: limit)
+    }
+
+    /// One page of threads:  the rows, whether older threads exist beyond
+    /// them, and the limit the page was asked for.
+    public struct SessionListPage: Equatable, Sendable {
+        public var sessions: [AcpSessionInfo]
+        /// True when the sidecar says older threads exist beyond this page.
+        ///
+        /// It never says how many, so nothing built on it may claim a total.
+        public var hasMore: Bool
+        /// The limit this page was asked for.
+        public var limit: Int
+
+        public init(sessions: [AcpSessionInfo], hasMore: Bool, limit: Int) {
+            self.sessions = sessions
+            self.hasMore = hasMore
+            self.limit = limit
+        }
+
+        /// The page merged into what is already on screen.
+        ///
+        /// The sidecar answers with the newest threads in one list, so a wider
+        /// page is a superset of a narrower one.  The rows already on screen
+        /// keep their place and are not repeated, and the older rows the
+        /// wider page brought in are appended.
+        public func merging(into existing: [AcpSessionInfo]) -> [AcpSessionInfo] {
+            var seen = Set(existing.map(\.sessionId))
+            var merged = existing
+            for session in sessions where seen.insert(session.sessionId).inserted {
+                merged.append(session)
+            }
+            return merged
+        }
+    }
+
+    /// The page sizes a thread list steps through.
+    ///
+    /// The sidecar serves the newest threads in one page and caps a page at
+    /// `maximum` rows, so the steps stop there:  asking for more would ask
+    /// for the same page again.
+    public enum SessionListLimit {
+        /// The first page:  the newest threads.
+        public static let initial = 100
+        /// The widest page the sidecar serves.
+        public static let maximum = 1000
+        /// The pages a list steps through.
+        public static let steps = [100, 300, 1000]
+
+        /// The next page size after `current`, or nil when there is none.
+        public static func next(after current: Int) -> Int? {
+            steps.first { $0 > current }
+        }
     }
 
     /// Load one Muse session's metadata and usage without acquiring the ACP session.

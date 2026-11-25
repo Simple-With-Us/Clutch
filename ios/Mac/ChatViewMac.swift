@@ -2174,7 +2174,7 @@ public struct ChatView: View {
         }
         do {
             let client = SessionsClient(host: host)
-            let listed = try await client.list(
+            let page = try await client.listPage(
                 engine: requestedEngine.sidecarId,
                 limit: requestedLimit,
                 includingArchived: requestedArchived,
@@ -2185,9 +2185,13 @@ public struct ChatView: View {
                   showArchived == requestedArchived,
                   sidebarFolderScope == requestedFolder,
                   sidebarLimit == requestedLimit else { return }
-            sidebarSessions = listed
-            sidebarHasMore = requestedLimit < 1000 && listed.count >= requestedLimit
-            sidebarFolders.formUnion(listed.compactMap { session in
+            sidebarSessions = page.sessions
+            // The sidecar says whether older threads exist beyond this page.
+            // A local guess at it offers a Load More with nothing to load, or
+            // hides one that does, so the flag the sidecar sent is the one
+            // that decides.
+            sidebarHasMore = page.hasMore && MacThreadFolderScope.nextLimit(after: requestedLimit) != nil
+            sidebarFolders.formUnion(page.sessions.compactMap { session in
                 guard let cwd = session.cwd, !cwd.isEmpty else { return nil }
                 return cwd
             })
@@ -2977,6 +2981,18 @@ struct MacSessionsSheet: View {
     @State private var sessions: [AcpSessionInfo]?
     @State private var error: String?
     @State private var loadingId: String?
+    /// The newest threads asked for so far.
+    ///
+    /// The sidecar serves the newest threads in one page, so a wider page is
+    /// how the older ones are reached.
+    @State private var limit = SessionsClient.SessionListLimit.initial
+    /// True when the sidecar says older threads exist beyond the page on
+    /// screen.
+    ///
+    /// The sidecar never says how many, so nothing here may claim a total.
+    @State private var hasMore = false
+    /// True while a wider page is on the way.
+    @State private var isLoadingMore = false
 
     var body: some View {
         NavigationStack {
@@ -3015,35 +3031,40 @@ struct MacSessionsSheet: View {
                                 .padding()
                                 .frame(maxHeight: .infinity)
                         } else {
-                            List(sessions) { session in
-                                Button {
-                                    Task { await load(session) }
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(session.displayTitle)
-                                                .font(.body.weight(.semibold))
-                                                .lineLimit(1)
-                                            if let cwd = session.cwd {
-                                                Text(cwd)
-                                                    .font(.caption.monospaced())
-                                                    .foregroundStyle(.secondary)
+                            List {
+                                ForEach(sessions) { session in
+                                    Button {
+                                        Task { await load(session) }
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(session.displayTitle)
+                                                    .font(.body.weight(.semibold))
                                                     .lineLimit(1)
-                                                    .truncationMode(.middle)
+                                                if let cwd = session.cwd {
+                                                    Text(cwd)
+                                                        .font(.caption.monospaced())
+                                                        .foregroundStyle(.secondary)
+                                                        .lineLimit(1)
+                                                        .truncationMode(.middle)
+                                                }
                                             }
+                                            if loadingId == session.sessionId {
+                                                // Resuming takes several seconds;
+                                                // without this the row just goes dead.
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            }
+                                            Spacer(minLength: 0)
                                         }
-                                        if loadingId == session.sessionId {
-                                            // Resuming takes several seconds;
-                                            // without this the row just goes dead.
-                                            ProgressView()
-                                                .controlSize(.small)
-                                        }
-                                        Spacer(minLength: 0)
+                                        .contentShape(Rectangle())
                                     }
-                                    .contentShape(Rectangle())
+                                    .buttonStyle(.plain)
+                                    .disabled(loadingId != nil)
                                 }
-                                .buttonStyle(.plain)
-                                .disabled(loadingId != nil)
+                                if hasMore {
+                                    loadMoreRow
+                                }
                             }
                         }
                     } else if error == nil {
@@ -3073,10 +3094,59 @@ struct MacSessionsSheet: View {
     private func refresh() async {
         error = nil
         do {
-            sessions = try await SessionsClient(host: host).list(engine: engine)
+            let page = try await SessionsClient(host: host).listPage(engine: engine, limit: limit)
+            sessions = page.sessions
+            hasMore = page.hasMore
+            limit = page.limit
         } catch {
             self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
         }
+    }
+
+    /// Widen the list:  the older threads are appended to what is on screen.
+    ///
+    /// The sidecar answers with the newest threads in one list, so a wider
+    /// page holds every row already on screen and the older ones besides.
+    private func loadMore() async {
+        guard hasMore, !isLoadingMore else { return }
+        guard let next = SessionsClient.SessionListLimit.next(after: limit) else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let page = try await SessionsClient(host: host).listPage(engine: engine, limit: next)
+            sessions = page.merging(into: sessions ?? [])
+            hasMore = page.hasMore
+            limit = page.limit
+        } catch {
+            self.error = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+        }
+    }
+
+    /// The row that says the list stops short, and the button that widens it.
+    ///
+    /// The sidecar says that older threads exist and never how many, so the
+    /// row says how many are on screen and nothing more.
+    private var loadMoreRow: some View {
+        VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
+            Text((sessions?.count ?? 0) == 1
+                ? "Showing the newest 1 thread."
+                : "Showing the newest \(sessions?.count ?? 0) threads.")
+                .font(ClutchFont.caption)
+                .foregroundStyle(.secondary)
+            if SessionsClient.SessionListLimit.next(after: limit) != nil {
+                Button("Load More") {
+                    Task { await loadMore() }
+                }
+                .font(ClutchFont.captionStrong)
+                .disabled(isLoadingMore)
+            } else {
+                // The sidecar caps a page, so there is nowhere wider to go.
+                Text("Older threads are not listed.")
+                    .font(ClutchFont.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, ClutchSpacing.tight)
     }
 
     private func load(_ session: AcpSessionInfo) async {
