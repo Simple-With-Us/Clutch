@@ -72,6 +72,7 @@ import { CometChatRelay, cleanEnvValue, cometchatConfigFromEnv, createStreamSink
 import { miniMaxCodeRemoteHtml } from "./minimax-code-remote.ts";
 import { attachSessionModelMetadata, readSessionUsage, withRate, type SessionModelMetadata, type SessionUsage } from "./session-usage.ts";
 import { readZcodeSessionUsage } from "./zcode-session-usage.ts";
+import { ZCODE_ACP_INSTALL, ZCODE_ACP_SETUP, defaultZcodeAcpServer, resolveZcodeCli, zcodeSignedIn, zcodeSpawnEnv } from "./zcode-acp.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
 import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
@@ -132,6 +133,8 @@ function defaultCwd(): string {
 interface Launcher {
   command: string;
   args: string[];
+  /** Set when an operator's CLUTCH_CHAT_LAUNCHER_<ENGINE> replaced the shipped launcher. */
+  override?: boolean;
 }
 
 /**
@@ -179,10 +182,6 @@ const defaultMcode = [
 const mcodeLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MCODE?.trim();
 const museLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_MUSE?.trim();
 const zcodeLauncherOverride = process.env.CLUTCH_CHAT_LAUNCHER_ZCODE?.trim();
-const defaultZcode = [
-  join(homedir(), ".local", "bin", "zcode"),
-  join(homedir(), ".zcode", "bin", "zcode"),
-].find(existsSync) ?? "zcode";
 
 const LAUNCHERS: Record<Engine, Launcher> = {
   // CLUTCH_CHAT_LAUNCHER_<ENGINE> overrides exist for the full-loop test,
@@ -200,13 +199,14 @@ const LAUNCHERS: Record<Engine, Launcher> = {
   muse: museLauncherOverride
     ? { command: museLauncherOverride, args: [] }
     : { command: join(ROOT, "scripts", "muse-code-acp.sh"), args: [] },
-  // Z Code is the third code engine: like mcode, its launcher is the CLI
-  // itself driven over ACP v1 stdio — no backend selection to resolve, so
-  // no script of its own.  CLUTCH_ZCODE_CLI names a CLI the default search
-  // (`~/.local/bin`, `~/.zcode/bin`, then PATH) missed.
+  // Z Code is the third code engine, but unlike mcode its CLI has no ACP
+  // command:  the launcher is the `zcode-acp-server` bridge, which drives
+  // `zcode app-server --stdio` and speaks ACP v1 on stdio (C-129; see
+  // ./zcode-acp.ts).  CLUTCH_ZCODE_ACP_CLI names a bridge the default search
+  // missed, and CLUTCH_ZCODE_CLI still names the Z Code CLI the bridge drives.
   zcode: zcodeLauncherOverride
-    ? { command: zcodeLauncherOverride, args: [] }
-    : { command: process.env.CLUTCH_ZCODE_CLI?.trim() || defaultZcode, args: ["acp"] },
+    ? { command: zcodeLauncherOverride, args: [], override: true }
+    : { command: defaultZcodeAcpServer(), args: [] },
 };
 
 /** Engines a phone or Mac can pick, in the order the picker shows them. */
@@ -334,7 +334,7 @@ export function mcodeAvailable(launcher: Launcher = LAUNCHERS.mcode): boolean {
   return launcher.command.includes("/") ? existsSync(launcher.command) : true;
 }
 
-/** Whether the direct Z Code launcher is present on this machine. */
+/** Whether the Z Code launcher (the `zcode-acp-server` bridge) is present on this machine. */
 export function zcodeAvailable(launcher: Launcher = LAUNCHERS.zcode, path = process.env.PATH ?? ""): boolean {
   if (launcher.command.includes("/")) return existsSync(launcher.command);
   // A bare name is the PATH fallback: resolve it, so health reports false
@@ -639,12 +639,17 @@ export async function engineAvailability(
   // A launcher with a path is checked against the filesystem; a bare
   // command name is checked against PATH, so a server without MiniMax
   // Code does not claim to have it.
+  // Z Code's launcher is its ACP bridge rather than the engine itself, so a
+  // missing launcher names the bridge's install line.
+  const missingLauncher = engine === "zcode"
+    ? `${label} needs its ACP bridge on this host.\u00A0 Run ${ZCODE_ACP_INSTALL}.`
+    : `${label} is not installed on this host.`;
   if (launcher.command.includes("/")) {
     if (!existsSync(launcher.command)) {
-      return { available: false, note: `${label} is not installed on this host.` };
+      return { available: false, note: missingLauncher };
     }
   } else if (!commandOnPath(launcher.command, env)) {
-    return { available: false, note: `${label} is not installed on this host.` };
+    return { available: false, note: missingLauncher };
   }
 
   if (engine === "muse") {
@@ -691,13 +696,31 @@ export async function engineAvailability(
   }
 
   if (engine === "zcode") {
-    // Same reasoning as Muse: the CLI's own login may be the credential, and
-    // the picker is where that sign-in starts, so a missing key keeps the
-    // engine listed with a note instead of dropping it.
-    if (!settingValue("ZAI_API_KEY", env, settings)) {
+    // A full launcher override (test hooks, unusual installs) is the
+    // operator's own command, which may drive neither the bridge nor the CLI,
+    // so neither the CLI nor the sign-in the bridge reads is checked for it.
+    // The mark is read off the launcher this check was handed, the same one
+    // the health route and the spawn use, and the existence check above has
+    // already run against the override's own command.  A path also has to be
+    // a file the spawn can run:  that check accepts a directory.
+    if (launcher.override) {
+      return launcher.command.includes("/") && !executableFile(launcher.command)
+        ? { available: false, note: `${label} is not installed on this host.` }
+        : { available: true };
+    }
+    // The bridge drives the Z Code CLI, so the CLI has to be here too.
+    if (!resolveZcodeCli(env)) {
+      return { available: false, note: `${label} is not installed on this host.\u00A0 Install the Z Code app or CLI.` };
+    }
+    // Same reasoning as Muse: the sign-in the bridge reads is the Z Code
+    // app's own, or a saved `zcode-acp setup` account, and the file check
+    // cannot see every form of it, so a missing one keeps the engine listed
+    // with a note instead of dropping it.  An API key in Clutch settings is
+    // not a Z Code sign-in:  the bridge never reads one.
+    if (!zcodeSignedIn(env)) {
       return {
         available: true,
-        note: `${label} needs a sign-in.\u00A0 Run zcode login as the user this sidecar runs as, or add ZAI_API_KEY in Clutch settings.`,
+        note: `${label} needs a sign-in.\u00A0 Sign in through the Z Code app, or run ${ZCODE_ACP_SETUP} as the user this sidecar runs as.`,
       };
     }
     return { available: true };
@@ -1873,7 +1896,7 @@ export class Bridge implements MuseAuthBridge {
     }
     const child = spawn(launcher.command, launcher.args, {
       stdio: ["pipe", "pipe", this.engine === "muse" ? "ignore" : "inherit"],
-      env: this.env,
+      env: this.engine === "zcode" ? zcodeSpawnEnv(this.env) : this.env,
     });
     this.child = child;
     child.stdout?.setEncoding("utf8");
@@ -3174,7 +3197,7 @@ async function main(): Promise<void> {
           ok: true,
           engines: ENGINE_ORDER,
           mcode: { available: mcodeAvailable() },
-          zcode: { available: zcodeAvailable() },
+          zcode: { available: zcodeAvailable() && (LAUNCHERS.zcode.override === true || resolveZcodeCli() !== null) },
           tailnetHost,
           activeTurns: [...sessions.values()].filter((session) => session.busy).length,
           diagnostics: await diagnostics.status(),

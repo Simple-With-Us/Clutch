@@ -61,7 +61,7 @@ function fixture(options: { python?: boolean } = {}): Fixture {
         minimax: { command: process.execPath, args: [] },
         mcode: { command: "mcode", args: ["acp"] },
         muse: { command: process.execPath, args: [] },
-        zcode: { command: process.execPath, args: ["acp"] },
+        zcode: { command: process.execPath, args: [] },
       },
       credentialFile,
       // The interpreter candidates are empty on purpose: the fixture's own PATH
@@ -186,21 +186,81 @@ describe("engine availability", () => {
     await expect(engineAvailability("muse", withKey)).resolves.toMatchObject({ available: true });
   });
 
-  it("keeps Z Code in the picker without a key and says where one goes", async () => {
+  it("names the ACP bridge's install line when the bridge is missing", async () => {
     const host = fixture();
+    // Z Code's CLI has no ACP command (C-129); the launcher is the
+    // zcode-acp-server bridge, so a missing one says how to install it.
+    const launchers = { ...host.context.launchers!, zcode: { command: "zcode-acp-server", args: [] } };
 
-    // Same reasoning as Muse: the CLI's own login may be the credential, and
-    // the picker is where that sign-in starts, so the engine stays listed.
-    const zcode = await engineAvailability("zcode", host.context);
-    expect(zcode.available).toBe(true);
-    expect(zcode.note).toContain("zcode login");
-    expect(zcode.note).toContain("ZAI_API_KEY");
+    const zcode = await engineAvailability("zcode", { ...host.context, launchers });
+    expect(zcode.available).toBe(false);
+    expect(zcode.note).toContain("npm install -g zcode-acp-server");
+  });
 
+  it("keeps Z Code out of the picker when the CLI the bridge drives is missing", async () => {
+    const host = fixture();
+    const env = { ...host.context.env, ZCODE_BIN: join(host.home, "no-such-zcode") };
+
+    const zcode = await engineAvailability("zcode", { ...host.context, env });
+    expect(zcode.available).toBe(false);
+    expect(zcode.note).toContain("not installed");
+  });
+
+  it("trusts a full Z Code launcher override without the CLI or a sign-in", async () => {
+    const host = fixture();
+    // CLUTCH_CHAT_LAUNCHER_ZCODE replaces the whole launcher, so the CLI the
+    // bridge would drive and the bridge's sign-in are not this host's concern.
+    // The sidecar marks that launcher, and the check reads the mark.
+    const env = { ...host.context.env, ZCODE_BIN: join(host.home, "no-such-zcode") };
+    const launchers = { ...host.context.launchers!, zcode: { command: process.execPath, args: [], override: true } };
+
+    await expect(engineAvailability("zcode", { ...host.context, env, launchers })).resolves.toEqual({ available: true });
+
+    // The override's own command still has to exist.
+    const missing = { ...launchers, zcode: { command: join(host.home, "no-such-launcher"), args: [], override: true } };
+    await expect(engineAvailability("zcode", { ...host.context, env, launchers: missing })).resolves.toMatchObject({ available: false });
+
+    // A directory is not a launcher the spawn can run.
+    const folder = { ...launchers, zcode: { command: host.home, args: [], override: true } };
+    await expect(engineAvailability("zcode", { ...host.context, env, launchers: folder })).resolves.toMatchObject({ available: false });
+  });
+
+  it("keeps Z Code in the picker without a sign-in and says how to sign in", async () => {
+    const host = fixture();
+    const cli = executable(join(host.home, "zcode.cjs"));
+    const env = { ...host.context.env, ZCODE_BIN: cli };
+
+    // Same reasoning as Muse: the bridge reads a sign-in the file check may
+    // not see, so the engine stays listed with the note.  A key in Clutch
+    // settings is no Z Code sign-in, because the bridge never reads one.
     const withKey = {
       ...host.context,
+      env,
       settings: { get: (key: string) => (key === "ZAI_API_KEY" ? "present" : "") },
     };
-    await expect(engineAvailability("zcode", withKey)).resolves.toMatchObject({ available: true });
+    const zcode = await engineAvailability("zcode", withKey);
+    expect(zcode.available).toBe(true);
+    expect(zcode.note).toContain("zcode-acp setup --provider zai");
+    expect(zcode.note).not.toContain("ZAI_API_KEY");
+
+    // A saved `zcode-acp setup` account is a sign-in.
+    const accounts = join(host.home, ".zcode", "v2", "acp-accounts.json");
+    mkdirSync(join(host.home, ".zcode", "v2"), { recursive: true });
+    writeFileSync(accounts, JSON.stringify({ zai: { provider: "zai" } }));
+    await expect(engineAvailability("zcode", { ...host.context, env })).resolves.toEqual({ available: true });
+  });
+
+  it("counts the Z Code app's own Coding Plan sign-in", async () => {
+    const host = fixture();
+    const cli = executable(join(host.home, "zcode.cjs"));
+    const env = { ...host.context.env, ZCODE_BIN: cli };
+    mkdirSync(join(host.home, ".zcode", "v2"), { recursive: true });
+    writeFileSync(
+      join(host.home, ".zcode", "v2", "config.json"),
+      JSON.stringify({ provider: { "builtin:zai-coding-plan": { enabled: true, options: { apiKey: "present" } } } }),
+    );
+
+    await expect(engineAvailability("zcode", { ...host.context, env })).resolves.toEqual({ available: true });
   });
 
   it("never starts an engine to answer the question", async () => {

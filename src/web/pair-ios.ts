@@ -228,4 +228,9 @@ function pairShell(args: Set<string>): void {
   log(`the shell opens over Tailscale; on this Mac use http://127.0.0.1:${chatPort}/minimax-code/ with the same token.`);
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  log(error instanceof Error ? error.message : String(error));
+  process.exit(2);
+}
