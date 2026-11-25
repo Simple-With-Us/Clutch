@@ -683,6 +683,10 @@ export async function engineAvailability(
   }
 
   if (engine === "zcode") {
+    // A full launcher override (test hooks, unusual installs) is the
+    // operator's own command, which may drive neither the bridge nor the CLI,
+    // so neither the CLI nor the sign-in the bridge reads is checked for it.
+    if (env.CLUTCH_CHAT_LAUNCHER_ZCODE?.trim()) return { available: true };
     // The bridge drives the Z Code CLI, so the CLI has to be here too.
     if (!resolveZcodeCli(env)) {
       return { available: false, note: `${label} is not installed on this host.\u00A0 Install the Z Code app or CLI.` };
@@ -2986,7 +2990,7 @@ async function main(): Promise<void> {
           ok: true,
           engines: ENGINE_ORDER,
           mcode: { available: mcodeAvailable() },
-          zcode: { available: zcodeAvailable() && resolveZcodeCli() !== null },
+          zcode: { available: zcodeAvailable() && (Boolean(zcodeLauncherOverride) || resolveZcodeCli() !== null) },
           tailnetHost,
           activeTurns: [...sessions.values()].filter((session) => session.busy).length,
           diagnostics: await diagnostics.status(),
