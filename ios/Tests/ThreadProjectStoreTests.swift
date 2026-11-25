@@ -52,4 +52,42 @@ final class ThreadProjectStoreTests: XCTestCase {
         XCTAssertNil(store.create(name: "New"))
         XCTAssertEqual(defaults.data(forKey: ThreadProjectStore.storageKey), data)
     }
+
+    @MainActor
+    func testMembershipWriteFailureDoesNotChangeStoredOrVisibleReferences() throws {
+        struct EncodingUnavailable: Error {}
+        let suite = "codes.clutch.tests.projects.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = ThreadProjectStore(defaults: defaults)
+        let projectID = try XCTUnwrap(first.create(name: "Fleet"))
+        let hostID = UUID()
+        let existing = ProjectThread(hostID: hostID, hostName: "Mac", engineID: "muse",
+                                     session: AcpSessionInfo(sessionId: "kept"))
+        let extra = ProjectThread(hostID: hostID, hostName: "Mac", engineID: "muse",
+                                  session: AcpSessionInfo(sessionId: "new"))
+        XCTAssertTrue(first.add(existing, to: projectID))
+        let failed = ThreadProjectStore(defaults: defaults) { _ in throw EncodingUnavailable() }
+        XCTAssertFalse(failed.add(extra, to: projectID))
+        XCTAssertFalse(failed.remove(existing.id, from: projectID))
+        XCTAssertEqual(failed.projects.first?.threads, [existing])
+        XCTAssertEqual(ThreadProjectStore(defaults: defaults).projects.first?.threads, [existing])
+    }
+
+    func testInvalidSessionPagesDoNotLookLikeCompleteEmptyLists() throws {
+        XCTAssertThrowsError(try SessionsClient.decodeSessionList(Data("{".utf8), limit: 100))
+        XCTAssertThrowsError(try SessionsClient.decodeSessionList(Data(#"{"sessions":42}"#.utf8), limit: 100))
+        let empty = try SessionsClient.decodeSessionList(Data(#"{"sessions":[]}"#.utf8), limit: 100)
+        XCTAssertTrue(empty.sessions.isEmpty)
+        XCTAssertFalse(empty.hasMore)
+    }
+
+    func testWidePagePreservesExistingRowsAndSortsNewArrivalsFirst() {
+        let previous = AcpSessionInfo(sessionId: "current", title: "Before", updatedAt: "2026-11-25T12:00:00Z")
+        let current = AcpSessionInfo(sessionId: "current", title: "After", updatedAt: "2026-11-25T12:00:00Z")
+        let newest = AcpSessionInfo(sessionId: "new", updatedAt: "2026-11-25T12:01:00Z")
+        let older = AcpSessionInfo(sessionId: "old", updatedAt: "2026-11-25T11:00:00Z")
+        let page = SessionsClient.SessionListPage(sessions: [current, newest], hasMore: true, limit: 300)
+        XCTAssertEqual(page.merging(into: [previous, older]), [newest, current, older])
+    }
 }

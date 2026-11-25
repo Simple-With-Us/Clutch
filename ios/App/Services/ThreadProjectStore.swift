@@ -46,15 +46,20 @@ struct ThreadProject: Codable, Identifiable, Equatable, Sendable {
 @MainActor
 @Observable
 final class ThreadProjectStore {
-    static let shared = ThreadProjectStore()
+    static let shared = ThreadProjectStore(defaults: HostStore.resolveDefaults())
     static let storageKey = "codes.clutch.thread-projects.v1"
 
     private let defaults: UserDefaults
+    private let encode: ([ThreadProject]) throws -> Data
     private(set) var projects: [ThreadProject] = []
     private(set) var storageError = false
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        encode: @escaping ([ThreadProject]) throws -> Data = { try JSONEncoder().encode($0) }
+    ) {
         self.defaults = defaults
+        self.encode = encode
         guard let stored = defaults.object(forKey: Self.storageKey) else { return }
         guard let data = stored as? Data,
               let decoded = try? JSONDecoder().decode([ThreadProject].self, from: data) else {
@@ -72,29 +77,28 @@ final class ThreadProjectStore {
         return save(projects + [project]) ? project.id : nil
     }
 
-    func add(_ thread: ProjectThread, to projectID: UUID) {
+    @discardableResult
+    func add(_ thread: ProjectThread, to projectID: UUID) -> Bool {
         guard let i = projects.firstIndex(where: { $0.id == projectID }),
-              !thread.id.engineID.isEmpty, !thread.id.sessionID.isEmpty,
-              !projects[i].threads.contains(where: { $0.id == thread.id }) else { return }
+              !thread.id.engineID.isEmpty, !thread.id.sessionID.isEmpty else { return false }
+        guard !projects[i].threads.contains(where: { $0.id == thread.id }) else { return true }
         var next = projects
         next[i].threads.append(thread)
-        save(next)
+        return save(next)
     }
 
-    func remove(_ threadID: ProjectThreadID, from projectID: UUID) {
-        guard let i = projects.firstIndex(where: { $0.id == projectID }) else { return }
+    @discardableResult
+    func remove(_ threadID: ProjectThreadID, from projectID: UUID) -> Bool {
+        guard let i = projects.firstIndex(where: { $0.id == projectID }) else { return false }
         var next = projects
         next[i].threads.removeAll { $0.id == threadID }
-        save(next)
+        return save(next)
     }
 
     @discardableResult
     private func save(_ next: [ThreadProject]) -> Bool {
         guard !storageError else { return false }
-        guard let data = try? JSONEncoder().encode(next) else {
-            storageError = true
-            return false
-        }
+        guard let data = try? encode(next) else { return false }
         defaults.set(data, forKey: Self.storageKey)
         projects = next
         return true

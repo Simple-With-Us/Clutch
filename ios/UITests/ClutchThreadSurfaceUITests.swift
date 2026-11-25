@@ -91,7 +91,11 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
 
         func tap(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
             let control = app.descendants(matching: .any).matching(identifier: label).firstMatch
-            XCTAssertTrue(control.waitForExistence(timeout: 20), label, file: file, line: line)
+            guard control.waitForExistence(timeout: 20) else {
+                dump("ios-project-missing-" + label)
+                XCTFail(label, file: file, line: line)
+                return
+            }
             control.tap()
         }
 
@@ -108,6 +112,9 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
             bar.buttons.firstMatch.tap()
         }
 
+        // Opening a second deep link can launch a new app process. A unique
+        // suite starts clean without wiping the first pairing on relaunch.
+        app.launchArguments = ["-ClutchDefaultsSuite", "codes.clutch.uitest.projects.\(UUID().uuidString)"]
         app.launch()
         try pair(mac, name: "FixtureMac")
         try pair(server, name: "FixtureServer")
@@ -120,6 +127,7 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         tap("Create")
 
         tap("clutch-project-add-threads")
+        XCTAssertTrue(app.navigationBars["Choose A Host"].waitForExistence(timeout: 20))
         tap("clutch-project-host-FixtureMac")
         tap("clutch-project-add-mcode-same")
         back(from: "FixtureMac")
