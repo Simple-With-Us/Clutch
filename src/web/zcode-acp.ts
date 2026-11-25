@@ -73,6 +73,9 @@ function executableFile(path: string): boolean {
   }
 }
 
+/** A JavaScript entry, which the bridge runs with its own Node rather than executing. */
+const JS_ENTRY = /\.(cjs|mjs|js)$/;
+
 function pathDirs(env: Env): string[] {
   return (env.PATH ?? "").split(delimiter).filter(Boolean);
 }
@@ -135,27 +138,37 @@ export function zcodeCliCandidates(env: Env = process.env): string[] {
  *
  * `ZCODE_BIN` (the bridge's own variable) and then `CLUTCH_ZCODE_CLI` name
  * one explicitly;  an explicit path that is not there is not replaced by a
- * guess.  Symlinks are followed, because the bridge only finds the provider
- * table next to the real `zcode.cjs`.
+ * guess.  An explicit bare name such as `zcode` is a command the bridge spawns
+ * through PATH, so it is looked up there.  Symlinks are followed, because the
+ * bridge only finds the provider table next to the real `zcode.cjs`.
+ *
+ * The bridge runs a `.cjs`, `.mjs` or `.js` entry with its own Node
+ * (dist/backend/resolve.js `resolveZcodeCommandOnce`), so only another kind
+ * of entry has to be executable.
  */
 export function resolveZcodeCli(env: Env = process.env): string | null {
   const explicit = env.ZCODE_BIN?.trim() || env.CLUTCH_ZCODE_CLI?.trim();
-  const candidates = explicit ? [explicit] : zcodeCliCandidates(env);
+  const candidates = !explicit
+    ? zcodeCliCandidates(env)
+    : /[\\/]/.test(explicit)
+      ? [explicit]
+      : pathDirs(env).map((dir) => join(dir, explicit));
   for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    let real: string;
-    try {
-      real = realpathSync(candidate);
-    } catch {
-      continue;
-    }
-    try {
-      if (statSync(real).isFile()) return real;
-    } catch {
-      continue;
-    }
+    const real = realFile(candidate);
+    if (real && (JS_ENTRY.test(real) || executableFile(real))) return real;
   }
   return null;
+}
+
+/** The real path of a regular file, following symlinks, or null. */
+function realFile(path: string): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    const real = realpathSync(path);
+    return statSync(real).isFile() ? real : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The Z Code data root the bridge reads:  `ZCODE_HOME`, else `~/.zcode`. */
