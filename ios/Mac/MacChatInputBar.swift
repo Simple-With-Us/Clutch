@@ -178,6 +178,13 @@ struct MacChatInputBar: View {
         }
     }
 
+    /// Tooltip for the Steer item. When steering is off it says why, so a
+    /// greyed-out item is never a mystery.
+    private var steerHelp: String {
+        if canSteer { return "Give the active turn a new instruction without stopping it." }
+        return "Steering is unavailable for this session: the Muse backend did not advertise steering (a native-only launch or an older host). Queue the message instead."
+    }
+
     private var footerText: String {
         if sending {
             return Copy.gap(
