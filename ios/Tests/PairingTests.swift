@@ -123,6 +123,10 @@ final class ClutchHostTests: XCTestCase {
             let host = ClutchHost(name: "Mac", origin: URL(string: mapped)!)
             XCTAssertTrue(host.isLocal, "\(mapped) should be local")
         }
+        for notMapped in ["http://[::ffff:7fzz]:3180", "http://[::ffff:fe00:1]:3180", "http://[::ffff:7f00:1:2]:3180"] {
+            let host = ClutchHost(name: "Remote", origin: URL(string: notMapped)!)
+            XCTAssertFalse(host.isLocal, "\(notMapped) should not be local")
+        }
         for remote in ["100.64.0.1", "studio.local", "jay-macbook.boa-roygbiv.ts.net", "example.com"] {
             let host = ClutchHost(name: "Remote", origin: URL(string: "https://\(remote):3180")!)
             XCTAssertFalse(host.isLocal, "\(remote) should not be local")

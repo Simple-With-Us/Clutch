@@ -3470,7 +3470,12 @@ async function main(): Promise<void> {
       }
       try {
         const preview = await readPreview(root, path);
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(preview));
+        // The absolute path is only for a client on this machine; a remote
+        // caller keeps the root-relative path and never learns the layout.
+        const remote = req.socket.remoteAddress ?? "";
+        const loopback = remote === "::1" || remote.startsWith("127.") || remote.startsWith("::ffff:127.");
+        const out = loopback ? preview : { ...preview, absolute: undefined };
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out));
       } catch (err) {
         res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
       }
