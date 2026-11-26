@@ -18,6 +18,7 @@
 
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { connect } from "node:http2";
+import { z } from "zod";
 
 /** Which APNs the token belongs to. */
 export type ApnsEnvironment = "Sandbox" | "Production";
@@ -162,17 +163,27 @@ const APNS_REASON_ALLOWLIST = new Set([
   "Unregistered",
 ]);
 
+/** Apple's error body, validated before any field is read. */
+export const ApnsErrorSchema = z.object({
+  /** Apple's static reason string, when the body carries one. */
+  reason: z.string().optional(),
+  description: z.string().optional(),
+  timestamp: z.number().optional(),
+});
+
 /** Read Apple's reason out of an error body, when it gave one. */
 function reasonFrom(body: string): string | undefined {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(body);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const reason = (parsed as Record<string, unknown>)["reason"];
-      if (typeof reason === "string" && APNS_REASON_ALLOWLIST.has(reason)) return reason;
-    }
+    parsed = JSON.parse(body);
   } catch {
-    /* not Apple's error body */
+    /* not JSON at all */
+    return undefined;
   }
+  const parsedError = ApnsErrorSchema.safeParse(parsed);
+  if (!parsedError.success) return undefined;
+  const reason = parsedError.data.reason;
+  if (typeof reason === "string" && APNS_REASON_ALLOWLIST.has(reason)) return reason;
   return undefined;
 }
 
@@ -192,6 +203,7 @@ export const http2ApnsTransport: ApnsTransport = (request) =>
   new Promise<ApnsTransportResponse>((resolve) => {
     let settled = false;
     let client: ReturnType<typeof connect> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (response: ApnsTransportResponse): void => {
       if (settled) return;
       settled = true;
@@ -212,7 +224,7 @@ export const http2ApnsTransport: ApnsTransport = (request) =>
       finish({ status: 0, body: "" });
       return;
     }
-    const timer = setTimeout(() => finish({ status: 0, body: "" }), APNS_REQUEST_TIMEOUT_MS);
+    timer = setTimeout(() => finish({ status: 0, body: "" }), APNS_REQUEST_TIMEOUT_MS);
     client.on("error", () => finish({ status: 0, body: "" }));
     const stream = client.request({
       ":method": "POST",

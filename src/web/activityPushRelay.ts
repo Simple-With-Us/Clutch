@@ -91,6 +91,11 @@ export const ActivityTokenRegistrationSchema = z
     environment: z.enum(["Sandbox", "Production"]),
     sessionId: z.string().min(1).max(200),
     attributes: z.record(z.string(), z.unknown()).optional(),
+    // Proof of possession:  the push token the phone already holds, so a
+    // bearer holder cannot overwrite another phone's registration without
+    // knowing its token.  Optional on first registration; required to
+    // replace one that is already stored.
+    previousPushToken: z.string().optional(),
   })
   .strict();
 
@@ -100,6 +105,9 @@ export const ActivityTokenRemovalSchema = z
     deviceUid: z.string().min(1).max(200),
     activityId: z.string().min(1).max(200),
     sessionId: z.string().min(1).max(200).optional(),
+    // Proof of possession:  the push token being removed, so a bearer holder
+    // cannot silence another phone's activity without knowing its token.
+    pushToken: z.string().optional(),
   })
   .strict();
 
@@ -475,6 +483,10 @@ export class ActivityPushRelay {
   /** The state each token's retry count belongs to:  a new state re-arms it. */
   private readonly attemptState = new Map<string, string>();
 
+  /** How many times cancelPending has superseded a token, per token.  A send
+   *  whose generation no longer matches is stale and must not record lastSent. */
+  private readonly generations = new Map<string, number>();
+
   /** The pushes that are in flight. */
   private readonly inFlight = new Set<Promise<void>>();
 
@@ -495,14 +507,34 @@ export class ActivityPushRelay {
     registration: Omit<ActivityTokenRegistration, "updatedAt" | "attributes"> & {
       updatedAt?: number;
       attributes?: Record<string, unknown>;
+      /** Proof of possession:  the token the phone already holds, required to
+       *  replace a registration that is already stored. */
+      previousPushToken?: string;
     },
   ): ActivityTokenRegistration {
+    const key = registrationKey(registration.deviceUid, registration.activityId);
+    const existing = this.options.store.list().find((row) => registrationKey(row.deviceUid, row.activityId) === key);
+    if (existing) {
+      // Replacing a stored registration requires proof the caller holds the
+      // token it replaces:  a bearer holder cannot steer another phone's
+      // pushes without knowing its push token.
+      if (!registration.previousPushToken || registration.previousPushToken !== existing.pushToken) {
+        throw new Error("registration is already held by another device");
+      }
+    }
     return this.options.store.put(registration);
   }
 
   /** Take one registration away. */
-  unregister(deviceUid: string, activityId: string): boolean {
+  unregister(deviceUid: string, activityId: string, pushToken?: string): boolean {
     const key = registrationKey(deviceUid, activityId);
+    const existing = this.options.store.list().find((row) => registrationKey(row.deviceUid, row.activityId) === key);
+    if (existing) {
+      // Removing a stored registration requires proof the caller holds its
+      // token:  a bearer holder cannot silence another phone's pushes
+      // without knowing its push token.
+      if (!pushToken || pushToken !== existing.pushToken) return false;
+    }
     this.cancelPending(key);
     this.lastSent.delete(key);
     this.lastSentAt.delete(key);
@@ -519,6 +551,9 @@ export class ActivityPushRelay {
     this.pendingPayloads.delete(key);
     this.attempts.delete(key);
     this.attemptState.delete(key);
+    // A cancel supersedes any in-flight send:  its generation is bumped so a
+    // late success cannot pin a superseded state on the token.
+    this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
   }
 
   /**
@@ -604,6 +639,15 @@ export class ActivityPushRelay {
     }
     const minInterval = this.options.minIntervalMs ?? ACTIVITY_PUSH_MIN_INTERVAL_MS;
     const last = this.lastSentAt.get(key);
+    // A newer state must not wait out a stale retry backoff: clear the old
+    // timer and re-time on the min-interval so fresh state is never delayed.
+    if (this.pendingPayloads.get(key)?.comparable !== comparable && this.pending.has(key)) {
+      const existing = this.pending.get(key);
+      if (existing) {
+        clearTimeout(existing);
+        this.pending.delete(key);
+      }
+    }
     const wait = last === undefined ? 0 : Math.max(0, minInterval - (now - last));
     this.pendingPayloads.set(key, { registration, payload, comparable });
     if (wait === 0) {
@@ -638,6 +682,9 @@ export class ActivityPushRelay {
   private async runSend(key: string): Promise<void> {
     const waiting = this.pendingPayloads.get(key);
     if (!waiting) return;
+    // A cancel while this send was in flight supersedes it:  capture the
+    // generation now so a late success cannot pin a superseded state.
+    const generation = this.generations.get(key) ?? 0;
     this.pendingPayloads.delete(key);
     this.attemptState.set(key, waiting.comparable);
     this.lastSentAt.set(key, this.options.now?.() ?? Date.now());
@@ -654,6 +701,9 @@ export class ActivityPushRelay {
         priority: waiting.payload.aps["content-state"].waitingCount > 0 ? 10 : 5,
       });
       if (result.status === 200) {
+        // A cancel superseded this send while it was in flight:  a stale
+        // state must not land on the island.
+        if ((this.generations.get(key) ?? 0) !== generation) return;
         this.lastSent.set(key, waiting.comparable);
         this.attempts.delete(key);
         this.attemptState.delete(key);
@@ -662,6 +712,7 @@ export class ActivityPushRelay {
       // The state was not delivered, so it is not remembered.
       this.log(`activity push failed status=${result.status} reason=${result.reason ?? "unknown"}`);
       if (isTransientPushStatus(result.status)) this.retryLater(key, waiting);
+      else this.attempts.set(key, this.options.retryLimit ?? ACTIVITY_PUSH_TRANSIENT_RETRIES);
     } catch {
       // A throw is the transport never answering:  the same push may go
       // through later, so it joins the transient path.
@@ -778,13 +829,22 @@ export async function handleActivityTokensRequest(
       return true;
     }
     try {
-      relay.register({
+      const registration: {
+        deviceUid: string;
+        activityId: string;
+        pushToken: string;
+        environment: typeof parsed.data.environment;
+        sessionId: string;
+        previousPushToken?: string;
+      } = {
         deviceUid: parsed.data.deviceUid,
         activityId: parsed.data.activityId,
         pushToken: parsed.data.pushToken,
         environment: parsed.data.environment,
         sessionId: parsed.data.sessionId,
-      });
+      };
+      if (parsed.data.previousPushToken) registration.previousPushToken = parsed.data.previousPushToken;
+      relay.register(registration);
     } catch {
       // The store file refused the write:  answer a static 500 and say no
       // more — the error's text is about the filesystem, not for the phone.
@@ -801,7 +861,7 @@ export async function handleActivityTokensRequest(
   }
   let removed: boolean;
   try {
-    removed = relay.unregister(parsed.data.deviceUid, parsed.data.activityId);
+    removed = relay.unregister(parsed.data.deviceUid, parsed.data.activityId, parsed.data.pushToken);
   } catch {
     respond(res, 500, { error: "the registration could not be removed" });
     return true;

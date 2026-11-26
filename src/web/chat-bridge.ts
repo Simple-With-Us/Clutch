@@ -2546,10 +2546,26 @@ async function main(): Promise<void> {
    * arrived, one was answered, a turn started, a turn ended.
    */
   function notifyActivityPush(): void {
+    // Coalesce bursts before snapshotting:  the relay keeps one push per
+    // interval, so concurrent notifies would repeat session scans whose
+    // results are then dropped.  One trailing retry keeps the final state.
+    const state = notifyActivityPush as unknown as { pending?: boolean; queued?: boolean };
+    if (state.pending) {
+      state.queued = true;
+      return;
+    }
+    state.pending = true;
     // A push is a courtesy to the island, never a turn failure:  the relay
     // swallows its own errors, and this catch is the backstop that keeps a
     // surprise from surfacing as an unhandled rejection in the sidecar.
-    void activityPush.notify().catch(() => undefined);
+    const settled = activityPush.notify().catch(() => undefined).finally(() => {
+      state.pending = false;
+      if (state.queued) {
+        state.queued = false;
+        notifyActivityPush();
+      }
+    });
+    void settled;
   }
   const knownModelMetadata = new Map<string, SessionModelMetadata>();
   const modelMetadataKey = (engine: Engine, remoteSessionId: string): string => `${engine}\u0000${remoteSessionId}`;
