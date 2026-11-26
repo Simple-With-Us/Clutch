@@ -48,15 +48,15 @@ final class ClutchChatTabUITests: XCTestCase {
             "clutch://pair?host=127.0.0.1&port=3180&chat=\(StubSidecar.chatToken)&chatPort=\(stub.port)"))
         app.open(link)
 
-        // The home list is the whole surface now; the agent conversation is
-        // its first row rather than a tab.  The row is one combined element
+        // The home list is the whole surface now; the quick conversation is
+        // its last row rather than a tab.  The row is one combined element
         // with one name and one identifier, so the query finds that one
         // element instead of guessing between two answers to the same label.
-        let agentChat = app.descendants(matching: .any)
-            .matching(identifier: "agent-chat-row")
+        let quickChat = app.descendants(matching: .any)
+            .matching(identifier: "quick-chat-row")
             .firstMatch
-        XCTAssertTrue(agentChat.waitForExistence(timeout: 30))
-        agentChat.tap()
+        XCTAssertTrue(quickChat.waitForExistence(timeout: 30))
+        quickChat.tap()
 
         XCTAssertTrue(app.staticTexts["Chat Unavailable"].waitForExistence(timeout: 30))
         snap("ios-chat-unavailable")

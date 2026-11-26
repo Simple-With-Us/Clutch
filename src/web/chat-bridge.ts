@@ -3496,7 +3496,25 @@ async function main(): Promise<void> {
       }
       try {
         const preview = await readPreview(root, path);
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(preview));
+        // The absolute path is only for a client on this machine; a remote
+        // caller keeps the root-relative path and never learns the layout.
+        const remote = req.socket.remoteAddress ?? "";
+        // Mirrors ClutchHost.isLocal: loopback in dotted, mapped-dotted and
+        // mapped-hex forms counts as this machine, nothing looser does.
+        let loopback = remote === "::1" || remote.startsWith("127.");
+        if (!loopback && remote.startsWith("::ffff:")) {
+          const mapped = remote.slice("::ffff:".length);
+          if (mapped.startsWith("127.")) {
+            loopback = true;
+          } else {
+            const hextets = mapped.split(":");
+            const hexOnly = hextets.every((part) => /^[0-9a-f]+$/i.test(part));
+            const high = hexOnly ? (hextets.length === 2 ? Number.parseInt(hextets[0]!, 16) : Number.parseInt(mapped, 16)) : Number.NaN;
+            loopback = Number.isInteger(high) && (mapped.includes(":") ? high >> 8 === 0x7f : high >> 24 === 0x7f);
+          }
+        }
+        const out = loopback ? preview : { ...preview, absolute: undefined };
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out));
       } catch (err) {
         res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: (err as Error).message.slice(0, 200) }));
       }

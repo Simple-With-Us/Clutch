@@ -136,6 +136,41 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     /// contract behind it.
     public var isMiniMaxCodeOnly: Bool { kind == .codeServer }
 
+    /// True when the sidecar runs on this machine, so a sidecar path names
+    /// a file this app can open.
+    ///
+    /// Loopback only: a Tailscale or LAN address is another machine even
+    /// when it is reachable without the internet, and treating its paths as
+    /// local opens a wrong file or none at all.
+    public var isLocal: Bool {
+        var host = (origin.host ?? "").lowercased()
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host = String(host.dropFirst().dropLast())
+        }
+        if host == "localhost" || host == "::1" { return true }
+        if host.hasPrefix("::ffff:") {
+            let mapped = String(host.dropFirst("::ffff:".count))
+            if mapped.contains(".") {
+                host = mapped
+            } else if mapped.contains(":") {
+                // IPv4-mapped in hex form, e.g. ::ffff:7f00:1 — exactly
+                // two hex hextets with the high byte 0x7f, nothing looser.
+                let hextets = mapped.split(separator: ":", omittingEmptySubsequences: false)
+                guard hextets.count == 2,
+                      let high = UInt16(hextets[0], radix: 16),
+                      UInt16(hextets[1], radix: 16) != nil else { return false }
+                return high >> 8 == 0x7f
+            } else {
+                // Or the whole 32-bit address as one hex word.
+                guard let word = UInt32(mapped, radix: 16) else { return false }
+                return word >> 24 == 0x7f
+            }
+        }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts.allSatisfy({ UInt8($0) != nil }) else { return false }
+        return parts[0] == "127"
+    }
+
     /// The identity of a pairing, as the surfaces key their loads by.
     ///
     /// Re-pairing the same host replaces the tokens, and a surface that kept
