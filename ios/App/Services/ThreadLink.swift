@@ -89,6 +89,23 @@ public struct ThreadLink: Equatable, Sendable {
         }
         return activityEngines.count == 1 ? activityEngines[0] : nil
     }
+
+    /// True when the link names an engine this host does not offer.
+    ///
+    /// This is not the same answer as an engine that cannot be resolved.  A
+    /// link written before the engine rode in it names none, and that one
+    /// opens on the surface's own engine.  A link that names an engine the
+    /// host never listed is refused outright:  opening its id on another
+    /// engine would open a different thread than the one it named, so the
+    /// refusal has to drop the link rather than fall back.
+    public func isRefused(known: Set<String>) -> Bool {
+        guard let engine, !engine.isEmpty else { return false }
+        // An empty list is not a refusal:  the catalog has not landed yet, and
+        // refusing a name before the host has said what it offers would break
+        // every link during the first moment after launch.
+        guard !known.isEmpty else { return false }
+        return !known.contains(engine)
+    }
 }
 
 /// The thread the app has been asked to open.

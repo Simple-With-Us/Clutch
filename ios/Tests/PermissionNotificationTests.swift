@@ -219,6 +219,29 @@ final class PermissionNotificationTests: XCTestCase {
         )
     }
 
+    func testALinkThatNamesAnUnlistedEngineIsRefusedRatherThanOpened() throws {
+        // A refusal is its own answer and not the same as an engine that
+        // cannot be resolved:  the surface drops this link instead of opening
+        // its id on the engine it happens to be showing.
+        let url = try XCTUnwrap(URL(string: "clutch://thread/session-7?engine=crafted"))
+        let crafted = try XCTUnwrap(ThreadLink.parse(url))
+        XCTAssertTrue(crafted.isRefused(known: ["mcode", "muse"]))
+
+        let listed = ThreadLink(sessionId: "session-7", hostId: nil, engine: "muse")
+        XCTAssertFalse(listed.isRefused(known: ["mcode", "muse"]))
+    }
+
+    func testAnOlderLinkIsNeverRefused() {
+        // An older link names no engine at all, so there is nothing to refuse
+        // and it opens on the engine the surface is showing.
+        let older = ThreadLink(sessionId: "session-7", hostId: nil, engine: nil)
+        XCTAssertFalse(older.isRefused(known: ["mcode"]))
+        XCTAssertFalse(older.isRefused(known: []))
+
+        let named = ThreadLink(sessionId: "session-7", hostId: nil, engine: "muse")
+        XCTAssertFalse(named.isRefused(known: []))
+    }
+
     func testALinkResolvesWhileTheEngineCatalogIsStillLoading() {
         // No catalog yet is not the same as no such engine:  refusing the
         // name before the host has said what it offers would break every

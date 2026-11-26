@@ -687,6 +687,12 @@ public struct SessionsView: View {
     /// not again by whatever surface happens to be on screen next.
     private func openPendingThread() {
         guard let link = threadLinkRouter.take() else { return }
+        // A link that names an engine this host does not offer is dropped
+        // here rather than opened, because opening its id on the sidebar's
+        // engine would open a different thread than the one it named.  A
+        // link that names none is not refused:  it is an older link, and it
+        // opens on the engine this surface is already showing.
+        guard !link.isRefused(known: hostEngineIds) else { return }
         // A link that names an engine opens on that engine, so an approval
         // Muse raised opens Muse while the sidebar is still on MiniMax Code.
         // An older link names none, and it resolves to the engine this device
