@@ -3717,18 +3717,39 @@ async function main(): Promise<void> {
           return;
         }
         // POST always carries a body.  A DELETE may name its target in
-        // the query or in a body; an absent body there is not invalid
-        // JSON, but a present one that does not parse is.
+        // the query or in a body; whether it carries one is a fact about
+        // the bytes that arrive, not the headers that announce them, so
+        // an empty chunked envelope is an absent body, never bad JSON.
         let body: unknown = {};
-        const hasBody = req.method === "POST"
-          || (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0")
-          || req.headers["transfer-encoding"] !== undefined;
-        if (hasBody) {
+        if (req.method === "POST") {
           try {
             body = await readJsonBody(req);
           } catch {
             res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
             return;
+          }
+        } else {
+          const chunks: Buffer[] = [];
+          let size = 0;
+          for await (const chunk of req) {
+            size += (chunk as Buffer).length;
+            if (size > 1_000_000) {
+              // The unread remainder would desync the next request on
+              // this keep-alive socket, so the stream dies with the 400.
+              req.destroy();
+              res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+              return;
+            }
+            chunks.push(chunk as Buffer);
+          }
+          const raw = Buffer.concat(chunks).toString("utf8").trim();
+          if (raw.length > 0) {
+            try {
+              body = JSON.parse(raw) as unknown;
+            } catch {
+              res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+              return;
+            }
           }
         }
         const parsedBody = z.object({
