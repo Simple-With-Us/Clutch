@@ -423,7 +423,10 @@ public struct SessionsView: View {
                     .buttonStyle(.plain)
                 }
             }
-            if model.hasMore && !model.sessions.isEmpty {
+            // The list renders the filtered rows, so the row that says how
+            // much of it is on screen has to count the rows the user can
+            // actually see.
+            if model.hasMore && !visibleSessions.isEmpty {
                 Section {
                     loadMoreRow
                 }
@@ -475,15 +478,27 @@ public struct SessionsView: View {
         #endif
     }
 
+    /// The caption under the list:  how many threads are on screen.
+    ///
+    /// The sidecar says that older threads exist and never how many, so the
+    /// count is the rows on screen and nothing more.  A filter narrows those
+    /// rows to the ones that match, and the wording says so.
+    private var loadMoreCaption: String {
+        let count = visibleSessions.count
+        let isFiltering = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isFiltering {
+            return count == 1 ? "Showing 1 matching thread." : "Showing \(count) matching threads."
+        }
+        return count == 1 ? "Showing the newest 1 thread." : "Showing the newest \(count) threads."
+    }
+
     /// The row that says the list stops short, and the button that widens it.
     ///
     /// The sidecar says that older threads exist and never how many, so the
     /// row says how many are on screen and nothing more.
     private var loadMoreRow: some View {
         VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
-            Text(model.sessions.count == 1
-                ? "Showing the newest 1 thread."
-                : "Showing the newest \(model.sessions.count) threads.")
+            Text(loadMoreCaption)
                 .font(ClutchFont.caption)
                 .foregroundStyle(.secondary)
             if SessionsClient.SessionListLimit.next(after: model.limit) != nil {

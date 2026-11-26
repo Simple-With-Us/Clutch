@@ -207,6 +207,9 @@ public struct ChatView: View {
     @State private var sidebarFolders: Set<String> = []
     @State private var sidebarLimit = MacThreadFolderScope.pageSize
     @State private var sidebarHasMore = false
+    /// True when the sidebar page is already as wide as the sidecar serves and
+    /// older threads still exist beyond it.
+    @State private var sidebarLoadMoreCapReached = false
     @State private var loadingMoreSidebar = false
     @State private var previewSession: SessionsClient.PreviewSession?
     @State private var previewTarget: AcpSessionInfo?
@@ -691,11 +694,13 @@ public struct ChatView: View {
                                 sidebarFolderScope = folder
                                 sidebarLimit = MacThreadFolderScope.pageSize
                                 sidebarHasMore = false
+                                sidebarLoadMoreCapReached = false
                                 Task { await loadSidebarSessions() }
                             },
                             canLoadMore: sidebarHasMore,
                             isLoadingMore: loadingMoreSidebar,
                             onLoadMore: loadMoreSidebarSessions,
+                            loadMoreCapReached: sidebarLoadMoreCapReached,
                             fixedWidth: visibleSidebarWidth,
                             onResize: { width in
                                 sidebarWidth = min(width, maximumSidebarWidth)
@@ -828,6 +833,7 @@ public struct ChatView: View {
             sidebarFolders = []
             sidebarLimit = MacThreadFolderScope.pageSize
             sidebarHasMore = false
+            sidebarLoadMoreCapReached = false
             resetTurnState()
             Task { await prepare() }
         }
@@ -1539,6 +1545,7 @@ public struct ChatView: View {
         sidebarFolders = []
         sidebarLimit = MacThreadFolderScope.pageSize
         sidebarHasMore = false
+        sidebarLoadMoreCapReached = false
         // Each surface keeps its own engine: the workspace's choice is what
         // a relaunch returns to, and the agent chat's choice never
         // overwrites it.
@@ -2190,7 +2197,12 @@ public struct ChatView: View {
             // A local guess at it offers a Load More with nothing to load, or
             // hides one that does, so the flag the sidecar sent is the one
             // that decides.
-            sidebarHasMore = page.hasMore && MacThreadFolderScope.nextLimit(after: requestedLimit) != nil
+            let nextLimit = MacThreadFolderScope.nextLimit(after: requestedLimit)
+            sidebarHasMore = page.hasMore && nextLimit != nil
+            // At the cap there is no wider page to ask for, so a Load More
+            // would be a button that does nothing.  The sidebar says the
+            // window out loud instead of reading as a complete list.
+            sidebarLoadMoreCapReached = page.hasMore && nextLimit == nil
             sidebarFolders.formUnion(page.sessions.compactMap { session in
                 guard let cwd = session.cwd, !cwd.isEmpty else { return nil }
                 return cwd
@@ -3091,10 +3103,23 @@ struct MacSessionsSheet: View {
         }
     }
 
+    /// Reload the list from the sidecar.
+    ///
+    /// A refresh that started before a Load More carries the narrower page,
+    /// so the answer is pinned to the limit it asked for:  a late answer for a
+    /// page the list has already moved past is dropped instead of shrinking
+    /// the list back to what it was.
     private func refresh() async {
+        // A wider page is on the way and the answer it waits for owns the
+        // list, so this one would only fight it.
+        guard !isLoadingMore else { return }
+        let requestedLimit = limit
         error = nil
         do {
-            let page = try await SessionsClient(host: host).listPage(engine: engine, limit: limit)
+            let page = try await SessionsClient(host: host).listPage(engine: engine, limit: requestedLimit)
+            // The list moved on while this answer was on the way, so the
+            // answer is stale and the widened rows stay on screen.
+            guard !isLoadingMore, limit == requestedLimit else { return }
             sessions = page.sessions
             hasMore = page.hasMore
             limit = page.limit
@@ -3114,7 +3139,10 @@ struct MacSessionsSheet: View {
         defer { isLoadingMore = false }
         do {
             let page = try await SessionsClient(host: host).listPage(engine: engine, limit: next)
-            sessions = page.merging(into: sessions ?? [])
+            // The merged rows are put back in newest-first order:  a thread
+            // created between the first page and this one is new to the merge
+            // and would otherwise land at the bottom of the list.
+            sessions = AcpSessionInfo.newestFirst(page.merging(into: sessions ?? []))
             hasMore = page.hasMore
             limit = page.limit
         } catch {
