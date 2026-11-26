@@ -65,13 +65,28 @@ public struct ThreadLink: Equatable, Sendable {
     /// A link that names an engine opens on that engine, so an approval Muse
     /// raised opens Muse even while the sidebar is showing MiniMax Code:  the
     /// destination carries its own engine and never borrows the sidebar's.
+    /// A named engine the host does not offer is refused rather than passed
+    /// on, because a link is untrusted input and the name reaches the session
+    /// client.
     /// A link that names none is an older link, and it resolves to the engine
     /// this device has seen activity for only when exactly one engine has
     /// it.  When none or several do there is nothing to resolve without
     /// guessing, so the answer is nothing and the caller keeps the engine its
     /// own surface is showing.
-    public static func resolveEngine(named: String?, activityEngines: [String]) -> String? {
-        if let named, !named.isEmpty { return named }
+    public static func resolveEngine(
+        named: String?,
+        activityEngines: [String],
+        known: Set<String>? = nil
+    ) -> String? {
+        if let named, !named.isEmpty {
+            // A link is a URL, so its engine is a claim and not a fact.  When
+            // the surface knows which engines its host offers, a name outside
+            // that list is not an engine this app can run and is refused, so
+            // a crafted link cannot point the session client at a route the
+            // host never advertised.
+            if let known, !known.isEmpty, !known.contains(named) { return nil }
+            return named
+        }
         return activityEngines.count == 1 ? activityEngines[0] : nil
     }
 }

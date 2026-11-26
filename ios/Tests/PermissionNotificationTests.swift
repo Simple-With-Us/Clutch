@@ -203,6 +203,36 @@ final class PermissionNotificationTests: XCTestCase {
         XCTAssertNil(ThreadLink.resolveEngine(named: nil, activityEngines: []))
     }
 
+    func testALinkThatNamesAnEngineTheSidebarDoesNotOfferIsRefused() {
+        // A link is untrusted input:  a crafted one must not be able to point
+        // the session client at an engine the host never advertised.
+        XCTAssertNil(
+            ThreadLink.resolveEngine(
+                named: "crafted",
+                activityEngines: [],
+                known: ["mcode", "muse"]
+            )
+        )
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: [], known: ["mcode", "muse"]),
+            "muse"
+        )
+    }
+
+    func testALinkResolvesWhileTheEngineCatalogIsStillLoading() {
+        // No catalog yet is not the same as no such engine:  refusing the
+        // name before the host has said what it offers would break every
+        // link during the first moment after launch.
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: [], known: []),
+            "muse"
+        )
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: [], known: nil),
+            "muse"
+        )
+    }
+
     func testThePayloadCarriesTheEngineAndReadsItBack() throws {
         XCTAssertEqual(payload().userInfo["engine"], "muse")
 

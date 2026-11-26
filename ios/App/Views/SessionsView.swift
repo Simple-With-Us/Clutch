@@ -568,7 +568,13 @@ public struct SessionsView: View {
     /// engine is working in.  A thread that names no folder falls back to
     /// the folder a new thread would work in.
     private var filesRoot: String {
-        guard case .thread(let id, _) = selection,
+        guard case .thread(let id, let selectionEngine) = selection else { return "" }
+        // The tree starts where the open thread works, and the list holds one
+        // engine's sessions:  another engine's thread with the same raw id is
+        // a different thread, so its folder is not this thread's and the tree
+        // opens at the host's own root rather than in the wrong place.
+        let threadEngine = selectionEngine ?? engine
+        guard threadEngine == engine,
               let session = model.sessions.first(where: { $0.sessionId == id }),
               let cwd = session.cwd,
               !cwd.isEmpty else { return "" }
@@ -661,6 +667,16 @@ public struct SessionsView: View {
         (catalog?.engines ?? []).filter { $0.available && $0.supportsThreads }
     }
 
+    /// Every engine this host advertises, available or not.
+    ///
+    /// A link is validated against this rather than against the engines that
+    /// can start a thread right now:  an engine whose binary is missing this
+    /// morning is still an engine of this host, and an older link to one of
+    /// its threads must not stop opening because of it.
+    private var hostEngineIds: Set<String> {
+        Set((catalog?.engines ?? []).map(\.id))
+    }
+
     private var engineLabel: String {
         catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
     }
@@ -682,7 +698,8 @@ public struct SessionsView: View {
             activityEngines: TurnActivity.shared.enginesWithActivity(
                 hostId: host.id,
                 sessionId: link.sessionId
-            )
+            ),
+            known: hostEngineIds
         )
         selection = .thread(link.sessionId, engine: opened)
     }
@@ -714,7 +731,14 @@ public struct SessionsView: View {
             // two engines can number a session the same and those are two
             // threads.
             let threadEngine = selectionEngine ?? engine
-            let session = model.sessions.first { $0.sessionId == id } ?? AcpSessionInfo(sessionId: id)
+            // The list is the sidebar engine's, so its entry is this thread's
+            // only when the thread runs on that engine:  two engines number
+            // their own sessions, and another engine's title and folder would
+            // be the wrong thread's.
+            let listed = threadEngine == engine
+                ? model.sessions.first { $0.sessionId == id }
+                : nil
+            let session = listed ?? AcpSessionInfo(sessionId: id)
             SessionThreadView(host: host, session: session, engine: threadEngine)
                 .id("\(threadEngine)|\(id)")
         case .quickChat:
