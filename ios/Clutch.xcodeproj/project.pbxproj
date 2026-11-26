@@ -27,6 +27,7 @@
 		10CF9BCC0D44DDB60988AEE9 /* ThreadLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DABEF53096AC30663E4A62 /* ThreadLink.swift */; };
 		13B0E2D13ECD6B0EF74E1520 /* TranscriptExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF732EB1367BF423728AA22B /* TranscriptExport.swift */; };
 		148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
+		CC90B1171164F4FA26AECB82 /* ContextPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */; };
 		19B7A8464C43E4F5EC900C8C /* ThreadToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6789066CD31896826BD7533 /* ThreadToolCard.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
 		1A5AE17AB7D512B9DA6660A4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
@@ -55,6 +56,7 @@
 		3DA59F2857BF4C0D968BC685 /* ThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACF4B282838514406995172 /* ThreadSidebar.swift */; };
 		3E4D115D045028935D2ACD8F /* ChatAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 121B2BA00B478616B615256A /* ChatAttachment.swift */; };
 		3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
+		C37CB2E34BD8E5C6765188E2 /* ContextPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */; };
 		415790D1EB7F6C28A5E51834 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE812BB0094810DBA4C76BF /* KeychainStore.swift */; };
 		43DA4D3EC7B1CB3FA3EA5C2F /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
 		455C3E49BB917BC1B035F17F /* ErrorReporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A647C072F700CCD2C3A38EB /* ErrorReporting.swift */; };
@@ -106,6 +108,7 @@
 		7F1FF6945B3A976706D9500F /* CometChatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C182639A35D271331937928A /* CometChatManager.swift */; };
 		80629098833B04809812A184 /* TurnNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED98C7FFAEA49E7BD86886F /* TurnNotifier.swift */; };
 		8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C15309992AC78E4D5B956FF9 /* PairingTests.swift */; };
+		36382D071D90C7E30F498885 /* ContextBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53398145C092651D127ACC75 /* ContextBreakdownTests.swift */; };
 		826F8FA2AA98AF63C81849C3 /* ThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACF4B282838514406995172 /* ThreadSidebar.swift */; };
 		83C155F3CF302A692C1F82B8 /* DictationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C52D1A65B23047FCDBB2582 /* DictationController.swift */; };
 		83D7750E247621E25DE47413 /* ClutchWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96881848B85F04B0AF1F6DDE /* ClutchWidgets.swift */; };
@@ -273,6 +276,7 @@
 		0215A08CC97DE1B4EB644A68 /* MacSurfaceSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSurfaceSetup.swift; sourceTree = "<group>"; };
 		02BD5C517F092893BF4C6806 /* MacWorkspaceCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceCommands.swift; sourceTree = "<group>"; };
 		03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
+		E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextPanel.swift; sourceTree = "<group>"; };
 		06F0339A3E0FBDCCAEC93ECE /* SentryTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryTelemetry.swift; sourceTree = "<group>"; };
 		075F6C76C816463CB4A9C109 /* StubSidecar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubSidecar.swift; sourceTree = "<group>"; };
 		08C24606E81FAD0D39FC4227 /* MuseContextPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuseContextPolicyTests.swift; sourceTree = "<group>"; };
@@ -370,6 +374,7 @@
 		BEFFD4634096ECB238C1735B /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		C02F9D1EBEE7BA353E8C6EC3 /* ClutchWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClutchWidgets.entitlements; sourceTree = "<group>"; };
 		C15309992AC78E4D5B956FF9 /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
+		53398145C092651D127ACC75 /* ContextBreakdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBreakdownTests.swift; sourceTree = "<group>"; };
 		C182639A35D271331937928A /* CometChatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CometChatManager.swift; sourceTree = "<group>"; };
 		C2CE776C209986B86CD7C869 /* EngineCatalogClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCatalogClient.swift; sourceTree = "<group>"; };
 		C5BA161828495CFF9A25F45B /* PermissionNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionNotificationTests.swift; sourceTree = "<group>"; };
@@ -476,6 +481,7 @@
 				1B01AADC5ACA6508F41FEB17 /* MacTranscriptModelTests.swift */,
 				08C24606E81FAD0D39FC4227 /* MuseContextPolicyTests.swift */,
 				C15309992AC78E4D5B956FF9 /* PairingTests.swift */,
+				53398145C092651D127ACC75 /* ContextBreakdownTests.swift */,
 				C5BA161828495CFF9A25F45B /* PermissionNotificationTests.swift */,
 				CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */,
 				E7A95E8F0A6509B0C8030883 /* SteerFailureTests.swift */,
@@ -652,6 +658,7 @@
 				1E37F50A879712AF7F22B092 /* SessionsView.swift */,
 				B8743F8609E61376F316396B /* ThreadProjectsView.swift */,
 				03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */,
+				E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */,
 				9ACF4B282838514406995172 /* ThreadSidebar.swift */,
 				E6789066CD31896826BD7533 /* ThreadToolCard.swift */,
 			);
@@ -1006,6 +1013,7 @@
 				8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */,
 				2B9E4785C5A7A4284CDF49D3 /* SentryTelemetry.swift in Sources */,
 				148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */,
+				CC90B1171164F4FA26AECB82 /* ContextPanel.swift in Sources */,
 				6837A599633AC57474330540 /* SessionsClient.swift in Sources */,
 				F6FA743C967C96776991A3E8 /* SessionsView.swift in Sources */,
 				1890A8F9596AAC382E8DEC92 /* ThreadProjectsView.swift in Sources */,
@@ -1104,6 +1112,7 @@
 				AA4AF91B37DD1E8C8CD0A936 /* RootView.swift in Sources */,
 				34DEB316FC4547BF59DDA16F /* SentryTelemetry.swift in Sources */,
 				3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */,
+				C37CB2E34BD8E5C6765188E2 /* ContextPanel.swift in Sources */,
 				CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */,
 				2086F0818B78430A05F98A62 /* SessionsView.swift in Sources */,
 				E371462C6A64730575403DE3 /* ThreadProjectsView.swift in Sources */,
@@ -1151,6 +1160,7 @@
 				0F68321B088D3BBBFBCE49D2 /* MacTranscriptModelTests.swift in Sources */,
 				97B5FB551747FB682BEA260B /* MuseContextPolicyTests.swift in Sources */,
 				8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */,
+				36382D071D90C7E30F498885 /* ContextBreakdownTests.swift in Sources */,
 				7105FF8A8E9981B158E4EC5A /* PermissionNotificationTests.swift in Sources */,
 				9D8A3F2FC3641D362CE8A63A /* SessionsTests.swift in Sources */,
 				954425213A19F67209489125 /* SteerFailureTests.swift in Sources */,
