@@ -31,6 +31,31 @@ final class MacTranscriptModelTests: XCTestCase {
         XCTAssertNil(rows[1].date)
     }
 
+    func testPreviewHistoryDecodesDistinctJournalDatesWithoutInventingMissingOnes() throws {
+        let payload = """
+        [
+          {"sessionId":"muse","kind":"user_message_chunk","text":"question","at":1793727000000},
+          {"sessionId":"muse","kind":"tool_call","text":"read_file","at":1793727060000,"toolResultAt":1793727120000},
+          {"sessionId":"muse","kind":"agent_message_chunk","text":"answer","at":1793727180000},
+          {"sessionId":"muse","kind":"agent_message_chunk","text":"untimed"}
+        ]
+        """
+        let entries = try JSONDecoder().decode([AcpHistoryEntry].self, from: Data(payload.utf8))
+
+        XCTAssertEqual(entries[0].recordedDate, Date(timeIntervalSince1970: 1_793_727_000))
+        XCTAssertEqual(entries[1].recordedDate, Date(timeIntervalSince1970: 1_793_727_060))
+        XCTAssertEqual(entries[1].recordedToolResultDate, Date(timeIntervalSince1970: 1_793_727_120))
+        XCTAssertEqual(entries[2].recordedDate, Date(timeIntervalSince1970: 1_793_727_180))
+        let format = Date.FormatStyle(date: .abbreviated, time: .standard)
+        XCTAssertEqual(entries[0].previewTimestamp, Date(timeIntervalSince1970: 1_793_727_000).formatted(format))
+        XCTAssertEqual(entries[1].previewTimestamp, [
+            "Started: \(Date(timeIntervalSince1970: 1_793_727_060).formatted(format))",
+            "Result: \(Date(timeIntervalSince1970: 1_793_727_120).formatted(format))"
+        ].joined(separator: "\n"))
+        XCTAssertEqual(entries[2].previewTimestamp, Date(timeIntervalSince1970: 1_793_727_180).formatted(format))
+        XCTAssertNil(entries[3].previewTimestamp)
+    }
+
     func testTheLiveTurnIsPartOfTheTranscript() {
         var model = self.model()
         model.history = [

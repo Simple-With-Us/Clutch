@@ -801,6 +801,29 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
     /// time says so, and the client shows no time rather than the time the
     /// entry was read back.
     public var at: Double?
+    /// Time of the result shown beside the tool call, in epoch milliseconds.
+    public var toolResultAt: Double?
+
+    public var recordedDate: Date? { Self.date(fromEpochMilliseconds: at) }
+    public var recordedToolResultDate: Date? { Self.date(fromEpochMilliseconds: toolResultAt) }
+
+    /// A hover label describes the journal entries, not the time this view opened.
+    public var previewTimestamp: String? {
+        let format = Date.FormatStyle(date: .abbreviated, time: .standard)
+        guard isTool else { return recordedDate?.formatted(format) }
+        let started = kind == "tool_call" ? recordedDate : nil
+        let result = recordedToolResultDate
+        let parts = [
+            started.map { "Started: \($0.formatted(format))" },
+            result.map { "Result: \($0.formatted(format))" },
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    private static func date(fromEpochMilliseconds milliseconds: Double?) -> Date? {
+        guard let milliseconds, milliseconds.isFinite, milliseconds > 0 else { return nil }
+        return Date(timeIntervalSince1970: milliseconds / 1000)
+    }
 
     public init(
         sessionId: String,
@@ -812,7 +835,8 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
         toolInput: String? = nil,
         toolOutput: String? = nil,
         plan: [AcpPlanEntry]? = nil,
-        at: Double? = nil
+        at: Double? = nil,
+        toolResultAt: Double? = nil
     ) {
         self.sessionId = sessionId
         self.kind = kind
@@ -824,6 +848,7 @@ public struct AcpHistoryEntry: Decodable, Equatable, Sendable {
         self.toolOutput = toolOutput
         self.plan = plan
         self.at = at
+        self.toolResultAt = toolResultAt
     }
 
     public var isTool: Bool { kind == "tool_call" || kind == "tool_call_update" }

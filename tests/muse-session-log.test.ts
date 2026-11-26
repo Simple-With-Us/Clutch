@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { applySessionMeta, enrichMuseSessionPage } from "../src/web/chat-bridge.ts";
+import { applySessionMeta, compactToolHistory, enrichMuseSessionPage } from "../src/web/chat-bridge.ts";
 import { findMuseSessionLog, museDisplayTitle, museSessionsRoot, parseMuseSessionLog, readMuseSessionLog, readMuseSessionName, readMuseSessionSummary } from "../src/web/muse-session-log.ts";
 
 const SESSION_ID = "8ec48d4a-e48d-4a49-ae87-f710d028e20c";
@@ -89,6 +89,22 @@ describe("Muse session log parser", () => {
     // A record with no recorded time carries none, rather than one that
     // was made up from the moment it was read.
     expect(parsed.transcript[1]?.at).toBeUndefined();
+  });
+
+  it("keeps the tool start and result times separate and does not date untimed replacements", () => {
+    const result = (text: string) => ({ kind: "tool_result_batch_committed", results: [{ tool_call_id: "call-1", text }] });
+    const timed = (event: object, sequence: number, recorded_at: number) => JSON.stringify({
+      payload_type: "runtime.session", payload: { event }, sequence, recorded_at,
+    });
+    const call = timed({ kind: "assistant_tool_calls_committed", tool_calls: [{ call_id: "call-1", name: "read_file" }] }, 1, 1_793_727_060_000_000);
+    const answer = timed(result("First result"), 2, 1_793_727_120_000_000);
+    const compact = (...rows: string[]) => compactToolHistory(parseMuseSessionLog(rows.join("\n"), SESSION_ID).transcript);
+    expect(compact(call, answer)[0]).toMatchObject({
+      at: 1_793_727_060_000, toolResultAt: 1_793_727_120_000, toolOutput: "First result",
+    });
+    const [updated] = compact(call, answer, entry("runtime.session", { event: result("Replacement") }, 3));
+    expect(updated).toMatchObject({ at: 1_793_727_060_000, toolOutput: "Replacement" });
+    expect(updated).not.toHaveProperty("toolResultAt");
   });
 
   it("deduplicates provider usage IDs and excludes estimates and unreported totals", () => {
