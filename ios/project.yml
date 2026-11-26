@@ -102,6 +102,12 @@ targets:
         # screen and in the island.  Without this key the system refuses to
         # start one, so the island simply never appears.
         NSSupportsLiveActivities: true
+        # The host's push relay updates the activity while the app is not in
+        # the foreground, and the system throttles frequent updates unless
+        # the app opts in.  The relay coalesces to one push every two
+        # seconds, which is frequent on purpose:  the island must not go
+        # stale between glances.
+        NSSupportsLiveActivitiesFrequentUpdates: true
         NSBonjourServices:
           - _clutch._tcp
           - _minimax._tcp

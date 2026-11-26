@@ -29,6 +29,18 @@ final class SessionsModel {
     private var generation = 0
 
     var phase: Phase = .idle
+    /// The newest threads asked for so far.
+    ///
+    /// The sidecar serves the newest threads in one page, so a wider page is
+    /// how the older ones are reached.
+    var limit: Int = SessionsClient.SessionListLimit.initial
+    /// True when the sidecar says older threads exist beyond the page on
+    /// screen.
+    ///
+    /// The sidecar never says how many, so nothing here may claim a total.
+    var hasMore = false
+    /// True while a wider page is on the way.
+    var isLoadingMore = false
 
     init(host: ClutchHost) {
         self.host = host
@@ -41,18 +53,49 @@ final class SessionsModel {
         generation += 1
         let ticket = generation
         let wanted = engine
+        let requested = limit
         do {
             // Newest first, with an unparseable stamp sinking below the dated
             // rows instead of scrambling the list.
-            let listed = try await client.list(engine: wanted)
+            let page = try await client.listPage(engine: wanted, limit: requested)
             // An engine switch that landed mid-flight starts its own load; a
             // ticket pins this answer to its engine, so a late answer for the
             // previous engine is dropped instead of displayed under the new one.
             guard ticket == generation else { return }
-            phase = .loaded(AcpSessionInfo.newestFirst(listed))
+            limit = page.limit
+            hasMore = page.hasMore
+            phase = .loaded(AcpSessionInfo.newestFirst(page.sessions))
         } catch {
             guard ticket == generation else { return }
             phase = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Widen the list:  the older threads are appended to what is on screen.
+    ///
+    /// The sidecar answers with the newest threads in one list, so a wider
+    /// page holds every row already on screen and the older ones besides.
+    func loadMore() async {
+        guard hasMore, !isLoadingMore else { return }
+        guard let next = SessionsClient.SessionListLimit.next(after: limit) else { return }
+        isLoadingMore = true
+        // The ticket pins this answer to the engine and the load it belongs
+        // to, so a load that started later owns the list and this answer is
+        // dropped instead of merging into a list that has moved on.
+        let ticket = generation
+        let wanted = engine
+        defer { isLoadingMore = false }
+        do {
+            let page = try await client.listPage(engine: wanted, limit: next)
+            guard ticket == generation else { return }
+            limit = page.limit
+            hasMore = page.hasMore
+            if case .loaded(let shown) = phase {
+                phase = .loaded(AcpSessionInfo.newestFirst(page.merging(into: shown)))
+            }
+        } catch {
+            // The list on screen stays as it is, and the row stays with it,
+            // so a retry is one tap away.
         }
     }
 
@@ -70,6 +113,10 @@ final class SessionsModel {
     func reloadForEngine() async {
         generation += 1
         if phase == .loading { phase = .idle }
+        // A widened page belongs to the engine it was widened on; the new
+        // engine starts again at its newest threads.
+        limit = SessionsClient.SessionListLimit.initial
+        hasMore = false
         await load()
     }
 
@@ -392,6 +439,18 @@ public struct SessionsView: View {
                 }
             }
             // Quick Chat sits last, below every project and folder: it is the
+            // The list renders the filtered rows, so the row that says how
+            // much of it is on screen has to count the rows the user can
+            // actually see.  Gate on the unfiltered store (model.sessions)
+            // so a search that matches nothing still offers Load More when
+            // older pages exist; the caption itself stays filtered.
+            if model.hasMore && !model.sessions.isEmpty {
+                Section {
+                    loadMoreRow
+                }
+            }
+
+            // Quick Chat sits last, below every project and folder: it is the
             // conversation without a project, not the first thing to read.
             quickChatRow
         }
@@ -439,6 +498,45 @@ public struct SessionsView: View {
             .accessibilityIdentifier("quick-chat-row")
         }
         #endif
+    }
+
+    /// The caption under the list:  how many threads are on screen.
+    ///
+    /// The sidecar says that older threads exist and never how many, so the
+    /// count is the rows on screen and nothing more.  A filter narrows those
+    /// rows to the ones that match, and the wording says so.
+    private var loadMoreCaption: String {
+        let count = visibleSessions.count
+        let isFiltering = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if isFiltering {
+            return count == 1 ? "Showing 1 matching thread." : "Showing \(count) matching threads."
+        }
+        return count == 1 ? "Showing the newest 1 thread." : "Showing the newest \(count) threads."
+    }
+
+    /// The row that says the list stops short, and the button that widens it.
+    ///
+    /// The sidecar says that older threads exist and never how many, so the
+    /// row says how many are on screen and nothing more.
+    private var loadMoreRow: some View {
+        VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
+            Text(loadMoreCaption)
+                .font(ClutchFont.caption)
+                .foregroundStyle(.secondary)
+            if SessionsClient.SessionListLimit.next(after: model.limit) != nil {
+                Button("Load More") {
+                    Task { await model.loadMore() }
+                }
+                .font(ClutchFont.captionStrong)
+                .disabled(model.isLoadingMore)
+            } else {
+                // The sidecar caps a page, so there is nowhere wider to go.
+                Text("Older threads are not listed.")
+                    .font(ClutchFont.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, ClutchSpacing.tight)
     }
 
     /// One thread row with its context menu, shared by the pinned and folder

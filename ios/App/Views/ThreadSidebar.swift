@@ -80,6 +80,13 @@ struct ThreadSidebar: View {
     var canLoadMore: Bool = false
     var isLoadingMore: Bool = false
     var onLoadMore: (() -> Void)? = nil
+    /// True when the page is already as wide as the sidecar serves and older
+    /// threads still exist beyond it.
+    ///
+    /// There is no wider page to ask for, so a Load More would be a button
+    /// that does nothing.  The list says the window out loud instead of
+    /// reading as a complete one.
+    var loadMoreCapReached: Bool = false
     /// macOS pins the rail width; a split view lets the system choose, so iOS
     /// passes nil and lets the column breathe.
     var fixedWidth: CGFloat? = 248
@@ -441,7 +448,7 @@ struct ThreadSidebar: View {
 
     @ViewBuilder
     private var footer: some View {
-        if (sessions.first(where: { $0.sessionId == selectedId })?.cwd?.isEmpty == false) || canLoadMore {
+        if (sessions.first(where: { $0.sessionId == selectedId })?.cwd?.isEmpty == false) || canLoadMore || loadMoreCapReached {
             VStack(spacing: 0) {
                 if let selected = sessions.first(where: { $0.sessionId == selectedId }), let cwd = selected.cwd, !cwd.isEmpty {
                     Divider()
@@ -479,6 +486,17 @@ struct ThreadSidebar: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isLoadingMore)
+                }
+                if loadMoreCapReached {
+                    // The sidecar says older threads exist and the page is
+                    // already as wide as it serves, so the list says that
+                    // rather than reading as a complete one.
+                    Text("Older threads are not listed.")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

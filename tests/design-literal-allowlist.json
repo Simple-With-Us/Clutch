@@ -68,7 +68,7 @@
     ".system(size: 10, weight: .bold)": 2,
     ".system(size: 10, weight: .semibold)": 3,
     ".system(size: 9, weight: .semibold)": 2,
-    ".system(size: 10, weight: .medium)": 3,
+    ".system(size: 10, weight: .medium)": 4,
     "cornerRadius: 6": 2,
     "cornerRadius: 7": 1,
     ".system(size: 24)": 1,

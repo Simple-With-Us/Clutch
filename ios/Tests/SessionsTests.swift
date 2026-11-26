@@ -1079,3 +1079,72 @@ final class PermissionAcknowledgementTests: XCTestCase {
         XCTAssertTrue(activity.enginesWithActivity(hostId: hostId, sessionId: "not-a-thread").isEmpty)
     }
 }
+
+/// A thread list is one page of the newest threads, and the sidecar says
+/// whether older threads exist beyond it.  The phone and the Mac read that
+/// answer, so it is pinned here.
+final class SessionListPageTests: XCTestCase {
+    func testTheSessionListCarriesTheSidecarsHasMoreFlag() throws {
+        let body = """
+        {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}],
+         "hasMore":true}
+        """
+        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+
+        XCTAssertEqual(page.sessions.count, 1)
+        XCTAssertEqual(page.sessions.first?.sessionId, "s-1")
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.limit, 100)
+    }
+
+    func testASessionListWithoutTheFlagIsNotMore() throws {
+        // A host that answers without the flag has no older threads to say
+        // so, and its page is not a broken answer.
+        let body = """
+        {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}]}
+        """
+        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+
+        XCTAssertEqual(page.sessions.count, 1)
+        XCTAssertFalse(page.hasMore)
+        XCTAssertEqual(page.limit, 100)
+    }
+
+    func testABrokenBodyIsAnEmptyPageRatherThanAFailure() throws {
+        let page = SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100)
+
+        XCTAssertTrue(page.sessions.isEmpty)
+        XCTAssertFalse(page.hasMore)
+    }
+
+    func testAWiderPageAppendsTheOlderThreadsWithoutRepeatingAny() throws {
+        let shown = [
+            AcpSessionInfo(sessionId: "s-1", title: "Newest"),
+            AcpSessionInfo(sessionId: "s-2", title: "Second"),
+        ]
+        let wider = SessionsClient.SessionListPage(
+            sessions: [
+                AcpSessionInfo(sessionId: "s-2", title: "Second"),
+                AcpSessionInfo(sessionId: "s-3", title: "Third"),
+            ],
+            hasMore: false,
+            limit: 300
+        )
+
+        let merged = wider.merging(into: shown)
+
+        // The rows already on screen keep their place, the older row the
+        // wider page brought in is appended, and no row is listed twice.
+        XCTAssertEqual(merged.map(\.sessionId), ["s-1", "s-2", "s-3"])
+    }
+
+    func testTheThreadListStepsThroughThePagesTheSidecarServes() throws {
+        // The sidecar caps a page at a thousand threads, so the steps stop
+        // there:  asking for more asks for the same page again.
+        XCTAssertEqual(SessionsClient.SessionListLimit.initial, 100)
+        XCTAssertEqual(SessionsClient.SessionListLimit.maximum, 1000)
+        XCTAssertEqual(SessionsClient.SessionListLimit.next(after: 100), 300)
+        XCTAssertEqual(SessionsClient.SessionListLimit.next(after: 300), 1000)
+        XCTAssertNil(SessionsClient.SessionListLimit.next(after: 1000))
+    }
+}
