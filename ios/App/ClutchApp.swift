@@ -26,6 +26,12 @@ struct ClutchApp: App {
         // request, and it has to be in place before a notification arrives:
         // a notification can be what launched the app.
         UNUserNotificationCenter.current().delegate = ClutchNotificationDelegate.shared
+        #if os(iOS)
+        // The Live Activity and the Lock Screen count start watching what
+        // the engines are doing as soon as the app does:  a surface that
+        // shows without being opened cannot start late.
+        ClutchActivityController.shared.start()
+        #endif
     }
 
     var body: some Scene {

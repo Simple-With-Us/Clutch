@@ -85,6 +85,8 @@ enum HomeSelection: Hashable {
     case thread(String)
     /// The conversation without a project.
     case quickChat
+    /// The approvals waiting on this host.
+    case approvals
     /// Nothing yet — the detail pane explains itself.
     case none
 }
@@ -115,6 +117,9 @@ public struct SessionsView: View {
     @State private var selection: HomeSelection = .none
     /// The thread a link asked for, waiting for this surface to take it.
     @State private var threadLinkRouter = ThreadLinkRouter.shared
+    /// The approvals list a link asked for, waiting for this surface to
+    /// take it.
+    @State private var approvalsLinkRouter = ApprovalsLinkRouter.shared
     @State private var isStartingThread = false
     @State private var newThreadFolder: String = ""
     @State private var isShowingFiles = false
@@ -130,8 +135,11 @@ public struct SessionsView: View {
     /// may just be the wrong engine for this host.
     @State private var isSettling = true
 
-    public init(host: ClutchHost) {
+    private let onShowProjects: (() -> Void)?
+
+    public init(host: ClutchHost, onShowProjects: (() -> Void)? = nil) {
         self.host = host
+        self.onShowProjects = onShowProjects
         _model = State(initialValue: SessionsModel(host: host))
     }
 
@@ -144,11 +152,15 @@ public struct SessionsView: View {
         .onChange(of: threadLinkRouter.pending) { _, _ in
             openPendingThread()
         }
+        .onChange(of: approvalsLinkRouter.pending) { _, _ in
+            openPendingApprovals()
+        }
         .onAppear {
             // A link can arrive before this surface exists, so the thread it
             // names is opened when the surface appears as well as when the
             // link changes.
             openPendingThread()
+            openPendingApprovals()
         }
         .task(id: host.pairingKey) {
             catalogRequestGeneration += 1
@@ -230,6 +242,15 @@ public struct SessionsView: View {
             engineBar
         }
         .toolbar {
+            if let onShowProjects {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: onShowProjects) {
+                        Label("Projects", systemImage: "folder.badge.plus")
+                    }
+                    .accessibilityLabel("Projects")
+                    .accessibilityIdentifier("clutch-projects")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     isShowingHosts = true
@@ -632,6 +653,15 @@ public struct SessionsView: View {
         selection = .thread(link.sessionId)
     }
 
+    /// Opens the approvals list a link asked for.
+    ///
+    /// The request is taken rather than read, so the list is opened once and
+    /// not again by whatever surface happens to be on screen next.
+    private func openPendingApprovals() {
+        guard approvalsLinkRouter.take() else { return }
+        selection = .approvals
+    }
+
     // MARK: - Detail
 
     @ViewBuilder
@@ -650,6 +680,13 @@ public struct SessionsView: View {
             #if os(iOS)
             ChatView(activeHost: host, store: HostStore.shared)
             #endif
+        case .approvals:
+            // The list the Live Activity and the Control Center action
+            // open:  the approvals waiting on this host, each one a way
+            // into the thread that has to answer it.
+            ApprovalsView(host: host) { sessionId in
+                selection = .thread(sessionId)
+            }
         case .none:
             ContentUnavailableView(
                 "Pick A Thread",
