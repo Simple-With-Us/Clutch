@@ -46,6 +46,11 @@ import {
   isDriftTrain,
   nextMarketingPatch
 } from "./version-plan.mjs";
+import {
+  profileAppGroups,
+  carriesGroup,
+  WILDCARD_GROUP
+} from "./mobileprovision.mjs";
 
 function base64url(input) {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -702,6 +707,7 @@ async function main() {
   }
   console.error(`asc-auth: using ${cred.source} (key id length ${cred.keyId.length})`);
   const token = signJwt({ keyId: cred.keyId, issuerId: cred.issuerId, privateKeyPem: cred.privateKeyPem });
+  const REQUIRED_APP_GROUP = process.env.IOS_REQUIRED_APP_GROUP || "";
 
   const [method, path, body, arg4, arg5] = process.argv.slice(2);
   if (!method || !path) {
@@ -1579,9 +1585,25 @@ async function main() {
 
     for (const [bundleId, profileName] of Object.entries(want)) {
       const key = `${bundleId}\0${profileName}`;
-      if (activeByBundleAndName.has(key)) {
-        console.error(`ensure-appstore-profiles: reusing ACTIVE profile name=${profileName} bundle=${bundleId}`);
-        continue;
+      const existing = activeByBundleAndName.get(key);
+      if (existing) {
+        if (REQUIRED_APP_GROUP) {
+          const content = existing.attributes?.profileContent;
+          const groups = content ? profileAppGroups(content) : null;
+          if (groups === null) {
+            console.error(`ensure-appstore-profiles: cannot read profile content name=${profileName} bundle=${bundleId}; deleting and recreating`);
+            await api("DELETE", `/v1/profiles/${existing.id}`);
+          } else if (!carriesGroup(groups, REQUIRED_APP_GROUP)) {
+            console.error(`ensure-appstore-profiles: profile name=${profileName} bundle=${bundleId} lacks required App Group ${REQUIRED_APP_GROUP}; deleting and recreating`);
+            await api("DELETE", `/v1/profiles/${existing.id}`);
+          } else {
+            console.error(`ensure-appstore-profiles: reusing ACTIVE profile name=${profileName} bundle=${bundleId}`);
+            continue;
+          }
+        } else {
+          console.error(`ensure-appstore-profiles: reusing ACTIVE profile name=${profileName} bundle=${bundleId}`);
+          continue;
+        }
       }
 
       const bidRes = await api("GET", `/v1/bundleIds?filter[identifier]=${encodeURIComponent(bundleId)}&limit=5`);
@@ -1615,6 +1637,28 @@ async function main() {
           `ensure-appstore-profiles: create failed for ${bundleId} name=${profileName} (HTTP ${created.status} ${err.code || err.title || ""})`
         );
         process.exit(2);
+      }
+      // Post-creation validation: a fresh profile must carry the required App
+      // Group.  App Groups come from the App ID on the Apple Developer Portal;
+      // if the App ID lacks the group, no profile created against it can carry
+      // it either.  Fail with an actionable message instead of silently
+      // shipping a profile that cannot sign for the target entitlements.
+      if (REQUIRED_APP_GROUP) {
+        const createdProfile = created.parsed?.data;
+        const createdContent = createdProfile?.attributes?.profileContent;
+        const createdGroups = createdContent ? profileAppGroups(createdContent) : null;
+        if (createdGroups === null) {
+          console.error(
+            `ensure-appstore-profiles: cannot read content of created profile name=${profileName} bundle=${bundleId}; aborting`
+          );
+          process.exit(2);
+        }
+        if (!carriesGroup(createdGroups, REQUIRED_APP_GROUP)) {
+          console.error(
+            `ensure-appstore-profiles: created profile name=${profileName} bundle=${bundleId} lacks required App Group ${REQUIRED_APP_GROUP}.  Add App Group ${REQUIRED_APP_GROUP} to the App ID ${bundleId} on the Apple Developer Portal, then re-run.`
+          );
+          process.exit(2);
+        }
       }
       console.error(`ensure-appstore-profiles: created profile name=${profileName} bundle=${bundleId}`);
     }
