@@ -157,6 +157,16 @@ if [ "$BACKEND" != "adapter" ]; then
       exec "$PYTHON3" "$GUI_BROKER" "$HELPER_APP" "$MUSE_HOST" "$@"
     fi
   fi
+  # Steering: native Muse ACP (1.4.x) does not advertise _muse/steer, while the
+  # adapter does.  In auto mode prefer the adapter when it is installed so the
+  # Steer button works.  Native stays first for launches that need native-only
+  # settings (REQUIRE_NATIVE), an explicit native backend, and
+  # MUSE_CODE_ACP_PREFER_NATIVE=1.
+  if [ "$BACKEND" = "auto" ] && [ "$REQUIRE_NATIVE" != "1" ] && [ "${MUSE_CODE_ACP_PREFER_NATIVE:-0}" != "1" ]; then
+    if ADAPTER="$(find_adapter)"; then
+      exec "$ADAPTER" "$@"
+    fi
+  fi
   if native_supported; then
     export MUSE_EXPERIMENTAL_ACP="${MUSE_EXPERIMENTAL_ACP:-on}"
     exec "$MUSE_HOST" acp "$@"
