@@ -25,7 +25,7 @@ public struct ContextPanel: View {
             ForEach(breakdown.segments) { segment in
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(color(for: segment.kind))
+                        .fill(Self.color(for: segment.kind))
                         .frame(width: 7, height: 7)
                     Text(segment.kind.label)
                         .font(ClutchFont.caption)
