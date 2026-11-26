@@ -433,7 +433,7 @@ describe("the activity token route", () => {
 
     const remove = fakeResponse();
     expect(await handleActivityTokensRequest(
-      fakeRequest("DELETE", CREDENTIAL, { deviceUid: "clutch-ios-device", activityId: "activity-1" }),
+      fakeRequest("DELETE", CREDENTIAL, { deviceUid: "clutch-ios-device", activityId: "activity-1", pushToken: registration().pushToken }),
       remove.res,
       "/clutch/v1/activity-tokens",
       TOKEN,
