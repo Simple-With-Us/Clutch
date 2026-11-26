@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createCron, cronView, deleteCron, describeRule, listCrons } from "../src/web/dshHostCrons.ts";
+import { createCron, cronView, deleteCron, describeRule, listCrons, pickCreatedCron } from "../src/web/dshHostCrons.ts";
 
 type Record_ = { kind: string; id: string; prompt: string; scheduledAt: string; afterSeconds?: number; everySeconds?: number };
 
@@ -79,6 +79,17 @@ describe("listCrons", () => {
     const host = new FakeHost();
     host.items = [{ sessionId: "sess-9" }];
     await expect(listCrons(host as never, NOW)).resolves.toEqual([]);
+  });
+});
+
+describe("pickCreatedCron", () => {
+  it("disambiguates same-prompt creations by predicted target", () => {
+    const start = new Date("2026-11-26T12:00:00.000Z");
+    const older = cronView("s", { kind: "after", id: "old", prompt: "p", afterSeconds: 600, scheduledAt: "2026-11-26T12:05:00.000Z" }, start);
+    const mine = cronView("s", { kind: "after", id: "mine", prompt: "p", afterSeconds: 600, scheduledAt: "2026-11-26T12:10:00.000Z" }, start);
+    expect(pickCreatedCron([older, mine], { kind: "after", afterSeconds: 600 }, start)?.id).toBe("mine");
+    expect(pickCreatedCron([mine], { kind: "after", afterSeconds: 600 }, start)?.id).toBe("mine");
+    expect(pickCreatedCron([], { kind: "after", afterSeconds: 600 }, start)).toBeUndefined();
   });
 });
 
