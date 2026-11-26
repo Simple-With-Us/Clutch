@@ -261,11 +261,20 @@ export function isLoopbackRemoteAddress(remote: string): boolean {
   const mapped = remote.slice("::ffff:".length);
   if (mapped.startsWith("127.")) return true;
   const hextets = mapped.split(":");
-  if (!hextets.every((part) => /^[0-9a-f]+$/i.test(part))) return false;
-  // Exactly two hextets for the colon form, or one 32-bit word; anything
-  // longer is not a mapped loopback at all.
-  if (hextets.length === 2) return Number.parseInt(hextets[0]!, 16) >> 8 === 0x7f;
-  if (hextets.length === 1) return Number.parseInt(mapped, 16) >> 24 === 0x7f;
+  // Exactly two hextets of at most four hex digits for the colon form, or
+  // one word of at most eight; anything longer or wider is not a mapped
+  // loopback at all. Both hextets must fit a UInt16.
+  if (hextets.length === 2) {
+    if (!hextets.every((part) => /^[0-9a-f]{1,4}$/i.test(part))) return false;
+    const high = Number.parseInt(hextets[0]!, 16);
+    const low = Number.parseInt(hextets[1]!, 16);
+    return high <= 0xffff && low <= 0xffff && high >> 8 === 0x7f;
+  }
+  if (hextets.length === 1) {
+    if (!/^[0-9a-f]{1,8}$/i.test(mapped)) return false;
+    const word = Number.parseInt(mapped, 16);
+    return word <= 0xffffffff && word >> 24 === 0x7f;
+  }
   return false;
 }
 

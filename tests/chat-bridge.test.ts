@@ -702,7 +702,7 @@ describe("isLoopbackRemoteAddress", () => {
     for (const local of ["::1", "127.0.0.1", "127.0.0.2", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:7f000001"]) {
       expect(isLoopbackRemoteAddress(local), local).toBe(true);
     }
-    for (const remote of ["", "100.64.0.1", "192.168.1.1", "::ffff:192.168.0.1", "::ffff:fe00:1", "::ffff:7f00:1:2", "::ffff:7fzz"]) {
+    for (const remote of ["", "100.64.0.1", "192.168.1.1", "::ffff:192.168.0.1", "::ffff:fe00:1", "::ffff:7f00:1:2", "::ffff:7fzz", "::ffff:007f00:1", "::ffff:7f00:12345", "::ffff:17f000001"]) {
       expect(isLoopbackRemoteAddress(remote), remote).toBe(false);
     }
   });
