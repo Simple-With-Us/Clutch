@@ -66,6 +66,15 @@ describe("listCrons", () => {
     expect(crons[0]?.sessionId).toBe("sess-2");
   });
 
+  it("skips one malformed record instead of failing the whole list", async () => {
+    const host = hostWith([
+      { kind: "after", id: "good", prompt: "p", afterSeconds: 60, scheduledAt: "2026-11-26T13:00:00.000Z" },
+    ]);
+    (host.items[0]!.projections!.values!.schedule as unknown[]).push({ kind: "someday", id: "bad" });
+    const crons = await listCrons(host as never, NOW);
+    expect(crons.map((cron) => cron.id)).toEqual(["good"]);
+  });
+
   it("reads sessions without a schedule projection as empty", async () => {
     const host = new FakeHost();
     host.items = [{ sessionId: "sess-9" }];

@@ -457,11 +457,11 @@ public struct SessionsView: View {
             Section {
                 HStack(spacing: 8) {
                     Image(systemName: "clock")
-                        .font(.system(size: 13))
+                        .font(ClutchFont.caption)
                         .foregroundStyle(Color.accentColor)
                         .accessibilityHidden(true)
                     Text("Reminders")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(ClutchFont.captionStrong)
                     Spacer(minLength: 0)
                 }
                 .frame(minHeight: 44)

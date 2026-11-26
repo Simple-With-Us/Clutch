@@ -51,7 +51,7 @@ const CronListValueSchema = z
             projections: z
               .object({
                 values: z
-                  .object({ schedule: z.array(ScheduleRecordSchema).optional() })
+                  .object({ schedule: z.array(z.unknown()).optional() })
                   .passthrough()
                   .optional(),
               })
@@ -97,11 +97,31 @@ export async function listCrons(client: DshHostClient, now: Date = new Date()): 
   const value = await client.call("session/list", { _request: {} }, CronListValueSchema);
   const out: CronView[] = [];
   for (const item of value.items) {
-    for (const record of item.projections?.values?.schedule ?? []) {
-      out.push(cronView(item.sessionId, record, now));
+    for (const raw of item.projections?.values?.schedule ?? []) {
+      // One malformed record must not empty every session's list: the
+      // projection is the host's data on its own version, so a record
+      // this build cannot read is skipped, never fatal.
+      const parsed = ScheduleRecordSchema.safeParse(raw);
+      if (parsed.success) out.push(cronView(item.sessionId, parsed.data, now));
     }
   }
   return out.sort((a, b) => Date.parse(b.scheduledAt) - Date.parse(a.scheduledAt));
+}
+
+/** Prompt text as the read-back compares it: whitespace-collapsed. */
+export function normalizePrompt(prompt: string): string {
+  return prompt.trim().replace(/\s+/g, " ");
+}
+
+/** How long a creation or deletion turn may run before it is abandoned. */
+export const CRON_TURN_TIMEOUT_MS = 120_000;
+
+/** A bounded signal for one engine-mediated turn. */
+export function cronTurnSignal(timeoutMs: number = CRON_TURN_TIMEOUT_MS): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("the cron turn timed out")), timeoutMs);
+  timer.unref?.();
+  return controller.signal;
 }
 
 export type CronRule =
@@ -136,12 +156,14 @@ export async function createCron(
     sessionId: options.sessionId,
     prompt: instruction,
     onUpdate: () => undefined,
+    signal: cronTurnSignal(),
   });
   if (turn.stopReason === "cancelled") {
     throw new Error("the host ended the creation turn before the reminder was created");
   }
+  const wanted = normalizePrompt(options.prompt);
   const created = (await listCrons(client)).find(
-    (cron) => cron.sessionId === options.sessionId && !before.has(cron.id) && cron.prompt === options.prompt,
+    (cron) => cron.sessionId === options.sessionId && !before.has(cron.id) && normalizePrompt(cron.prompt) === wanted,
   );
   if (!created) {
     throw new Error("the engine did not create the reminder: no matching record in the session's schedule");
@@ -161,6 +183,7 @@ export async function deleteCron(
     sessionId: options.sessionId,
     prompt: instruction,
     onUpdate: () => undefined,
+    signal: cronTurnSignal(),
   });
   if (turn.stopReason === "cancelled") {
     throw new Error("the host ended the deletion turn before the reminder was deleted");

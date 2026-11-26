@@ -345,7 +345,7 @@ public struct SessionsClient {
         comps.path = "/clutch/v1/crons"
         comps.queryItems = [URLQueryItem(name: "sessionId", value: sessionId), URLQueryItem(name: "id", value: id)]
         guard let url = comps.url else { throw ChatClientError.badHost }
-        var request = authorized(url, timeout: 120)
+        var request = try authorized(url, timeout: 120)
         request.httpMethod = "DELETE"
         let (_, resp) = try await URLSession.shared.data(for: request)
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
@@ -357,7 +357,7 @@ public struct SessionsClient {
         var comps = try base()
         comps.path = "/clutch/v1/crons"
         guard let url = comps.url else { throw ChatClientError.badHost }
-        var request = authorized(url, timeout: 120)
+        var request = try authorized(url, timeout: 120)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
