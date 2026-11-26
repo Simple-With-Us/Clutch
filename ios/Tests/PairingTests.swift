@@ -112,19 +112,19 @@ final class ClutchHostTests: XCTestCase {
         XCTAssertTrue(tls.isSameOrigin(URL(string: "https://example.com:443/x")!))
     }
 
-    func testLocalMeansLoopbackOnly() {
+    func testLocalMeansLoopbackOnly() throws {
         // The sidecar's paths name local files only when the sidecar runs
         // here; a Tailscale, LAN, or public address is another machine.
-        for local in ["127.0.0.1", "localhost", "::1", "127.0.0.2", "127.0.1.1"] {
-            let host = ClutchHost(name: "Mac", origin: URL(string: "http://\(local):3180")!)
+        for local in ["http://127.0.0.1:3180", "http://localhost:3180", "http://[::1]:3180", "http://127.0.0.2:3180", "http://127.0.1.1:3180"] {
+            let host = ClutchHost(name: "Mac", origin: try XCTUnwrap(URL(string: local)))
             XCTAssertTrue(host.isLocal, "\(local) should be local")
         }
         for mapped in ["http://[::ffff:127.0.0.1]:3180", "http://[::ffff:7f00:1]:3180"] {
-            let host = ClutchHost(name: "Mac", origin: URL(string: mapped)!)
+            let host = ClutchHost(name: "Mac", origin: try XCTUnwrap(URL(string: mapped)))
             XCTAssertTrue(host.isLocal, "\(mapped) should be local")
         }
         for notMapped in ["http://[::ffff:fe00:1]:3180", "http://[::ffff:7f00:1:2]:3180"] {
-            let host = ClutchHost(name: "Remote", origin: URL(string: notMapped)!)
+            let host = ClutchHost(name: "Remote", origin: try XCTUnwrap(URL(string: notMapped)))
             XCTAssertFalse(host.isLocal, "\(notMapped) should not be local")
         }
         for remote in ["100.64.0.1", "studio.local", "jay-macbook.boa-roygbiv.ts.net", "example.com"] {
