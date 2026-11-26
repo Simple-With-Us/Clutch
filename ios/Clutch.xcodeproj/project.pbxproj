@@ -23,10 +23,12 @@
 		0F5E975FAE3778BF20E31265 /* Baselines in Resources */ = {isa = PBXBuildFile; fileRef = 926B16673D8E28C842C0BB2F /* Baselines */; };
 		0F68321B088D3BBBFBCE49D2 /* MacTranscriptModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B01AADC5ACA6508F41FEB17 /* MacTranscriptModelTests.swift */; };
 		10950FDFF3C7150C078C0DB1 /* MuseContextPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 285F711440ABD3B32DEC1547 /* MuseContextPolicy.swift */; };
+		3EBB623E26206D8B4E529FE3 /* CronModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD7A466ACED2584864455EF /* CronModels.swift */; };
 		10B2C3CACBC8883D7023F117 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE812BB0094810DBA4C76BF /* KeychainStore.swift */; };
 		10CF9BCC0D44DDB60988AEE9 /* ThreadLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DABEF53096AC30663E4A62 /* ThreadLink.swift */; };
 		13B0E2D13ECD6B0EF74E1520 /* TranscriptExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF732EB1367BF423728AA22B /* TranscriptExport.swift */; };
 		148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
+		12E4472F7E76DFDB5E0DAE4D /* CronsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F51544CD89A933EDC6E6812 /* CronsView.swift */; };
 		CC90B1171164F4FA26AECB82 /* ContextPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */; };
 		19B7A8464C43E4F5EC900C8C /* ThreadToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6789066CD31896826BD7533 /* ThreadToolCard.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
@@ -56,6 +58,7 @@
 		3DA59F2857BF4C0D968BC685 /* ThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACF4B282838514406995172 /* ThreadSidebar.swift */; };
 		3E4D115D045028935D2ACD8F /* ChatAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 121B2BA00B478616B615256A /* ChatAttachment.swift */; };
 		3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
+		F6421986D96EFBE8EC7382D8 /* CronsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F51544CD89A933EDC6E6812 /* CronsView.swift */; };
 		C37CB2E34BD8E5C6765188E2 /* ContextPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */; };
 		415790D1EB7F6C28A5E51834 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE812BB0094810DBA4C76BF /* KeychainStore.swift */; };
 		43DA4D3EC7B1CB3FA3EA5C2F /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
@@ -108,6 +111,7 @@
 		7F1FF6945B3A976706D9500F /* CometChatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C182639A35D271331937928A /* CometChatManager.swift */; };
 		80629098833B04809812A184 /* TurnNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED98C7FFAEA49E7BD86886F /* TurnNotifier.swift */; };
 		8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C15309992AC78E4D5B956FF9 /* PairingTests.swift */; };
+		DCF297CF0066A2EBB6EDEDAC /* CronModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB4C004EB394ABE32E3B2BD /* CronModelsTests.swift */; };
 		36382D071D90C7E30F498885 /* ContextBreakdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53398145C092651D127ACC75 /* ContextBreakdownTests.swift */; };
 		826F8FA2AA98AF63C81849C3 /* ThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACF4B282838514406995172 /* ThreadSidebar.swift */; };
 		83C155F3CF302A692C1F82B8 /* DictationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C52D1A65B23047FCDBB2582 /* DictationController.swift */; };
@@ -165,6 +169,7 @@
 		BBD5DD21F1527DA995140810 /* EngineCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52735AD5D1B2F9E98C6D68A5 /* EngineCatalog.swift */; };
 		BCF5B6E6848DA3059F9A713C /* ChatSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9346B55294FF01D6E7D02D73 /* ChatSessionClient.swift */; };
 		BDDE6D9B4BFB3B9F31D879EC /* MuseContextPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 285F711440ABD3B32DEC1547 /* MuseContextPolicy.swift */; };
+		E4E3F1A21173E0240E0DAE59 /* CronModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD7A466ACED2584864455EF /* CronModels.swift */; };
 		BE77738D1465DE74C35AC2EE /* ClutchActivityWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB1E8CCD63FC770188DD2B3 /* ClutchActivityWork.swift */; };
 		C2B3EB590F01E7322FEAC4FB /* ClutchTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E916FA19E4055DD59D74CC /* ClutchTheme.swift */; };
 		C98833B27EF97136742BC786 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F81457A11AE35E90469E20EF /* ChatView.swift */; };
@@ -276,6 +281,7 @@
 		0215A08CC97DE1B4EB644A68 /* MacSurfaceSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSurfaceSetup.swift; sourceTree = "<group>"; };
 		02BD5C517F092893BF4C6806 /* MacWorkspaceCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceCommands.swift; sourceTree = "<group>"; };
 		03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
+		2F51544CD89A933EDC6E6812 /* CronsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronsView.swift; sourceTree = "<group>"; };
 		E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextPanel.swift; sourceTree = "<group>"; };
 		06F0339A3E0FBDCCAEC93ECE /* SentryTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryTelemetry.swift; sourceTree = "<group>"; };
 		075F6C76C816463CB4A9C109 /* StubSidecar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubSidecar.swift; sourceTree = "<group>"; };
@@ -301,6 +307,7 @@
 		24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsSheet.swift; sourceTree = "<group>"; };
 		25E5918CD8EB83C254B0421E /* EngineCatalogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCatalogTests.swift; sourceTree = "<group>"; };
 		285F711440ABD3B32DEC1547 /* MuseContextPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuseContextPolicy.swift; sourceTree = "<group>"; };
+		7BD7A466ACED2584864455EF /* CronModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronModels.swift; sourceTree = "<group>"; };
 		2B43A9E1A0C36208217D6362 /* ClutchMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ClutchMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2CE812BB0094810DBA4C76BF /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		370F89587447F8A4277926BD /* FleetRecallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallView.swift; sourceTree = "<group>"; };
@@ -374,6 +381,7 @@
 		BEFFD4634096ECB238C1735B /* FilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesView.swift; sourceTree = "<group>"; };
 		C02F9D1EBEE7BA353E8C6EC3 /* ClutchWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ClutchWidgets.entitlements; sourceTree = "<group>"; };
 		C15309992AC78E4D5B956FF9 /* PairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingTests.swift; sourceTree = "<group>"; };
+		AFB4C004EB394ABE32E3B2BD /* CronModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronModelsTests.swift; sourceTree = "<group>"; };
 		53398145C092651D127ACC75 /* ContextBreakdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextBreakdownTests.swift; sourceTree = "<group>"; };
 		C182639A35D271331937928A /* CometChatManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CometChatManager.swift; sourceTree = "<group>"; };
 		C2CE776C209986B86CD7C869 /* EngineCatalogClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineCatalogClient.swift; sourceTree = "<group>"; };
@@ -481,6 +489,7 @@
 				1B01AADC5ACA6508F41FEB17 /* MacTranscriptModelTests.swift */,
 				08C24606E81FAD0D39FC4227 /* MuseContextPolicyTests.swift */,
 				C15309992AC78E4D5B956FF9 /* PairingTests.swift */,
+				AFB4C004EB394ABE32E3B2BD /* CronModelsTests.swift */,
 				53398145C092651D127ACC75 /* ContextBreakdownTests.swift */,
 				C5BA161828495CFF9A25F45B /* PermissionNotificationTests.swift */,
 				CB35F8724EDB3F045CBD8812 /* SessionsTests.swift */,
@@ -584,6 +593,7 @@
 				B1871B16B40D4398AF90EB14 /* MacTranscriptModel.swift */,
 				1832A27C6035D0A5A449CDC5 /* MarkdownBlocks.swift */,
 				285F711440ABD3B32DEC1547 /* MuseContextPolicy.swift */,
+				7BD7A466ACED2584864455EF /* CronModels.swift */,
 				9A12B9A826FDC8B5B82481FD /* RecentFolders.swift */,
 				55259B1D396B0F39A856CD66 /* TurnActivity.swift */,
 				5B399B23E2BEB94F0BB11AA6 /* TypedToolCard.swift */,
@@ -658,6 +668,7 @@
 				1E37F50A879712AF7F22B092 /* SessionsView.swift */,
 				B8743F8609E61376F316396B /* ThreadProjectsView.swift */,
 				03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */,
+				2F51544CD89A933EDC6E6812 /* CronsView.swift */,
 				E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */,
 				9ACF4B282838514406995172 /* ThreadSidebar.swift */,
 				E6789066CD31896826BD7533 /* ThreadToolCard.swift */,
@@ -1001,6 +1012,7 @@
 				78665CC6B85A8AEDF64DCF92 /* MacTranscriptModel.swift in Sources */,
 				4F4374435C5B1AB93B2F89A2 /* MarkdownBlocks.swift in Sources */,
 				BDDE6D9B4BFB3B9F31D879EC /* MuseContextPolicy.swift in Sources */,
+				E4E3F1A21173E0240E0DAE59 /* CronModels.swift in Sources */,
 				FCEA95FFDA024133BEB147D1 /* PairView.swift in Sources */,
 				55E24ED085686E3D6A023806 /* PairingLink.swift in Sources */,
 				7EDF428C0E84FDBFAB3169B1 /* PairingScannerSheet.swift in Sources */,
@@ -1013,6 +1025,7 @@
 				8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */,
 				2B9E4785C5A7A4284CDF49D3 /* SentryTelemetry.swift in Sources */,
 				148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */,
+				12E4472F7E76DFDB5E0DAE4D /* CronsView.swift in Sources */,
 				CC90B1171164F4FA26AECB82 /* ContextPanel.swift in Sources */,
 				6837A599633AC57474330540 /* SessionsClient.swift in Sources */,
 				F6FA743C967C96776991A3E8 /* SessionsView.swift in Sources */,
@@ -1102,6 +1115,7 @@
 				E64E5F126568F95581E97A35 /* MacWorkspaceCommands.swift in Sources */,
 				8AF5B617CD4F20AC12ED1DA1 /* MarkdownBlocks.swift in Sources */,
 				10950FDFF3C7150C078C0DB1 /* MuseContextPolicy.swift in Sources */,
+				3EBB623E26206D8B4E529FE3 /* CronModels.swift in Sources */,
 				B358A3BF898C0600BE5DD604 /* PairView.swift in Sources */,
 				A0CE74C52BAAE38076860EDA /* PairingLink.swift in Sources */,
 				9CE71E2968D8D4C0E79641DF /* PermissionCard.swift in Sources */,
@@ -1112,6 +1126,7 @@
 				AA4AF91B37DD1E8C8CD0A936 /* RootView.swift in Sources */,
 				34DEB316FC4547BF59DDA16F /* SentryTelemetry.swift in Sources */,
 				3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */,
+				F6421986D96EFBE8EC7382D8 /* CronsView.swift in Sources */,
 				C37CB2E34BD8E5C6765188E2 /* ContextPanel.swift in Sources */,
 				CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */,
 				2086F0818B78430A05F98A62 /* SessionsView.swift in Sources */,
@@ -1160,6 +1175,7 @@
 				0F68321B088D3BBBFBCE49D2 /* MacTranscriptModelTests.swift in Sources */,
 				97B5FB551747FB682BEA260B /* MuseContextPolicyTests.swift in Sources */,
 				8179F099BDB60A0737FBF8CC /* PairingTests.swift in Sources */,
+				DCF297CF0066A2EBB6EDEDAC /* CronModelsTests.swift in Sources */,
 				36382D071D90C7E30F498885 /* ContextBreakdownTests.swift in Sources */,
 				7105FF8A8E9981B158E4EC5A /* PermissionNotificationTests.swift in Sources */,
 				9D8A3F2FC3641D362CE8A63A /* SessionsTests.swift in Sources */,
