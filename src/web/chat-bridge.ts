@@ -253,6 +253,22 @@ export function engineForModelId(model: string | undefined): Engine | null {
 }
 
 /** Bounded integer query param with a default; garbage means the default. */
+/** Whether a socket peer is this machine, mirroring ClutchHost.isLocal:
+ * loopback in dotted, mapped-dotted and mapped-hex forms, nothing looser. */
+export function isLoopbackRemoteAddress(remote: string): boolean {
+  if (remote === "::1" || remote.startsWith("127.")) return true;
+  if (!remote.startsWith("::ffff:")) return false;
+  const mapped = remote.slice("::ffff:".length);
+  if (mapped.startsWith("127.")) return true;
+  const hextets = mapped.split(":");
+  if (!hextets.every((part) => /^[0-9a-f]+$/i.test(part))) return false;
+  // Exactly two hextets for the colon form, or one 32-bit word; anything
+  // longer is not a mapped loopback at all.
+  if (hextets.length === 2) return Number.parseInt(hextets[0]!, 16) >> 8 === 0x7f;
+  if (hextets.length === 1) return Number.parseInt(mapped, 16) >> 24 === 0x7f;
+  return false;
+}
+
 export function parseLimitParam(raw: string | null, def: number, max: number): number {
   const text = (raw ?? "").trim();
   if (text === "") return def;
@@ -3498,21 +3514,7 @@ async function main(): Promise<void> {
         const preview = await readPreview(root, path);
         // The absolute path is only for a client on this machine; a remote
         // caller keeps the root-relative path and never learns the layout.
-        const remote = req.socket.remoteAddress ?? "";
-        // Mirrors ClutchHost.isLocal: loopback in dotted, mapped-dotted and
-        // mapped-hex forms counts as this machine, nothing looser does.
-        let loopback = remote === "::1" || remote.startsWith("127.");
-        if (!loopback && remote.startsWith("::ffff:")) {
-          const mapped = remote.slice("::ffff:".length);
-          if (mapped.startsWith("127.")) {
-            loopback = true;
-          } else {
-            const hextets = mapped.split(":");
-            const hexOnly = hextets.every((part) => /^[0-9a-f]+$/i.test(part));
-            const high = hexOnly ? (hextets.length === 2 ? Number.parseInt(hextets[0]!, 16) : Number.parseInt(mapped, 16)) : Number.NaN;
-            loopback = Number.isInteger(high) && (mapped.includes(":") ? high >> 8 === 0x7f : high >> 24 === 0x7f);
-          }
-        }
+        const loopback = isLoopbackRemoteAddress(req.socket.remoteAddress ?? "");
         const out = loopback ? preview : { ...preview, absolute: undefined };
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(out));
       } catch (err) {
