@@ -159,6 +159,7 @@ describe("the Muse Code launcher", () => {
       env: {
         PATH: `${stub}:${process.env.PATH ?? ""}`,
         HOME: stub,
+        MUSE_CODE_ACP_PREFER_NATIVE: "1",
       },
       encoding: "utf8",
     });
