@@ -11,10 +11,10 @@ final class CronModelsTests: XCTestCase {
         """
         let list = try JSONDecoder().decode(CronList.self, from: Data(payload.utf8))
         XCTAssertEqual(list.crons.count, 2)
-        XCTAssertEqual(list.crons[0]?.ruleLabel, "In 10 min")
-        XCTAssertEqual(list.crons[1]?.ruleLabel, "Every 1 hr")
-        XCTAssertEqual(list.crons[1]?.state, "overdue")
-        XCTAssertNotNil(list.crons[0]?.scheduledDate)
+        XCTAssertEqual(list.crons[0].ruleLabel, "In 10 min")
+        XCTAssertEqual(list.crons[1].ruleLabel, "Every 1 hr")
+        XCTAssertEqual(list.crons[1].state, "overdue")
+        XCTAssertNotNil(list.crons[0].scheduledDate)
     }
 
     func testAtRuleNamesTheInstant() {

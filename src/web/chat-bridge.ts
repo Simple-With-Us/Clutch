@@ -3716,15 +3716,27 @@ async function main(): Promise<void> {
           res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ crons }));
           return;
         }
-        let body: unknown;
-        try {
-          body = await readJsonBody(req);
-        } catch {
-          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
-          return;
+        // Only POST carries a body; a DELETE names its target in the
+        // query, and an empty body there is not invalid JSON.
+        let body: unknown = {};
+        if (req.method === "POST") {
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+            return;
+          }
         }
-        const record = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
-        const sessionId = typeof record.sessionId === "string" ? record.sessionId : url.searchParams.get("sessionId") ?? "";
+        const parsedBody = z.object({
+          sessionId: z.string().optional(),
+          id: z.string().optional(),
+          prompt: z.string().optional(),
+          afterSeconds: z.number().optional(),
+          at: z.string().optional(),
+          everySeconds: z.number().optional(),
+        }).passthrough().safeParse(body);
+        const record = parsedBody.success ? parsedBody.data : {};
+        const sessionId = record.sessionId ?? url.searchParams.get("sessionId") ?? "";
         if (req.method === "DELETE") {
           const id = typeof record.id === "string" ? record.id : url.searchParams.get("id") ?? "";
           if (!sessionId || !id) {

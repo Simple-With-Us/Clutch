@@ -94,8 +94,8 @@ public struct CronsView: View {
 
     private func delete(_ cron: CronItem) async {
         do {
-            try await SessionsClient(host: host).deleteCron(sessionId: cron.sessionId, id: cron.id)
-            crons.removeAll { $0.id == cron.id && $0.sessionId == cron.sessionId }
+            try await SessionsClient(host: host).deleteCron(sessionId: cron.sessionId, id: cron.cronId)
+            crons.removeAll { $0.id == cron.id }
         } catch {
             actionError = error.localizedDescription
         }

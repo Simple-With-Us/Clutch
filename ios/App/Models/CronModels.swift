@@ -5,7 +5,11 @@ import Foundation
 /// design: the reminder fires in the thread that owns it, so the row
 /// names that thread's session alongside the reminder itself.
 public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
-    public var id: String
+    /// The schedule id, unique only within its owning session.
+    public var cronId: String
+    /// The list identity: schedule ids repeat across sessions, so a row
+    /// is its session and its schedule id together.
+    public var id: String { "\(sessionId)|\(cronId)" }
     public var sessionId: String
     public var kind: String
     public var prompt: String
@@ -14,6 +18,11 @@ public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
     public var everySeconds: Int?
     public var state: String
     public var deliveryMode: String
+
+    private enum CodingKeys: String, CodingKey {
+        case cronId = "id"
+        case sessionId, kind, prompt, scheduledAt, afterSeconds, everySeconds, state, deliveryMode
+    }
 
     public init(
         id: String,
@@ -26,7 +35,7 @@ public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
         state: String,
         deliveryMode: String = "session-local"
     ) {
-        self.id = id
+        self.cronId = id
         self.sessionId = sessionId
         self.kind = kind
         self.prompt = prompt
@@ -37,13 +46,24 @@ public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
         self.deliveryMode = deliveryMode
     }
 
-    /// When this reminder next fires, when the host named a real instant.
-    public var scheduledDate: Date? {
+    private static let fractionalFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: scheduledAt) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: scheduledAt)
+        return formatter
+    }()
+
+    private static let plainFormatter = ISO8601DateFormatter()
+
+    private static let ruleDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    /// When this reminder next fires, when the host named a real instant.
+    public var scheduledDate: Date? {
+        Self.fractionalFormatter.date(from: scheduledAt) ?? Self.plainFormatter.date(from: scheduledAt)
     }
 
     /// The rule in the owner's words: "in 10 min", "daily at 9:00 AM",
@@ -58,10 +78,7 @@ public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
             return "Every \(Self.duration(everySeconds))"
         default:
             guard let scheduledDate else { return "One time" }
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-            return formatter.string(from: scheduledDate)
+            return Self.ruleDateFormatter.string(from: scheduledDate)
         }
     }
 
