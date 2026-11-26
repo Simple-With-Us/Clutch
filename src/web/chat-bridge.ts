@@ -3734,6 +3734,9 @@ async function main(): Promise<void> {
           for await (const chunk of req) {
             size += (chunk as Buffer).length;
             if (size > 1_000_000) {
+              // The unread remainder would desync the next request on
+              // this keep-alive socket, so the stream dies with the 400.
+              req.destroy();
               res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
               return;
             }
