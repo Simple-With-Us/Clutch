@@ -24,7 +24,7 @@ struct ThreadProjectsView: View {
         NavigationStack(path: $path) {
             List {
                 if store.storageError {
-                    Text("Saved projects could not be read.").foregroundStyle(.secondary)
+                    Text("Project storage is unavailable. Your saved data was not changed.").foregroundStyle(.secondary)
                 } else if store.projects.isEmpty {
                     Text("Create a project to group threads from different hosts and coding tools.")
                         .foregroundStyle(.secondary)
@@ -138,6 +138,7 @@ private struct ThreadProjectDetail: View {
                     Label("Add Threads", systemImage: "plus")
                 }
                 .accessibilityIdentifier("clutch-project-add-threads")
+                .disabled(store.storageError)
             }
 
             Section("Threads") {
@@ -159,12 +160,14 @@ private struct ThreadProjectDetail: View {
                         Button("Remove From Project", role: .destructive) {
                             if !store.remove(thread.id, from: projectID) { writeFailed = true }
                         }
+                        .disabled(store.storageError)
                     }
                     #if os(iOS)
                     .swipeActions {
                         Button("Remove", role: .destructive) {
                             if !store.remove(thread.id, from: projectID) { writeFailed = true }
                         }
+                        .disabled(store.storageError)
                     }
                     #endif
                 }

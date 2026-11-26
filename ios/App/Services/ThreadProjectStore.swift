@@ -98,7 +98,10 @@ final class ThreadProjectStore {
     @discardableResult
     private func save(_ next: [ThreadProject]) -> Bool {
         guard !storageError else { return false }
-        guard let data = try? encode(next) else { return false }
+        guard let data = try? encode(next) else {
+            storageError = true
+            return false
+        }
         defaults.set(data, forKey: Self.storageKey)
         projects = next
         return true

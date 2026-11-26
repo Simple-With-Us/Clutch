@@ -67,9 +67,17 @@ final class ThreadProjectStoreTests: XCTestCase {
         let extra = ProjectThread(hostID: hostID, hostName: "Mac", engineID: "muse",
                                   session: AcpSessionInfo(sessionId: "new"))
         XCTAssertTrue(first.add(existing, to: projectID))
-        let failed = ThreadProjectStore(defaults: defaults) { _ in throw EncodingUnavailable() }
+        var encodeAttempts = 0
+        let failed = ThreadProjectStore(defaults: defaults) { _ in
+            encodeAttempts += 1
+            throw EncodingUnavailable()
+        }
+        XCTAssertFalse(failed.storageError)
         XCTAssertFalse(failed.add(extra, to: projectID))
+        XCTAssertTrue(failed.storageError)
+        XCTAssertNil(failed.create(name: "Blocked"))
         XCTAssertFalse(failed.remove(existing.id, from: projectID))
+        XCTAssertEqual(encodeAttempts, 1)
         XCTAssertEqual(failed.projects.first?.threads, [existing])
         XCTAssertEqual(ThreadProjectStore(defaults: defaults).projects.first?.threads, [existing])
     }
