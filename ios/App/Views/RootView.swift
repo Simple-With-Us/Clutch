@@ -15,6 +15,7 @@ struct RootView: View {
     /// screen, which is what the web canvas used to draw for it.
     @State private var gate: HostGateState = .ready
     @State private var isShowingHosts = false
+    @State private var isShowingProjects = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -62,7 +63,7 @@ struct RootView: View {
                 // The phone has no tab bar: one surface, one detail.  The
                 // Host console and Fleet Recall live in Hosts and Settings,
                 // reachable from the home list's gear.
-                gated(SessionsView(host: host), host: host)
+                gated(SessionsView(host: host, onShowProjects: { isShowingProjects = true }), host: host)
                     .sheet(isPresented: $isShowingHosts) {
                         HostsSheet(store: store)
                     }
@@ -94,6 +95,9 @@ struct RootView: View {
                     store.pair(payload)
                 }
             }
+        }
+        .sheet(isPresented: $isShowingProjects) {
+            ThreadProjectsView(hosts: store)
         }
         .onOpenURL { url in
             if let link = ThreadLink.parse(url) {
@@ -128,7 +132,7 @@ struct RootView: View {
             if !host.isMiniMaxCodeOnly {
                 gated(ChatView(activeHost: host, store: store, initialSurface: .agent), host: host)
                     .tabItem {
-                        Label("Agent Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                        Label("Quick Chat", systemImage: "bubble.left.and.bubble.right.fill")
                     }
                     .tag(1)
             }
@@ -163,6 +167,11 @@ struct RootView: View {
         .tint(.accentColor)
         #if os(macOS)
         .frame(minWidth: 760, minHeight: 560)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                projectsButton
+            }
+        }
         #endif
     }
 
@@ -191,9 +200,21 @@ struct RootView: View {
                     onSwitchHost: { isShowingHosts = true },
                     onPaired: { payload in store.pair(payload) }
                 )
+                .safeAreaInset(edge: .bottom) {
+                    // A sleeping active host must not hide projects on other hosts.
+                    projectsButton.padding(12)
+                }
                 .transition(.opacity)
             }
         }
+    }
+
+    private var projectsButton: some View {
+        Button { isShowingProjects = true } label: {
+            Label("Projects", systemImage: "folder.badge.plus")
+        }
+        .accessibilityLabel("Projects")
+        .accessibilityIdentifier("clutch-projects")
     }
 
     /// Asks the sidecar whether it will talk to this device.

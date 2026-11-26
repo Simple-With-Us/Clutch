@@ -154,7 +154,7 @@ npm install -g @bex-co/muse-code-acp      # compatibility fallback for older Mus
 muse login                                # as the service user
 ```
 
-The launcher defaults to `MUSE_CODE_ACP_BACKEND=auto`, which prefers native ACP only after `MUSE_EXPERIMENTAL_ACP=on muse acp --help` succeeds.  `native` requires that route and `adapter` forces the compatibility adapter.  `MUSE_CODE_EXECUTABLE` pins the Muse binary, while `MUSE_CODE_ACP_BIN` and `MUSE_CODE_ACP_SEARCH_PATHS` control the fallback adapter.
+The launcher defaults to `MUSE_CODE_ACP_BACKEND=auto`, which prefers the `muse-code-acp` adapter when it is installed (native `muse acp` does not advertise steering, so only the adapter enables the Steer button) and uses native ACP, after `MUSE_EXPERIMENTAL_ACP=on muse acp --help` succeeds, when no adapter is found.  Set `MUSE_CODE_ACP_PREFER_NATIVE=1` or `MUSE_CODE_ACP_REQUIRE_NATIVE=1` to keep native first.  The Mac saved-login route (desktop helper, no `META_API_KEY`) is unchanged and stays native.  `native` requires that route and `adapter` forces the compatibility adapter.  `MUSE_CODE_EXECUTABLE` pins the Muse binary, while `MUSE_CODE_ACP_BIN` and `MUSE_CODE_ACP_SEARCH_PATHS` control the fallback adapter.
 
 The Muse models come from two places, and the catalog merges them: what the ACP session advertises on `session/new`, and the provider catalog the Muse CLI writes to `~/.local/share/muse/model-catalog/`.  The provider catalog is what makes a model the session does not advertise — Muse Wonder — selectable from the phone and the Mac.
 

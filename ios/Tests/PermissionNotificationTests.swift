@@ -7,6 +7,7 @@ final class PermissionNotificationTests: XCTestCase {
         PermissionNotificationPayload(
             hostId: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
             sessionId: "session-7",
+            engine: "muse",
             requestId: "perm-7",
             denyOptionId: "reject-once"
         )
@@ -55,7 +56,7 @@ final class PermissionNotificationTests: XCTestCase {
         // payload holds identifiers and never the request itself.
         XCTAssertEqual(
             Set(payload().userInfo.keys),
-            ["hostId", "sessionId", "requestId", "denyOptionId"]
+            ["hostId", "sessionId", "engine", "requestId", "denyOptionId"]
         )
     }
 
@@ -153,5 +154,125 @@ final class PermissionNotificationTests: XCTestCase {
             options: [AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once")]
         )
         XCTAssertNil(request.denyOptionId)
+    }
+
+    // MARK: - The engine the link names
+
+    func testALinkCarriesTheEngineItNames() throws {
+        let hostId = UUID(uuidString: "11111111-2222-3333-4444-555555555555")
+        let url = try XCTUnwrap(ThreadLink.url(sessionId: "session-7", hostId: hostId, engine: "muse"))
+
+        let link = try XCTUnwrap(ThreadLink.parse(url))
+
+        XCTAssertEqual(link.sessionId, "session-7")
+        XCTAssertEqual(link.hostId, hostId)
+        XCTAssertEqual(link.engine, "muse")
+    }
+
+    func testAnOlderLinkNamesNoEngine() throws {
+        // A link written before the engine rode in it still opens.
+        let url = try XCTUnwrap(
+            URL(string: "clutch://thread/session-7?host=11111111-2222-3333-4444-555555555555")
+        )
+
+        let link = try XCTUnwrap(ThreadLink.parse(url))
+
+        XCTAssertEqual(link.sessionId, "session-7")
+        XCTAssertNil(link.engine)
+    }
+
+    func testALinkThatNamesAnEngineOpensItEvenWhenTheSidebarIsElsewhere() {
+        // A Muse approval opens Muse while the sidebar stays on MiniMax
+        // Code:  the destination carries its own engine and never borrows
+        // the sidebar's.
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: ["mcode", "muse"]),
+            "muse"
+        )
+    }
+
+    func testAnOlderLinkResolvesToTheOneEngineThatHasActivity() {
+        XCTAssertEqual(ThreadLink.resolveEngine(named: nil, activityEngines: ["muse"]), "muse")
+    }
+
+    func testAnOlderLinkThatIsAmbiguousNamesNoEngine() {
+        // Two engines carry the same raw id, and none carries it, so there
+        // is nothing to resolve without guessing:  the surface keeps the
+        // engine it is already showing.
+        XCTAssertNil(ThreadLink.resolveEngine(named: nil, activityEngines: ["mcode", "muse"]))
+        XCTAssertNil(ThreadLink.resolveEngine(named: nil, activityEngines: []))
+    }
+
+    func testALinkThatNamesAnEngineTheSidebarDoesNotOfferIsRefused() {
+        // A link is untrusted input:  a crafted one must not be able to point
+        // the session client at an engine the host never advertised.
+        XCTAssertNil(
+            ThreadLink.resolveEngine(
+                named: "crafted",
+                activityEngines: [],
+                known: ["mcode", "muse"]
+            )
+        )
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: [], known: ["mcode", "muse"]),
+            "muse"
+        )
+    }
+
+    func testALinkThatNamesAnUnlistedEngineIsRefusedRatherThanOpened() throws {
+        // A refusal is its own answer and not the same as an engine that
+        // cannot be resolved:  the surface drops this link instead of opening
+        // its id on the engine it happens to be showing.
+        let url = try XCTUnwrap(URL(string: "clutch://thread/session-7?engine=crafted"))
+        let crafted = try XCTUnwrap(ThreadLink.parse(url))
+        XCTAssertTrue(crafted.isRefused(known: ["mcode", "muse"]))
+
+        let listed = ThreadLink(sessionId: "session-7", hostId: nil, engine: "muse")
+        XCTAssertFalse(listed.isRefused(known: ["mcode", "muse"]))
+    }
+
+    func testAnOlderLinkIsNeverRefused() {
+        // An older link names no engine at all, so there is nothing to refuse
+        // and it opens on the engine the surface is showing.
+        let older = ThreadLink(sessionId: "session-7", hostId: nil, engine: nil)
+        XCTAssertFalse(older.isRefused(known: ["mcode"]))
+        XCTAssertFalse(older.isRefused(known: []))
+
+        let named = ThreadLink(sessionId: "session-7", hostId: nil, engine: "muse")
+        XCTAssertFalse(named.isRefused(known: []))
+    }
+
+    func testALinkResolvesWhileTheEngineCatalogIsStillLoading() {
+        // No catalog yet is not the same as no such engine:  refusing the
+        // name before the host has said what it offers would break every
+        // link during the first moment after launch.
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: [], known: []),
+            "muse"
+        )
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: [], known: nil),
+            "muse"
+        )
+    }
+
+    func testThePayloadCarriesTheEngineAndReadsItBack() throws {
+        XCTAssertEqual(payload().userInfo["engine"], "muse")
+
+        let read = try XCTUnwrap(PermissionNotificationPayload(userInfo: payload().userInfo))
+
+        XCTAssertEqual(read.engine, "muse")
+    }
+
+    func testAPayloadFromBeforeTheEngineReadsBackWithoutOne() throws {
+        let older: [String: String] = [
+            "hostId": "11111111-2222-3333-4444-555555555555",
+            "sessionId": "session-7",
+            "requestId": "perm-7",
+        ]
+
+        let read = try XCTUnwrap(PermissionNotificationPayload(userInfo: older))
+
+        XCTAssertNil(read.engine)
     }
 }

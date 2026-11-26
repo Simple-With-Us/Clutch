@@ -50,6 +50,7 @@ final class FilesClientTests: XCTestCase {
         """
         let preview = try JSONDecoder().decode(FilesClient.Preview.self, from: Data(payload.utf8))
         XCTAssertEqual(preview.name, "README.md")
+        XCTAssertNil(preview.absolute)
         XCTAssertTrue(preview.isText)
         XCTAssertFalse(preview.truncated)
         XCTAssertEqual(preview.bytes, 12)

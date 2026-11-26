@@ -266,8 +266,7 @@ public final class HostStore {
         guard let token = localChatToken() else { return }
         var changed = false
         for index in hosts.indices where hosts[index].chatToken?.isEmpty ?? true {
-            let host = (hosts[index].origin.host ?? "").lowercased()
-            guard host == "127.0.0.1" || host == "localhost" else { continue }
+            guard hosts[index].isLocal else { continue }
             hosts[index].chatToken = token
             changed = true
         }

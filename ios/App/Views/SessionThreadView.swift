@@ -92,6 +92,47 @@ final class SessionThreadModel {
     /// files to a message.
     var attachments: [ChatAttachment] = []
 
+    /// What the engine last said about this thread's context window, and
+    /// whether it offers compaction.  Nil until it reports either.
+    var contextControls: MuseContextControls?
+    /// The newest usage record the stream carried, for the context panel.
+    var latestUsage: AcpSessionUsage?
+
+    /// The context panel's split, when the engine named a window: from
+    /// the live usage when it has one, else from the controls' totals.
+    var contextBreakdown: ContextBreakdown? {
+        if let breakdown = latestUsage?.contextBreakdown { return breakdown }
+        guard let controls = contextControls,
+              let used = controls.contextUsedTokens,
+              let window = controls.contextWindow, window > 0 else { return nil }
+        return ContextBreakdown(window: window, segments: [
+            ContextSegment(kind: .input, tokens: min(max(used, 0), window)),
+            ContextSegment(kind: .free, tokens: max(window - max(used, 0), 0)),
+        ])
+    }
+
+    /// Whether the owner can compact this thread by hand right now.
+    var canCompactContext: Bool {
+        contextControls?.supportsCompaction == true && !isSending && phase == .ready
+    }
+
+    /// Ask the engine to compact this thread now, the same "/compact"
+    /// turn the Mac workspace sends.  The turn itself is the note the
+    /// thread carries about it.
+    func compactContext() {
+        guard canCompactContext else { return }
+        // The compact turn is not the owner's next message: their draft
+        // and their attachments stay exactly as they left them, the way
+        // the Mac workspace already treats its own compact send.
+        let savedDraft = draft
+        let savedAttachments = attachments
+        draft = "/compact"
+        attachments = []
+        send()
+        draft = savedDraft
+        attachments = savedAttachments
+    }
+
     /// The engine this thread runs on (`mcode` for MiniMax Code, `muse` for
     /// Muse Code).  Set when the thread is opened, and what the catalog is
     /// filtered by.
@@ -171,6 +212,7 @@ final class SessionThreadModel {
             cwd = loaded.cwd
             remoteSessionId = loaded.remoteSessionId
             bubbles = Self.bubbles(from: loaded.history)
+            if let carriedControls = loaded.contextControls { contextControls = carriedControls }
             historyCount = loaded.history.count
             // The plan is a state, not a line of the transcript: the last
             // plan the thread carried is the one the engine last reported.
@@ -197,7 +239,7 @@ final class SessionThreadModel {
         // turn starts without steering until the sidecar says otherwise.
         supportsSteering = false
         bubbles.append(ThreadBubbleItem(id: UUID().uuidString, role: .user, text: prompt))
-        TurnActivity.shared.runStarted(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
+        TurnActivity.shared.runStarted(hostId: host.id, engine: engine, sessionId: session.sessionId, title: session.displayTitle)
 
         // relayReceiverUid is empty: an unpaired CometChat thread has no sink
         // to relay into, and the sidecar skips the mirror when it is blank.
@@ -257,6 +299,7 @@ final class SessionThreadModel {
                         permissionTick += 1
                         TurnActivity.shared.approvalArrived(
                             hostId: host.id,
+                            engine: engine,
                             sessionId: session.sessionId,
                             requestId: request.requestId,
                             title: session.displayTitle
@@ -266,6 +309,7 @@ final class SessionThreadModel {
                             payload: PermissionNotificationPayload.make(
                                 hostId: host.id,
                                 sessionId: session.sessionId,
+                                engine: engine,
                                 requestId: request.requestId,
                                 denyOptionId: request.denyOptionId
                             )
@@ -275,21 +319,21 @@ final class SessionThreadModel {
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.clearAll()
-                        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
-                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                         didFinish = true
-                    case .usage:
-                        break // live usage strip is Mac-only
-                    case .contextControls:
-                        break // compaction controls are shown on the Mac workspace
+                    case .usage(let usage):
+                        latestUsage = usage
+                    case .contextControls(let controls):
+                        contextControls = controls
                     case .failed(let message):
                         sendError = message
                         ErrorReporting.turnFailed(engine: engine, message: message)
                         pendingPermissions.clearAll()
-                        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
-                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
@@ -301,8 +345,8 @@ final class SessionThreadModel {
                     sendError = error.localizedDescription
                     ErrorReporting.turnTransportFailed(engine: engine, error: error)
                 }
-                TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
-                TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
+                TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
+                TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
             }
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
@@ -381,6 +425,7 @@ final class SessionThreadModel {
                 if pendingPermissions.acknowledge(requestId: answer.requestId) {
                     TurnActivity.shared.approvalAcknowledged(
                         hostId: host.id,
+                        engine: engine,
                         sessionId: session.sessionId,
                         requestId: answer.requestId
                     )
@@ -413,8 +458,8 @@ final class SessionThreadModel {
         // it out on its own.
         queuedPrompt = nil
         supportsSteering = false
-        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
-        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+        TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
+        TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
         turnTick += 1
         isSending = false
     }
@@ -593,6 +638,23 @@ public struct SessionThreadView: View {
             }
             if let queued = model.queuedPrompt {
                 queuedPromptPill(queued)
+            }
+            if let breakdown = model.contextBreakdown {
+                VStack(spacing: ClutchSpacing.tight) {
+                    ContextPanel(breakdown: breakdown)
+                    if model.canCompactContext {
+                        HStack {
+                            Spacer()
+                            Button("Compact Context", systemImage: "arrow.down.right.and.arrow.up.left") {
+                                model.compactContext()
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Ask the engine to compact this thread's context")
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
             composer
         }
