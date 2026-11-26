@@ -276,7 +276,7 @@ describe("the Muse Code launcher", () => {
     const python = join(stub, "python3");
     writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\n');
     chmodSync(python, 0o755);
-    const base = { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app };
+    const base = { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app, MUSE_CODE_ACP_PREFER_NATIVE: "1" };
 
     const withApiKey = execFileSync(LAUNCHER, ["--flag"], {
       env: { ...base, META_API_KEY: "test-key-placeholder" },
