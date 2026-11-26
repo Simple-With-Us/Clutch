@@ -94,6 +94,7 @@ import {
   type SessionMetaFile,
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
+import { createCron, deleteCron, listCrons, type CronRule } from "./dshHostCrons.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
 import { listDirectory, readPreview } from "./files.ts";
 import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "./dshHostTurn.ts";
@@ -3704,6 +3705,73 @@ async function main(): Promise<void> {
       const controls = bridges.get("muse")?.contextControls(session.bridgeSessionId) ?? { supportsCompaction: false };
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(controls));
       return;
+    }
+
+    // Crons: the host's schedule projection, and the engine-mediated
+    // create/delete the schedule tools are the management surface for.
+    if (url.pathname === "/clutch/v1/crons" && (req.method === "GET" || req.method === "POST" || req.method === "DELETE")) {
+      try {
+        if (req.method === "GET") {
+          const crons = await hostClient.run((client) => listCrons(client));
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ crons }));
+          return;
+        }
+        // Only POST carries a body; a DELETE names its target in the
+        // query, and an empty body there is not invalid JSON.
+        let body: unknown = {};
+        if (req.method === "POST") {
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "invalid JSON body" }));
+            return;
+          }
+        }
+        const parsedBody = z.object({
+          sessionId: z.string().optional(),
+          id: z.string().optional(),
+          prompt: z.string().optional(),
+          afterSeconds: z.number().optional(),
+          at: z.string().optional(),
+          everySeconds: z.number().optional(),
+        }).passthrough().safeParse(body);
+        const record = parsedBody.success ? parsedBody.data : {};
+        const sessionId = record.sessionId ?? url.searchParams.get("sessionId") ?? "";
+        if (req.method === "DELETE") {
+          const id = typeof record.id === "string" ? record.id : url.searchParams.get("id") ?? "";
+          if (!sessionId || !id) {
+            res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "sessionId and id are required" }));
+            return;
+          }
+          await hostClient.run((client) => deleteCron(client, { sessionId, id }));
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ deleted: true, id }));
+          return;
+        }
+        const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
+        const rules: CronRule[] = [];
+        if (typeof record.afterSeconds === "number") rules.push({ kind: "after", afterSeconds: record.afterSeconds });
+        if (typeof record.at === "string") rules.push({ kind: "at", at: record.at });
+        if (typeof record.everySeconds === "number") rules.push({ kind: "every", everySeconds: record.everySeconds });
+        const rule = rules.length === 1 ? rules[0]! : undefined;
+        const ruleValid = rule !== undefined && (
+          rule.kind === "every"
+            ? Number.isInteger(rule.everySeconds) && rule.everySeconds >= 300
+            : rule.kind === "after"
+              ? Number.isInteger(rule.afterSeconds) && rule.afterSeconds > 0
+              : !Number.isNaN(Date.parse(rule.at)) && Date.parse(rule.at) > Date.now()
+        );
+        if (!sessionId || !prompt || !ruleValid) {
+          res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "sessionId, a non-empty prompt, and exactly one valid rule (afterSeconds, at, or everySeconds >= 300) are required" }));
+          return;
+        }
+        const cron = await hostClient.run((client) => createCron(client, { sessionId, prompt, rule }));
+        res.writeHead(201, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ cron }));
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "the dsh host could not answer";
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: message.slice(0, 200) }));
+        return;
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/clutch/v1/session-meta") {

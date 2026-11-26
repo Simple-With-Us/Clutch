@@ -316,6 +316,58 @@ public struct SessionsClient {
         return try JSONDecoder().decode(MuseContextControls.self, from: data)
     }
 
+    // MARK: - Crons
+    //
+    // The reminders the host's sessions hold, through the sidecar's cron
+    // routes.  Create and delete are verified by the sidecar against the
+    // schedule projection, so a 201 or a deleted answer is the host's own
+    // record, not the engine's claim.
+
+    public func crons() async throws -> [CronItem] {
+        var comps = try base()
+        comps.path = "/clutch/v1/crons"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        let (data, resp) = try await URLSession.shared.data(for: authorized(url, timeout: 30))
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        return try JSONDecoder().decode(CronList.self, from: data).crons
+    }
+
+    public func createCron(sessionId: String, prompt: String, rule: [String: Any]) async throws -> CronItem {
+        var payload: [String: Any] = ["sessionId": sessionId, "prompt": prompt]
+        for (key, value) in rule { payload[key] = value }
+        return try await cronRequest(method: "POST", payload: payload, status: 201, decode: CronCreated.self).cron
+    }
+
+    public func deleteCron(sessionId: String, id: String) async throws {
+        var comps = try base()
+        comps.path = "/clutch/v1/crons"
+        comps.queryItems = [URLQueryItem(name: "sessionId", value: sessionId), URLQueryItem(name: "id", value: id)]
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        var request = try authorized(url, timeout: 120)
+        request.httpMethod = "DELETE"
+        let (_, resp) = try await URLSession.shared.data(for: request)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+    }
+
+    private func cronRequest<T: Decodable>(method: String, payload: [String: Any], status: Int, decode: T.Type) async throws -> T {
+        var comps = try base()
+        comps.path = "/clutch/v1/crons"
+        guard let url = comps.url else { throw ChatClientError.badHost }
+        var request = try authorized(url, timeout: 120)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, resp) = try await URLSession.shared.data(for: request)
+        guard (resp as? HTTPURLResponse)?.statusCode == status else {
+            throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
     // MARK: - Projects and archiving
     //
     // The engine has no concept of either, so this is Clutch-side metadata that

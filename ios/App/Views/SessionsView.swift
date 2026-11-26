@@ -138,6 +138,8 @@ enum HomeSelection: Hashable {
     case quickChat
     /// The approvals waiting on this host.
     case approvals
+    /// The reminders this host's threads hold.
+    case crons
     /// Nothing yet — the detail pane explains itself.
     case none
 }
@@ -448,6 +450,26 @@ public struct SessionsView: View {
                 Section {
                     loadMoreRow
                 }
+            }
+
+            // Reminders sit above Quick Chat: they are work the owner
+            // scheduled, and Quick Chat stays last by the rule above it.
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock")
+                        .font(ClutchFont.caption)
+                        .foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                    Text("Reminders")
+                        .font(ClutchFont.captionStrong)
+                    Spacer(minLength: 0)
+                }
+                .frame(minHeight: 44)
+                .tag(HomeSelection.crons)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Reminders")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("crons-row")
             }
 
             // Quick Chat sits last, below every project and folder: it is the
@@ -856,6 +878,8 @@ public struct SessionsView: View {
             ApprovalsView(host: host) { thread in
                 selection = .thread(thread.sessionId, engine: thread.engine)
             }
+        case .crons:
+            CronsView(host: host, sessions: visibleSessions)
         case .none:
             ContentUnavailableView(
                 "Pick A Thread",
