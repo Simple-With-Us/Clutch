@@ -106,8 +106,8 @@ final class SessionThreadModel {
               let used = controls.contextUsedTokens,
               let window = controls.contextWindow, window > 0 else { return nil }
         return ContextBreakdown(window: window, segments: [
-            ContextSegment(kind: .input, tokens: min(used, window)),
-            ContextSegment(kind: .free, tokens: max(window - used, 0)),
+            ContextSegment(kind: .input, tokens: min(max(used, 0), window)),
+            ContextSegment(kind: .free, tokens: max(window - max(used, 0), 0)),
         ])
     }
 
@@ -121,8 +121,16 @@ final class SessionThreadModel {
     /// thread carries about it.
     func compactContext() {
         guard canCompactContext else { return }
+        // The compact turn is not the owner's next message: their draft
+        // and their attachments stay exactly as they left them, the way
+        // the Mac workspace already treats its own compact send.
+        let savedDraft = draft
+        let savedAttachments = attachments
         draft = "/compact"
+        attachments = []
         send()
+        draft = savedDraft
+        attachments = savedAttachments
     }
 
     /// The engine this thread runs on (`mcode` for MiniMax Code, `muse` for
