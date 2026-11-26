@@ -117,6 +117,7 @@ struct MacChatInputBar: View {
                             Label("Steer Current Turn", systemImage: MacBusySendMode.steer.symbol)
                         }
                         .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSteer || isSteering)
+                        .help(steerHelp)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                             .font(.system(size: 20))
