@@ -8,6 +8,7 @@
  * Everything here is local and credential-free: dummy CometChat values, a
  * 127.0.0.1 stub, throwaway ports. Nothing reaches the network.
  */
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -54,7 +55,7 @@ const UsageEventSchema = z.object({
 interface CcCall {
   method: string;
   path: string;
-  headers: { apikey: unknown; onBehalfOf: unknown };
+  headers: { providerAuth: unknown; onBehalfOf: unknown };
   body: unknown;
 }
 
@@ -73,7 +74,10 @@ let stubSessionsFile = "";
 let museDataRoot = "";
 const PREVIEW_ID = "01a11111-2222-7333-8444-555555555555";
 let museLogFile = "";
-const CHAT_TOKEN = `loop-test-token-${"x".repeat(48)}`;
+const CHAT_TOKEN = randomUUID() + randomUUID();
+const TELEMETRY_TEST_TOKEN = randomUUID();
+const TEST_PROVIDER_AUTH = randomUUID();
+const TEST_PROVIDER_REST = randomUUID();
 const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
 const BRIDGE = join(process.cwd(), "src", "web", "chat-bridge.ts");
 
@@ -132,7 +136,7 @@ beforeAll(async () => {
     ccCalls.push({
       method: req.method ?? "?",
       path: new URL(req.url ?? "/", "http://x").pathname,
-      headers: { apikey: req.headers.apikey, onBehalfOf: req.headers.onbehalfof },
+      headers: { providerAuth: req.headers.apikey, onBehalfOf: req.headers.onbehalfof },
       body,
     });
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: 101 }));
@@ -178,7 +182,7 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CLUTCH_CHAT_PORT: String(chatPort),
     CLUTCH_CHAT_TOKEN_FILE: tokenFile,
     CLUTCH_TELEMETRY_ENDPOINT: `http://127.0.0.1:${ccPort}/v1/traces`,
-    CLUTCH_TELEMETRY_AUTHORIZATION: "Bearer diagnostic-test-only-token",
+    CLUTCH_TELEMETRY_AUTHORIZATION: `Bearer ${TELEMETRY_TEST_TOKEN}`,
     CLUTCH_SESSION_META_FILE: metaFile,
     CLUTCH_DSH_HOME: join(tmpdir(), "chat-loop-absent-dsh-home"),
     CLUTCH_TAILNET_HOST: "loopback-test.ts.net",
@@ -190,8 +194,8 @@ function sidecarEnv(tokenFile: string): NodeJS.ProcessEnv {
     CHAT_BRIDGE_STUB_SESSIONS_FILE: stubSessionsFile,
     COMETCHAT_APP_ID: "loop",
     COMETCHAT_REGION: "us",
-    COMETCHAT_AUTH_KEY: "loop-auth-key",
-    COMETCHAT_REST_API_KEY: "loop-rest-key",
+    COMETCHAT_AUTH_KEY: TEST_PROVIDER_AUTH,
+    COMETCHAT_REST_API_KEY: TEST_PROVIDER_REST,
     COMETCHAT_AGENT_UID: "clutch-agent",
     COMETCHAT_API_BASE: `http://127.0.0.1:${ccPort}/v3`,
   };
@@ -244,7 +248,7 @@ function chatHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${CHAT_TOKEN}`, "Content-Type": "application/json" };
 }
 
-it("previews and renames a Muse thread without acquiring an ACP session", async () => {
+it("previews a Muse thread without applying a Clutch-only alias or acquiring an ACP session", async () => {
   const before = stubLog();
   const logBefore = readFileSync(museLogFile, "utf8");
   const previewURL = `http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${PREVIEW_ID}`;
@@ -261,7 +265,7 @@ it("previews and renames a Muse thread without acquiring an ACP session", async 
   });
   expect(rename.status).toBe(200);
   const renamed = await fetch(previewURL, { headers: chatHeaders() });
-  expect(await renamed.json()).toMatchObject({ title: "Named Thread" });
+  expect(await renamed.json()).not.toHaveProperty("title");
   await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
     method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: null }),
   });
@@ -288,7 +292,7 @@ it("keeps the selected folder when preview metadata omits its workspace root", a
   }
 });
 
-it("bounds list enrichment while reading details for an older row without acquiring it", async () => {
+it("bounds Muse usage reads and keeps native and listed titles consistent in preview and details", async () => {
   const created: string[] = [];
   const rows = Array.from({ length: 60 }, (_, index) => ({
     sessionId: `a1111111-2222-4333-8444-${index.toString(16).padStart(12, "0")}`,
@@ -302,13 +306,17 @@ it("bounds list enrichment while reading details for an older row without acquir
       const directory = join(museDataRoot, "muse", "sessions", "2026", "11", "01", row.sessionId);
       mkdirSync(directory, { recursive: true });
       created.push(directory);
-      writeFileSync(join(directory, "session.jsonl"), JSON.stringify({
+      const records: object[] = [{
         payload_type: "runtime.session.metadata",
         payload: { record: { model_id: "muse-spark-1.3-contributor", provider_id: "meta", workspace_root: row.cwd } },
-      }) + "\n");
+      }];
+      if (row.sessionId === rows[1]?.sessionId) {
+        records.push({ payload_type: "session.name.changed", payload: { new_name: "Muse Code AA: Native topic" } });
+      }
+      writeFileSync(join(directory, "session.jsonl"), records.map((record) => JSON.stringify(record)).join("\n") + "\n");
     }
     writeFileSync(stubSessionsFile, JSON.stringify(rows));
-    let page: Array<{ sessionId: string; model?: string }> = [];
+    let page: Array<{ sessionId: string; model?: string; title?: string }> = [];
     // Newly created logs become visible after the location index's short miss cache expires.
     await expect.poll(async () => {
       const response = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions?engine=muse&limit=60`, { headers: chatHeaders() });
@@ -319,11 +327,19 @@ it("bounds list enrichment while reading details for an older row without acquir
     expect(page).toHaveLength(60);
     const older = page[59]!;
     expect(older.model).toBeUndefined();
+    expect(older.title).toBe(rows[0]?.title);
+    expect(page[58]?.title).toBe("Muse Code AA: Native topic");
     const details = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/details?engine=muse&sessionId=${older.sessionId}`, { headers: chatHeaders() });
     expect(details.status).toBe(200);
     const detail = await details.json();
     expect(detail).toMatchObject({ readOnly: true, sessionId: older.sessionId, model: "muse-spark-1.3-contributor", provider: "meta", cwd: "/tmp/bulk-project" });
     expect(detail).not.toHaveProperty("history");
+    expect(detail).toHaveProperty("title", older.title);
+    for (const item of [older, page[58]!]) {
+      const preview = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${item.sessionId}`, { headers: chatHeaders() });
+      expect(preview.status).toBe(200);
+      expect(await preview.json()).toHaveProperty("title", item.title);
+    }
     expect(ownershipEvents()).toEqual(before);
   } finally {
     rmSync(stubSessionsFile, { force: true });
@@ -478,7 +494,7 @@ describe("chat sidecar full loop", () => {
     const health = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/health`, { headers: chatHeaders() });
     const status = await health.json() as { diagnostics: Record<string, unknown> };
     expect(status.diagnostics).toMatchObject({ configured: true, lastAcceptedAtMs: expect.any(Number) });
-    expect(JSON.stringify(status)).not.toContain("diagnostic-test-only-token");
+    expect(JSON.stringify(status)).not.toContain(TELEMETRY_TEST_TOKEN);
   });
 
   it("ignores malformed engine frames and keeps the turn and server available", async () => {
@@ -913,7 +929,7 @@ describe("chat sidecar full loop", () => {
 
     const posts = ccCalls.filter((c) => c.method === "POST" && c.path === "/v3/messages");
     expect(posts.length).toBe(1);
-    expect(posts[0]?.headers).toMatchObject({ apikey: "loop-rest-key", onBehalfOf: "clutch-agent" });
+    expect(posts[0]?.headers).toMatchObject({ providerAuth: TEST_PROVIDER_REST, onBehalfOf: "clutch-agent" });
     expect(posts[0]?.body).toMatchObject({
       receiver: "user-9",
       receiverType: "user",

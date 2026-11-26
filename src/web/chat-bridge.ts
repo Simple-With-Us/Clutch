@@ -66,7 +66,7 @@ import { readZcodeSessionUsage } from "./zcode-session-usage.ts";
 import { ZCODE_ACP_INSTALL, ZCODE_ACP_SETUP, defaultZcodeAcpServer, resolveZcodeCli, zcodeSignedIn, zcodeSpawnEnv } from "./zcode-acp.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
-import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
+import { museDisplayTitle, readMuseSessionLog, readMuseSessionName, readMuseSessionSummary } from "./muse-session-log.ts";
 import { mapWithConcurrency } from "./bounded-map.ts";
 import { museSessionUsage, withMuseContext } from "./muse-session-metrics.ts";
 import { normalizeSessionFolder, sessionIsInFolder } from "./session-folder-scope.ts";
@@ -1065,6 +1065,7 @@ export function applySessionMeta(
   sessions: readonly AcpSessionInfo[],
   meta: SessionMetaFile,
   includeArchived: boolean,
+  includeTitleOverrides = true,
 ): AcpSessionInfo[] {
   const out: AcpSessionInfo[] = [];
   for (const session of sessions) {
@@ -1072,7 +1073,7 @@ export function applySessionMeta(
     if (entry?.archived && !includeArchived) continue;
     out.push({
       ...session,
-      ...(entry?.title ? { title: entry.title } : {}),
+      ...(includeTitleOverrides && entry?.title ? { title: entry.title } : {}),
       ...(entry?.projectId ? { projectId: entry.projectId } : {}),
       ...(entry?.archived ? { archived: true } : {}),
     });
@@ -2340,6 +2341,31 @@ const SessionMetaPatchSchema = z
 /** Most sessions enriched with log-derived usage per list request. */
 const USAGE_ENRICH_CAP = 50;
 
+/** Saved Muse names apply to the entire returned page, independently of the
+ * cap on usage and model enrichment. Older rows use a separate compact name read. */
+export async function enrichMuseSessionPage(
+  rows: readonly AcpSessionInfo[],
+  readSummary: typeof readMuseSessionSummary = readMuseSessionSummary,
+  readName: typeof readMuseSessionName = readMuseSessionName,
+): Promise<AcpSessionInfo[]> {
+  return mapWithConcurrency(rows, 4, async (row, index) => {
+    const summary = index < USAGE_ENRICH_CAP ? await readSummary(row.sessionId) : null;
+    const { title: listedTitle, ...session } = row;
+    const name = index < USAGE_ENRICH_CAP ? summary?.name : await readName(row.sessionId);
+    const title = museDisplayTitle(name, listedTitle);
+    const includeUsage = summary !== null;
+    const usage = includeUsage ? museSessionUsage(summary) : null;
+    return {
+      ...session,
+      ...(title ? { title } : {}),
+      ...(includeUsage && summary.modelId ? { model: summary.modelId } : {}),
+      ...(includeUsage && summary.providerId ? { provider: summary.providerId } : {}),
+      ...(usage ? { usage } : {}),
+    };
+  });
+}
+
+
 const ProjectCreateSchema = z
   .object({
     name: z.string({ error: "project name is required" }),
@@ -2507,6 +2533,16 @@ async function main(): Promise<void> {
   const bridges = new Map<Engine, Bridge>();
   const sessions = new Map<string, ChatSession>();
   const knownModelMetadata = new Map<string, SessionModelMetadata>();
+  // Fallback supplied by the Muse ACP catalog, never Clutch-local metadata.
+  const museListedTitles = new Map<string, string>();
+  function rememberMuseListedTitles(rows: readonly AcpSessionInfo[]): void {
+    for (const row of rows) {
+      museListedTitles.delete(row.sessionId);
+      const title = museDisplayTitle(undefined, row.title);
+      if (title) museListedTitles.set(row.sessionId, title.slice(0, 512));
+    }
+    while (museListedTitles.size > 5_000) museListedTitles.delete(museListedTitles.keys().next().value!);
+  }
   const modelMetadataKey = (engine: Engine, remoteSessionId: string): string => `${engine}\u0000${remoteSessionId}`;
   const rememberModelMetadata = (engine: Engine, remoteSessionId: string, metadata: SessionModelMetadata | null): void => {
     if (!metadata || (!metadata.provider && !metadata.model)) return;
@@ -3210,8 +3246,10 @@ async function main(): Promise<void> {
         const fetchLimit = requestedCwd && folderScope === "tree" ? 5_000 : includeArchived ? limit : Math.max(limit, 500);
         const listed = await listSessionsFor(listEngine, folderScope === "tree" ? undefined : requestedCwd, fetchLimit);
         const scoped = requestedCwd ? listed.filter((row) => sessionIsInFolder(row.cwd, requestedCwd, folderScope === "tree")) : listed;
-        const visible = applySessionMeta(scoped, loadSessionMeta(SESSION_META_FILE), includeArchived);
+        const sessionMeta = loadSessionMeta(SESSION_META_FILE);
+        const visible = applySessionMeta(scoped, sessionMeta, includeArchived, listEngine !== "muse");
         const page = visible.slice(0, limit);
+        if (listEngine === "muse") rememberMuseListedTitles(page);
         // Bound list I/O; details for an individual Muse row are read on demand.
         const modelPage = isDshHostedEngine(listEngine)
           ? attachSessionModelMetadata(page.slice(0, USAGE_ENRICH_CAP), DSH_HOME).concat(page.slice(USAGE_ENRICH_CAP))
@@ -3223,17 +3261,7 @@ async function main(): Promise<void> {
         const enrichedHead = withKnownMetadata.slice(0, USAGE_ENRICH_CAP);
         const enrichedTail = withKnownMetadata.slice(USAGE_ENRICH_CAP);
         const sessions = listEngine === "muse"
-          ? await mapWithConcurrency(enrichedHead, 4, async (row) => {
-            const log = await readMuseSessionSummary(row.sessionId);
-            if (!log) return row;
-            const usage = museSessionUsage(log);
-            return {
-              ...row,
-              ...(log.modelId ? { model: log.modelId } : {}),
-              ...(log.providerId ? { provider: log.providerId } : {}),
-              ...(usage ? { usage } : {}),
-            };
-          }).then((enriched) => enriched.concat(enrichedTail))
+          ? await enrichMuseSessionPage(withKnownMetadata)
           : listEngine === "zcode"
           // Z Code keeps its own model I/O log, not a dsh session log, so the
           // usage comes from the engine's own record.
@@ -3273,12 +3301,11 @@ async function main(): Promise<void> {
           res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Recorded details are unavailable for this thread." }));
           return;
         }
-        const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
         const usage = museSessionUsage(summary);
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
           readOnly: true, sessionId: id,
           cwd: summary.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
-          title: entry?.title ?? summary.name, model: summary.modelId, provider: summary.providerId,
+          title: museDisplayTitle(summary.name, museListedTitles.get(id)), model: summary.modelId, provider: summary.providerId,
           ...(usage ? { usage } : {}),
         }));
       } catch {
@@ -3304,11 +3331,10 @@ async function main(): Promise<void> {
             res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "A read-only preview is unavailable for this thread.\u00A0 Choose Resume Thread to open it with Muse." }));
             return;
           }
-          const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
           const usage = museSessionUsage(log);
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
             readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
-            title: entry?.title ?? log.name, model: log.modelId, provider: log.providerId,
+            title: museDisplayTitle(log.name, museListedTitles.get(id)), model: log.modelId, provider: log.providerId,
             history: sliceThreadHistory(compactToolHistory(log.transcript), limit),
             ...(usage ? { usage } : {}), running, truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
           }));
