@@ -92,6 +92,39 @@ final class SessionThreadModel {
     /// files to a message.
     var attachments: [ChatAttachment] = []
 
+    /// What the engine last said about this thread's context window, and
+    /// whether it offers compaction.  Nil until it reports either.
+    var contextControls: MuseContextControls?
+    /// The newest usage record the stream carried, for the context panel.
+    var latestUsage: AcpSessionUsage?
+
+    /// The context panel's split, when the engine named a window: from
+    /// the live usage when it has one, else from the controls' totals.
+    var contextBreakdown: ContextBreakdown? {
+        if let breakdown = latestUsage?.contextBreakdown { return breakdown }
+        guard let controls = contextControls,
+              let used = controls.contextUsedTokens,
+              let window = controls.contextWindow, window > 0 else { return nil }
+        return ContextBreakdown(window: window, segments: [
+            ContextSegment(kind: .input, tokens: min(used, window)),
+            ContextSegment(kind: .free, tokens: max(window - used, 0)),
+        ])
+    }
+
+    /// Whether the owner can compact this thread by hand right now.
+    var canCompactContext: Bool {
+        contextControls?.supportsCompaction == true && !isSending && phase == .ready
+    }
+
+    /// Ask the engine to compact this thread now, the same "/compact"
+    /// turn the Mac workspace sends.  The turn itself is the note the
+    /// thread carries about it.
+    func compactContext() {
+        guard canCompactContext else { return }
+        draft = "/compact"
+        send()
+    }
+
     /// The engine this thread runs on (`mcode` for MiniMax Code, `muse` for
     /// Muse Code).  Set when the thread is opened, and what the catalog is
     /// filtered by.
@@ -171,6 +204,7 @@ final class SessionThreadModel {
             cwd = loaded.cwd
             remoteSessionId = loaded.remoteSessionId
             bubbles = Self.bubbles(from: loaded.history)
+            if let carriedControls = loaded.contextControls { contextControls = carriedControls }
             historyCount = loaded.history.count
             // The plan is a state, not a line of the transcript: the last
             // plan the thread carried is the one the engine last reported.
@@ -282,10 +316,10 @@ final class SessionThreadModel {
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                         didFinish = true
-                    case .usage:
-                        break // live usage strip is Mac-only
-                    case .contextControls:
-                        break // compaction controls are shown on the Mac workspace
+                    case .usage(let usage):
+                        latestUsage = usage
+                    case .contextControls(let controls):
+                        contextControls = controls
                     case .failed(let message):
                         sendError = message
                         ErrorReporting.turnFailed(engine: engine, message: message)
@@ -596,6 +630,23 @@ public struct SessionThreadView: View {
             }
             if let queued = model.queuedPrompt {
                 queuedPromptPill(queued)
+            }
+            if let breakdown = model.contextBreakdown {
+                VStack(spacing: ClutchSpacing.tight) {
+                    ContextPanel(breakdown: breakdown)
+                    if model.canCompactContext {
+                        HStack {
+                            Spacer()
+                            Button("Compact Context", systemImage: "arrow.down.right.and.arrow.up.left") {
+                                model.compactContext()
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Ask the engine to compact this thread's context")
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
             composer
         }

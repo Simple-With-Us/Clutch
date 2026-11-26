@@ -518,12 +518,91 @@ public struct AcpSessionUsage: Decodable, Equatable, Sendable {
         )
     }
 
+    /// The window split into the parts an owner can act on, or nil when
+    /// the engine reported no window.  The parts sum to the used tokens:
+    /// cached reads first, then the output, and the rest is fresh input.
+    public var contextBreakdown: ContextBreakdown? {
+        guard let contextWindow, contextWindow > 0 else { return nil }
+        guard contextUsedTokens != nil || basis != "session-totals" else { return nil }
+        let used = min(contextUsedTokens ?? totalTokens, contextWindow)
+        guard used >= 0 else { return nil }
+        let cached = min(max(cacheReadTokens ?? cachedTokens ?? 0, 0), used)
+        let output = min(max(outputTokens, 0), used - cached)
+        let input = used - cached - output
+        return ContextBreakdown(
+            window: contextWindow,
+            segments: [
+                ContextSegment(kind: .input, tokens: input),
+                ContextSegment(kind: .cached, tokens: cached),
+                ContextSegment(kind: .output, tokens: output),
+                ContextSegment(kind: .free, tokens: contextWindow - used),
+            ]
+        )
+    }
+
     /// `4.2k tok/s`, or nil when the engine has not produced two dated records
     /// yet.  A rate needs two real samples, so it is absent for a fresh thread.
     public var rateLabel: String? {
         guard let rate = outputTokensPerSecond, rate.isFinite, rate >= 0 else { return nil }
         if rate >= 1000 { return String(format: "%.1fk tok/s", rate / 1000) }
         return String(format: "%.0f tok/s", rate)
+    }
+}
+
+/// Which part of a context window one segment names.
+public enum ContextSegmentKind: String, Equatable, Sendable {
+    case input
+    case cached
+    case output
+    case free
+
+    public var label: String {
+        switch self {
+        case .input: return "Input"
+        case .cached: return "Cached"
+        case .output: return "Output"
+        case .free: return "Free"
+        }
+    }
+}
+
+/// One part of a context window, in tokens.
+public struct ContextSegment: Equatable, Sendable, Identifiable {
+    public var kind: ContextSegmentKind
+    public var tokens: Int
+
+    public var id: String { kind.rawValue }
+
+    public init(kind: ContextSegmentKind, tokens: Int) {
+        self.kind = kind
+        self.tokens = tokens
+    }
+}
+
+/// A context window as a panel shows it: the percent used, the parts it
+/// splits into, and the room left.  Built only from what the engine
+/// reported, so a window it never named builds nothing at all.
+public struct ContextBreakdown: Equatable, Sendable {
+    public var window: Int
+    public var segments: [ContextSegment]
+
+    public init(window: Int, segments: [ContextSegment]) {
+        self.window = window
+        self.segments = segments
+    }
+
+    public var usedTokens: Int {
+        segments.filter { $0.kind != .free }.reduce(0) { $0 + $1.tokens }
+    }
+
+    public var usedPercent: Double {
+        guard window > 0 else { return 0 }
+        return Double(usedTokens) / Double(window) * 100
+    }
+
+    public func fraction(of kind: ContextSegmentKind) -> Double {
+        guard window > 0, let segment = segments.first(where: { $0.kind == kind }) else { return 0 }
+        return Double(segment.tokens) / Double(window)
     }
 }
 

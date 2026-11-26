@@ -126,6 +126,9 @@ struct MacInspector: View {
     private var usageRows: some View {
         if let usage {
             VStack(alignment: .leading, spacing: ClutchSpacing.hair) {
+                if let breakdown = usage.contextBreakdown {
+                    ContextPanel(breakdown: breakdown)
+                }
                 if let model = usage.model {
                     usageRow("Model", model)
                 }
