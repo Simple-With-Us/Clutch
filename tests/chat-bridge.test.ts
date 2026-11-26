@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { clutchChatPort, clutchWebPort } from "../src/shared/ports.ts";
 import { isTrustedHostHeader, pairingLink, serverPairingLink, trustedAuthoritySet } from "../src/web/pair-link.ts";
-import { Bridge, compactToolHistory, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sameUsageReading, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf, zcodeAvailable } from "../src/web/chat-bridge.ts";
+import { Bridge, compactToolHistory, isLoopbackRemoteAddress, loadOrMintToken, materializeAttachment, mcodeAvailable, museInstalled, normalizeSessionUpdate, parseLimitParam, parsePromptImages, parseThreadQuery, readTailnetStatus, resolveTailnetHost, routeForModel, safeAttachmentName, sameUsageReading, sliceThreadHistory, sortSessionsByUpdated, toolStatusOf, zcodeAvailable } from "../src/web/chat-bridge.ts";
 import { engineCatalog, parseAcpMessage, readMuseProviderCatalog, resetEngineCatalogCache } from "../src/web/engine-catalog.ts";
 import { miniMaxCodeRemoteHtml } from "../src/web/minimax-code-remote.ts";
 
@@ -694,6 +694,17 @@ describe("thread endpoint wiring", () => {
     expect(source).toContain('"/clutch/v1/thread"');
     expect(source).toContain("parseThreadQuery");
     expect(source).toContain("fetchThread");
+  });
+});
+
+describe("isLoopbackRemoteAddress", () => {
+  it("accepts dotted, mapped-dotted and mapped-hex loopback only", () => {
+    for (const local of ["::1", "127.0.0.1", "127.0.0.2", "::ffff:127.0.0.1", "::ffff:7f00:1", "::ffff:7f000001"]) {
+      expect(isLoopbackRemoteAddress(local), local).toBe(true);
+    }
+    for (const remote of ["", "100.64.0.1", "192.168.1.1", "::ffff:192.168.0.1", "::ffff:fe00:1", "::ffff:7f00:1:2", "::ffff:7fzz"]) {
+      expect(isLoopbackRemoteAddress(remote), remote).toBe(false);
+    }
   });
 });
 
