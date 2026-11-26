@@ -181,6 +181,8 @@ struct MacChatInputBar: View {
     /// Tooltip for the Steer item. When steering is off it says why, so a
     /// greyed-out item is never a mystery.
     private var steerHelp: String {
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Type a message to steer the current turn." }
+        if isSteering { return "A steer is already being sent." }
         if canSteer { return "Give the active turn a new instruction without stopping it." }
         return "Steering is unavailable for this session: the Muse backend did not advertise steering (a native-only launch or an older host). Queue the message instead."
     }
