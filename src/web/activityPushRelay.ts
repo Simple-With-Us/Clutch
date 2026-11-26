@@ -527,6 +527,11 @@ export class ActivityPushRelay {
         // A token change supersedes any push still queued for the old token,
         // so the next schedule captures the new registration.
         this.cancelPending(key);
+        // The rotated phone must hear the current state again:  drop the
+        // remembered state for this key so the next unchanged-state notify
+        // pushes to the new token instead of skipping it.
+        this.lastSent.delete(key);
+        this.lastSentAt.delete(key);
       }
     }
     return this.options.store.put(registration);
@@ -716,6 +721,9 @@ export class ActivityPushRelay {
         this.attemptState.delete(key);
         return;
       }
+      // A cancel or rotation superseded this send while it was in flight:  a
+      // superseded payload must not be retried or counted against the budget.
+      if ((this.generations.get(key) ?? 0) !== generation) return;
       // The state was not delivered, so it is not remembered.
       this.log(`activity push failed status=${result.status} reason=${result.reason ?? "unknown"}`);
       if (isTransientPushStatus(result.status)) this.retryLater(key, waiting);
@@ -724,6 +732,7 @@ export class ActivityPushRelay {
       // A throw is the transport never answering:  the same push may go
       // through later, so it joins the transient path.
       this.log("activity push failed");
+      if ((this.generations.get(key) ?? 0) !== generation) return;
       this.retryLater(key, waiting);
     }
   }

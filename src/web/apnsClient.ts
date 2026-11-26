@@ -168,7 +168,7 @@ export const ApnsErrorSchema = z.object({
   /** Apple's static reason string, when the body carries one. */
   reason: z.string().optional(),
   description: z.string().optional(),
-  timestamp: z.number().optional(),
+  timestamp: z.number().or(z.string()).optional(),
 });
 
 /** Read Apple's reason out of an error body, when it gave one. */
