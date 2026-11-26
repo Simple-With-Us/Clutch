@@ -3716,10 +3716,14 @@ async function main(): Promise<void> {
           res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ crons }));
           return;
         }
-        // Only POST carries a body; a DELETE names its target in the
-        // query, and an empty body there is not invalid JSON.
+        // POST always carries a body.  A DELETE may name its target in
+        // the query or in a body; an absent body there is not invalid
+        // JSON, but a present one that does not parse is.
         let body: unknown = {};
-        if (req.method === "POST") {
+        const hasBody = req.method === "POST"
+          || (req.headers["content-length"] !== undefined && req.headers["content-length"] !== "0")
+          || req.headers["transfer-encoding"] !== undefined;
+        if (hasBody) {
           try {
             body = await readJsonBody(req);
           } catch {
