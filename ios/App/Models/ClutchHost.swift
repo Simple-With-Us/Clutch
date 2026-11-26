@@ -156,13 +156,13 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
                 // IPv4-mapped in hex form, e.g. ::ffff:7f00:1 — exactly
                 // two hex hextets with the high byte 0x7f, nothing looser.
                 let hextets = mapped.split(separator: ":", omittingEmptySubsequences: false)
-                guard hextets.count == 2,
+                guard hextets.count == 2, hextets.allSatisfy({ $0.count <= 4 }),
                       let high = UInt16(hextets[0], radix: 16),
                       UInt16(hextets[1], radix: 16) != nil else { return false }
                 return high >> 8 == 0x7f
             } else {
                 // Or the whole 32-bit address as one hex word.
-                guard let word = UInt32(mapped, radix: 16) else { return false }
+                guard mapped.count <= 8, let word = UInt32(mapped, radix: 16) else { return false }
                 return word >> 24 == 0x7f
             }
         }
