@@ -3,31 +3,43 @@ import Observation
 
 /// A link that names a thread, so the app can open that exact thread.
 ///
-/// The shape is `clutch://thread/<session id>?host=<host id>`.  The host is
-/// optional because a thread id only means something on the host that owns
-/// it, and the app already knows which host it is looking at most of the
-/// time.  The pairing link owns the `pair` host of the same scheme, so the
-/// two never collide.
+/// The shape is
+/// `clutch://thread/<session id>?host=<host id>&engine=<engine>`.  The host
+/// is optional because a thread id only means something on the host that
+/// owns it, and the app already knows which host it is looking at most of the
+/// time.  The engine is optional too:  every engine on a host numbers its own
+/// sessions, so a link that names one opens that engine, and a link written
+/// before the engine rode in it still opens, resolved from what the device
+/// has actually seen rather than from a guess.  The pairing link owns the
+/// `pair` host of the same scheme, so the two never collide.
 public struct ThreadLink: Equatable, Sendable {
     /// The thread's session id.
     public var sessionId: String
     /// The host that owns the thread, when the link names one.
     public var hostId: UUID?
+    /// The engine the thread runs on, when the link names one.
+    public var engine: String?
 
-    public init(sessionId: String, hostId: UUID? = nil) {
+    public init(sessionId: String, hostId: UUID? = nil, engine: String? = nil) {
         self.sessionId = sessionId
         self.hostId = hostId
+        self.engine = engine
     }
 
     /// The link that opens this thread.
-    public static func url(sessionId: String, hostId: UUID?) -> URL? {
+    public static func url(sessionId: String, hostId: UUID?, engine: String? = nil) -> URL? {
         var comps = URLComponents()
         comps.scheme = "clutch"
         comps.host = "thread"
         comps.path = "/\(sessionId)"
+        var items: [URLQueryItem] = []
         if let hostId {
-            comps.queryItems = [URLQueryItem(name: "host", value: hostId.uuidString)]
+            items.append(URLQueryItem(name: "host", value: hostId.uuidString))
         }
+        if let engine, !engine.isEmpty {
+            items.append(URLQueryItem(name: "engine", value: engine))
+        }
+        if !items.isEmpty { comps.queryItems = items }
         return comps.url
     }
 
@@ -43,7 +55,24 @@ public struct ThreadLink: Equatable, Sendable {
         guard !sessionId.isEmpty else { return nil }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let hostId = items.first(where: { $0.name == "host" })?.value.flatMap(UUID.init(uuidString:))
-        return ThreadLink(sessionId: sessionId, hostId: hostId)
+        let namedEngine = items.first(where: { $0.name == "engine" })?.value
+        let engine = (namedEngine?.isEmpty == false) ? namedEngine : nil
+        return ThreadLink(sessionId: sessionId, hostId: hostId, engine: engine)
+    }
+
+    /// The engine a link opens on, when the link and the device settle it.
+    ///
+    /// A link that names an engine opens on that engine, so an approval Muse
+    /// raised opens Muse even while the sidebar is showing MiniMax Code:  the
+    /// destination carries its own engine and never borrows the sidebar's.
+    /// A link that names none is an older link, and it resolves to the engine
+    /// this device has seen activity for only when exactly one engine has
+    /// it.  When none or several do there is nothing to resolve without
+    /// guessing, so the answer is nothing and the caller keeps the engine its
+    /// own surface is showing.
+    public static func resolveEngine(named: String?, activityEngines: [String]) -> String? {
+        if let named, !named.isEmpty { return named }
+        return activityEngines.count == 1 ? activityEngines[0] : nil
     }
 }
 

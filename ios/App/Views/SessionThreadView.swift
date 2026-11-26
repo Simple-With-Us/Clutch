@@ -197,7 +197,7 @@ final class SessionThreadModel {
         // turn starts without steering until the sidecar says otherwise.
         supportsSteering = false
         bubbles.append(ThreadBubbleItem(id: UUID().uuidString, role: .user, text: prompt))
-        TurnActivity.shared.runStarted(hostId: host.id, sessionId: session.sessionId, title: session.displayTitle)
+        TurnActivity.shared.runStarted(hostId: host.id, engine: engine, sessionId: session.sessionId, title: session.displayTitle)
 
         // relayReceiverUid is empty: an unpaired CometChat thread has no sink
         // to relay into, and the sidecar skips the mirror when it is blank.
@@ -257,6 +257,7 @@ final class SessionThreadModel {
                         permissionTick += 1
                         TurnActivity.shared.approvalArrived(
                             hostId: host.id,
+                            engine: engine,
                             sessionId: session.sessionId,
                             requestId: request.requestId,
                             title: session.displayTitle
@@ -266,6 +267,7 @@ final class SessionThreadModel {
                             payload: PermissionNotificationPayload.make(
                                 hostId: host.id,
                                 sessionId: session.sessionId,
+                                engine: engine,
                                 requestId: request.requestId,
                                 denyOptionId: request.denyOptionId
                             )
@@ -275,8 +277,8 @@ final class SessionThreadModel {
                     case .done(_, _, let remote):
                         if let remote { remoteSessionId = remote }
                         pendingPermissions.clearAll()
-                        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
-                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle)
                         didFinish = true
@@ -288,8 +290,8 @@ final class SessionThreadModel {
                         sendError = message
                         ErrorReporting.turnFailed(engine: engine, message: message)
                         pendingPermissions.clearAll()
-                        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
-                        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+                        TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
+                        TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
                         turnTick += 1
                         TurnNotifier.turnFinished(threadTitle: session.displayTitle, failed: true)
                     }
@@ -301,8 +303,8 @@ final class SessionThreadModel {
                     sendError = error.localizedDescription
                     ErrorReporting.turnTransportFailed(engine: engine, error: error)
                 }
-                TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
-                TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
+                TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
+                TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
             }
             if !reply.isEmpty { upsert(replyId, text: reply) }
             thoughtLine = nil
@@ -381,6 +383,7 @@ final class SessionThreadModel {
                 if pendingPermissions.acknowledge(requestId: answer.requestId) {
                     TurnActivity.shared.approvalAcknowledged(
                         hostId: host.id,
+                        engine: engine,
                         sessionId: session.sessionId,
                         requestId: answer.requestId
                     )
@@ -413,8 +416,8 @@ final class SessionThreadModel {
         // it out on its own.
         queuedPrompt = nil
         supportsSteering = false
-        TurnActivity.shared.approvalsCleared(hostId: host.id, sessionId: session.sessionId)
-        TurnActivity.shared.runEnded(hostId: host.id, sessionId: session.sessionId)
+        TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
+        TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
         turnTick += 1
         isSending = false
     }

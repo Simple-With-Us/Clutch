@@ -82,7 +82,11 @@ final class SessionsModel {
 /// Where the home surface's detail pane is pointed.
 enum HomeSelection: Hashable {
     /// The thread with this session id.
-    case thread(String)
+    ///
+    /// The engine is the one the surface that asked for the thread named, so
+    /// a Muse approval opens Muse while the sidebar stays on MiniMax Code.
+    /// A row tapped in the list names none and follows the sidebar's engine.
+    case thread(String, engine: String?)
     /// The always-there agent conversation.
     case agentChat
     /// The approvals waiting on this host.
@@ -326,7 +330,7 @@ public struct SessionsView: View {
                             Spacer(minLength: 0)
                         }
                         .frame(minHeight: 44)
-                        .tag(HomeSelection.thread(approval.sessionId))
+                        .tag(HomeSelection.thread(approval.sessionId, engine: approval.engine))
                         .accessibilityLabel("Approval wanted by \(approval.title)")
                     }
                 }
@@ -344,7 +348,7 @@ public struct SessionsView: View {
                             Spacer(minLength: 0)
                         }
                         .frame(minHeight: 44)
-                        .tag(HomeSelection.thread(run.sessionId))
+                        .tag(HomeSelection.thread(run.sessionId, engine: run.engine))
                         .accessibilityLabel("Running: \(run.title)")
                     }
                 }
@@ -428,7 +432,12 @@ public struct SessionsView: View {
     /// selection binding is what opens the thread on a phone.
     private func threadRow(_ session: AcpSessionInfo) -> some View {
         let isSelected: Bool = {
-            if case .thread(let id) = selection { return id == session.sessionId }
+            if case .thread(let id, let selectionEngine) = selection {
+                // A thread opened on another engine is not this row:  the
+                // two engines number their own sessions, so the same raw id
+                // in this list is a different thread.
+                return id == session.sessionId && (selectionEngine == nil || selectionEngine == engine)
+            }
             return false
         }()
         return ThreadSidebarRow(
@@ -439,7 +448,7 @@ public struct SessionsView: View {
             onSelect: { _ in },
             isListSelectable: true
         )
-        .tag(HomeSelection.thread(session.sessionId))
+        .tag(HomeSelection.thread(session.sessionId, engine: nil))
         .contextMenu {
             Button {
                 ThreadPinStore.toggle(session.sessionId, forHost: host.id)
@@ -466,6 +475,18 @@ public struct SessionsView: View {
         AcpSessionInfo.filtered(AcpSessionInfo.newestFirst(model.sessions), query: searchText)
     }
 
+    /// The threads this list already shows, by the host, engine and id that
+    /// identify them.
+    ///
+    /// A listed thread of one engine does not hide another engine's thread
+    /// that happens to carry the same raw id:  the list on screen is one
+    /// engine's, and the other engine's approval still needs a row.
+    private var listedThreads: Set<TurnThreadKey> {
+        Set(visibleSessions.map {
+            TurnThreadKey(hostId: host.id, engine: engine, sessionId: $0.sessionId)
+        })
+    }
+
     /// Approvals this device has seen on the host on screen, minus the ones
     /// already listed as rows, so a thread never appears twice in one list.
     ///
@@ -475,15 +496,15 @@ public struct SessionsView: View {
         TurnActivity.approvalsForHomeList(
             TurnActivity.shared.approvals,
             hostId: host.id,
-            listedSessions: Set(visibleSessions.map(\.sessionId))
+            listed: listedThreads
         )
     }
 
     /// Runs this device is streaming on the host on screen, minus the ones
     /// already listed.
     private var runningTurns: [TurnActivityRun] {
-        let listed = Set(visibleSessions.map(\.sessionId))
-        return TurnActivity.shared.runs.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
+        let listed = listedThreads
+        return TurnActivity.shared.runs.filter { $0.hostId == host.id && !listed.contains($0.thread) }
     }
 
     private var hasActivity: Bool {
@@ -533,7 +554,7 @@ public struct SessionsView: View {
     /// engine is working in.  A thread that names no folder falls back to
     /// the folder a new thread would work in.
     private var filesRoot: String {
-        guard case .thread(let id) = selection,
+        guard case .thread(let id, _) = selection,
               let session = model.sessions.first(where: { $0.sessionId == id }),
               let cwd = session.cwd,
               !cwd.isEmpty else { return "" }
@@ -636,7 +657,20 @@ public struct SessionsView: View {
     /// not again by whatever surface happens to be on screen next.
     private func openPendingThread() {
         guard let link = threadLinkRouter.take() else { return }
-        selection = .thread(link.sessionId)
+        // A link that names an engine opens on that engine, so an approval
+        // Muse raised opens Muse while the sidebar is still on MiniMax Code.
+        // An older link names none, and it resolves to the engine this device
+        // has seen activity for only when exactly one engine has it; when
+        // none or several do, the sidebar's own engine stands rather than a
+        // guess at which of them the link meant.
+        let opened = ThreadLink.resolveEngine(
+            named: link.engine,
+            activityEngines: TurnActivity.shared.enginesWithActivity(
+                hostId: host.id,
+                sessionId: link.sessionId
+            )
+        )
+        selection = .thread(link.sessionId, engine: opened)
     }
 
     /// Opens the approvals list a link asked for.
@@ -653,15 +687,22 @@ public struct SessionsView: View {
     @ViewBuilder
     private var detail: some View {
         switch selection {
-        case .thread(let id):
+        case .thread(let id, let selectionEngine):
             // Each thread gets its own view, so switching threads starts the
             // new one clean: the transcript, the plan and the pending
             // questions belong to the thread they were raised in.  A thread
             // tapped from Needs You or Running that the loaded pages do not
             // carry still opens: the load call needs only the id.
+            //
+            // The engine is the one the selection named, so a Muse approval
+            // opens Muse while the sidebar stays where the owner left it.  The
+            // view is keyed by the thread rather than by the raw id, because
+            // two engines can number a session the same and those are two
+            // threads.
+            let threadEngine = selectionEngine ?? engine
             let session = model.sessions.first { $0.sessionId == id } ?? AcpSessionInfo(sessionId: id)
-            SessionThreadView(host: host, session: session, engine: engine)
-                .id(id)
+            SessionThreadView(host: host, session: session, engine: threadEngine)
+                .id("\(threadEngine)|\(id)")
         case .agentChat:
             #if os(iOS)
             ChatView(activeHost: host, store: HostStore.shared)
@@ -670,8 +711,8 @@ public struct SessionsView: View {
             // The list the Live Activity and the Control Center action
             // open:  the approvals waiting on this host, each one a way
             // into the thread that has to answer it.
-            ApprovalsView(host: host) { sessionId in
-                selection = .thread(sessionId)
+            ApprovalsView(host: host) { thread in
+                selection = .thread(thread.sessionId, engine: thread.engine)
             }
         case .none:
             ContentUnavailableView(
@@ -1196,6 +1237,7 @@ final class NewThreadModel {
                             payload: PermissionNotificationPayload.make(
                                 hostId: host.id,
                                 sessionId: chatId,
+                                engine: engine,
                                 requestId: request.requestId,
                                 denyOptionId: request.denyOptionId
                             )

@@ -7,6 +7,7 @@ final class PermissionNotificationTests: XCTestCase {
         PermissionNotificationPayload(
             hostId: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
             sessionId: "session-7",
+            engine: "muse",
             requestId: "perm-7",
             denyOptionId: "reject-once"
         )
@@ -55,7 +56,7 @@ final class PermissionNotificationTests: XCTestCase {
         // payload holds identifiers and never the request itself.
         XCTAssertEqual(
             Set(payload().userInfo.keys),
-            ["hostId", "sessionId", "requestId", "denyOptionId"]
+            ["hostId", "sessionId", "engine", "requestId", "denyOptionId"]
         )
     }
 
@@ -153,5 +154,72 @@ final class PermissionNotificationTests: XCTestCase {
             options: [AcpPermissionOption(optionId: "allow-once", kind: "allow_once", name: "Allow once")]
         )
         XCTAssertNil(request.denyOptionId)
+    }
+
+    // MARK: - The engine the link names
+
+    func testALinkCarriesTheEngineItNames() throws {
+        let hostId = UUID(uuidString: "11111111-2222-3333-4444-555555555555")
+        let url = try XCTUnwrap(ThreadLink.url(sessionId: "session-7", hostId: hostId, engine: "muse"))
+
+        let link = try XCTUnwrap(ThreadLink.parse(url))
+
+        XCTAssertEqual(link.sessionId, "session-7")
+        XCTAssertEqual(link.hostId, hostId)
+        XCTAssertEqual(link.engine, "muse")
+    }
+
+    func testAnOlderLinkNamesNoEngine() throws {
+        // A link written before the engine rode in it still opens.
+        let url = try XCTUnwrap(
+            URL(string: "clutch://thread/session-7?host=11111111-2222-3333-4444-555555555555")
+        )
+
+        let link = try XCTUnwrap(ThreadLink.parse(url))
+
+        XCTAssertEqual(link.sessionId, "session-7")
+        XCTAssertNil(link.engine)
+    }
+
+    func testALinkThatNamesAnEngineOpensItEvenWhenTheSidebarIsElsewhere() {
+        // A Muse approval opens Muse while the sidebar stays on MiniMax
+        // Code:  the destination carries its own engine and never borrows
+        // the sidebar's.
+        XCTAssertEqual(
+            ThreadLink.resolveEngine(named: "muse", activityEngines: ["mcode", "muse"]),
+            "muse"
+        )
+    }
+
+    func testAnOlderLinkResolvesToTheOneEngineThatHasActivity() {
+        XCTAssertEqual(ThreadLink.resolveEngine(named: nil, activityEngines: ["muse"]), "muse")
+    }
+
+    func testAnOlderLinkThatIsAmbiguousNamesNoEngine() {
+        // Two engines carry the same raw id, and none carries it, so there
+        // is nothing to resolve without guessing:  the surface keeps the
+        // engine it is already showing.
+        XCTAssertNil(ThreadLink.resolveEngine(named: nil, activityEngines: ["mcode", "muse"]))
+        XCTAssertNil(ThreadLink.resolveEngine(named: nil, activityEngines: []))
+    }
+
+    func testThePayloadCarriesTheEngineAndReadsItBack() throws {
+        XCTAssertEqual(payload().userInfo["engine"], "muse")
+
+        let read = try XCTUnwrap(PermissionNotificationPayload(userInfo: payload().userInfo))
+
+        XCTAssertEqual(read.engine, "muse")
+    }
+
+    func testAPayloadFromBeforeTheEngineReadsBackWithoutOne() throws {
+        let older: [String: String] = [
+            "hostId": "11111111-2222-3333-4444-555555555555",
+            "sessionId": "session-7",
+            "requestId": "perm-7",
+        ]
+
+        let read = try XCTUnwrap(PermissionNotificationPayload(userInfo: older))
+
+        XCTAssertNil(read.engine)
     }
 }

@@ -17,6 +17,14 @@ public struct PermissionNotificationPayload: Codable, Equatable, Sendable {
     public var hostId: UUID
     /// The thread the request was raised in.
     public var sessionId: String
+    /// The engine the thread runs on, when the notification names one.
+    ///
+    /// A host serves more than one engine and each numbers its own sessions,
+    /// so the tap needs the engine to open the thread the request came from
+    /// rather than whichever engine the sidebar happens to be showing.  It is
+    /// optional because a notification queued before the field existed still
+    /// opens, resolved the way a legacy link is.
+    public var engine: String?
     /// The permission request the owner is answering.
     public var requestId: String
     /// The option that refuses the request, when the engine offered one.
@@ -25,9 +33,16 @@ public struct PermissionNotificationPayload: Codable, Equatable, Sendable {
     /// to when the engine offered no reject option of its own.
     public var denyOptionId: String?
 
-    public init(hostId: UUID, sessionId: String, requestId: String, denyOptionId: String? = nil) {
+    public init(
+        hostId: UUID,
+        sessionId: String,
+        engine: String? = nil,
+        requestId: String,
+        denyOptionId: String? = nil
+    ) {
         self.hostId = hostId
         self.sessionId = sessionId
+        self.engine = engine
         self.requestId = requestId
         self.denyOptionId = denyOptionId
     }
@@ -40,6 +55,7 @@ public struct PermissionNotificationPayload: Codable, Equatable, Sendable {
     public static func make(
         hostId: UUID?,
         sessionId: String?,
+        engine: String? = nil,
         requestId: String,
         denyOptionId: String?
     ) -> PermissionNotificationPayload? {
@@ -47,6 +63,7 @@ public struct PermissionNotificationPayload: Codable, Equatable, Sendable {
         return PermissionNotificationPayload(
             hostId: hostId,
             sessionId: sessionId,
+            engine: (engine?.isEmpty == false) ? engine : nil,
             requestId: requestId,
             denyOptionId: denyOptionId
         )
@@ -54,12 +71,13 @@ public struct PermissionNotificationPayload: Codable, Equatable, Sendable {
 
     /// The payload as the notification's own dictionary.
     ///
-    /// Four identifiers and nothing else:  a notification that carried the
+    /// Five identifiers and nothing else:  a notification that carried the
     /// tool's name or its command would put the request on the lock screen.
     public var userInfo: [String: String] {
         [
             "hostId": hostId.uuidString,
             "sessionId": sessionId,
+            "engine": engine ?? "",
             "requestId": requestId,
             "denyOptionId": denyOptionId ?? "",
         ]
@@ -72,9 +90,11 @@ public struct PermissionNotificationPayload: Codable, Equatable, Sendable {
               let sessionId = userInfo["sessionId"] as? String,
               let requestId = userInfo["requestId"] as? String else { return nil }
         let deny = userInfo["denyOptionId"] as? String
+        let namedEngine = userInfo["engine"] as? String
         self.init(
             hostId: hostId,
             sessionId: sessionId,
+            engine: (namedEngine?.isEmpty == false) ? namedEngine : nil,
             requestId: requestId,
             denyOptionId: (deny?.isEmpty == false) ? deny : nil
         )
@@ -98,9 +118,19 @@ public enum PermissionNotificationHandler {
         )
     }
 
-    /// Opens the thread the request was raised in.
+    /// Opens the thread the request was raised in, on the engine it came
+    /// from.
+    ///
+    /// The engine rides in the link, so a Muse approval opens Muse even while
+    /// the sidebar is showing MiniMax Code.  A payload from before the engine
+    /// rode in the notification builds the older link, which the app resolves
+    /// from what it has seen.
     public static func open(_ payload: PermissionNotificationPayload) async {
-        guard let url = ThreadLink.url(sessionId: payload.sessionId, hostId: payload.hostId) else { return }
+        guard let url = ThreadLink.url(
+            sessionId: payload.sessionId,
+            hostId: payload.hostId,
+            engine: payload.engine
+        ) else { return }
         await MainActor.run { openURL(url) }
     }
 
