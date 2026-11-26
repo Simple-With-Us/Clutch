@@ -858,10 +858,10 @@ final class PermissionAcknowledgementTests: XCTestCase {
     func testTheActivityStateIsClearedForTheRequestTheAcknowledgmentNames() {
         let activity = TurnActivity()
         let hostId = UUID()
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-2", title: "Fix the test")
 
-        activity.approvalAcknowledged(hostId: hostId, sessionId: "s-1", requestId: "perm-1")
+        activity.approvalAcknowledged(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1")
 
         // The other request's own activity state is still there:  the
         // acknowledgment named one request and cleared one request.
@@ -871,9 +871,9 @@ final class PermissionAcknowledgementTests: XCTestCase {
     func testAcknowledgingAnApprovalThatIsNotThereChangesNothing() {
         let activity = TurnActivity()
         let hostId = UUID()
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
 
-        activity.approvalAcknowledged(hostId: hostId, sessionId: "s-1", requestId: "perm-missing")
+        activity.approvalAcknowledged(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-missing")
 
         XCTAssertEqual(activity.approvals.map(\.requestId), ["perm-1"])
     }
@@ -956,8 +956,8 @@ final class PermissionAcknowledgementTests: XCTestCase {
     func testTheSiblingApprovalTakesTheNewTitle() {
         let activity = TurnActivity()
         let hostId = UUID()
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Old name")
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "New name")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "Old name")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-2", title: "New name")
 
         // The title is the thread's name, so the row the home list shows
         // carries the name the thread has now, not the name it had when the
@@ -968,10 +968,10 @@ final class PermissionAcknowledgementTests: XCTestCase {
     func testTheWholeActivityStateGoesWhenTheTurnEnds() {
         let activity = TurnActivity()
         let hostId = UUID()
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
-        activity.approvalArrived(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "Fix the test")
+        activity.approvalArrived(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-2", title: "Fix the test")
 
-        activity.approvalsCleared(hostId: hostId, sessionId: "s-1")
+        activity.approvalsCleared(hostId: hostId, engine: "mcode", sessionId: "s-1")
 
         XCTAssertTrue(activity.approvals.isEmpty)
     }
@@ -980,13 +980,13 @@ final class PermissionAcknowledgementTests: XCTestCase {
         let hostId = UUID()
         let otherHost = UUID()
         let approvals = [
-            TurnActivityApproval(hostId: hostId, sessionId: "s-1", requestId: "perm-1", title: "Fix the test"),
-            TurnActivityApproval(hostId: hostId, sessionId: "s-1", requestId: "perm-2", title: "Fix the test"),
-            TurnActivityApproval(hostId: hostId, sessionId: "s-2", requestId: "perm-3", title: "Fix the test"),
-            TurnActivityApproval(hostId: otherHost, sessionId: "s-3", requestId: "perm-4", title: "Fix the test"),
+            TurnActivityApproval(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "Fix the test"),
+            TurnActivityApproval(hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-2", title: "Fix the test"),
+            TurnActivityApproval(hostId: hostId, engine: "mcode", sessionId: "s-2", requestId: "perm-3", title: "Fix the test"),
+            TurnActivityApproval(hostId: otherHost, engine: "mcode", sessionId: "s-3", requestId: "perm-4", title: "Fix the test"),
         ]
 
-        let rows = TurnActivity.approvalsForHomeList(approvals, hostId: hostId, listedSessions: [])
+        let rows = TurnActivity.approvalsForHomeList(approvals, hostId: hostId, listed: [])
 
         // One row per thread, and another host's approval is not this
         // host's business.
@@ -996,8 +996,86 @@ final class PermissionAcknowledgementTests: XCTestCase {
         let listed = TurnActivity.approvalsForHomeList(
             approvals,
             hostId: hostId,
-            listedSessions: ["s-1"]
+            listed: [TurnThreadKey(hostId: hostId, engine: "mcode", sessionId: "s-1")]
         )
         XCTAssertEqual(listed.map(\.sessionId), ["s-2"])
+    }
+
+    // MARK: - Two engines, one host
+
+    func testATurnEndingOnOneEngineLeavesTheOtherEnginesThreadAlone() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        // Both engines number their own sessions, so the same raw id is two
+        // threads on one host and not one.  Ending the Muse turn must not
+        // take the MiniMax Code turn's row with it.
+        activity.runStarted(hostId: hostId, engine: "mcode", sessionId: "s-1", title: "MiniMax")
+        activity.runStarted(hostId: hostId, engine: "muse", sessionId: "s-1", title: "Muse")
+
+        activity.runEnded(hostId: hostId, engine: "muse", sessionId: "s-1")
+
+        XCTAssertEqual(activity.runs.map(\.engine), ["mcode"])
+    }
+
+    func testAnApprovalOnOneEngineIsNotClearedByTheOther() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        activity.approvalArrived(
+            hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "MiniMax"
+        )
+        activity.approvalArrived(
+            hostId: hostId, engine: "muse", sessionId: "s-1", requestId: "perm-1", title: "Muse"
+        )
+
+        activity.approvalsCleared(hostId: hostId, engine: "muse", sessionId: "s-1")
+
+        XCTAssertEqual(activity.approvals.map(\.engine), ["mcode"])
+    }
+
+    func testBothEnginesThreadsAreTwoRowsAndNotOne() {
+        let hostId = UUID()
+        let approvals = [
+            TurnActivityApproval(
+                hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "MiniMax"
+            ),
+            TurnActivityApproval(
+                hostId: hostId, engine: "muse", sessionId: "s-1", requestId: "perm-2", title: "Muse"
+            ),
+        ]
+
+        let rows = TurnActivity.approvalsForHomeList(approvals, hostId: hostId, listed: [])
+
+        XCTAssertEqual(rows.map(\.engine), ["mcode", "muse"])
+    }
+
+    func testAListedThreadDoesNotHideTheOtherEnginesApproval() {
+        // The list on screen is one engine's.  Its thread with this raw id
+        // is not the other engine's thread with the same id, so the other
+        // engine's approval still needs its row.
+        let hostId = UUID()
+        let approvals = [
+            TurnActivityApproval(
+                hostId: hostId, engine: "mcode", sessionId: "s-1", requestId: "perm-1", title: "MiniMax"
+            ),
+            TurnActivityApproval(
+                hostId: hostId, engine: "muse", sessionId: "s-1", requestId: "perm-2", title: "Muse"
+            ),
+        ]
+        let listed: Set<TurnThreadKey> = [
+            TurnThreadKey(hostId: hostId, engine: "mcode", sessionId: "s-1"),
+        ]
+
+        let rows = TurnActivity.approvalsForHomeList(approvals, hostId: hostId, listed: listed)
+
+        XCTAssertEqual(rows.map(\.engine), ["muse"])
+    }
+
+    func testTheEnginesWithActivityOnARawSessionIdAreResolved() {
+        let activity = TurnActivity()
+        let hostId = UUID()
+        activity.runStarted(hostId: hostId, engine: "muse", sessionId: "s-9", title: "Muse")
+
+        XCTAssertEqual(activity.enginesWithActivity(hostId: hostId, sessionId: "s-9"), ["muse"])
+        XCTAssertTrue(activity.enginesWithActivity(hostId: hostId, sessionId: "not-a-thread").isEmpty)
     }
 }

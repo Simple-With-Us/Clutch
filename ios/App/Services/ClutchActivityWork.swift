@@ -16,33 +16,21 @@ enum ClutchActivityWork {
     /// the home list shows it:  the row opens the thread, and the card in
     /// it is the one the owner answers.
     ///
-    /// The overlap is keyed by the thread, which is the host and the
-    /// session:  two hosts can hold a session with the same id, and one
-    /// host's waiting thread is not the other host's running thread.  The
-    /// request is not part of the key, because the request is not part of
-    /// the thread.
+    /// The overlap is keyed by the thread, which is the host, the engine the
+    /// thread runs on and the session:  two hosts can hold a session with the
+    /// same id, and one host's engines number their own sessions, so a Muse
+    /// thread with an id and a MiniMax Code thread with the same id are two
+    /// threads and not one.  The request is not part of the key, because the
+    /// request is not part of the thread.
     static func split(approvals: [TurnActivityApproval],
                       runs: [TurnActivityRun]) -> (waiting: [TurnActivityApproval], running: [TurnActivityRun]) {
         var waiting: [TurnActivityApproval] = []
-        var waitingThreads = Set<String>()
+        var waitingThreads = Set<TurnThreadKey>()
         for approval in approvals {
-            guard waitingThreads.insert(threadKey(hostId: approval.hostId, sessionId: approval.sessionId)).inserted else {
-                continue
-            }
+            guard waitingThreads.insert(approval.thread).inserted else { continue }
             waiting.append(approval)
         }
-        let running = runs.filter {
-            !waitingThreads.contains(threadKey(hostId: $0.hostId, sessionId: $0.sessionId))
-        }
+        let running = runs.filter { !waitingThreads.contains($0.thread) }
         return (waiting, running)
-    }
-
-    /// The key a thread is known by:  the host and the session.
-    ///
-    /// It is not the entry's own id, because an approval's id carries the
-    /// request as well:  a session can wait on more than one request, and
-    /// the request is not part of the thread.
-    private static func threadKey(hostId: UUID, sessionId: String) -> String {
-        "\(hostId)|\(sessionId)"
     }
 }
