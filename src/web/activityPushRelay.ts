@@ -515,11 +515,18 @@ export class ActivityPushRelay {
     const key = registrationKey(registration.deviceUid, registration.activityId);
     const existing = this.options.store.list().find((row) => registrationKey(row.deviceUid, row.activityId) === key);
     if (existing) {
-      // Replacing a stored registration requires proof the caller holds the
-      // token it replaces:  a bearer holder cannot steer another phone's
-      // pushes without knowing its push token.
-      if (!registration.previousPushToken || registration.previousPushToken !== existing.pushToken) {
-        throw new Error("registration is already held by another device");
+      // Idempotent re-registration with the unchanged pushToken needs no
+      // proof:  the phone is only refreshing its own session id.
+      if (registration.pushToken !== existing.pushToken) {
+        // Rotating to a new pushToken requires proof the caller holds the
+        // token it replaces:  a bearer holder cannot steer another phone's
+        // pushes without knowing its push token.
+        if (!registration.previousPushToken || registration.previousPushToken !== existing.pushToken) {
+          throw new Error("registration is already held by another device");
+        }
+        // A token change supersedes any push still queued for the old token,
+        // so the next schedule captures the new registration.
+        this.cancelPending(key);
       }
     }
     return this.options.store.put(registration);
@@ -828,7 +835,6 @@ export async function handleActivityTokensRequest(
       respond(res, 400, { error: "the registration body is not valid" });
       return true;
     }
-    try {
       const registration: {
         deviceUid: string;
         activityId: string;
@@ -844,13 +850,21 @@ export async function handleActivityTokensRequest(
         sessionId: parsed.data.sessionId,
       };
       if (parsed.data.previousPushToken) registration.previousPushToken = parsed.data.previousPushToken;
-      relay.register(registration);
-    } catch {
-      // The store file refused the write:  answer a static 500 and say no
-      // more — the error's text is about the filesystem, not for the phone.
-      respond(res, 500, { error: "the registration could not be stored" });
-      return true;
-    }
+      try {
+        relay.register(registration);
+      } catch (error) {
+        // An authz rejection is the caller's fault, not a server failure:
+        // answer 403 so callers can tell forbidden from a store error.
+        const message = error instanceof Error ? error.message : String(error);
+        if (message === "registration is already held by another device") {
+          respond(res, 403, { error: "the registration is already held by another device" });
+          return true;
+        }
+        // The store file refused the write:  answer a static 500 and say no
+        // more — the error's text is about the filesystem, not for the phone.
+        respond(res, 500, { error: "the registration could not be stored" });
+        return true;
+      }
     respond(res, 200, { enabled: relay.enabled, registered: true });
     return true;
   }
