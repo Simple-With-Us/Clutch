@@ -61,9 +61,20 @@ public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
         return formatter
     }()
 
+    /// Formatters are not thread-safe and rows decode off the main
+    /// thread, so every shared formatter is used under one lock.
+    private static let formatterLock = NSLock()
+
+    /// The parsed instant without the lock; callers hold it themselves.
+    private var parsedDate: Date? {
+        Self.fractionalFormatter.date(from: scheduledAt) ?? Self.plainFormatter.date(from: scheduledAt)
+    }
+
     /// When this reminder next fires, when the host named a real instant.
     public var scheduledDate: Date? {
-        Self.fractionalFormatter.date(from: scheduledAt) ?? Self.plainFormatter.date(from: scheduledAt)
+        Self.formatterLock.lock()
+        defer { Self.formatterLock.unlock() }
+        return parsedDate
     }
 
     /// The rule in the owner's words: "in 10 min", "daily at 9:00 AM",
@@ -77,8 +88,10 @@ public struct CronItem: Decodable, Equatable, Identifiable, Sendable {
             guard let everySeconds else { return "Repeating" }
             return "Every \(Self.duration(everySeconds))"
         default:
-            guard let scheduledDate else { return "One time" }
-            return Self.ruleDateFormatter.string(from: scheduledDate)
+            Self.formatterLock.lock()
+            defer { Self.formatterLock.unlock() }
+            guard let parsedDate else { return "One time" }
+            return Self.ruleDateFormatter.string(from: parsedDate)
         }
     }
 

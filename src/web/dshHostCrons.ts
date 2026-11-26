@@ -93,10 +93,17 @@ export function cronView(sessionId: string, record: z.infer<typeof ScheduleRecor
 }
 
 /** Every active reminder on the host, newest target first. */
-export async function listCrons(client: DshHostClient, now: Date = new Date()): Promise<CronView[]> {
+export async function listCrons(
+  client: DshHostClient,
+  now: Date = new Date(),
+  sessionId?: string,
+): Promise<CronView[]> {
   const value = await client.call("session/list", { _request: {} }, CronListValueSchema);
   const out: CronView[] = [];
   for (const item of value.items) {
+    // A scoped read-back parses only its own session's projection; the
+    // host call is one either way, so the saving is in the reading.
+    if (sessionId !== undefined && item.sessionId !== sessionId) continue;
     for (const raw of item.projections?.values?.schedule ?? []) {
       // One malformed record must not empty every session's list: the
       // projection is the host's data on its own version, so a record
@@ -167,7 +174,7 @@ export async function createCron(
   client: DshHostClient,
   options: { readonly sessionId: string; readonly prompt: string; readonly rule: CronRule },
 ): Promise<CronView> {
-  const before = new Set((await listCrons(client)).filter((cron) => cron.sessionId === options.sessionId).map((cron) => cron.id));
+  const before = new Set((await listCrons(client, new Date(), options.sessionId)).map((cron) => cron.id));
   // The reminder text is data for the tool argument, never instructions
   // for the turn: it is fenced and quoted, and the engine is told to use
   // it verbatim, so text inside it cannot steer the turn elsewhere.
@@ -194,8 +201,8 @@ export async function createCron(
   }
   const wanted = normalizePrompt(options.prompt);
   const created = pickCreatedCron(
-    (await listCrons(client)).filter(
-      (cron) => cron.sessionId === options.sessionId && !before.has(cron.id) && normalizePrompt(cron.prompt) === wanted,
+    (await listCrons(client, new Date(), options.sessionId)).filter(
+      (cron) => !before.has(cron.id) && normalizePrompt(cron.prompt) === wanted,
     ),
     options.rule,
     turnStartedAt,
@@ -229,9 +236,7 @@ export async function deleteCron(
   if (turn.stopReason === "cancelled") {
     throw new Error("the host ended the deletion turn before the reminder was deleted");
   }
-  const stillThere = (await listCrons(client)).some(
-    (cron) => cron.sessionId === options.sessionId && cron.id === options.id,
-  );
+  const stillThere = (await listCrons(client, new Date(), options.sessionId)).some((cron) => cron.id === options.id);
   if (stillThere) {
     throw new Error("the engine did not delete the reminder: it is still in the session's schedule");
   }
