@@ -59,6 +59,9 @@ export interface FilePreview {
   readonly truncated: boolean;
   /** The text of the file, for a text file. */
   readonly content: string;
+  /** The absolute path the sidecar resolved, so a local client opens the
+   * file the sidecar actually read instead of re-rooting it at home. */
+  readonly absolute?: string;
 }
 
 /** How many bytes a preview carries. */
@@ -248,6 +251,7 @@ export async function readPreview(root: string, relative: string): Promise<FileP
   if (isBinary) {
     return {
       path: relativePath(root, target),
+      absolute: target,
       name: basename(target),
       kind: "binary",
       bytes,
@@ -257,6 +261,7 @@ export async function readPreview(root: string, relative: string): Promise<FileP
   }
   return {
     path: relativePath(root, target),
+    absolute: target,
     name: basename(target),
     kind: "text",
     bytes,

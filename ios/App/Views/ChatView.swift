@@ -757,6 +757,7 @@ public struct ChatView: View {
                             payload: PermissionNotificationPayload.make(
                                 hostId: activeHost?.id,
                                 sessionId: sessionId,
+                                engine: requestEngine,
                                 requestId: request.requestId,
                                 denyOptionId: request.denyOptionId
                             )

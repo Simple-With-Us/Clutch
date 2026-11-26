@@ -159,6 +159,7 @@ describe("the Muse Code launcher", () => {
       env: {
         PATH: `${stub}:${process.env.PATH ?? ""}`,
         HOME: stub,
+        MUSE_CODE_ACP_PREFER_NATIVE: "1",
       },
       encoding: "utf8",
     });
@@ -275,7 +276,7 @@ describe("the Muse Code launcher", () => {
     const python = join(stub, "python3");
     writeFileSync(python, '#!/usr/bin/env bash\nprintf "BROKER\\n"\n');
     chmodSync(python, 0o755);
-    const base = { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app };
+    const base = { PATH: `${stub}:/usr/bin:/bin`, HOME: stub, CLUTCH_MAC_APP: app, MUSE_CODE_ACP_PREFER_NATIVE: "1" };
 
     const withApiKey = execFileSync(LAUNCHER, ["--flag"], {
       env: { ...base, META_API_KEY: "test-key-placeholder" },
@@ -287,6 +288,32 @@ describe("the Muse Code launcher", () => {
     const withoutHelper = execFileSync(LAUNCHER, ["--flag"], { env: base, encoding: "utf8" });
     expect(withoutHelper).toContain("NATIVE args=acp --flag");
     expect(withoutHelper).not.toContain("BROKER");
+  });
+
+  it("prefers the steering-capable adapter in auto mode and keeps native when native is required", () => {
+    const stub = scratch();
+    const adapter = join(stub, "fake-adapter");
+    const muse = join(stub, "muse");
+    writeFileSync(adapter, '#!/usr/bin/env bash\nprintf "ADAPTER args=%s\\n" "$*"\n');
+    writeFileSync(muse, '#!/usr/bin/env bash\n[ "$1" = acp ] && [ "${2:-}" = --help ] && exit 0\nprintf "NATIVE args=%s\\n" "$*"\n');
+    chmodSync(adapter, 0o755);
+    chmodSync(muse, 0o755);
+    const env = { PATH: `${stub}:${process.env.PATH ?? ""}`, HOME: stub, MUSE_CODE_ACP_BIN: adapter };
+
+    const auto = execFileSync(LAUNCHER, ["--flag"], { env, encoding: "utf8" });
+    expect(auto).toContain("ADAPTER args=--flag");
+
+    const required = execFileSync(LAUNCHER, ["--flag"], {
+      env: { ...env, MUSE_CODE_ACP_REQUIRE_NATIVE: "1" },
+      encoding: "utf8",
+    });
+    expect(required).toContain("NATIVE args=acp --flag");
+
+    const explicitNative = execFileSync(LAUNCHER, ["--flag"], {
+      env: { ...env, MUSE_CODE_ACP_BACKEND: "native" },
+      encoding: "utf8",
+    });
+    expect(explicitNative).toContain("NATIVE args=acp --flag");
   });
 
   it("falls back to the adapter when the installed Muse binary lacks native ACP", () => {

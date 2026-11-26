@@ -164,19 +164,13 @@ public struct SessionsClient {
             self.limit = limit
         }
 
-        /// The page merged into what is already on screen.
-        ///
-        /// The sidecar answers with the newest threads in one list, so a wider
-        /// page is a superset of a narrower one.  The rows already on screen
-        /// keep their place and are not repeated, and the older rows the
-        /// wider page brought in are appended.
+        /// Keep the freshest metadata from the latest answer, retain any
+        /// previously loaded rows, and sort the union newest first.
         public func merging(into existing: [AcpSessionInfo]) -> [AcpSessionInfo] {
-            var seen = Set(existing.map(\.sessionId))
-            var merged = existing
-            for session in sessions where seen.insert(session.sessionId).inserted {
-                merged.append(session)
-            }
-            return merged
+            var seen = Set<String>()
+            return AcpSessionInfo.newestFirst((sessions + existing).filter {
+                !$0.sessionId.isEmpty && seen.insert($0.sessionId).inserted
+            })
         }
     }
 

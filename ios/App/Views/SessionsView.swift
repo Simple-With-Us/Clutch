@@ -129,9 +129,13 @@ final class SessionsModel {
 /// Where the home surface's detail pane is pointed.
 enum HomeSelection: Hashable {
     /// The thread with this session id.
-    case thread(String)
-    /// The always-there agent conversation.
-    case agentChat
+    ///
+    /// The engine is the one the surface that asked for the thread named, so
+    /// a Muse approval opens Muse while the sidebar stays on MiniMax Code.
+    /// A row tapped in the list names none and follows the sidebar's engine.
+    case thread(String, engine: String?)
+    /// The conversation without a project.
+    case quickChat
     /// The approvals waiting on this host.
     case approvals
     /// Nothing yet — the detail pane explains itself.
@@ -182,8 +186,11 @@ public struct SessionsView: View {
     /// may just be the wrong engine for this host.
     @State private var isSettling = true
 
-    public init(host: ClutchHost) {
+    private let onShowProjects: (() -> Void)?
+
+    public init(host: ClutchHost, onShowProjects: (() -> Void)? = nil) {
         self.host = host
+        self.onShowProjects = onShowProjects
         _model = State(initialValue: SessionsModel(host: host))
     }
 
@@ -286,6 +293,15 @@ public struct SessionsView: View {
             engineBar
         }
         .toolbar {
+            if let onShowProjects {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: onShowProjects) {
+                        Label("Projects", systemImage: "folder.badge.plus")
+                    }
+                    .accessibilityLabel("Projects")
+                    .accessibilityIdentifier("clutch-projects")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     isShowingHosts = true
@@ -324,11 +340,11 @@ public struct SessionsView: View {
             }
         }
         .sheet(isPresented: $isStartingThread) {
-            NewThreadSheet(host: host, engine: engine, initialFolder: newThreadFolder) { created in
+            NewThreadSheet(host: host, engine: engine, initialFolder: newThreadFolder, seedFolders: model.sessions.compactMap(\.cwd)) { created in
                 isStartingThread = false
                 Task {
                     await model.refresh()
-                    selection = .thread(created.sessionId)
+                    selection = .thread(created.sessionId, engine: engine)
                 }
             }
         }
@@ -354,7 +370,6 @@ public struct SessionsView: View {
             get: { selection == .none ? nil : selection },
             set: { selection = $0 ?? .none }
         )) {
-            agentChatRow
             if !pendingApprovals.isEmpty {
                 Section("Needs You") {
                     ForEach(pendingApprovals) { approval in
@@ -373,7 +388,7 @@ public struct SessionsView: View {
                             Spacer(minLength: 0)
                         }
                         .frame(minHeight: 44)
-                        .tag(HomeSelection.thread(approval.sessionId))
+                        .tag(HomeSelection.thread(approval.sessionId, engine: approval.engine))
                         .accessibilityLabel("Approval wanted by \(approval.title)")
                     }
                 }
@@ -391,7 +406,7 @@ public struct SessionsView: View {
                             Spacer(minLength: 0)
                         }
                         .frame(minHeight: 44)
-                        .tag(HomeSelection.thread(run.sessionId))
+                        .tag(HomeSelection.thread(run.sessionId, engine: run.engine))
                         .accessibilityLabel("Running: \(run.title)")
                     }
                 }
@@ -423,14 +438,21 @@ public struct SessionsView: View {
                     .buttonStyle(.plain)
                 }
             }
+            // Quick Chat sits last, below every project and folder: it is the
             // The list renders the filtered rows, so the row that says how
             // much of it is on screen has to count the rows the user can
-            // actually see.
-            if model.hasMore && !visibleSessions.isEmpty {
+            // actually see.  Gate on the unfiltered store (model.sessions)
+            // so a search that matches nothing still offers Load More when
+            // older pages exist; the caption itself stays filtered.
+            if model.hasMore && !model.sessions.isEmpty {
                 Section {
                     loadMoreRow
                 }
             }
+
+            // Quick Chat sits last, below every project and folder: it is the
+            // conversation without a project, not the first thing to read.
+            quickChatRow
         }
         .listStyle(.plain)
         .searchable(text: $searchText, prompt: "Filter Threads")
@@ -442,11 +464,11 @@ public struct SessionsView: View {
         }
     }
 
-    /// The agent conversation row: the always-there thread that used to be
-    /// its own tab.  iOS only — the Mac keeps its own Agent Chat tab.  The
-    /// row is selection-tagged like the thread rows above it.
+    /// The Quick Chat row: the conversation without a project, the one that
+    /// used to be its own tab.  iOS only — the Mac keeps its own Quick Chat
+    /// tab.  The row is selection-tagged like the thread rows above it.
     @ViewBuilder
-    private var agentChatRow: some View {
+    private var quickChatRow: some View {
         #if os(iOS)
         Section {
             HStack(spacing: 8) {
@@ -455,9 +477,9 @@ public struct SessionsView: View {
                     .foregroundStyle(Color.accentColor)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Agent Chat")
+                    Text("Quick Chat")
                         .font(.system(size: 12, weight: .semibold))
-                    Text("The always-there conversation")
+                    Text("Without a Project")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
@@ -465,15 +487,15 @@ public struct SessionsView: View {
                 Spacer(minLength: 0)
             }
             .frame(minHeight: 44)
-            .tag(HomeSelection.agentChat)
+            .tag(HomeSelection.quickChat)
             // The row is one thing to VoiceOver, not three:  the icon, the
             // title and the subtitle are combined into a single element with
             // one name, the way a thread row names itself.  The row behaves
-            // as a button because tapping it opens the agent conversation.
+            // as a button because tapping it opens the quick conversation.
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Agent Chat, The always-there conversation")
+            .accessibilityLabel("Quick Chat, Without a Project")
             .accessibilityAddTraits(.isButton)
-            .accessibilityIdentifier("agent-chat-row")
+            .accessibilityIdentifier("quick-chat-row")
         }
         #endif
     }
@@ -522,7 +544,12 @@ public struct SessionsView: View {
     /// selection binding is what opens the thread on a phone.
     private func threadRow(_ session: AcpSessionInfo) -> some View {
         let isSelected: Bool = {
-            if case .thread(let id) = selection { return id == session.sessionId }
+            if case .thread(let id, let selectionEngine) = selection {
+                // A thread opened on another engine is not this row:  the
+                // two engines number their own sessions, so the same raw id
+                // in this list is a different thread.
+                return id == session.sessionId && (selectionEngine == nil || selectionEngine == engine)
+            }
             return false
         }()
         return ThreadSidebarRow(
@@ -533,7 +560,7 @@ public struct SessionsView: View {
             onSelect: { _ in },
             isListSelectable: true
         )
-        .tag(HomeSelection.thread(session.sessionId))
+        .tag(HomeSelection.thread(session.sessionId, engine: nil))
         .contextMenu {
             Button {
                 ThreadPinStore.toggle(session.sessionId, forHost: host.id)
@@ -560,6 +587,18 @@ public struct SessionsView: View {
         AcpSessionInfo.filtered(AcpSessionInfo.newestFirst(model.sessions), query: searchText)
     }
 
+    /// The threads this list already shows, by the host, engine and id that
+    /// identify them.
+    ///
+    /// A listed thread of one engine does not hide another engine's thread
+    /// that happens to carry the same raw id:  the list on screen is one
+    /// engine's, and the other engine's approval still needs a row.
+    private var listedThreads: Set<TurnThreadKey> {
+        Set(visibleSessions.map {
+            TurnThreadKey(hostId: host.id, engine: engine, sessionId: $0.sessionId)
+        })
+    }
+
     /// Approvals this device has seen on the host on screen, minus the ones
     /// already listed as rows, so a thread never appears twice in one list.
     ///
@@ -569,15 +608,15 @@ public struct SessionsView: View {
         TurnActivity.approvalsForHomeList(
             TurnActivity.shared.approvals,
             hostId: host.id,
-            listedSessions: Set(visibleSessions.map(\.sessionId))
+            listed: listedThreads
         )
     }
 
     /// Runs this device is streaming on the host on screen, minus the ones
     /// already listed.
     private var runningTurns: [TurnActivityRun] {
-        let listed = Set(visibleSessions.map(\.sessionId))
-        return TurnActivity.shared.runs.filter { $0.hostId == host.id && !listed.contains($0.sessionId) }
+        let listed = listedThreads
+        return TurnActivity.shared.runs.filter { $0.hostId == host.id && !listed.contains($0.thread) }
     }
 
     private var hasActivity: Bool {
@@ -627,7 +666,13 @@ public struct SessionsView: View {
     /// engine is working in.  A thread that names no folder falls back to
     /// the folder a new thread would work in.
     private var filesRoot: String {
-        guard case .thread(let id) = selection,
+        guard case .thread(let id, let selectionEngine) = selection else { return "" }
+        // The tree starts where the open thread works, and the list holds one
+        // engine's sessions:  another engine's thread with the same raw id is
+        // a different thread, so its folder is not this thread's and the tree
+        // opens at the host's own root rather than in the wrong place.
+        let threadEngine = selectionEngine ?? engine
+        guard threadEngine == engine,
               let session = model.sessions.first(where: { $0.sessionId == id }),
               let cwd = session.cwd,
               !cwd.isEmpty else { return "" }
@@ -720,6 +765,16 @@ public struct SessionsView: View {
         (catalog?.engines ?? []).filter { $0.available && $0.supportsThreads }
     }
 
+    /// Every engine this host advertises, available or not.
+    ///
+    /// A link is validated against this rather than against the engines that
+    /// can start a thread right now:  an engine whose binary is missing this
+    /// morning is still an engine of this host, and an older link to one of
+    /// its threads must not stop opening because of it.
+    private var hostEngineIds: Set<String> {
+        Set((catalog?.engines ?? []).map(\.id))
+    }
+
     private var engineLabel: String {
         catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
     }
@@ -730,7 +785,27 @@ public struct SessionsView: View {
     /// not again by whatever surface happens to be on screen next.
     private func openPendingThread() {
         guard let link = threadLinkRouter.take() else { return }
-        selection = .thread(link.sessionId)
+        // A link that names an engine this host does not offer is dropped
+        // here rather than opened, because opening its id on the sidebar's
+        // engine would open a different thread than the one it named.  A
+        // link that names none is not refused:  it is an older link, and it
+        // opens on the engine this surface is already showing.
+        guard !link.isRefused(known: hostEngineIds) else { return }
+        // A link that names an engine opens on that engine, so an approval
+        // Muse raised opens Muse while the sidebar is still on MiniMax Code.
+        // An older link names none, and it resolves to the engine this device
+        // has seen activity for only when exactly one engine has it; when
+        // none or several do, the sidebar's own engine stands rather than a
+        // guess at which of them the link meant.
+        let opened = ThreadLink.resolveEngine(
+            named: link.engine,
+            activityEngines: TurnActivity.shared.enginesWithActivity(
+                hostId: host.id,
+                sessionId: link.sessionId
+            ),
+            known: hostEngineIds
+        )
+        selection = .thread(link.sessionId, engine: opened)
     }
 
     /// Opens the approvals list a link asked for.
@@ -747,16 +822,30 @@ public struct SessionsView: View {
     @ViewBuilder
     private var detail: some View {
         switch selection {
-        case .thread(let id):
+        case .thread(let id, let selectionEngine):
             // Each thread gets its own view, so switching threads starts the
             // new one clean: the transcript, the plan and the pending
             // questions belong to the thread they were raised in.  A thread
             // tapped from Needs You or Running that the loaded pages do not
             // carry still opens: the load call needs only the id.
-            let session = model.sessions.first { $0.sessionId == id } ?? AcpSessionInfo(sessionId: id)
-            SessionThreadView(host: host, session: session, engine: engine)
-                .id(id)
-        case .agentChat:
+            //
+            // The engine is the one the selection named, so a Muse approval
+            // opens Muse while the sidebar stays where the owner left it.  The
+            // view is keyed by the thread rather than by the raw id, because
+            // two engines can number a session the same and those are two
+            // threads.
+            let threadEngine = selectionEngine ?? engine
+            // The list is the sidebar engine's, so its entry is this thread's
+            // only when the thread runs on that engine:  two engines number
+            // their own sessions, and another engine's title and folder would
+            // be the wrong thread's.
+            let listed = threadEngine == engine
+                ? model.sessions.first { $0.sessionId == id }
+                : nil
+            let session = listed ?? AcpSessionInfo(sessionId: id)
+            SessionThreadView(host: host, session: session, engine: threadEngine)
+                .id("\(threadEngine)|\(id)")
+        case .quickChat:
             #if os(iOS)
             ChatView(activeHost: host, store: HostStore.shared)
             #endif
@@ -764,8 +853,8 @@ public struct SessionsView: View {
             // The list the Live Activity and the Control Center action
             // open:  the approvals waiting on this host, each one a way
             // into the thread that has to answer it.
-            ApprovalsView(host: host) { sessionId in
-                selection = .thread(sessionId)
+            ApprovalsView(host: host) { thread in
+                selection = .thread(thread.sessionId, engine: thread.engine)
             }
         case .none:
             ContentUnavailableView(
@@ -816,6 +905,9 @@ struct NewThreadSheet: View {
     /// The folder the sheet was opened with; folded into `workingFolder` on
     /// appear so a caller that preselects also sees it as chosen.
     private let initialFolder: String
+    /// Folders the caller already knows, such as the host's threads' working
+    /// folders, offered as recents when the owner picked none yet.
+    private let seedFolders: [String]
     let onCreated: (AcpSessionInfo) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -828,16 +920,23 @@ struct NewThreadSheet: View {
     @State private var isDropTargeted = false
     @State private var isShowingFolderPicker = false
     @State private var recentFolders: [String] = []
+    @State private var showPathEditor = false
+    @State private var pathDraft = ""
+    @State private var catalog: EngineCatalog?
+    @State private var selectedModelId: String?
+    @State private var selectedEffort: String?
 
     init(
         host: ClutchHost,
         engine: String = "mcode",
         initialFolder: String = "",
+        seedFolders: [String] = [],
         onCreated: @escaping (AcpSessionInfo) -> Void
     ) {
         self.host = host
         self.engine = engine
         self.initialFolder = initialFolder
+        self.seedFolders = seedFolders
         self.onCreated = onCreated
         _model = State(initialValue: NewThreadModel(host: host, engine: engine))
     }
@@ -883,6 +982,7 @@ struct NewThreadSheet: View {
                 if !model.attachments.isEmpty {
                     attachmentStrip
                 }
+                modelBar
                 HStack(alignment: .bottom, spacing: 8) {
                     // One attach control: photo, file, and paste share a
                     // sheet, so the field keeps its width on a phone.
@@ -999,13 +1099,25 @@ struct NewThreadSheet: View {
                 if workingFolder.isEmpty && !initialFolder.isEmpty {
                     workingFolder = initialFolder
                 }
+                RecentFolderStore.seed(seedFolders, forHost: host.id)
                 recentFolders = RecentFolderStore.recent(forHost: host.id)
                 // The folder lives on the model, since send() reads it there;
                 // the sheet's own state is just what the menu edits.
                 model.workingFolder = workingFolder
+                model.modelId = selectedModelId
+                model.effort = selectedEffort
+            }
+            .task {
+                await loadCatalog()
             }
             .onChange(of: workingFolder) { _, folder in
                 model.workingFolder = folder
+            }
+            .onChange(of: selectedModelId) { _, id in
+                model.modelId = id
+            }
+            .onChange(of: selectedEffort) { _, effort in
+                model.effort = effort
             }
             .onDisappear {
                 // A sheet that goes away mid-turn leaves the engine running
@@ -1021,6 +1133,132 @@ struct NewThreadSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
+        }
+    }
+
+    /// The engine and model the first turn will run on, above the field so
+    /// they are on screen while the prompt is typed.  The thread view shows
+    /// the same bar, so a model picked here is the model the thread opens
+    /// with.
+    private var modelBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                    .font(ClutchFont.micro)
+                Text(engineLabel)
+                    .font(ClutchFont.captionStrong)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.clutchSecondaryBackground, in: Capsule())
+            .accessibilityLabel("Engine: \(engineLabel)")
+
+            Menu {
+                if models.isEmpty {
+                    Text("Not reported")
+                } else {
+                    ForEach(models) { entry in
+                        Button {
+                            selectedModelId = entry.id
+                        } label: {
+                            if entry.id == selectedModelId {
+                                Label(entry.displayLabel, systemImage: "checkmark")
+                            } else {
+                                Text(entry.displayLabel)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text(modelLabel)
+                        .font(ClutchFont.captionStrong)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(ClutchFont.microStrong)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.clutchSecondaryBackground, in: Capsule())
+            }
+            .disabled(models.isEmpty)
+            .accessibilityLabel("Model: \(modelLabel)")
+
+            if !effortLevels.isEmpty {
+                Menu {
+                    ForEach(effortLevels, id: \.self) { level in
+                        Button {
+                            selectedEffort = level
+                        } label: {
+                            if level == selectedEffort {
+                                Label(level.capitalized, systemImage: "checkmark")
+                            } else {
+                                Text(level.capitalized)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gauge.with.dots.needle.50percent")
+                            .font(ClutchFont.micro)
+                        Text((selectedEffort ?? "default").capitalized)
+                            .font(ClutchFont.captionStrong)
+                        Image(systemName: "chevron.down")
+                            .font(ClutchFont.microStrong)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.clutchSecondaryBackground, in: Capsule())
+                }
+                .accessibilityLabel("Effort: \((selectedEffort ?? "default").capitalized)")
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// The engine's models, as the catalog published them.
+    private var models: [EngineModel] {
+        catalog?.descriptor(engine)?.models ?? []
+    }
+
+    /// The engine's effort levels, as the catalog published them.
+    private var effortLevels: [String] {
+        catalog?.descriptor(engine)?.effortLevels ?? []
+    }
+
+    private var engineLabel: String {
+        catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
+    }
+
+    /// What the model picker shows: the picked model, a plain "Default"
+    /// when none is picked (the turn runs on the sidecar's own default,
+    /// which the catalog order cannot name), or an honest "Not reported"
+    /// when the host published nothing — never an invented name.
+    private var modelLabel: String {
+        if let id = selectedModelId,
+           let found = catalog?.model(engineId: engine, modelId: id) {
+            return found.displayLabel
+        }
+        if !models.isEmpty {
+            return "Default"
+        }
+        return "Not reported"
+    }
+
+    /// Loads the catalog so the bar shows what this host really offers.  A
+    /// failure falls back to what the host published last; the thread still
+    /// works either way, on the sidecar's default.
+    @MainActor
+    private func loadCatalog() async {
+        let client = EngineCatalogClient(host: host)
+        if let loaded = try? await client.fetch(engine: engine) {
+            catalog = loaded
+        } else if let last = await client.lastKnownCatalog() {
+            catalog = last
         }
     }
 
@@ -1047,6 +1285,12 @@ struct NewThreadSheet: View {
             } label: {
                 Label("Browse…", systemImage: "folder.badge.plus")
             }
+            Button {
+                pathDraft = workingFolder
+                showPathEditor = true
+            } label: {
+                Label("Enter Path…", systemImage: "pencil")
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "folder")
@@ -1066,6 +1310,33 @@ struct NewThreadSheet: View {
             .background(Color.clutchSecondaryBackground, in: Capsule())
         }
         .accessibilityLabel("Working Folder")
+        .alert("Working Folder", isPresented: $showPathEditor) {
+            TextField("Absolute Path", text: $pathDraft)
+#if os(iOS)
+                .autocapitalization(.none)
+#endif
+                .autocorrectionDisabled()
+            Button("Use Folder") { useTypedPath() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Type the folder on the host, starting with a slash — for example /mnt/fleet-extra/Code/Clutch.")
+        }
+    }
+
+    /// Takes a typed folder path: browsing starts at the sidecar's home
+    /// directory and cannot climb out of it, so a folder anywhere else —
+    /// `/mnt` on a server, for example — is typed, not browsed to.
+    private func useTypedPath() {
+        let trimmed = pathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard trimmed.hasPrefix("/") else {
+            model.errorText = "Type an absolute folder path, starting with a slash."
+            return
+        }
+        model.errorText = nil
+        workingFolder = trimmed
+        RecentFolderStore.add(trimmed, forHost: host.id)
+        recentFolders = RecentFolderStore.recent(forHost: host.id)
     }
 
     /// The images waiting on the first turn, each removable.
@@ -1171,6 +1442,11 @@ final class NewThreadModel {
     /// The working folder the first turn runs in; empty means the sidecar's
     /// `$HOME` default, which the ACP bridge then pins the thread to.
     var workingFolder: String = ""
+    /// The model the owner picked for the first turn; nil sends the
+    /// sidecar's default, the way an untouched thread keeps its own.
+    var modelId: String?
+    /// The reasoning effort the owner picked; nil sends the default.
+    var effort: String?
     /// The sidecar chat id the first turn created; the permission answer
     /// rides on it, so the card is unanswerable until it exists.
     var chatId: String?
@@ -1249,13 +1525,14 @@ final class NewThreadModel {
 
         let client = ChatSessionClient(
             host: host,
-            model: "",
+            model: modelId ?? "",
             sessionId: nil,
             relayReceiverUid: "",
             engine: engine,
             // The chosen folder rides on the first turn: without it the
             // sidecar defaults to $HOME and the thread is stuck there.
             cwd: workingFolder.isEmpty ? nil : workingFolder,
+            effort: effort,
             museOptions: engine == "muse" ? MuseLaunchPreferences.options(for: host) : nil,
             contextPolicy: engine == "muse" ? MuseContextPreferences.policy(for: host) : nil,
             images: attachments
@@ -1290,6 +1567,7 @@ final class NewThreadModel {
                             payload: PermissionNotificationPayload.make(
                                 hostId: host.id,
                                 sessionId: chatId,
+                                engine: engine,
                                 requestId: request.requestId,
                                 denyOptionId: request.denyOptionId
                             )

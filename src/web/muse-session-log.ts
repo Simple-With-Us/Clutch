@@ -16,6 +16,10 @@ const MAX_TOTAL_TEXT_CHARS = 120_000;
 const MAX_CACHE_ENTRIES = 32;
 const MAX_SUMMARY_BYTES = 256 * 1024;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
+const MAX_NAME_BYTES = 64 * 1024;
+const NAME_HEAD_BYTES = 16 * 1024;
+// A wide list must not evict its own titles between identical requests.
+const MAX_NAME_CACHE_ENTRIES = 1_024;
 const MAX_LOCATION_SCAN_ENTRIES = 20_000;
 const MAX_LOCATION_INDEX_ROOTS = 8;
 const LOCATION_INDEX_TTL_MS = 500;
@@ -54,6 +58,14 @@ export interface MuseSessionLog {
   truncated: boolean;
 }
 
+/** Use Muse's recorded name ahead of its own listing fallback. */
+export function museDisplayTitle(
+  nativeName: string | undefined,
+  listedTitle?: string,
+): string | undefined {
+  return nativeName?.trim() || listedTitle?.trim() || undefined;
+}
+
 export interface MuseSessionLogOptions {
   sessionsRoot?: string;
   maxBytes?: number;
@@ -70,6 +82,7 @@ interface ParsedRecord {
 }
 
 const cache = new Map<string, { result: MuseSessionLog; mtimeMs: number; size: number }>();
+const nameCache = new Map<string, { name: string | undefined; identity: string }>();
 const summaryCache = new Map<string, { result: MuseSessionLog; mtimeMs: number; size: number }>();
 
 interface LocationIndex {
@@ -552,6 +565,7 @@ async function readBounded(
   maxBytes: number,
   identity: { dev: number; ino: number },
   validatePath: () => Promise<boolean>,
+  headBudget = HEAD_BYTES,
 ): Promise<string | null> {
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
@@ -566,7 +580,7 @@ async function readBounded(
       if (read.bytesRead !== size) return null;
       return whole.subarray(0, read.bytesRead).toString("utf8");
     }
-    const headSize = Math.min(HEAD_BYTES, Math.max(1, maxBytes - 1));
+    const headSize = Math.min(headBudget, Math.max(1, maxBytes - 1));
     const tailSize = Math.min(Math.max(0, size - headSize), maxBytes - headSize - 1);
     const head = Buffer.alloc(headSize);
     const first = await handle.read(head, 0, headSize, 0);
@@ -650,5 +664,50 @@ export async function readMuseSessionSummary(
     return compact;
   } catch {
     return null;
+  }
+}
+
+
+/** Look at the journal edges for a saved name without parsing transcript or usage. */
+export async function readMuseSessionName(
+  sessionId: string,
+  options: Pick<MuseSessionLogOptions, "sessionsRoot"> = {},
+): Promise<string | undefined> {
+  const sessionsRoot = options.sessionsRoot ?? museSessionsRoot();
+  const path = await findMuseSessionLog(sessionId, sessionsRoot);
+  if (!path) return undefined;
+  try {
+    const root = await realpath(sessionsRoot);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+    const identity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    const cached = nameCache.get(path);
+    if (cached?.identity === identity) {
+      nameCache.delete(path);
+      nameCache.set(path, cached);
+      return cached.name;
+    }
+    const contents = await readBounded(path, stat.size, MAX_NAME_BYTES, stat,
+      () => isSafeSessionPath(root, sessionId, path), NAME_HEAD_BYTES);
+    if (contents === null) return undefined;
+    const records: ParsedRecord[] = [];
+    for (const [index, line] of contents.split(/\r?\n/).entries()) {
+      if (!line.includes("session.name.changed")) continue;
+      const record = parseJsonRecord(line);
+      if (record) collectRecords(record, records, index);
+    }
+    // A later log row wins on equal sequence numbers, as in the replay.
+    const latest = records.reduce<ParsedRecord | undefined>((best, record) => {
+      if (record.value.payload_type !== "session.name.changed" ||
+          typeof asRecord(record.value.payload)?.new_name !== "string") return best;
+      return !best || record.sequence >= best.sequence ? record : best;
+    }, undefined);
+    const name = latest ? boundedText(asRecord(latest.value.payload)?.new_name) ?? undefined : undefined;
+    nameCache.delete(path);
+    nameCache.set(path, { name, identity });
+    while (nameCache.size > MAX_NAME_CACHE_ENTRIES) nameCache.delete(nameCache.keys().next().value!);
+    return name;
+  } catch {
+    return undefined;
   }
 }

@@ -1,3 +1,5 @@
+<p><img src="assets/clutch-icon-1024.png" alt="Clutch logo" width="96" height="96"></p>
+
 # Clutch
 
 Clutch provides a web interface, coding profiles, and ACP bridges around the upstream `@deepseek-ai/dsh` package.  It includes configurations for DeepSeek, MiniMax, and Muse Code; available tools and behavior depend on the selected profile, model, and provider.  Engines beyond those can be dropped in as files under [`engines/`](./engines).

@@ -1,5 +1,11 @@
 import SwiftUI
 
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
+
 /// The file names that read as code, so the preview shows them the way a
 /// person expects to read them.
 private let codeExtensions: [String] = [
@@ -117,23 +123,49 @@ struct FolderView: View {
 /// turn exists.
 struct FolderPickerView: View {
     let host: ClutchHost
-    let root: String
     let onChoose: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var model: FolderModel
     @State private var path: String
+    /// The tree the picker browses, editable so a folder outside the
+    /// sidecar's home directory — `/mnt` on a server — is reachable.
+    @State private var root: String
+    @State private var rootDraft = ""
+    @State private var showRootEditor = false
 
     init(host: ClutchHost, root: String, onChoose: @escaping (String) -> Void) {
         self.host = host
-        self.root = root
         self.onChoose = onChoose
         _model = State(initialValue: FolderModel(host: host, root: root, path: ""))
         _path = State(initialValue: "")
+        _root = State(initialValue: root)
     }
 
     var body: some View {
         NavigationStack {
             List {
+                Button {
+                    rootDraft = root
+                    showRootEditor = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "server.rack")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Browse From")
+                                .font(ClutchFont.microStrong)
+                                .foregroundStyle(.secondary)
+                            Text(rootLabel)
+                                .font(ClutchFont.captionStrong)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "pencil")
+                            .font(ClutchFont.micro)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityLabel("Browse From \(rootLabel)")
                 if let parent = model.listing?.parent {
                     Button {
                         navigate(to: parent)
@@ -184,7 +216,38 @@ struct FolderPickerView: View {
                     .disabled(model.listing == nil)
                 }
             }
+            .alert("Browse From", isPresented: $showRootEditor) {
+                TextField("Root Folder", text: $rootDraft)
+#if os(iOS)
+                    .autocapitalization(.none)
+#endif
+                    .autocorrectionDisabled()
+                Button("Browse") { useTypedRoot() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Empty browses the sidecar's home directory. Type a folder like /mnt/fleet-extra to browse from there instead.")
+            }
         }
+    }
+
+    private var rootLabel: String {
+        root.isEmpty ? "Default (Home Directory)" : root
+    }
+
+    /// Re-roots the picker at a typed folder: the sidecar jails browsing to
+    /// whatever root the client names, so naming `/mnt` — rather than
+    /// climbing to it from home, which the jail refuses — is how a server
+    /// path outside home is reached.
+    private func useTypedRoot() {
+        let trimmed = rootDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != root else { return }
+        // Empty means the sidecar's default; anything else must be absolute,
+        // because a relative root would resolve against an unknown folder.
+        guard trimmed.isEmpty || trimmed.hasPrefix("/") else { return }
+        root = trimmed
+        path = ""
+        model = FolderModel(host: host, root: trimmed, path: "")
+        Task { await model.load() }
     }
 
     private func navigate(to target: String) {
@@ -224,6 +287,7 @@ struct FilePreviewView: View {
     let name: String
 
     @State private var model: FilePreviewModel
+    @State private var remoteNote: String?
 
     init(host: ClutchHost, root: String, path: String, name: String) {
         self.host = host
@@ -235,6 +299,14 @@ struct FilePreviewView: View {
 
     var body: some View {
         ScrollView {
+            if let note = remoteNote {
+                Label(note, systemImage: "exclamationmark.triangle")
+                    .font(ClutchFont.caption)
+                    .foregroundStyle(ClutchColor.warning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+            }
             Text(model.body)
                 .font(model.isCode ? .system(.body, design: .monospaced) : .body)
                 .textSelection(.enabled)
@@ -264,7 +336,94 @@ struct FilePreviewView: View {
                 EmptyView()
             }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    copyToClipboard(bestKnownPath)
+                } label: {
+                    Label("Copy Path", systemImage: "doc.on.doc")
+                }
+                .help("Copy the file's path on the host")
+                .disabled(model.preview == nil)
+                Button {
+                    copyToClipboard(model.body)
+                } label: {
+                    Label("Copy Contents", systemImage: "doc.on.clipboard")
+                }
+                .help("Copy the preview text")
+                .disabled(model.preview?.isText != true)
+                Button {
+                    Task { await model.reload() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .help("Read the file again")
+                #if os(macOS)
+                Button {
+                    openInEditor()
+                } label: {
+                    Label("Open in Editor", systemImage: "arrow.up.forward.app")
+                }
+                .help(host.isLocal ? "Open the file in its default editor" : "Download a read-only copy and open it")
+                .disabled(model.preview?.isText != true)
+                #endif
+            }
+        }
     }
+
+    /// The file's path as the host knows it: the root joined to the
+    /// preview's relative path, or the relative path alone when the tree
+    /// was browsed from the sidecar's default.
+    private var bestKnownPath: String {
+        guard let preview = model.preview else { return path }
+        if root.isEmpty { return preview.path }
+        return (root as NSString).appendingPathComponent(preview.path)
+    }
+
+    private func copyToClipboard(_ string: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+        #else
+        UIPasteboard.general.string = string
+        #endif
+    }
+
+    #if os(macOS)
+    /// Opens the file in its default editor.  On a local host the sidecar
+    /// path names a local file, so it opens directly; on a remote host the
+    /// preview downloads to a read-only copy, because the remote file
+    /// itself is not on this machine.
+    private func openInEditor() {
+        guard model.preview?.isText == true else { return }
+        if host.isLocal {
+            NSWorkspace.shared.open(URL(fileURLWithPath: localPath))
+            return
+        }
+        do {
+            let safeName = (name as NSString).lastPathComponent.isEmpty
+                ? "preview.txt" : (name as NSString).lastPathComponent
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("clutch-preview-\(UUID().uuidString)-\(safeName)")
+            try model.body.write(to: url, atomically: true, encoding: .utf8)
+            NSWorkspace.shared.open(url)
+            remoteNote = "A read-only copy — edits won't save."
+        } catch {
+            remoteNote = "The copy could not be downloaded."
+        }
+    }
+
+    /// The file on this machine's disk: the sidecar path when the tree was
+    /// rooted explicitly, or the same path under this user's home when the
+    /// tree was browsed from the sidecar's default.
+    private var localPath: String {
+        if let absolute = model.preview?.absolute, !absolute.isEmpty { return absolute }
+        let relative = model.preview?.path ?? path
+        if !root.isEmpty { return (root as NSString).appendingPathComponent(relative) }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return (home as NSString).appendingPathComponent(relative)
+    }
+    #endif
 }
 
 /// What one folder holds.
@@ -358,5 +517,11 @@ final class FilePreviewModel {
         } catch {
             phase = .failed(error.localizedDescription)
         }
+    }
+
+    /// Reads the file again, after an edit elsewhere or a failed load.
+    func reload() async {
+        phase = .idle
+        await load()
     }
 }

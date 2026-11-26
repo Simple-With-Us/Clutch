@@ -3,9 +3,22 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { findMuseSessionLog, museSessionsRoot, parseMuseSessionLog, readMuseSessionLog, readMuseSessionSummary } from "../src/web/muse-session-log.ts";
+import { applySessionMeta, enrichMuseSessionPage } from "../src/web/chat-bridge.ts";
+import { findMuseSessionLog, museDisplayTitle, museSessionsRoot, parseMuseSessionLog, readMuseSessionLog, readMuseSessionName, readMuseSessionSummary } from "../src/web/muse-session-log.ts";
 
 const SESSION_ID = "8ec48d4a-e48d-4a49-ae87-f710d028e20c";
+
+function makeRoot(): { root: string; file: string } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "clutch-muse-session-log-")));
+  const folder = join(root, "2026", "10", "21", SESSION_ID);
+  mkdirSync(folder, { recursive: true });
+  const file = join(folder, "session.jsonl");
+  writeFileSync(file, [
+    entry("runtime.session.metadata", { record: { model_id: "muse-spark-1.3", provider_id: "muse", workspace_root: "/invented/project" } }, 1),
+    userRecord("Synthetic on-disk preview", 2),
+  ].join("\n"));
+  return { root, file };
+}
 
 function entry(payload_type: string, payload: Record<string, unknown>, sequence: number): string {
   return JSON.stringify({ record_type: "event", payload_type, payload, sequence });
@@ -206,17 +219,6 @@ describe("Muse session log filesystem reader", () => {
   // physical too: on macOS tmpdir() is /var/folders, which is a symlink to
   // /private/var/folders, and an unresolved root makes every expected path
   // differ from the one the reader returns.
-  function makeRoot(): { root: string; file: string } {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "clutch-muse-session-log-")));
-    const folder = join(root, "2026", "10", "21", SESSION_ID);
-    mkdirSync(folder, { recursive: true });
-    const file = join(folder, "session.jsonl");
-    writeFileSync(file, [
-      entry("runtime.session.metadata", { record: { model_id: "muse-spark-1.3", provider_id: "muse", workspace_root: "/invented/project" } }, 1),
-      userRecord("Synthetic on-disk preview", 2),
-    ].join("\n"));
-    return { root, file };
-  }
 
   it("locates strict UUID sessions only inside valid date directories and reads bounded metadata", async () => {
     const { root, file } = makeRoot();
@@ -265,6 +267,10 @@ describe("Muse session log filesystem reader", () => {
       utimesSync(file, changed, changed);
       const second = await readMuseSessionSummary(SESSION_ID, { sessionsRoot: root });
       expect(second?.name).toBe("Updated summary");
+      expect(museDisplayTitle(second?.name, "mild-andromeda")).toBe("Updated summary");
+      expect(museDisplayTitle(undefined, "mild-andromeda")).toBe("mild-andromeda");
+      expect(museDisplayTitle(" ", " ")).toBeUndefined();
+      expect(museDisplayTitle(undefined, " generic ")).toBe("generic");
       expect(second?.modelId).toBe("muse-wonder-1.0");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -311,4 +317,46 @@ describe("Muse session log filesystem reader", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+
+it("prefers the native Muse name even beyond the usage limit, without a Clutch alias", async () => {
+  const rows = Array.from({ length: 51 }, (_, index) => ({ sessionId: String(index), title: "generic-muse" }));
+  const visible = applySessionMeta(rows, { version: 1, sessions: { "50": { title: "Old Clutch label" } }, projects: [] }, false, false);
+  const log = parseMuseSessionLog(entry("session.name.changed", { new_name: "Muse Code AA: Native Topic" }, 1), "50");
+  const summaries: string[] = [];
+  const names: string[] = [];
+  const result = await enrichMuseSessionPage(visible, async (id) => {
+    summaries.push(id);
+    return null;
+  }, async (id) => {
+    names.push(id);
+    return log.name;
+  });
+  expect(summaries).toHaveLength(50);
+  expect(names).toEqual(["50"]);
+  expect(visible[50]?.title).toBe("generic-muse");
+  expect(result[49]?.title).toBe("generic-muse");
+  expect(result[50]?.title).toBe("Muse Code AA: Native Topic");
+  expect(result[50]?.title).toBe(museDisplayTitle(log.name));
+  expect(result[50]?.usage).toBeUndefined();
+  await expect(enrichMuseSessionPage([{ sessionId: "untitled", title: "   " }], async () => null))
+    .resolves.toEqual([{ sessionId: "untitled" }]);
+});
+
+
+it("reads only a name and invalidates it after a native rename or clear", async () => {
+  const { root, file } = makeRoot();
+  try {
+    const initial = entry("session.name.changed", { new_name: "Native first" }, 1);
+    const large = userRecord("x".repeat(80_000), 2);
+    writeFileSync(file, [initial, large, entry("session.name.changed", { new_name: "Native latest" }, 3)].join("\n"));
+    const options = { sessionsRoot: root };
+    await expect(readMuseSessionName(SESSION_ID, options)).resolves.toBe("Native latest");
+    await expect(readMuseSessionName(SESSION_ID, options)).resolves.toBe("Native latest");
+    writeFileSync(file, [initial, large, entry("session.name.changed", { new_name: " " }, 4)].join("\n"));
+    await expect(readMuseSessionName(SESSION_ID, options)).resolves.toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

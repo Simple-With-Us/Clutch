@@ -9,7 +9,10 @@ import SwiftUI
 struct ApprovalsView: View {
     let host: ClutchHost
     /// Opens the thread an approval belongs to.
-    let onOpenThread: (String) -> Void
+    ///
+    /// The thread carries its engine, so a Muse approval opens Muse and not
+    /// whichever engine the sidebar happens to be showing.
+    let onOpenThread: (TurnThreadKey) -> Void
 
     /// What this host is waiting on and what it is running.
     ///
@@ -36,7 +39,7 @@ struct ApprovalsView: View {
                     Section("Needs You") {
                         ForEach(work.waiting) { approval in
                             Button {
-                                onOpenThread(approval.sessionId)
+                                onOpenThread(approval.thread)
                             } label: {
                                 HStack(spacing: 8) {
                                     Image(systemName: "exclamationmark.triangle.fill")
@@ -63,7 +66,7 @@ struct ApprovalsView: View {
                     Section("Running") {
                         ForEach(work.running) { run in
                             Button {
-                                onOpenThread(run.sessionId)
+                                onOpenThread(run.thread)
                             } label: {
                                 HStack(spacing: 8) {
                                     ProgressView()
