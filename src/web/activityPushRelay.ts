@@ -38,6 +38,14 @@ export const ACTIVITY_TOKENS_PATH = "/clutch/v1/activity-tokens";
 /** How many registrations the host keeps. */
 export const MAX_ACTIVITY_TOKENS = 64;
 
+/** Thrown when a push registration is already held by another device. */
+export class RegistrationHeldError extends Error {
+  constructor() {
+    super("registration is already held by another device");
+    this.name = "RegistrationHeldError";
+  }
+}
+
 /** How long a push token is good for, as the phone tells it. */
 const MAX_TOKEN_LENGTH = 512;
 
@@ -522,7 +530,7 @@ export class ActivityPushRelay {
         // token it replaces:  a bearer holder cannot steer another phone's
         // pushes without knowing its push token.
         if (!registration.previousPushToken || registration.previousPushToken.toLowerCase() !== existing.pushToken.toLowerCase()) {
-          throw new Error("registration is already held by another device");
+          throw new RegistrationHeldError();
         }
         // A token change supersedes any push still queued for the old token,
         // so the next schedule captures the new registration.
@@ -546,7 +554,7 @@ export class ActivityPushRelay {
       // token:  a bearer holder cannot silence another phone's pushes
       // without knowing its push token.
       if (!pushToken || pushToken.toLowerCase() !== existing.pushToken.toLowerCase()) {
-        throw new Error("registration is already held by another device");
+        throw new RegistrationHeldError();
       }
     }
     this.cancelPending(key);
@@ -866,8 +874,7 @@ export async function handleActivityTokensRequest(
       } catch (error) {
         // An authz rejection is the caller's fault, not a server failure:
         // answer 403 so callers can tell forbidden from a store error.
-        const message = error instanceof Error ? error.message : String(error);
-        if (message === "registration is already held by another device") {
+        if (error instanceof RegistrationHeldError) {
           respond(res, 403, { error: "the registration is already held by another device" });
           return true;
         }
@@ -888,8 +895,7 @@ export async function handleActivityTokensRequest(
   try {
     removed = relay.unregister(parsed.data.deviceUid, parsed.data.activityId, parsed.data.pushToken);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message === "registration is already held by another device") {
+    if (error instanceof RegistrationHeldError) {
       respond(res, 403, { error: "the registration is already held by another device" });
       return true;
     }
