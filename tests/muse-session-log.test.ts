@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { applySessionMeta, enrichMuseSessionPage } from "../src/web/chat-bridge.ts";
 import { findMuseSessionLog, museDisplayTitle, museSessionsRoot, parseMuseSessionLog, readMuseSessionLog, readMuseSessionSummary } from "../src/web/muse-session-log.ts";
 
 const SESSION_ID = "8ec48d4a-e48d-4a49-ae87-f710d028e20c";
@@ -265,9 +266,10 @@ describe("Muse session log filesystem reader", () => {
       utimesSync(file, changed, changed);
       const second = await readMuseSessionSummary(SESSION_ID, { sessionsRoot: root });
       expect(second?.name).toBe("Updated summary");
-      expect(museDisplayTitle(undefined, second?.name, "mild-andromeda")).toBe("Updated summary");
-      expect(museDisplayTitle("My Clutch title", second?.name, "mild-andromeda")).toBe("My Clutch title");
-      expect(museDisplayTitle(undefined, undefined, "mild-andromeda")).toBe("mild-andromeda");
+      expect(museDisplayTitle(second?.name, "mild-andromeda")).toBe("Updated summary");
+      expect(museDisplayTitle(undefined, "mild-andromeda")).toBe("mild-andromeda");
+      expect(museDisplayTitle(" ", " ")).toBeUndefined();
+      expect(museDisplayTitle(undefined, " generic ")).toBe("generic");
       expect(second?.modelId).toBe("muse-wonder-1.0");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -314,4 +316,19 @@ describe("Muse session log filesystem reader", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+});
+
+
+it("prefers the native Muse name even beyond the usage limit, without a Clutch alias", async () => {
+  const rows = Array.from({ length: 51 }, (_, index) => ({ sessionId: String(index), title: "generic-muse" }));
+  const visible = applySessionMeta(rows, { version: 1, sessions: { "50": { title: "Old Clutch label" } }, projects: [] }, false, false);
+  const log = parseMuseSessionLog(entry("session.name.changed", { new_name: "Muse Code AA: Native Topic" }, 1), "50");
+  const result = await enrichMuseSessionPage(visible, async (id) => id === "50" ? log : null);
+  expect(visible[50]?.title).toBe("generic-muse");
+  expect(result[49]?.title).toBe("generic-muse");
+  expect(result[50]?.title).toBe("Muse Code AA: Native Topic");
+  expect(result[50]?.title).toBe(museDisplayTitle(log.name));
+  expect(result[50]?.usage).toBeUndefined();
+  await expect(enrichMuseSessionPage([{ sessionId: "untitled", title: "   " }], async () => null))
+    .resolves.toEqual([{ sessionId: "untitled" }]);
 });

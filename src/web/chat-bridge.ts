@@ -1065,6 +1065,7 @@ export function applySessionMeta(
   sessions: readonly AcpSessionInfo[],
   meta: SessionMetaFile,
   includeArchived: boolean,
+  includeTitleOverrides = true,
 ): AcpSessionInfo[] {
   const out: AcpSessionInfo[] = [];
   for (const session of sessions) {
@@ -1072,7 +1073,7 @@ export function applySessionMeta(
     if (entry?.archived && !includeArchived) continue;
     out.push({
       ...session,
-      ...(entry?.title ? { title: entry.title } : {}),
+      ...(includeTitleOverrides && entry?.title ? { title: entry.title } : {}),
       ...(entry?.projectId ? { projectId: entry.projectId } : {}),
       ...(entry?.archived ? { archived: true } : {}),
     });
@@ -2340,6 +2341,29 @@ const SessionMetaPatchSchema = z
 /** Most sessions enriched with log-derived usage per list request. */
 const USAGE_ENRICH_CAP = 50;
 
+/** Saved Muse names apply to the entire returned page, independently of the
+ * cap on usage and model enrichment. Reads use the bounded summary cache. */
+export async function enrichMuseSessionPage(
+  rows: readonly AcpSessionInfo[],
+  readSummary: typeof readMuseSessionSummary = readMuseSessionSummary,
+): Promise<AcpSessionInfo[]> {
+  return mapWithConcurrency(rows, 4, async (row, index) => {
+    const summary = await readSummary(row.sessionId);
+    const { title: listedTitle, ...session } = row;
+    const title = museDisplayTitle(summary?.name, listedTitle);
+    const includeUsage = index < USAGE_ENRICH_CAP && summary !== null;
+    const usage = includeUsage ? museSessionUsage(summary) : null;
+    return {
+      ...session,
+      ...(title ? { title } : {}),
+      ...(includeUsage && summary.modelId ? { model: summary.modelId } : {}),
+      ...(includeUsage && summary.providerId ? { provider: summary.providerId } : {}),
+      ...(usage ? { usage } : {}),
+    };
+  });
+}
+
+
 const ProjectCreateSchema = z
   .object({
     name: z.string({ error: "project name is required" }),
@@ -3211,7 +3235,7 @@ async function main(): Promise<void> {
         const listed = await listSessionsFor(listEngine, folderScope === "tree" ? undefined : requestedCwd, fetchLimit);
         const scoped = requestedCwd ? listed.filter((row) => sessionIsInFolder(row.cwd, requestedCwd, folderScope === "tree")) : listed;
         const sessionMeta = loadSessionMeta(SESSION_META_FILE);
-        const visible = applySessionMeta(scoped, sessionMeta, includeArchived);
+        const visible = applySessionMeta(scoped, sessionMeta, includeArchived, listEngine !== "muse");
         const page = visible.slice(0, limit);
         // Bound list I/O; details for an individual Muse row are read on demand.
         const modelPage = isDshHostedEngine(listEngine)
@@ -3224,19 +3248,7 @@ async function main(): Promise<void> {
         const enrichedHead = withKnownMetadata.slice(0, USAGE_ENRICH_CAP);
         const enrichedTail = withKnownMetadata.slice(USAGE_ENRICH_CAP);
         const sessions = listEngine === "muse"
-          ? await mapWithConcurrency(enrichedHead, 4, async (row) => {
-            const log = await readMuseSessionSummary(row.sessionId);
-            if (!log) return row;
-            const usage = museSessionUsage(log);
-            const title = museDisplayTitle(sessionMeta.sessions[row.sessionId]?.title, log.name, row.title);
-            return {
-              ...row,
-              ...(title ? { title } : {}),
-              ...(log.modelId ? { model: log.modelId } : {}),
-              ...(log.providerId ? { provider: log.providerId } : {}),
-              ...(usage ? { usage } : {}),
-            };
-          }).then((enriched) => enriched.concat(enrichedTail))
+          ? await enrichMuseSessionPage(withKnownMetadata)
           : listEngine === "zcode"
           // Z Code keeps its own model I/O log, not a dsh session log, so the
           // usage comes from the engine's own record.
@@ -3276,12 +3288,11 @@ async function main(): Promise<void> {
           res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "Recorded details are unavailable for this thread." }));
           return;
         }
-        const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
         const usage = museSessionUsage(summary);
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
           readOnly: true, sessionId: id,
           cwd: summary.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
-          title: museDisplayTitle(entry?.title, summary.name), model: summary.modelId, provider: summary.providerId,
+          title: museDisplayTitle(summary.name), model: summary.modelId, provider: summary.providerId,
           ...(usage ? { usage } : {}),
         }));
       } catch {
@@ -3307,11 +3318,10 @@ async function main(): Promise<void> {
             res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: "A read-only preview is unavailable for this thread.\u00A0 Choose Resume Thread to open it with Muse." }));
             return;
           }
-          const entry = loadSessionMeta(SESSION_META_FILE).sessions[id];
           const usage = museSessionUsage(log);
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
             readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
-            title: museDisplayTitle(entry?.title, log.name), model: log.modelId, provider: log.providerId,
+            title: museDisplayTitle(log.name), model: log.modelId, provider: log.providerId,
             history: sliceThreadHistory(compactToolHistory(log.transcript), limit),
             ...(usage ? { usage } : {}), running, truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
           }));

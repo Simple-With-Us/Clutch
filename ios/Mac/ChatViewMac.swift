@@ -673,6 +673,7 @@ public struct ChatView: View {
                                 }
                             },
                             onAction: { action, session in handle(action, session) },
+                            allowsLocalTitleOverride: engine != .muse,
                             showArchived: showArchived,
                             onToggleArchived: {
                                 showArchived.toggle()

@@ -61,6 +61,7 @@ struct ThreadSidebar: View {
     var onRetry: (() -> Void)? = nil
     /// Context-menu actions the host handles.  nil leaves those items out.
     var onAction: ((ThreadSidebarAction, AcpSessionInfo) -> Void)? = nil
+    var allowsLocalTitleOverride = true
     /// Whether archived threads are listed (marked, restorable) or hidden.
     var showArchived: Bool = false
     /// Flip `showArchived` and reload.  Without this, archiving a thread made
@@ -496,7 +497,8 @@ struct ThreadSidebar: View {
             onSelect: onSelect,
             isPinned: pinnedIds.contains(session.sessionId),
             onTogglePin: onTogglePin,
-            onAction: onAction
+            onAction: onAction,
+            allowsLocalTitleOverride: allowsLocalTitleOverride
         )
         #if os(macOS)
         .onHover { inside in
@@ -530,6 +532,7 @@ struct ThreadSidebarRow: View {
     /// nil where no surface handles them (the Mac Code tab's thread list), so
     /// those items are left out there instead of shown and silently ignored.
     var onAction: ((ThreadSidebarAction, AcpSessionInfo) -> Void)? = nil
+    var allowsLocalTitleOverride = true
     /// True when the containing `List(selection:)` owns the tap: the row
     /// renders without its own button, because a plain button would eat the
     /// tap and a compact-width split view only pushes its detail column for
@@ -677,7 +680,9 @@ struct ThreadSidebarRow: View {
 
         if let onAction {
             Button("Open In New Window") { onAction(.openInNewWindow(session), session) }
-            Button("Rename Thread…") { onAction(.renameThread(session), session) }
+            if allowsLocalTitleOverride {
+                Button("Rename Thread…") { onAction(.renameThread(session), session) }
+            }
             Divider()
             if let cwd = session.cwd, !cwd.isEmpty {
                 Button("Reveal Working Folder In Finder") {
