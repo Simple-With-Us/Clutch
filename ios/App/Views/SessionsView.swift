@@ -1028,16 +1028,17 @@ struct NewThreadSheet: View {
         catalog?.descriptor(engine)?.label ?? EngineLabels.label(for: engine)
     }
 
-    /// What the model picker shows: the picked model, the catalog's first
-    /// row as the default it is, or an honest "Not reported" when the host
-    /// published nothing — never an invented name.
+    /// What the model picker shows: the picked model, a plain "Default"
+    /// when none is picked (the turn runs on the sidecar's own default,
+    /// which the catalog order cannot name), or an honest "Not reported"
+    /// when the host published nothing — never an invented name.
     private var modelLabel: String {
         if let id = selectedModelId,
            let found = catalog?.model(engineId: engine, modelId: id) {
             return found.displayLabel
         }
-        if let first = models.first {
-            return "\(first.displayLabel) (Default)"
+        if !models.isEmpty {
+            return "Default"
         }
         return "Not reported"
     }

@@ -401,8 +401,10 @@ struct FilePreviewView: View {
             return
         }
         do {
+            let safeName = (name as NSString).lastPathComponent.isEmpty
+                ? "preview.txt" : (name as NSString).lastPathComponent
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("clutch-preview-\(UUID().uuidString)-\(name)")
+                .appendingPathComponent("clutch-preview-\(UUID().uuidString)-\(safeName)")
             try model.body.write(to: url, atomically: true, encoding: .utf8)
             NSWorkspace.shared.open(url)
             remoteNote = "A read-only copy — edits won't save."
@@ -415,6 +417,7 @@ struct FilePreviewView: View {
     /// rooted explicitly, or the same path under this user's home when the
     /// tree was browsed from the sidecar's default.
     private var localPath: String {
+        if let absolute = model.preview?.absolute, !absolute.isEmpty { return absolute }
         let relative = model.preview?.path ?? path
         if !root.isEmpty { return (root as NSString).appendingPathComponent(relative) }
         let home = FileManager.default.homeDirectoryForCurrentUser.path

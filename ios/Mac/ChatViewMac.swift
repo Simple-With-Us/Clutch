@@ -1206,10 +1206,17 @@ public struct ChatView: View {
         return trimmed.isEmpty || trimmed.hasPrefix("/")
     }
 
-    private var displayCwd: String {
+    /// The folder a thread really works in, or nil for the sidecar's
+    /// default. Display copy may name that default; a path consumer
+    /// (an export) must never receive the display text as a path.
+    private var realCwd: String? {
         if let cwd = codeCwd, !cwd.isEmpty { return cwd }
         if let selected = sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.cwd, !selected.isEmpty { return selected }
-        return "Default (Home Directory)"
+        return nil
+    }
+
+    private var displayCwd: String {
+        realCwd ?? "Default (Home Directory)"
     }
 
     /// Chooses a folder with this Mac's open panel.  Only offered when the
@@ -2901,7 +2908,7 @@ public struct ChatView: View {
         let title = isWorkspace
             ? (sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.displayTitle ?? "\(engine.label) Thread")
             : "\(selectedModel ?? engine.label) Thread"
-        return TranscriptExport.markdown(title: title, cwd: isWorkspace ? displayCwd : nil, entries: entries)
+        return TranscriptExport.markdown(title: title, cwd: isWorkspace ? realCwd : nil, entries: entries)
     }
 
     private func copyTranscript() {

@@ -143,8 +143,23 @@ public struct ClutchHost: Identifiable, Codable, Equatable, Hashable {
     /// when it is reachable without the internet, and treating its paths as
     /// local opens a wrong file or none at all.
     public var isLocal: Bool {
-        let host = (origin.host ?? "").lowercased()
-        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+        var host = (origin.host ?? "").lowercased()
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            host = String(host.dropFirst().dropLast())
+        }
+        if host == "localhost" || host == "::1" { return true }
+        if host.hasPrefix("::ffff:") {
+            let mapped = String(host.dropFirst("::ffff:".count))
+            if mapped.contains(".") {
+                host = mapped
+            } else {
+                // IPv4-mapped in hex form, e.g. ::ffff:7f00:1.
+                return mapped.hasPrefix("7f")
+            }
+        }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts.allSatisfy({ UInt8($0) != nil }) else { return false }
+        return parts[0] == "127"
     }
 
     /// The identity of a pairing, as the surfaces key their loads by.

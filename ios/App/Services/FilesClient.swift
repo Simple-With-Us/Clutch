@@ -59,6 +59,8 @@ public struct FilesClient {
         public var bytes: Int
         public var truncated: Bool
         public var content: String
+        /// The absolute path the sidecar resolved; nil from older sidecars.
+        public var absolute: String?
 
         public var isText: Bool { kind == "text" }
 
@@ -68,7 +70,8 @@ public struct FilesClient {
             kind: String,
             bytes: Int,
             truncated: Bool,
-            content: String
+            content: String,
+            absolute: String? = nil
         ) {
             self.path = path
             self.name = name
@@ -76,6 +79,7 @@ public struct FilesClient {
             self.bytes = bytes
             self.truncated = truncated
             self.content = content
+            self.absolute = absolute
         }
     }
 

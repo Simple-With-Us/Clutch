@@ -115,9 +115,13 @@ final class ClutchHostTests: XCTestCase {
     func testLocalMeansLoopbackOnly() {
         // The sidecar's paths name local files only when the sidecar runs
         // here; a Tailscale, LAN, or public address is another machine.
-        for local in ["127.0.0.1", "localhost", "::1"] {
+        for local in ["127.0.0.1", "localhost", "::1", "127.0.0.2", "127.0.1.1"] {
             let host = ClutchHost(name: "Mac", origin: URL(string: "http://\(local):3180")!)
             XCTAssertTrue(host.isLocal, "\(local) should be local")
+        }
+        for mapped in ["http://[::ffff:127.0.0.1]:3180", "http://[::ffff:7f00:1]:3180"] {
+            let host = ClutchHost(name: "Mac", origin: URL(string: mapped)!)
+            XCTAssertTrue(host.isLocal, "\(mapped) should be local")
         }
         for remote in ["100.64.0.1", "studio.local", "jay-macbook.boa-roygbiv.ts.net", "example.com"] {
             let host = ClutchHost(name: "Remote", origin: URL(string: "https://\(remote):3180")!)
