@@ -80,4 +80,74 @@ final class ClutchThreadSurfaceUITests: XCTestCase {
         snap("ios-find-match")
         try assertSnapshot("ios-find-match", of: app.windows.firstMatch)
     }
+
+    func testProjectCombinesThreadsFromDifferentHostsAndCodingTools() throws {
+        let mac = StubSidecar(projectEngine: "mcode")
+        let server = StubSidecar(projectEngine: "muse")
+        try mac.start()
+        defer { mac.stop() }
+        try server.start()
+        defer { server.stop() }
+
+        func tap(_ label: String, file: StaticString = #filePath, line: UInt = #line) {
+            let control = app.descendants(matching: .any).matching(identifier: label).firstMatch
+            guard control.waitForExistence(timeout: 20) else {
+                dump("ios-project-missing-" + label)
+                XCTFail(label, file: file, line: line)
+                return
+            }
+            control.tap()
+        }
+
+        func pair(_ host: StubSidecar, name: String) throws {
+            let link = try XCTUnwrap(URL(string:
+                "clutch://pair?h=127.0.0.1&tls=0&kind=mcode&name=\(name)&chat=\(StubSidecar.chatToken)&chatPort=\(host.port)"))
+            app.open(link)
+            XCTAssertTrue(app.buttons["Host: \(name)"].firstMatch.waitForExistence(timeout: 20))
+        }
+
+        func back(from title: String) {
+            let bar = app.navigationBars[title]
+            XCTAssertTrue(bar.waitForExistence(timeout: 20))
+            bar.buttons.firstMatch.tap()
+        }
+
+        // Opening a second deep link can launch a new app process. A unique
+        // suite starts clean without wiping the first pairing on relaunch.
+        app.launchArguments = ["-ClutchDefaultsSuite", "codes.clutch.uitest.projects.\(UUID().uuidString)"]
+        app.launch()
+        try pair(mac, name: "FixtureMac")
+        try pair(server, name: "FixtureServer")
+        tap("clutch-projects")
+        tap("clutch-projects-create")
+        let field = app.alerts.textFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 20))
+        field.tap()
+        field.typeText("Mixed Fleet \(UUID().uuidString.prefix(6))")
+        tap("Create")
+
+        tap("clutch-project-add-threads")
+        XCTAssertTrue(app.navigationBars["Choose A Host"].waitForExistence(timeout: 20))
+        tap("clutch-project-host-FixtureMac")
+        tap("clutch-project-add-mcode-same")
+        back(from: "FixtureMac")
+        tap("clutch-project-host-FixtureServer")
+        tap("clutch-project-add-muse-same")
+        tap("Load More Threads")
+        tap("clutch-project-add-muse-older")
+        back(from: "FixtureServer")
+        back(from: "Choose A Host")
+
+        XCTAssertTrue(app.staticTexts["FixtureMac · MiniMax Code"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["FixtureServer · Muse Code"].exists)
+        snap("ios-cross-host-project")
+        tap("clutch-project-member-mcode-same")
+        XCTAssertTrue(app.staticTexts["Preview from mcode"].waitForExistence(timeout: 20))
+        back(from: "Thread mcode")
+        tap("clutch-project-member-muse-same")
+        XCTAssertTrue(app.staticTexts["Preview from muse"].waitForExistence(timeout: 20))
+        back(from: "Thread muse")
+        tap("clutch-project-member-muse-older")
+        XCTAssertTrue(app.staticTexts["Older preview from muse"].waitForExistence(timeout: 20))
+    }
 }

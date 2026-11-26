@@ -135,8 +135,11 @@ public struct SessionsView: View {
     /// may just be the wrong engine for this host.
     @State private var isSettling = true
 
-    public init(host: ClutchHost) {
+    private let onShowProjects: (() -> Void)?
+
+    public init(host: ClutchHost, onShowProjects: (() -> Void)? = nil) {
         self.host = host
+        self.onShowProjects = onShowProjects
         _model = State(initialValue: SessionsModel(host: host))
     }
 
@@ -239,6 +242,15 @@ public struct SessionsView: View {
             engineBar
         }
         .toolbar {
+            if let onShowProjects {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: onShowProjects) {
+                        Label("Projects", systemImage: "folder.badge.plus")
+                    }
+                    .accessibilityLabel("Projects")
+                    .accessibilityIdentifier("clutch-projects")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     isShowingHosts = true
