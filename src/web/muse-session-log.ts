@@ -375,6 +375,7 @@ export function parseMuseSessionLog(
             // The answer is kept beside the call, so a card can show what
             // came back and not only what the tool was asked.
             toolOutput: text,
+            ...(recordedAt === undefined ? {} : { toolResultAt: recordedAt }),
           });
         }
       }

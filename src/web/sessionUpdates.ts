@@ -74,6 +74,8 @@ export interface SessionUpdate {
    * An entry with no time says so rather than being given one.
    */
   at?: number;
+  /** The native journal time of the tool result shown in this card, in epoch milliseconds. */
+  toolResultAt?: number;
 }
 
 /** ACP tool-call status as the clients render it. */
@@ -102,7 +104,7 @@ export function compactToolHistory(history: readonly SessionUpdate[]): SessionUp
       const existing = id ? byId.get(id) : undefined;
       const kept = existing !== undefined ? out[existing] : undefined;
       if (existing !== undefined && kept) {
-        out[existing] = {
+        const merged: SessionUpdate = {
           ...kept,
           text: kept.text || entry.text,
           toolStatus: entry.toolStatus ?? kept.toolStatus ?? "running",
@@ -116,6 +118,13 @@ export function compactToolHistory(history: readonly SessionUpdate[]): SessionUp
           // retried must not keep showing the answer it had before.
           ...(entry.toolOutput || kept.toolOutput ? { toolOutput: entry.toolOutput || kept.toolOutput } : {}),
         };
+        // Keep the time attached to the answer that is actually displayed.
+        // An untimed replacement must not inherit an older answer's time.
+        if (entry.toolOutput) {
+          if (entry.toolResultAt === undefined) delete merged.toolResultAt;
+          else merged.toolResultAt = entry.toolResultAt;
+        }
+        out[existing] = merged;
         continue;
       }
       if (id) byId.set(id, out.length);

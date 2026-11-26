@@ -151,8 +151,11 @@ beforeAll(async () => {
   museLogFile = join(sessionDir, "session.jsonl");
   writeFileSync(museLogFile, [
     { payload_type: "runtime.session.metadata", payload: { record: { model_id: "muse-wonder-1.0-contributor", provider_id: "meta", workspace_root: "/tmp/project" } } },
-    { payload_type: "runtime.session.task", payload: { event: { kind: "user_prompt_display", prompt: "Previewed question" } } },
-    { payload_type: "runtime.session.task", payload: { event: { kind: "assistant_message_committed", text: "Previewed answer" } } },
+    { recorded_at: 1_793_727_000_000_000, payload_type: "runtime.session.task", payload: { event: { kind: "user_prompt_display", prompt: "Previewed question" } } },
+    { recorded_at: 1_793_727_060_000_000, payload_type: "runtime.session.task", payload: { event: { kind: "assistant_tool_calls_committed", tool_calls: [{ call_id: "preview-tool", name: "read_file" }] } } },
+    { recorded_at: 1_793_727_120_000_000, payload_type: "runtime.session.task", payload: { event: { kind: "tool_result_batch_committed", results: [{ tool_call_id: "preview-tool", text: "Recorded result" }] } } },
+    { recorded_at: 1_793_727_180_000_000, payload_type: "runtime.session.task", payload: { event: { kind: "assistant_message_committed", text: "Previewed answer" } } },
+    { payload_type: "runtime.session.task", payload: { event: { kind: "assistant_message_committed", text: "No saved time" } } },
     { payload_type: "runtime.session.task", payload: { event: { kind: "goal_usage_attribution", record: { usage_id: "reported-1", usage_family: "provider", quantity: { unit: "tokens", reported: true, input_tokens: 24, output_tokens: 12, cached_tokens: 8 } } } } },
   ].map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n");
   tokenFile = join(dir, "chat-token");
@@ -254,18 +257,27 @@ it("previews a Muse thread without applying a Clutch-only alias or acquiring an 
   const previewURL = `http://127.0.0.1:${chatPort}/clutch/v1/sessions/preview?engine=muse&sessionId=${PREVIEW_ID}`;
   const preview = await fetch(previewURL, { headers: chatHeaders() });
   expect(preview.status).toBe(200);
-  expect(await preview.json()).toMatchObject({
+  const first = await preview.json();
+  expect(first).toMatchObject({
     readOnly: true, remoteSessionId: PREVIEW_ID, running: false,
     model: "muse-wonder-1.0-contributor", provider: "meta",
-    history: [{ text: "Previewed question" }, { text: "Previewed answer" }],
+    history: [
+      { text: "Previewed question", at: 1_793_727_000_000 },
+      { text: "read_file", at: 1_793_727_060_000, toolResultAt: 1_793_727_120_000, toolOutput: "Recorded result" },
+      { text: "Previewed answer", at: 1_793_727_180_000 },
+      { text: "No saved time" },
+    ],
     usage: { basis: "session-totals", totalsComplete: true, inputTokens: 24, outputTokens: 12, cachedTokens: 8, totalTokens: 0 },
   });
+  expect(first.history[3]).not.toHaveProperty("at");
   const rename = await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
     method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: "  Named\nThread  " }),
   });
   expect(rename.status).toBe(200);
   const renamed = await fetch(previewURL, { headers: chatHeaders() });
-  expect(await renamed.json()).not.toHaveProperty("title");
+  const reopened = await renamed.json();
+  expect(reopened).not.toHaveProperty("title");
+  expect(reopened.history).toEqual(first.history);
   await fetch(`http://127.0.0.1:${chatPort}/clutch/v1/session-meta`, {
     method: "PUT", headers: chatHeaders(), body: JSON.stringify({ sessionId: PREVIEW_ID, title: null }),
   });

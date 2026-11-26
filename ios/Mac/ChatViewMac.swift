@@ -1870,13 +1870,13 @@ public struct ChatView: View {
                                 id: "preview-\(index)",
                                 kind: entry.isTool ? .tool : .message,
                                 text: entry.text,
-                                date: entry.at.map { Date(timeIntervalSince1970: $0 / 1000) },
+                                date: entry.recordedDate,
                                 fromAgent: !entry.isUser,
                                 isCard: false,
                                 toolStatus: entry.isTool ? (entry.toolStatus ?? "completed") : nil,
                                 toolInput: entry.toolInput,
                                 toolOutput: entry.toolOutput
-                            ))
+                            ), previewTimestamp: entry.previewTimestamp)
                         }
                     }
                 }
@@ -3297,12 +3297,22 @@ struct MacTurnHeader: View {
 struct MacChatRow: View {
     var row: ChatView.Row
     var isMatch: Bool = false
+    var previewTimestamp: String? = nil
 
     @State private var expanded = false
     @State private var hovering = false
     @State private var copied = false
 
     var body: some View {
+        if let previewTimestamp {
+            content.help(previewTimestamp)
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch row.kind {
         case .tool:
             toolCard
