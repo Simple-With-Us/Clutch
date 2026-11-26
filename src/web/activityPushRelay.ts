@@ -517,11 +517,11 @@ export class ActivityPushRelay {
     if (existing) {
       // Idempotent re-registration with the unchanged pushToken needs no
       // proof:  the phone is only refreshing its own session id.
-      if (registration.pushToken !== existing.pushToken) {
+      if (registration.pushToken.toLowerCase() !== existing.pushToken.toLowerCase()) {
         // Rotating to a new pushToken requires proof the caller holds the
         // token it replaces:  a bearer holder cannot steer another phone's
         // pushes without knowing its push token.
-        if (!registration.previousPushToken || registration.previousPushToken !== existing.pushToken) {
+        if (!registration.previousPushToken || registration.previousPushToken.toLowerCase() !== existing.pushToken.toLowerCase()) {
           throw new Error("registration is already held by another device");
         }
         // A token change supersedes any push still queued for the old token,
@@ -545,7 +545,7 @@ export class ActivityPushRelay {
       // Removing a stored registration requires proof the caller holds its
       // token:  a bearer holder cannot silence another phone's pushes
       // without knowing its push token.
-      if (!pushToken || pushToken !== existing.pushToken) return false;
+      if (!pushToken || pushToken.toLowerCase() !== existing.pushToken.toLowerCase()) return false;
     }
     this.cancelPending(key);
     this.lastSent.delete(key);
