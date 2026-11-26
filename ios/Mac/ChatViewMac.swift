@@ -861,9 +861,8 @@ public struct ChatView: View {
 
     private var chatPane: some View {
         VStack(spacing: 0) {
-            if !isPreviewingThread {
-                modelStrip
-            }
+            // Browsing another host or tool must not require starting a thread.
+            modelStrip
             if isWorkspace && !isPreviewingThread {
                 cwdBar
             }
@@ -1223,7 +1222,8 @@ public struct ChatView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .accessibilityLabel("Engine: \(engineName(engine))")
-                .help("Choose engine (⌘⌥1–4)")
+                .accessibilityIdentifier("clutch-workspace-tool")
+                .help("Choose coding tool (⌘⌥1–4)")
 
                 Spacer(minLength: 8)
 
@@ -1270,6 +1270,7 @@ public struct ChatView: View {
 
                 if let host = activeHost, let store {
                     HostSwitcher(host: host, store: store, compact: true)
+                        .accessibilityIdentifier("clutch-workspace-host")
                         .menuStyle(.borderlessButton)
                         .disabled(sending || !queuedMessages.isEmpty)
                         .frame(maxWidth: 220, alignment: .trailing)
@@ -1277,7 +1278,7 @@ public struct ChatView: View {
                 }
             }
 
-            if !engineModels.isEmpty || !engineEfforts.isEmpty {
+            if !isPreviewingThread && (!engineModels.isEmpty || !engineEfforts.isEmpty) {
                 HStack(spacing: 8) {
                     if !engineModels.isEmpty {
                         Menu {
@@ -1341,7 +1342,7 @@ public struct ChatView: View {
                 }
             }
 
-            if ThreadMetricPresentation.showsUsageStrip(engineID: engine.rawValue) {
+            if !isPreviewingThread && ThreadMetricPresentation.showsUsageStrip(engineID: engine.rawValue) {
                 HStack(spacing: 8) {
                     if engine == .mcode && !mcodeAvailable {
                         Label("MiniMax Code Not Found On Host", systemImage: "exclamationmark.triangle")

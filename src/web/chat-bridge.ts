@@ -66,7 +66,7 @@ import { readZcodeSessionUsage } from "./zcode-session-usage.ts";
 import { ZCODE_ACP_INSTALL, ZCODE_ACP_SETUP, defaultZcodeAcpServer, resolveZcodeCli, zcodeSignedIn, zcodeSpawnEnv } from "./zcode-acp.ts";
 import { modelMetadataFromMuseConfigOptions } from "./muse-session-metadata.ts";
 import { MuseLaunchOptionsSchema, MuseSettingsError, contributorDefaultModel, isMuseContributorModel, museContributorModelId, museLaunchArguments, sameMuseLaunchOptions, type MuseLaunchOptions } from "./muse-launch-options.ts";
-import { readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
+import { museDisplayTitle, readMuseSessionLog, readMuseSessionSummary } from "./muse-session-log.ts";
 import { mapWithConcurrency } from "./bounded-map.ts";
 import { museSessionUsage, withMuseContext } from "./muse-session-metrics.ts";
 import { normalizeSessionFolder, sessionIsInFolder } from "./session-folder-scope.ts";
@@ -3210,7 +3210,8 @@ async function main(): Promise<void> {
         const fetchLimit = requestedCwd && folderScope === "tree" ? 5_000 : includeArchived ? limit : Math.max(limit, 500);
         const listed = await listSessionsFor(listEngine, folderScope === "tree" ? undefined : requestedCwd, fetchLimit);
         const scoped = requestedCwd ? listed.filter((row) => sessionIsInFolder(row.cwd, requestedCwd, folderScope === "tree")) : listed;
-        const visible = applySessionMeta(scoped, loadSessionMeta(SESSION_META_FILE), includeArchived);
+        const sessionMeta = loadSessionMeta(SESSION_META_FILE);
+        const visible = applySessionMeta(scoped, sessionMeta, includeArchived);
         const page = visible.slice(0, limit);
         // Bound list I/O; details for an individual Muse row are read on demand.
         const modelPage = isDshHostedEngine(listEngine)
@@ -3227,8 +3228,10 @@ async function main(): Promise<void> {
             const log = await readMuseSessionSummary(row.sessionId);
             if (!log) return row;
             const usage = museSessionUsage(log);
+            const title = museDisplayTitle(sessionMeta.sessions[row.sessionId]?.title, log.name, row.title);
             return {
               ...row,
+              ...(title ? { title } : {}),
               ...(log.modelId ? { model: log.modelId } : {}),
               ...(log.providerId ? { provider: log.providerId } : {}),
               ...(usage ? { usage } : {}),
@@ -3278,7 +3281,7 @@ async function main(): Promise<void> {
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
           readOnly: true, sessionId: id,
           cwd: summary.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
-          title: entry?.title ?? summary.name, model: summary.modelId, provider: summary.providerId,
+          title: museDisplayTitle(entry?.title, summary.name), model: summary.modelId, provider: summary.providerId,
           ...(usage ? { usage } : {}),
         }));
       } catch {
@@ -3308,7 +3311,7 @@ async function main(): Promise<void> {
           const usage = museSessionUsage(log);
           res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
             readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
-            title: entry?.title ?? log.name, model: log.modelId, provider: log.providerId,
+            title: museDisplayTitle(entry?.title, log.name), model: log.modelId, provider: log.providerId,
             history: sliceThreadHistory(compactToolHistory(log.transcript), limit),
             ...(usage ? { usage } : {}), running, truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
           }));

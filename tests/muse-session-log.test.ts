@@ -3,7 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { findMuseSessionLog, museSessionsRoot, parseMuseSessionLog, readMuseSessionLog, readMuseSessionSummary } from "../src/web/muse-session-log.ts";
+import { findMuseSessionLog, museDisplayTitle, museSessionsRoot, parseMuseSessionLog, readMuseSessionLog, readMuseSessionSummary } from "../src/web/muse-session-log.ts";
 
 const SESSION_ID = "8ec48d4a-e48d-4a49-ae87-f710d028e20c";
 
@@ -265,6 +265,9 @@ describe("Muse session log filesystem reader", () => {
       utimesSync(file, changed, changed);
       const second = await readMuseSessionSummary(SESSION_ID, { sessionsRoot: root });
       expect(second?.name).toBe("Updated summary");
+      expect(museDisplayTitle(undefined, second?.name, "mild-andromeda")).toBe("Updated summary");
+      expect(museDisplayTitle("My Clutch title", second?.name, "mild-andromeda")).toBe("My Clutch title");
+      expect(museDisplayTitle(undefined, undefined, "mild-andromeda")).toBe("mild-andromeda");
       expect(second?.modelId).toBe("muse-wonder-1.0");
     } finally {
       rmSync(root, { recursive: true, force: true });

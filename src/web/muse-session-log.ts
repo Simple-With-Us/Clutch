@@ -54,6 +54,16 @@ export interface MuseSessionLog {
   truncated: boolean;
 }
 
+/** Manual Clutch names are explicit overrides; otherwise prefer Muse's
+ * recorded rename to the cached ACP listing. No letter is inferred here. */
+export function museDisplayTitle(
+  override: string | undefined,
+  nativeName: string | undefined,
+  listedTitle?: string,
+): string | undefined {
+  return override?.trim() || nativeName?.trim() || listedTitle;
+}
+
 export interface MuseSessionLogOptions {
   sessionsRoot?: string;
   maxBytes?: number;
