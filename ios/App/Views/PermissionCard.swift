@@ -229,8 +229,12 @@ struct PermissionCard: View {
         // answered is asked again: either way the card is live.
         .confirmationDialog(
             "Allow Always?",
-            item: $confirmingOption,
-            titleVisibility: .visible
+            isPresented: Binding(
+                get: { confirmingOption != nil },
+                set: { if !$0 { confirmingOption = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: confirmingOption
         ) { option in
             Button(displayName(option)) { answer(option.optionId) }
             Button("Cancel", role: .cancel) {}
