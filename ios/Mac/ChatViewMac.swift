@@ -1374,16 +1374,22 @@ public struct ChatView: View {
                 .help(verbosity.detail)
 
                 if let host = activeHost, let store {
-                    HostSwitcher(host: host, store: store, compact: true)
+                    HostSwitcher(host: host, store: store, compact: true, onSelect: { picked in
+                        // Switching host in place drops the open thread and its
+                        // turn.  While a turn runs or messages are queued the
+                        // other host opens in a new window, and this one keeps
+                        // running.
+                        if picked.id != host.id, sending || !queuedMessages.isEmpty {
+                            openWindow(value: MacThreadWindowRequest(hostID: picked.id, engineID: engine.sidecarId))
+                        } else {
+                            store.activate(picked)
+                        }
+                    })
                         .accessibilityIdentifier("clutch-workspace-host")
                         .menuStyle(.borderlessButton)
-                        .disabled(sending || !queuedMessages.isEmpty)
                         .frame(maxWidth: 220, alignment: .trailing)
-                        // Switching host drops the open thread and its turn, so the
-                        // switcher is off while a turn runs or messages are queued.
-                        // It says so, instead of just going grey.
                         .help(sending || !queuedMessages.isEmpty
-                              ? "Finish or stop the current turn, and send or remove queued messages, to change host."
+                              ? "A turn is running here, so another host opens in a new window."
                               : statusHelp(for: host))
                 }
             }
