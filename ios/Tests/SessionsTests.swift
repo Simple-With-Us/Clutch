@@ -1089,7 +1089,7 @@ final class SessionListPageTests: XCTestCase {
         {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}],
          "hasMore":true}
         """
-        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+        let page = try SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
 
         XCTAssertEqual(page.sessions.count, 1)
         XCTAssertEqual(page.sessions.first?.sessionId, "s-1")
@@ -1103,18 +1103,15 @@ final class SessionListPageTests: XCTestCase {
         let body = """
         {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}]}
         """
-        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+        let page = try SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
 
         XCTAssertEqual(page.sessions.count, 1)
         XCTAssertFalse(page.hasMore)
         XCTAssertEqual(page.limit, 100)
     }
 
-    func testABrokenBodyIsAnEmptyPageRatherThanAFailure() throws {
-        let page = SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100)
-
-        XCTAssertTrue(page.sessions.isEmpty)
-        XCTAssertFalse(page.hasMore)
+    func testABrokenBodyFailsRatherThanLookingLikeAnEmptyPage() {
+        XCTAssertThrowsError(try SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100))
     }
 
     func testAWiderPageAppendsTheOlderThreadsWithoutRepeatingAny() throws {
@@ -1136,6 +1133,27 @@ final class SessionListPageTests: XCTestCase {
         // The rows already on screen keep their place, the older row the
         // wider page brought in is appended, and no row is listed twice.
         XCTAssertEqual(merged.map(\.sessionId), ["s-1", "s-2", "s-3"])
+    }
+
+    func testWiderPageKeepsTiesStableWhileUpdatingAndSortingDatedRows() {
+        let tied = "2026-11-25T12:00:00Z"
+        let first = AcpSessionInfo(sessionId: "first", updatedAt: tied)
+        let second = AcpSessionInfo(sessionId: "second", title: "Old title", updatedAt: tied)
+        let refreshed = AcpSessionInfo(sessionId: "second", title: "New title", updatedAt: tied)
+        let retained = AcpSessionInfo(sessionId: "retained", updatedAt: "2026-11-25T11:00:00Z")
+        let newest = AcpSessionInfo(sessionId: "newest", updatedAt: "2026-11-25T13:00:00Z")
+        let appended = AcpSessionInfo(sessionId: "appended", updatedAt: tied)
+        let undated = AcpSessionInfo(sessionId: "undated")
+        let wider = SessionsClient.SessionListPage(
+            sessions: [refreshed, appended, newest, refreshed, undated],
+            hasMore: false,
+            limit: 300
+        )
+
+        XCTAssertEqual(
+            wider.merging(into: [first, second, retained]),
+            [newest, first, refreshed, appended, retained, undated]
+        )
     }
 
     func testTheThreadListStepsThroughThePagesTheSidecarServes() throws {
