@@ -151,43 +151,50 @@ final class SessionsModel {
     /// Archive or restore one thread.  Archiving hides it and is reversible;
     /// nothing the engine owns moves.
     func setArchived(_ session: AcpSessionInfo, archived: Bool) async {
-        await applyMeta(sessionId: session.sessionId, archived: archived) { $0.archived = archived }
+        await applyMeta(sessionId: session.sessionId, archived: archived)
     }
 
     /// Rename the Clutch-side title without touching the engine session.
     func rename(_ session: AcpSessionInfo, title: String) async {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        await applyMeta(sessionId: session.sessionId, title: .some(trimmed)) { $0.title = trimmed }
+        await applyMeta(sessionId: session.sessionId, title: .some(trimmed))
     }
 
     /// Move a thread into a Project, or out of all of them when `nil`.
     func assign(_ session: AcpSessionInfo, projectId: String?) async {
-        await applyMeta(sessionId: session.sessionId, projectId: .some(projectId)) { $0.projectId = projectId }
+        await applyMeta(sessionId: session.sessionId, projectId: .some(projectId))
     }
 
     /// Create a Project and put the thread in it.
     func createProject(name: String, assigning session: AcpSessionInfo) async {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let ticket = generation
         do {
             let result = try await client.createProject(name: trimmed)
             await assign(session, projectId: result.project.id)
         } catch {
+            guard ticket == generation else { return }
             actionError = error.localizedDescription
         }
     }
 
     /// One metadata write, redrawn from the answer it returns.  The row
     /// changes in place instead of reloading the list, so the scroll and
-    /// the selection survive an action taken from a row menu.
+    /// the selection survive an action taken from a row menu.  The row
+    /// takes the entry the sidecar returned, not the values asked for:
+    /// a title it trimmed or an assignment it refused must not paint
+    /// optimistically.  An answer that lands after an engine switch or
+    /// archive toggle belongs to the old list and is dropped, the same
+    /// ticket rule the loads follow.
     private func applyMeta(
         sessionId: String,
         projectId: String?? = nil,
         archived: Bool? = nil,
-        title: String?? = nil,
-        mutate: (inout AcpSessionInfo) -> Void
+        title: String?? = nil
     ) async {
+        let ticket = generation
         do {
             let meta = try await client.updateMeta(
                 sessionId: sessionId,
@@ -195,16 +202,28 @@ final class SessionsModel {
                 archived: archived,
                 title: title
             )
+            guard ticket == generation else { return }
             projects = meta.projects
             if case .loaded(var rows) = phase,
                let index = rows.firstIndex(where: { $0.sessionId == sessionId }) {
-                mutate(&rows[index])
+                if let entry = meta.sessions[sessionId] {
+                    if let storedTitle = entry.title { rows[index].title = storedTitle }
+                    rows[index].projectId = entry.projectId
+                    rows[index].archived = entry.archived
+                } else {
+                    // No entry left means the sidecar holds nothing for
+                    // this thread: unassigned and unarchived.  The title
+                    // keeps the engine's own, which only a reload knows.
+                    rows[index].projectId = nil
+                    rows[index].archived = false
+                }
                 if rows[index].archived == true, !showArchived {
                     rows.remove(at: index)
                 }
                 phase = .loaded(rows)
             }
         } catch {
+            guard ticket == generation else { return }
             actionError = error.localizedDescription
         }
     }
@@ -490,14 +509,19 @@ public struct SessionsView: View {
             .disabled(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             Button("Cancel", role: .cancel) {}
         }
-        .alert("Couldn't Update Thread", isPresented: Binding(
-            get: { model.actionError != nil },
-            set: { if !$0 { model.actionError = nil } }
-        )) {
-            Button("OK", role: .cancel) { model.actionError = nil }
-        } message: {
-            Text(model.actionError ?? "")
-        }
+        // One alert per view: the error alert rides its own background
+        // level so it can never suppress the row prompt above.
+        .background(
+            EmptyView()
+                .alert("Couldn't Update Thread", isPresented: Binding(
+                    get: { model.actionError != nil },
+                    set: { if !$0 { model.actionError = nil } }
+                )) {
+                    Button("OK", role: .cancel) { model.actionError = nil }
+                } message: {
+                    Text(model.actionError ?? "")
+                }
+        )
     }
 
     /// The home list: what needs the owner first, then the folders their
