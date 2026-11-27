@@ -8,14 +8,21 @@ import SwiftUI
 struct MacThreadWindow: View {
     @Binding var request: MacThreadWindowRequest?
     @State private var store = HostStore(persistsActiveHost: false)
-    @State private var seeded = false
+    /// The request (by its window id) the store's active host was last set for.
+    @State private var seededFor: UUID?
 
-    /// The host this window shows: the one its request names until the window has
-    /// started, then whichever host the window's switcher last picked.
-    private var windowHost: ClutchHost? {
+    /// The host the request names, or nil when it is no longer paired.
+    private var requestedHost: ClutchHost? {
         guard let request else { return nil }
-        if seeded { return store.activeHost }
         return store.hosts.first(where: { $0.id == request.hostID })
+    }
+
+    /// The host this window shows.  A host that is not paired shows the unavailable
+    /// view, whatever the switcher picked before.  Once the window has started for
+    /// its request, the switcher's pick (the store's active host) is what shows.
+    private var windowHost: ClutchHost? {
+        guard let request, let requested = requestedHost else { return nil }
+        return seededFor == request.windowID ? (store.activeHost ?? requested) : requested
     }
 
     var body: some View {
@@ -38,12 +45,16 @@ struct MacThreadWindow: View {
             }
         }
         .frame(minWidth: 760, minHeight: 560)
-        .onAppear {
-            guard !seeded else { return }
-            if let request, let host = store.hosts.first(where: { $0.id == request.hostID }) {
-                store.activate(host)
-            }
-            seeded = true
-        }
+        .onAppear(perform: seed)
+        .onChange(of: request?.windowID) { _, _ in seed() }
+    }
+
+    /// Starts the window on its request's host.  Runs again when the request changes,
+    /// so a window reused for another thread starts on that thread's host.  A request
+    /// whose host is not paired is left unseeded and shows the unavailable view.
+    private func seed() {
+        guard let request, let host = requestedHost, seededFor != request.windowID else { return }
+        store.activate(host)
+        seededFor = request.windowID
     }
 }
