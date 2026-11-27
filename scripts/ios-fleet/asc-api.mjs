@@ -1588,11 +1588,17 @@ async function main() {
       const existing = activeByBundleAndName.get(key);
       if (existing) {
         if (REQUIRED_APP_GROUP) {
-          const content = existing.attributes?.profileContent;
+          let content = existing.attributes?.profileContent;
+          if (!content) {
+            const fetched = await api("GET", `/v1/profiles/${existing.id}`);
+            if (fetched.ok) {
+              content = fetched.parsed?.data?.attributes?.profileContent;
+            }
+          }
           const groups = content ? profileAppGroups(content) : null;
           if (groups === null) {
-            console.error(`ensure-appstore-profiles: cannot read profile content name=${profileName} bundle=${bundleId}; deleting and recreating`);
-            await api("DELETE", `/v1/profiles/${existing.id}`);
+            console.error(`ensure-appstore-profiles: cannot read profile content name=${profileName} bundle=${bundleId} even after fetching the profile; reusing ACTIVE profile rather than deleting a profile whose required App Group cannot be proven missing`);
+            continue;
           } else if (!carriesGroup(groups, REQUIRED_APP_GROUP)) {
             console.error(`ensure-appstore-profiles: profile name=${profileName} bundle=${bundleId} lacks required App Group ${REQUIRED_APP_GROUP}; deleting and recreating`);
             await api("DELETE", `/v1/profiles/${existing.id}`);
