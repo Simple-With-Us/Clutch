@@ -18,6 +18,14 @@ public final class DshHostStream {
     public private(set) var isEnded = false
     /// The failure the host reported on the stream, if any.
     public private(set) var failure: DshHostRpcError?
+    /// How many frames were dropped because no reader took them in time.
+    public private(set) var droppedCount = 0
+
+    /// How many unread frames one stream holds before the oldest go.
+    ///
+    /// A follow stream opens with a burst of history, so the cap is generous;
+    /// a reader that has gone away still cannot grow this inbox without bound.
+    static let maxInboxItems = 4096
 
     public init(id: String, endpoint: String) {
         self.id = id
@@ -48,6 +56,14 @@ public final class DshHostStream {
 
     func append(_ value: DshJSONValue) {
         items.append(value)
+        // Eviction drops to half the cap in one shift, not one frame per
+        // shift: a stream held over the cap by an absent reader would
+        // otherwise pay an O(n) memmove for every frame that arrives.
+        if items.count > Self.maxInboxItems {
+            let overflow = items.count - Self.maxInboxItems / 2
+            items.removeFirst(overflow)
+            droppedCount += overflow
+        }
     }
 
     func finish() {
@@ -363,7 +379,14 @@ public final class DshHostClient {
     /// so a finished turn does not keep the host holding the session open.
     public func closeStream(_ stream: DshHostStream) {
         send(DshHostMuxCancelFrame(streamId: stream.id))
-        streams[stream.id]?.finish()
+        // The reader keeps its own reference and sees the end on it; the
+        // client drops its copy, so a closed stream cannot leak for the
+        // life of the connection or take late frames nobody reads.
+        if let held = streams.removeValue(forKey: stream.id) {
+            held.finish()
+        } else {
+            stream.finish()
+        }
     }
 
     // MARK: - The mux
@@ -397,12 +420,16 @@ public final class DshHostClient {
     }
 
     /// Close the mux and drop the streams it carried.
+    ///
+    /// Every stream is ended first: a reader holding one must see the end
+    /// instead of waiting forever on a stream the client already dropped.
     private func closeMux() {
         receiveTask?.cancel()
         receiveTask = nil
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
         socketFailure = nil
+        for stream in streams.values { stream.finish() }
         streams = [:]
     }
 
@@ -419,6 +446,14 @@ public final class DshHostClient {
                     guard self.socket === socket else { return }
                     self.socketFailure = error
                     self.state = .failed(Self.describe(error))
+                    // Nothing more can arrive on this socket, so every open
+                    // stream ends with the loss on it instead of hanging.
+                    let lost = DshHostRpcError(
+                        code: "connection-lost",
+                        message: "The connection to the host was lost."
+                    )
+                    for stream in self.streams.values { stream.fail(lost) }
+                    self.streams = [:]
                     return
                 }
             }
@@ -453,10 +488,10 @@ public final class DshHostClient {
         case "error":
             guard let streamId = frame.streamId else { return }
             let error = frame.error ?? DshHostRpcError(code: "unknown", message: "The host reported a failure.")
-            streams[streamId]?.fail(error)
+            streams.removeValue(forKey: streamId)?.fail(error)
         case "end":
             guard let streamId = frame.streamId else { return }
-            streams[streamId]?.finish()
+            streams.removeValue(forKey: streamId)?.finish()
         default:
             break
         }

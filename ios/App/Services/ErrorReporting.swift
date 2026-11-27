@@ -11,12 +11,13 @@ import Sentry
 /// automatic hook sees — an ACP error from the sidecar would otherwise be
 /// visible only on the device where it happened.
 ///
-/// Privacy: URLs and absolute paths are redacted from every message at
-/// this boundary — Muse copy arrives safe, but other engines forward raw
-/// provider text that can embed URLs or paths.  Prompt, transcript, and
-/// token text never travel: only the failure line the owner already reads.
-/// Transport error descriptions can embed URLs, so only the error's type
-/// name travels for those.
+/// Privacy: URLs, credentials, email addresses and absolute paths are
+/// redacted from every message at this boundary — Muse copy arrives safe,
+/// but other engines forward raw provider text that can embed any of them.
+/// Prompt, transcript, and token text never travel: only the failure line
+/// the owner already reads.  Transport error descriptions can embed URLs,
+/// so only the error's type, domain and code travel for those — enough to
+/// tell offline from slow host from TLS failure, never the text itself.
 public enum ErrorReporting {
     /// A turn the engine refused or failed, redacted for travel.
     public static func turnFailed(engine: String, message: String) {
@@ -40,8 +41,9 @@ public enum ErrorReporting {
         "[turn-failed engine=\(engine)] \(redacted(message))"
     }
 
-    /// Strip URLs and absolute paths from a message.  Safe copy passes
-    /// through untouched; raw provider text loses its exfiltratable parts.
+    /// Strip URLs, credentials, email addresses and absolute paths from a
+    /// message.  Safe copy passes through untouched; raw provider text
+    /// loses its exfiltratable parts.
     public static func redacted(_ message: String) -> String {
         var out = message.replacingOccurrences(
             of: "https?://\\S+",
@@ -49,16 +51,40 @@ public enum ErrorReporting {
             options: .regularExpression
         )
         out = out.replacingOccurrences(
-            of: "(^|[\\s(])(~?/(?:[^/\\s]+/)*[^/\\s]*)",
+            of: "(?i)bearer\\s+\\S+",
+            with: "[token]",
+            options: .regularExpression
+        )
+        out = out.replacingOccurrences(
+            of: "(?i)(token|api[_-]?key|secret|password)=\\S+",
+            with: "$1=[redacted]",
+            options: .regularExpression
+        )
+        out = out.replacingOccurrences(
+            of: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}",
+            with: "[email]",
+            options: .regularExpression
+        )
+        // An absolute path needs something after the slash, so a bare
+        // " / " between words survives as the prose it is.
+        out = out.replacingOccurrences(
+            of: "(^|[\\s(])(~?/(?:[^/\\s]+/)*[^/\\s]+)",
             with: "$1[path]",
             options: .regularExpression
         )
         return out
     }
 
-    /// The report line for a transport failure: the error's type only.
+    /// The report line for a transport failure: the error's type, domain
+    /// and code, never its description.
+    ///
+    /// The code is the diagnosis — `NSURLErrorDomain` -1009 is offline,
+    /// -1001 is a timeout, -1200 is TLS — while the description is where
+    /// URLs and host names hide.
     public static func transportMessage(engine: String, error: Error) -> String {
-        "[turn-transport-failed engine=\(engine)] \(String(describing: type(of: error)))"
+        let bridged = error as NSError
+        return "[turn-transport-failed engine=\(engine)] "
+            + "\(String(describing: type(of: error))) \(bridged.domain)/\(bridged.code)"
     }
 
     private static func report(_ message: String) {

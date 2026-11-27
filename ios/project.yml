@@ -263,6 +263,9 @@ targets:
       # is here because the token layer's system colours live in it.
       - path: App/Design
       - path: App/Platform.swift
+      # The extension reads the same app-group defaults the manifest
+      # declares, so it carries the same manifest.
+      - path: Resources/PrivacyInfo.xcprivacy
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: codes.clutch.ios.widgets

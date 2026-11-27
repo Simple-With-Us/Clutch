@@ -53,6 +53,22 @@ final class PairingLinkTests: XCTestCase {
         XCTAssertNil(try payload("127.0.0.1:3180").launchToken)
     }
 
+    func testBareAddressSchemeFollowsTheAddressRange() throws {
+        // Private, loopback and link-local addresses keep the plaintext
+        // default a local sidecar needs.
+        for local in ["10.0.0.5", "172.16.4.2", "172.31.255.1", "192.168.1.20", "169.254.9.9"] {
+            XCTAssertEqual(try payload(local).origin.scheme, "http", "\(local) should stay http")
+        }
+        // A public address never earns it: the pairing tokens would travel
+        // in the clear.  The 100.64/10 shared range counts as public here:
+        // carrier NAT hands it out too, so only a full http:// address the
+        // owner typed keeps plaintext on a tailnet range.
+        for publicAddress in ["8.8.8.8", "172.32.0.1", "192.169.0.1", "100.64.1.2", "100.127.0.1", "100.128.0.1", "203.0.113.7"] {
+            XCTAssertEqual(try payload(publicAddress).origin.scheme, "https", "\(publicAddress) should default to https")
+        }
+        XCTAssertEqual(try payload("http://100.64.1.2:3180/?token=t0k").origin.absoluteString, "http://100.64.1.2:3180")
+    }
+
     func testServerLinkPairsMiniMaxCodeHostWithoutLaunchToken() throws {
         let p = try payload("clutch://pair?h=jay-server.boa-roygbiv.ts.net&tls=1&kind=mcode&chat=bridge-token-9&chatPort=3181&name=jay-server")
         XCTAssertEqual(p.kind, .codeServer)

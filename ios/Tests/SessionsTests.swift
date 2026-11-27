@@ -109,6 +109,21 @@ final class AcpSessionTests: XCTestCase {
         XCTAssertFalse(request.options[1].allows)
     }
 
+    func testAnUnreadablePermissionFailsTheTurnInsteadOfVanishing() {
+        // The engine blocks until the request is answered, so a request in
+        // a form this app cannot read must end the turn out loud.
+        for payload in [#"{}"#, "not json at all"] {
+            let event = ChatSessionClient.decode(event: "permission", payload: payload)
+            guard case .failed(let message) = event else {
+                return XCTFail("expected a failed event for \(payload), got \(String(describing: event))")
+            }
+            XCTAssertFalse(message.isEmpty)
+        }
+        // An unreadable payload on any other event still drops quietly:
+        // only a permission the engine is waiting on may fail the turn.
+        XCTAssertNil(ChatSessionClient.decode(event: "thought", payload: "not json at all"))
+    }
+
     func testDecodesTheEvidenceAPermissionCarries() throws {
         let payload = """
         {"requestId":"perm-8","title":"Run npm test","toolName":"bash",

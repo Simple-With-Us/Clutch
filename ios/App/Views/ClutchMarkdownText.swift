@@ -1,5 +1,58 @@
 import SwiftUI
 
+/// Parsed markdown, kept across body passes.
+///
+/// A transcript re-renders for reasons that have nothing to do with its
+/// text — a hover, a ticking count, a sibling row streaming — and every
+/// visible history row used to re-split its fences and rebuild its
+/// attributed string on each pass.  The parse is a pure function of the
+/// string, so the string itself is the key; NSCache bounds the memory and
+/// drops the lot under pressure, which is the right failure for a cache.
+private enum ClutchMarkdownCache {
+    private final class CachedBlocks {
+        let value: MarkdownBlocks
+        init(_ value: MarkdownBlocks) { self.value = value }
+    }
+
+    private final class CachedProse {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    private static let blocksCache: NSCache<NSString, CachedBlocks> = {
+        let cache = NSCache<NSString, CachedBlocks>()
+        cache.countLimit = 256
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
+
+    private static let proseCache: NSCache<NSString, CachedProse> = {
+        let cache = NSCache<NSString, CachedProse>()
+        cache.countLimit = 512
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
+
+    static func blocks(for text: String) -> MarkdownBlocks {
+        let key = text as NSString
+        if let cached = blocksCache.object(forKey: key) { return cached.value }
+        let parsed = MarkdownBlocks.parse(text)
+        blocksCache.setObject(CachedBlocks(parsed), forKey: key, cost: text.utf16.count * 2)
+        return parsed
+    }
+
+    static func prose(for source: String) -> AttributedString {
+        let key = source as NSString
+        if let cached = proseCache.object(forKey: key) { return cached.value }
+        var options = AttributedString.MarkdownParsingOptions()
+        options.interpretedSyntax = .inlineOnlyPreservingWhitespace
+        let parsed = (try? AttributedString(markdown: source, options: options))
+            ?? AttributedString(source)
+        proseCache.setObject(CachedProse(parsed), forKey: key, cost: source.utf16.count * 2)
+        return parsed
+    }
+}
+
 /// Markdown in a transcript.
 ///
 /// The prose keeps its inline markdown and the fenced code is drawn as
@@ -44,7 +97,7 @@ public struct ClutchMarkdownText: View {
 
     /// The parts of the text.
     private var blocks: MarkdownBlocks {
-        MarkdownBlocks.parse(text)
+        ClutchMarkdownCache.blocks(for: text)
     }
 
     /// The prose, with its inline markdown read.
@@ -53,12 +106,7 @@ public struct ClutchMarkdownText: View {
     /// syntax is interpreted:  a line that starts with a hash in the middle
     /// of a sentence is still a sentence.
     private func prose(_ source: String) -> AttributedString {
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .inlineOnlyPreservingWhitespace
-        guard let parsed = try? AttributedString(markdown: source, options: options) else {
-            return AttributedString(source)
-        }
-        return parsed
+        ClutchMarkdownCache.prose(for: source)
     }
 }
 
@@ -94,7 +142,7 @@ public struct ClutchCodeBlock: View {
                 } label: {
                     Image(systemName: copied ? "checkmark" : "doc.on.doc")
                         .font(ClutchFont.microStrong)
-                        .foregroundStyle(copied ? Color.green : Color.secondary)
+                        .foregroundStyle(copied ? ClutchColor.success : Color.secondary)
                         .frame(width: 22, height: 22)
                 }
                 .buttonStyle(.plain)

@@ -30,7 +30,10 @@ struct ClutchLiveActivityWidget: Widget {
                     .font(ClutchFont.captionStrong)
                     .foregroundStyle(context.state.waitingCount > 0 ? .orange : .white.opacity(0.8))
             } compactTrailing: {
-                Text("\(context.state.waitingCount + context.state.runningCount)")
+                // The one number that needs the owner: what is waiting.
+                // Summing waiting and running made 3 mean either three
+                // blocked approvals or three harmless runs.
+                Text("\(context.state.waitingCount > 0 ? context.state.waitingCount : context.state.runningCount)")
                     .font(ClutchFont.bodyStrong)
                     .monospacedDigit()
                     .foregroundStyle(.white)
@@ -76,8 +79,8 @@ struct ClutchActivitySessionList: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     Text(session.status == .waiting ? "Waiting" : "Running")
-                        .font(ClutchFont.micro)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .font(ClutchFont.captionStrong)
+                        .foregroundStyle(.white)
                 }
             }
         }

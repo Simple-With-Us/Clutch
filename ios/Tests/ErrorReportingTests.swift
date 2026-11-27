@@ -22,6 +22,35 @@ final class ErrorReportingTests: XCTestCase {
         XCTAssertTrue(line.contains("FakeTransportError"))
     }
 
+    func testTransportFailureCarriesTheDomainAndCode() {
+        // Offline, timeout and TLS failures share one error type; the code
+        // is what tells them apart, so it travels and the text does not.
+        let offline = NSError(domain: NSURLErrorDomain, code: URLError.notConnectedToInternet.rawValue)
+        let line = ErrorReporting.transportMessage(engine: "muse", error: offline)
+        XCTAssertTrue(line.contains("\(NSURLErrorDomain)/\(URLError.notConnectedToInternet.rawValue)"), line)
+        XCTAssertFalse(line.contains(offline.localizedDescription), line)
+    }
+
+    func testRedactionStripsCredentialsAndEmails() {
+        XCTAssertEqual(
+            ErrorReporting.redacted("sent Bearer abc.def.ghi to the host"),
+            "sent [token] to the host"
+        )
+        XCTAssertEqual(
+            ErrorReporting.redacted("retry with api_key=sk-1234 failed"),
+            "retry with api_key=[redacted] failed"
+        )
+        XCTAssertEqual(
+            ErrorReporting.redacted("owner jay@example.com was notified"),
+            "owner [email] was notified"
+        )
+    }
+
+    func testRedactionLeavesABareSlashAlone() {
+        // A slash between words is prose, not a path.
+        XCTAssertEqual(ErrorReporting.redacted("allow once / always"), "allow once / always")
+    }
+
     func testRedactionStripsUrlsAndPaths() {
         XCTAssertEqual(
             ErrorReporting.redacted("fetch https://provider.example/v1/chat?key=abc failed"),

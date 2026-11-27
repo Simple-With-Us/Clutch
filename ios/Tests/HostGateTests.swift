@@ -20,8 +20,20 @@ final class HostGateTests: XCTestCase {
         // The sidecar answered, so the app shows what went wrong there
         // rather than a gate card over it.
         XCTAssertEqual(HostGate.classify(status: 404), .ready)
-        XCTAssertEqual(HostGate.classify(status: 500), .ready)
-        XCTAssertEqual(HostGate.classify(status: 503), .ready)
+    }
+
+    func testABrokenSidecarReadsAsUnreachableNotReady() {
+        // A 5xx is the sidecar speaking but failing: green at the gate
+        // would send every surface into its own opaque error instead.
+        guard case .unreachable(let reason500) = HostGate.classify(status: 500) else {
+            return XCTFail("expected 500 to read as unreachable")
+        }
+        XCTAssertTrue(reason500.contains("500"))
+        guard case .unreachable = HostGate.classify(status: 503) else {
+            return XCTFail("expected 503 to read as unreachable")
+        }
+        XCTAssertFalse(HostGate.classify(status: 500).isReady)
+        XCTAssertEqual(HostGate.classify(status: 500).pickerStatus, .offline)
     }
 
     func testThePickerFollowsTheGateRatherThanTheProbe() {

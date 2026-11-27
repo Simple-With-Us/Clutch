@@ -31,7 +31,9 @@ enum KeychainStore {
     /// Stores a credential, replacing what was there.
     ///
     /// It answers whether the keychain took it, so a caller that cannot lose
-    /// the credential knows to keep a copy.
+    /// the credential knows to keep a copy.  The item is readable only while
+    /// this device is unlocked and never leaves it: the default accessibility
+    /// would let a token ride an encrypted backup onto another device.
     @discardableResult
     static func write(_ value: String, account: String) -> Bool {
         guard !value.isEmpty else { return false }
@@ -40,7 +42,10 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let attributes: [String: Any] = [kSecValueData as String: Data(value.utf8)]
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var insert = query

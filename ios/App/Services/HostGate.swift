@@ -38,13 +38,16 @@ public enum HostGate {
     /// Classifies the sidecar's health answer.
     ///
     /// A `401` means the sidecar is running and refused this device's token,
-    /// which is a pairing problem and not a reachability problem.  Any other
-    /// answer means the sidecar spoke, so the surfaces show their own errors
-    /// rather than a gate card over them.
+    /// which is a pairing problem and not a reachability problem.  A `5xx`
+    /// means the sidecar spoke but is broken, so the gate says so in one
+    /// place instead of showing green here and failing on every surface.
+    /// Any other answer means the sidecar spoke, so the surfaces show their
+    /// own errors rather than a gate card over them.
     public static func classify(status: Int) -> HostGateState {
         switch status {
         case 200: return .ready
         case 401, 403: return .needsPairing
+        case 500...599: return .unreachable("The host answered \(status).")
         default: return .ready
         }
     }
