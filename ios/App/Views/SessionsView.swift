@@ -173,6 +173,9 @@ final class SessionsModel {
         let ticket = generation
         do {
             let result = try await client.createProject(name: trimmed)
+            // The assign that follows captures a fresh ticket of its own,
+            // so the switch check belongs here, before chaining into it.
+            guard ticket == generation else { return }
             await assign(session, projectId: result.project.id)
         } catch {
             guard ticket == generation else { return }
@@ -495,7 +498,14 @@ public struct SessionsView: View {
         .sheet(isPresented: $isShowingHosts) {
             HostsSheet(store: HostStore.shared)
         }
-        .alert(rowPrompt?.title ?? "", item: $rowPrompt) { prompt in
+        .alert(
+            Text(rowPrompt?.title ?? ""),
+            isPresented: Binding(
+                get: { rowPrompt != nil },
+                set: { if !$0 { rowPrompt = nil } }
+            ),
+            presenting: rowPrompt
+        ) { prompt in
             TextField(prompt.fieldLabel, text: $promptText)
             Button("Save") {
                 let text = promptText
