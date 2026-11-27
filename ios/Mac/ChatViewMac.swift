@@ -1379,7 +1379,12 @@ public struct ChatView: View {
                         .menuStyle(.borderlessButton)
                         .disabled(sending || !queuedMessages.isEmpty)
                         .frame(maxWidth: 220, alignment: .trailing)
-                        .help(statusHelp(for: host))
+                        // Switching host drops the open thread and its turn, so the
+                        // switcher is off while a turn runs or messages are queued.
+                        // It says so, instead of just going grey.
+                        .help(sending || !queuedMessages.isEmpty
+                              ? "Finish or stop the current turn, and send or remove queued messages, to change host."
+                              : statusHelp(for: host))
                 }
             }
 
