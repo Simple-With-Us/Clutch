@@ -301,6 +301,9 @@ public struct SessionsClient {
         public var history: [AcpHistoryEntry]
         public var usage: AcpSessionUsage?
         public var running: Bool
+        /// The chat session a client can steer while this thread's turn runs.
+        /// It is absent when nothing is running or the engine cannot steer.
+        public var liveSessionId: String?
         public var truncated: Bool
     }
 

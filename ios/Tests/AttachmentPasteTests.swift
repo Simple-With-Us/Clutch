@@ -194,4 +194,21 @@ final class AttachmentPasteTests: XCTestCase {
         XCTAssertTrue(outcome.textInserts.first?.contains("```hello.py") ?? false)
         XCTAssertTrue(outcome.errors.isEmpty)
     }
+
+    // MARK: - Thumbnails
+
+    func testThumbnailDecodesImageData() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        let attachment = ChatAttachment(mimeType: "image/png", data: png, name: "tiny.png")
+        XCTAssertNotNil(AttachmentThumbnail.image(for: attachment))
+    }
+
+    func testThumbnailFallsBackOnNonImageData() {
+        let notBase64 = ChatAttachment(mimeType: "image/png", data: "not-base64!!!", name: "x")
+        XCTAssertNil(AttachmentThumbnail.image(for: notBase64))
+        let notAnImage = ChatAttachment(
+            mimeType: "image/png", data: Data("hello".utf8).base64EncodedString(), name: "x"
+        )
+        XCTAssertNil(AttachmentThumbnail.image(for: notAnImage))
+    }
 }
