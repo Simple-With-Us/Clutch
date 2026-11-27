@@ -13,6 +13,10 @@ public struct HostSwitcher: View {
     let compact: Bool
     /// The state to show, when the surface knows better than the probe does.
     let status: HostStatus?
+    /// What picking a host does, when the surface does more than switch to it.
+    /// A surface with a turn running opens the pick in a new window here,
+    /// because switching in place would drop the turn.
+    let onSelect: ((ClutchHost) -> Void)?
 
     /// The sheet the picker can open.
     private enum Sheet: String, Identifiable {
@@ -27,19 +31,25 @@ public struct HostSwitcher: View {
         host: ClutchHost,
         store: HostStore,
         compact: Bool = false,
-        status: HostStatus? = nil
+        status: HostStatus? = nil,
+        onSelect: ((ClutchHost) -> Void)? = nil
     ) {
         self.host = host
         self.store = store
         self.compact = compact
         self.status = status
+        self.onSelect = onSelect
     }
 
     public var body: some View {
         Menu {
             ForEach(store.hosts) { candidate in
                 Button {
-                    store.activate(candidate)
+                    if let onSelect {
+                        onSelect(candidate)
+                    } else {
+                        store.activate(candidate)
+                    }
                 } label: {
                     if candidate.id == host.id {
                         Label(candidate.name, systemImage: "checkmark")

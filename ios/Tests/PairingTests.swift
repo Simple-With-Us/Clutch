@@ -178,6 +178,30 @@ final class HostStoreTests: XCTestCase {
         return d
     }
 
+    func testAThreadWindowStoreSwitchStaysInTheWindow() {
+        let defaults = freshDefaults()
+        let main = HostStore(defaults: defaults)
+        let server = main.pair(PairingPayload(name: "Server", origin: URL(string: "http://100.64.0.9:3180")!, launchToken: "s", chatToken: nil))
+        let mac = main.pair(PairingPayload(name: "Mac", origin: URL(string: "http://127.0.0.1:3180")!, launchToken: "m", chatToken: nil))
+        main.activate(server)
+
+        // A thread window picks the Mac in its own store.
+        let window = HostStore(defaults: defaults, persistsActiveHost: false)
+        guard let macInWindow = window.hosts.first(where: { $0.id == mac.id }) else {
+            return XCTFail("the window store should hold the paired Mac")
+        }
+        window.activate(macInWindow)
+        XCTAssertEqual(window.activeHost?.id, mac.id)
+
+        // Nothing it did, including a status save, changes the app's active host.
+        window.setStatus(.offline, for: server.id)
+        XCTAssertEqual(HostStore(defaults: defaults).activeHost?.id, server.id)
+
+        // The main window's own store still persists its choice.
+        main.activate(mac)
+        XCTAssertEqual(HostStore(defaults: defaults).activeHost?.id, mac.id)
+    }
+
     func testPairAddsActivatesAndPersists() {
         let defaults = freshDefaults()
         let store = HostStore(defaults: defaults)
