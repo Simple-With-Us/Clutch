@@ -210,9 +210,21 @@ public final class DshHostClient {
     /// its chance to become ready.
     public func connect(to host: ClutchHost) async {
         wantsConnection = true
-        reconnectTask?.cancel()
-        reconnectTask = nil
+        await stopReconnect()
         await establish(to: host)
+    }
+
+    /// Stop any supervised reconnect and wait for it to actually stop.
+    ///
+    /// Cancel alone is cooperative: a reconnect already inside establish
+    /// keeps mutating the session, socket, and state a new attempt is
+    /// about to rebuild, so the old task is joined before anything else
+    /// touches the connection.
+    private func stopReconnect() async {
+        guard let running = reconnectTask else { return }
+        reconnectTask = nil
+        running.cancel()
+        await running.value
     }
 
     /// One full connection attempt: fresh session, token exchange, mux.
@@ -260,6 +272,20 @@ public final class DshHostClient {
                 // must still count as a failed attempt here.
                 if let failure = socketFailure { throw failure }
                 state = .connected
+                isEstablishing = false
+                // A socket that died between the check above and this
+                // publish must still count as a failed attempt: without
+                // this the client sits connected on a dead socket with
+                // no supervisor scheduled, because the death handler ran
+                // while the state was still connecting.  Reconnect
+                // scheduling is idempotent, so a death that lands after
+                // this point is supervised exactly once either way.
+                if socketFailure != nil {
+                    state = .connecting
+                    warning = "The connection dropped. Trying again."
+                    scheduleReconnect()
+                    return
+                }
                 startPing()
                 return
             } catch {
@@ -281,8 +307,7 @@ public final class DshHostClient {
     /// Close the mux and drop the host.
     public func disconnect() async {
         wantsConnection = false
-        reconnectTask?.cancel()
-        reconnectTask = nil
+        await stopReconnect()
         teardown()
     }
 
