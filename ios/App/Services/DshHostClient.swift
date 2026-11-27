@@ -296,6 +296,10 @@ public final class DshHostClient {
                 let delay = Self.retryDelay(attempt: attempt)
                 attempt += 1
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                // The sleep above swallows cancellation, so a stop asked
+                // during the backoff would otherwise retry until the
+                // deadline instead of letting the joiner go.
+                if Task.isCancelled { break }
             }
         }
 
