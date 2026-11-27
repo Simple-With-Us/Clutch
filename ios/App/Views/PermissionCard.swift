@@ -40,6 +40,10 @@ struct PermissionCard: View {
     /// True while the answer is on its way, so a double tap cannot answer
     /// the same request twice.
     @State private var isAnswering = false
+    /// Whether long evidence is shown in full instead of capped.
+    @State private var showsAllEvidence = false
+    /// The allow-always option awaiting its explicit confirmation, if any.
+    @State private var confirmingOption: AcpPermissionOption?
     /// Why the last allow did not go out, when it did not.
     ///
     /// The card says it rather than swallowing the tap, because an allow
@@ -89,8 +93,11 @@ struct PermissionCard: View {
             }
             // What the tool wants to do, so the owner can read it before
             // answering.  An approval nobody can read is not an approval.
+            // Long evidence (a full diff) scrolls inside a cap instead of
+            // pushing the answer buttons off the screen; the whole of it
+            // is one tap away and nothing is hidden by default otherwise.
             if let evidence = request.evidence, !evidence.lines.isEmpty {
-                VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
+                let lines = VStack(alignment: .leading, spacing: ClutchSpacing.tight) {
                     ForEach(evidence.lines) { line in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(line.label)
@@ -100,6 +107,25 @@ struct PermissionCard: View {
                                 .font(ClutchFont.monoMicro)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                Group {
+                    if evidenceIsLong(evidence) && !showsAllEvidence {
+                        ScrollView { lines }
+                            .frame(maxHeight: 160)
+                        Button("Show All Evidence") { showsAllEvidence = true }
+                            .font(ClutchFont.microStrong)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(ClutchColor.accent)
+                            .accessibilityIdentifier("permission-evidence-show-all")
+                    } else {
+                        lines
+                        if evidenceIsLong(evidence) {
+                            Button("Show Less Evidence") { showsAllEvidence = false }
+                                .font(ClutchFont.microStrong)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(ClutchColor.accent)
                         }
                     }
                 }
@@ -121,15 +147,26 @@ struct PermissionCard: View {
             } else {
                 VStack(spacing: ClutchSpacing.base) {
                     ForEach(offeredOptions) { option in
-                        // An option that lets the engine proceed is the one
-                        // primary action; a refusing option reads as a plain
-                        // button, never as a second equally-weighted call to
-                        // action, so the card has one obvious default.
-                        if option.allows {
+                        // One primary action only: allow-once.  An allow
+                        // that outlives the turn is a plainer button that
+                        // asks again before it counts, and a refusal never
+                        // reads as an equally-weighted call to action, so
+                        // the card has one obvious default.
+                        if option.effect == .allowOnce {
                             optionButton(option)
                                 .buttonStyle(.borderedProminent)
                                 .tint(ClutchColor.accent)
                                 .disabled(!canAnswer || isAnswering)
+                        } else if option.effect == .allowAlways {
+                            Button {
+                                confirmingOption = option
+                            } label: {
+                                optionLabel(option)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(ClutchColor.warning)
+                            .disabled(!canAnswer || isAnswering)
+                            .accessibilityIdentifier("permission-option-\(option.optionId)")
                         } else {
                             optionButton(option)
                                 .buttonStyle(.bordered)
@@ -190,8 +227,24 @@ struct PermissionCard: View {
         .accessibilityIdentifier("permission-card")
         // A request the owner answered is gone, and one that could not be
         // answered is asked again: either way the card is live.
+        .confirmationDialog(
+            "Allow Always?",
+            isPresented: Binding(
+                get: { confirmingOption != nil },
+                set: { if !$0 { confirmingOption = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: confirmingOption
+        ) { option in
+            Button(displayName(option)) { answer(option.optionId) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This lets the tool run without asking again. Allow Once asks every time.")
+        }
         .onChange(of: request.id) { _, newValue in
             isAnswering = false
+            showsAllEvidence = false
+            confirmingOption = nil
             authenticationMessage = nil
             // The dropped-answer notice belongs to the request it was
             // raised on.  It stays while that request is on screen, so the
@@ -216,16 +269,34 @@ struct PermissionCard: View {
         }
     }
 
+    /// What an option button shows, shared by answers that go straight
+    /// out and the allow-always that stops to confirm first.
+    private func optionLabel(_ option: AcpPermissionOption) -> some View {
+        HStack(spacing: ClutchSpacing.snug) {
+            Image(systemName: mark(for: option))
+            Text(displayName(option))
+        }
+        .font(ClutchFont.bodyStrong)
+        .frame(maxWidth: .infinity, minHeight: ClutchMetric.minTapTarget)
+    }
+
+    /// Whether the evidence needs the cap: many lines, or one long one.
+    private func evidenceIsLong(_ evidence: AcpPermissionEvidence) -> Bool {
+        var characters = 0
+        var newlines = 0
+        for line in evidence.lines {
+            characters += line.text.count
+            newlines += line.text.count(where: { $0 == "\n" })
+            if characters > 1_200 || newlines > 12 { return true }
+        }
+        return false
+    }
+
     private func optionButton(_ option: AcpPermissionOption) -> some View {
         Button {
             answer(option.optionId)
         } label: {
-            HStack(spacing: ClutchSpacing.snug) {
-                Image(systemName: mark(for: option))
-                Text(displayName(option))
-            }
-            .font(ClutchFont.bodyStrong)
-            .frame(maxWidth: .infinity, minHeight: ClutchMetric.minTapTarget)
+            optionLabel(option)
         }
         // The engine's own option id is the button's name, so a test can ask
         // for this one button instead of matching a word against every button
