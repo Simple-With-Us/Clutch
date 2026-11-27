@@ -55,9 +55,12 @@ final class DraftStoreTests: XCTestCase {
                 now: start.addingTimeInterval(TimeInterval(index))
             )
         }
-        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "s-0", in: directory), "")
+        // Reads run at the saves' own synthetic clock: the real one would
+        // expire every 2001-dated draft before the assertions see it.
+        let readNow = start.addingTimeInterval(10_000)
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "s-0", in: directory, now: readNow), "")
         let newest = "s-\(DraftStore.maxDrafts + 5)"
-        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: newest, in: directory), "draft \(DraftStore.maxDrafts + 5)")
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: newest, in: directory, now: readNow), "draft \(DraftStore.maxDrafts + 5)")
     }
 
     func testReaffirmingADraftKeepsItFromEvictingFirst() {
@@ -75,8 +78,9 @@ final class DraftStoreTests: XCTestCase {
         let later = start.addingTimeInterval(10_000)
         DraftStore.save("keep me", hostId: host, sessionId: "live", in: directory, now: later)
         DraftStore.save("newcomer", hostId: host, sessionId: "new", in: directory, now: later.addingTimeInterval(1))
-        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "live", in: directory), "keep me")
-        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "f-0", in: directory), "")
+        let readNow = later.addingTimeInterval(2)
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "live", in: directory, now: readNow), "keep me")
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "f-0", in: directory, now: readNow), "")
     }
 
     func testDraftsOlderThanAMonthAreForgotten() {
@@ -85,8 +89,8 @@ final class DraftStoreTests: XCTestCase {
         let now = Date(timeIntervalSinceReferenceDate: 5_000_000)
         DraftStore.save("stale", hostId: host, sessionId: "old", in: directory, now: now.addingTimeInterval(-DraftStore.maxAge - 1))
         DraftStore.save("fresh", hostId: host, sessionId: "new", in: directory, now: now)
-        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "old", in: directory), "")
-        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "new", in: directory), "fresh")
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "old", in: directory, now: now), "")
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "new", in: directory, now: now), "fresh")
     }
 
     func testAnExpiredDraftStaysForgottenOnReadAlone() {
