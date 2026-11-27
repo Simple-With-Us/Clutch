@@ -469,12 +469,100 @@ public struct ChatView: View {
         return "Default Model"
     }
 
-    /// The transcript, derived from the state this view holds.
+    /// The last derivation and the inputs it came from.  A reference box,
+    /// so reading the cache never counts as a state change.
+    private final class TranscriptDerivationCache {
+        var key: Int?
+        var rows: [Row] = []
+        var turns: [MacTranscriptModel.Turn] = []
+    }
+
+    @State private var transcriptCache = TranscriptDerivationCache()
+
+    /// The rows and turns, derived once per distinct input set.
+    ///
+    /// Every access used to rebuild the whole model — stable-identifier
+    /// hashing per history entry, turn numbering, grouping — and a body
+    /// pass touches rows, the ledger, and find several times, so a long
+    /// thread paid the full derivation several times per frame and again
+    /// per streamed chunk.  The key hashes every input the derivation
+    /// reads; a hit returns the last derivation untouched.
+    private var derivedTranscript: (rows: [Row], turns: [MacTranscriptModel.Turn]) {
+        let key = derivationKey
+        if transcriptCache.key == key {
+            return (transcriptCache.rows, transcriptCache.turns)
+        }
+        let model = buildTranscriptModel()
+        let rows = model.rows
+        let turns = model.turns
+        transcriptCache.key = key
+        transcriptCache.rows = rows
+        transcriptCache.turns = turns
+        return (rows, turns)
+    }
+
+    /// Every input the derivation reads, hashed.  Text hashes are the
+    /// process-seeded kind on purpose: the key only has to tell this
+    /// run's inputs apart, unlike row identity, which must be stable.
+    private var derivationKey: Int {
+        var hasher = Hasher()
+        hasher.combine(isWorkspace)
+        hasher.combine(verbosity.rawValue)
+        hasher.combine(deviceUid)
+        hasher.combine(localPrompts.count)
+        for prompt in localPrompts {
+            hasher.combine(prompt.id)
+            hasher.combine(prompt.text)
+            hasher.combine(prompt.at)
+        }
+        hasher.combine(agentBubbles.count)
+        for bubble in agentBubbles {
+            hasher.combine(bubble.id)
+            hasher.combine(bubble.senderUid)
+            hasher.combine(bubble.text)
+            hasher.combine(bubble.sentAt)
+            hasher.combine(bubble.kind)
+        }
+        hasher.combine(codeLoaded.count)
+        for entry in codeLoaded {
+            hasher.combine(entry.sessionId)
+            hasher.combine(entry.kind)
+            hasher.combine(entry.text)
+            hasher.combine(entry.toolCallId ?? "")
+            hasher.combine(entry.toolStatus ?? "")
+            hasher.combine(entry.parentToolCallId ?? "")
+            hasher.combine(entry.toolInput ?? "")
+            hasher.combine(entry.toolOutput ?? "")
+            hasher.combine(entry.at ?? -1)
+        }
+        hasher.combine(codePending.count)
+        for prompt in codePending {
+            hasher.combine(prompt.id)
+            hasher.combine(prompt.text)
+            hasher.combine(prompt.at)
+        }
+        hasher.combine(liveTools.count)
+        for tool in liveTools {
+            hasher.combine(tool.id)
+            hasher.combine(tool.name)
+            hasher.combine(tool.status)
+            hasher.combine(tool.parentId ?? "")
+            hasher.combine(tool.input ?? "")
+            hasher.combine(tool.output ?? "")
+        }
+        hasher.combine(streamingText)
+        hasher.combine(thoughtLine ?? "")
+        hasher.combine(sendError ?? "")
+        hasher.combine(sending)
+        return hasher.finalize()
+    }
+
+    /// The transcript inputs, derived from the state this view holds.
     ///
     /// The derivation lives in `MacTranscriptModel`, so this view renders a
     /// transcript instead of being one, and the turn that is running is
     /// part of that transcript rather than a pane beside it.
-    private var transcript: MacTranscriptModel {
+    private func buildTranscriptModel() -> MacTranscriptModel {
         var model = MacTranscriptModel()
         model.workspace = isWorkspace
         model.verbosity = verbosity
@@ -537,7 +625,7 @@ public struct ChatView: View {
     }
 
     /// The rows the transcript shows.
-    private var rows: [Row] { transcript.rows }
+    private var rows: [Row] { derivedTranscript.rows }
 
     /// The transcript as the ledger shows it:  a header for each turn, then
     /// the rows of that turn.
@@ -545,17 +633,17 @@ public struct ChatView: View {
     /// The header comes before the first row of the turn, so a reader sees
     /// where a turn began before they read what it did.
     private var ledger: [MacLedgerItem] {
-        // The transcript is derived once here and the turn headers are
-        // looked up in a table, so a long thread costs one derivation and
-        // one lookup per row rather than a derivation per row.
-        let model = transcript
+        // The derivation is cached behind derivedTranscript and the turn
+        // headers are looked up in a table, so a long thread costs one
+        // derivation per input change and one lookup per row.
+        let derived = derivedTranscript
         let headers = Dictionary(
-            model.turns.map { ($0.number, $0) },
+            derived.turns.map { ($0.number, $0) },
             uniquingKeysWith: { first, _ in first }
         )
         var out: [MacLedgerItem] = []
         var seen: Set<Int> = []
-        for row in model.rows {
+        for row in derived.rows {
             let number = row.turn ?? 1
             let header = headers[number]
             if !seen.contains(number) {
@@ -622,7 +710,10 @@ public struct ChatView: View {
 
     /// Where the focused match sits, in the words a reader uses.
     private var findLocation: String? {
-        guard let focus = findFocusId, let location = transcript.location(of: focus) else { return nil }
+        // Find is the one reader left on the uncached path: it runs only
+        // while find is open, where one derivation per keystroke is the
+        // price already paid there.
+        guard let focus = findFocusId, let location = buildTranscriptModel().location(of: focus) else { return nil }
         if let tool = location.tool { return "Turn \(location.turn), tool \(tool)" }
         return "Turn \(location.turn)"
     }
