@@ -507,6 +507,9 @@ public struct ChatView: View {
     /// Every input the derivation reads, hashed.  Text hashes are the
     /// process-seeded kind on purpose: the key only has to tell this
     /// run's inputs apart, unlike row identity, which must be stable.
+    /// Optionals hash as themselves, never through a default: a missing
+    /// value and an empty one are different inputs, and a key that
+    /// conflates them serves a stale transcript after a real change.
     private var derivationKey: Int {
         var hasher = Hasher()
         hasher.combine(isWorkspace)
@@ -531,12 +534,12 @@ public struct ChatView: View {
             hasher.combine(entry.sessionId)
             hasher.combine(entry.kind)
             hasher.combine(entry.text)
-            hasher.combine(entry.toolCallId ?? "")
-            hasher.combine(entry.toolStatus ?? "")
-            hasher.combine(entry.parentToolCallId ?? "")
-            hasher.combine(entry.toolInput ?? "")
-            hasher.combine(entry.toolOutput ?? "")
-            hasher.combine(entry.at ?? -1)
+            hasher.combine(entry.toolCallId)
+            hasher.combine(entry.toolStatus)
+            hasher.combine(entry.parentToolCallId)
+            hasher.combine(entry.toolInput)
+            hasher.combine(entry.toolOutput)
+            hasher.combine(entry.at)
         }
         hasher.combine(codePending.count)
         for prompt in codePending {
@@ -549,13 +552,13 @@ public struct ChatView: View {
             hasher.combine(tool.id)
             hasher.combine(tool.name)
             hasher.combine(tool.status)
-            hasher.combine(tool.parentId ?? "")
-            hasher.combine(tool.input ?? "")
-            hasher.combine(tool.output ?? "")
+            hasher.combine(tool.parentId)
+            hasher.combine(tool.input)
+            hasher.combine(tool.output)
         }
         hasher.combine(streamingText)
-        hasher.combine(thoughtLine ?? "")
-        hasher.combine(sendError ?? "")
+        hasher.combine(thoughtLine)
+        hasher.combine(sendError)
         hasher.combine(sending)
         return hasher.finalize()
     }
