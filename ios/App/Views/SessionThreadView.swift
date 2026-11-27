@@ -41,7 +41,8 @@ final class SessionThreadModel {
     private let client: SessionsClient
     private let session: AcpSessionInfo
     /// Where the unsent draft survives a relaunch.
-    private let draftDefaults: UserDefaults
+    private let draftDirectory: URL?
+    private var draftSaveTask: Task<Void, Never>?
 
     /// Sidecar chat id for the loaded thread; swapped on every send so the
     /// next turn continues the same conversation.
@@ -52,13 +53,43 @@ final class SessionThreadModel {
 
     var phase: Phase = .idle
     var bubbles: [ThreadBubbleItem] = []
-    /// The next message being composed.  Every change is kept, so leaving
-    /// the thread or relaunching the app finds the words still there; the
-    /// clear on send is the same write with nothing in it.
+    /// The next message being composed.  Changes are kept behind a short
+    /// debounce, so leaving the thread or relaunching the app finds the
+    /// words still there without table work on every keystroke; clearing
+    /// the composer saves at once, so a sent draft never resurrects.
     var draft = "" {
         didSet {
-            DraftStore.save(draft, hostId: host.id, sessionId: session.sessionId, in: draftDefaults)
+            guard draft != oldValue else { return }
+            draftSaveTask?.cancel()
+            if draft.isEmpty {
+                DraftStore.save("", hostId: host.id, sessionId: session.sessionId, in: draftDirectory)
+                return
+            }
+            let text = draft
+            let hostId = host.id
+            let sessionId = session.sessionId
+            let directory = draftDirectory
+            draftSaveTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                await Task.detached(priority: .utility) {
+                    DraftStore.save(text, hostId: hostId, sessionId: sessionId, in: directory)
+                }.value
+            }
         }
+    }
+
+    /// Text a failed steer or a stopped turn gives back, waiting for the
+    /// view to fold into the composer.  The view owns that fold because
+    /// dictation rebuilds the field from its base while it records.
+    var pendingRestore: String?
+
+    /// Writes the draft now instead of at the debounce tick, for the
+    /// moment the thread goes off screen.
+    func flushDraft() {
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        DraftStore.save(draft, hostId: host.id, sessionId: session.sessionId, in: draftDirectory)
     }
     var isSending = false
     var thoughtLine: String?
@@ -155,15 +186,15 @@ final class SessionThreadModel {
 
     private var sendTask: Task<Void, Never>?
 
-    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode", drafts: UserDefaults = .standard) {
+    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode", draftDirectory: URL? = nil) {
         self.host = host
         self.client = SessionsClient(host: host)
         self.session = session
         self.engine = engine
         self.remoteSessionId = session.sessionId
         self.cwd = session.cwd
-        self.draftDefaults = drafts
-        self.draft = DraftStore.draft(hostId: host.id, sessionId: session.sessionId, in: drafts)
+        self.draftDirectory = draftDirectory
+        self.draft = DraftStore.draft(hostId: host.id, sessionId: session.sessionId, in: draftDirectory)
     }
 
     /// The engine's models, as the catalog published them.
@@ -409,13 +440,18 @@ final class SessionThreadModel {
         }
     }
 
-    /// Puts text back at the head of the composer, ahead of anything typed
-    /// since, the way Agent Chat restores its own.
+    /// Hands text to the view to fold into the composer.  The fold lives
+    /// there, not here: while dictation records, the view rebuilds the
+    /// field from its base on every transcript change, and a direct write
+    /// to `draft` would be overwritten by the next rebuild.
     private func restoreToComposer(_ text: String) {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft = current.isEmpty ? value : value + "\n\n" + draft
+        if let pendingRestore, !pendingRestore.isEmpty {
+            self.pendingRestore = value + "\n\n" + pendingRestore
+        } else {
+            pendingRestore = value
+        }
     }
 
     /// Answer the permission request the engine is waiting on.
@@ -716,6 +752,12 @@ public struct SessionThreadView: View {
             guard dictation.isRecording || !text.isEmpty else { return }
             model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+        .onChange(of: model.pendingRestore) { _, pending in
+            guard let pending else { return }
+            model.pendingRestore = nil
+            applyRestore(pending)
+        }
+        .onDisappear { model.flushDraft() }
         // Haptics keyed on counters so each event lands once.
         .sensoryFeedback(.success, trigger: model.turnTick)
         .sensoryFeedback(.warning, trigger: model.permissionTick)
@@ -1167,6 +1209,24 @@ public struct SessionThreadView: View {
 
     /// The pill naming what is waiting for the running turn to end.
     @ViewBuilder
+    /// Folds restored text into the composer, ahead of anything typed
+    /// since.  While dictation records, the field is rebuilt from
+    /// `draftBase` plus the transcript on every change, so the text joins
+    /// the base and the field is rebuilt the way the observer rebuilds it,
+    /// exactly as Agent Chat restores its own.
+    private func applyRestore(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        if dictation.isRecording {
+            draftBase = draftBase.isEmpty ? value : value + "\n\n" + draftBase
+            let spoken = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            model.draft = draftBase + (draftBase.isEmpty || spoken.isEmpty ? "" : " ") + spoken
+            return
+        }
+        let current = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.draft = current.isEmpty ? value : value + "\n\n" + model.draft
+    }
+
     private func queuedPromptPill(_ queued: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "tray.and.arrow.down")
@@ -1178,7 +1238,7 @@ public struct SessionThreadView: View {
             Spacer(minLength: 0)
             Button {
                 model.queuedPrompt = nil
-                model.draft = queued
+                applyRestore(queued)
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
