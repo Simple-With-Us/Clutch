@@ -17,6 +17,7 @@ MAP="${IOS_APPSTORE_PROFILES_MAP:-${ROOT}/ios/appstore-profiles.json}"
 CLIENT="${ROOT}/scripts/ios-fleet/asc-api.mjs"
 DEST="${IOS_PROFILES_DIR:-${HOME}/Library/MobileDevice/Provisioning Profiles}"
 REQUIRED_APP_GROUP="${IOS_REQUIRED_APP_GROUP:-}"
+export IOS_REQUIRED_APP_GROUP  # asc-api.mjs reads process.env.IOS_REQUIRED_APP_GROUP
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/clutch-profiles.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
@@ -127,7 +128,9 @@ for bid, row in sorted(found.items()):
         groups = ents.get("com.apple.security.application-groups") or []
         if isinstance(groups, str):
             groups = [groups]
-        if required_group not in groups:
+        if "*" in groups:
+            pass  # wildcard App Group satisfies any required group
+        elif required_group not in groups:
             raise SystemExit(
                 "error: profile %s for %s is missing App Group %s required by the target entitlements."
                 % (name, bid, required_group))
