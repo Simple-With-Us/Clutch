@@ -216,6 +216,9 @@ public struct ChatView: View {
     @State private var previewLoadingId: String?
     @State private var previewError: String?
     @State private var previewToken = UUID()
+    @State private var previewSteerText = ""
+    @State private var previewSteering = false
+    @State private var previewSteerNote: String?
     @State private var didConsumeInitialThreadRequest = false
     @State private var runningSessionRegistry = MacRunningSessionRegistry.shared
     @State private var runningRegistryOwner = UUID()
@@ -796,7 +799,12 @@ public struct ChatView: View {
         .task(id: activeHost?.pairingKey) {
             await prepare()
         }
-        .task(id: engine) {
+        // The thread list is read again when the host changes as well as when
+        // the engine does.  Switching host clears the list (see the host change
+        // handler below) and `prepare()` does not read it in the workspace, so a
+        // key of the engine alone left the rail empty or on the old machine's
+        // threads until the app was quit and reopened.
+        .task(id: "\(activeHost?.pairingKey ?? "unpaired")|\(engine.sidecarId)") {
             if isWorkspace { await loadSidebarSessions() }
         }
         .sheet(isPresented: $showingMuseSignIn) {
@@ -1369,12 +1377,23 @@ public struct ChatView: View {
                 .help(verbosity.detail)
 
                 if let host = activeHost, let store {
-                    HostSwitcher(host: host, store: store, compact: true)
+                    HostSwitcher(host: host, store: store, compact: true, onSelect: { picked in
+                        // Switching host in place drops the open thread and its
+                        // turn.  While a turn runs or messages are queued the
+                        // other host opens in a new window, and this one keeps
+                        // running.
+                        if picked.id != host.id, sending || !queuedMessages.isEmpty {
+                            openWindow(value: MacThreadWindowRequest(hostID: picked.id, engineID: engine.sidecarId))
+                        } else {
+                            store.activate(picked)
+                        }
+                    })
                         .accessibilityIdentifier("clutch-workspace-host")
                         .menuStyle(.borderlessButton)
-                        .disabled(sending || !queuedMessages.isEmpty)
                         .frame(maxWidth: 220, alignment: .trailing)
-                        .help(statusHelp(for: host))
+                        .help(sending || !queuedMessages.isEmpty
+                              ? "A turn is running here, so another host opens in a new window."
+                              : statusHelp(for: host))
                 }
             }
 
@@ -1902,13 +1921,69 @@ public struct ChatView: View {
     /// row is therefore the first choice and a stacked layout is what the
     /// bar falls back to.
     private func previewActionBar(for preview: SessionsClient.PreviewSession) -> some View {
-        ViewThatFits(in: .horizontal) {
-            previewActionRow(for: preview, stacked: false)
-            previewActionRow(for: preview, stacked: true)
+        VStack(alignment: .leading, spacing: 6) {
+            if preview.running, let liveId = preview.liveSessionId {
+                liveSteerRow(for: preview, liveSessionId: liveId)
+            }
+            ViewThatFits(in: .horizontal) {
+                previewActionRow(for: preview, stacked: false)
+                previewActionRow(for: preview, stacked: true)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(Color.clutchSecondaryBackground.opacity(0.7))
+    }
+
+    /// Steering for a thread whose turn another window or client is running.
+    ///
+    /// Resume stays off while that turn runs, so two windows never drive one
+    /// turn.  The running turn can still be steered, which is what the
+    /// sidecar already offers its own window.
+    @ViewBuilder
+    private func liveSteerRow(
+        for preview: SessionsClient.PreviewSession,
+        liveSessionId: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            TextField("Steer the running turn", text: $previewSteerText)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { sendPreviewSteer(preview, liveSessionId: liveSessionId) }
+            Button("Steer") { sendPreviewSteer(preview, liveSessionId: liveSessionId) }
+                .buttonStyle(.borderedProminent)
+                .disabled(previewSteerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || previewSteering)
+            Button("Refresh") {
+                if let target = previewTarget { Task { await loadPreview(target) } }
+            }
+            .buttonStyle(.bordered)
+            .disabled(previewSteering)
+        }
+        if let note = previewSteerNote {
+            Text(note)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func sendPreviewSteer(_ preview: SessionsClient.PreviewSession, liveSessionId: String) {
+        let text = previewSteerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !previewSteering, let host = activeHost else { return }
+        previewSteering = true
+        previewSteerNote = nil
+        Task {
+            defer { previewSteering = false }
+            do {
+                try await ChatSessionClient.steer(host: host, sessionId: liveSessionId, text: text)
+                guard activeHost?.id == host.id,
+                      previewSession?.remoteSessionId == preview.remoteSessionId else { return }
+                previewSteerText = ""
+                previewSteerNote = "Sent to the running turn."
+            } catch {
+                guard activeHost?.id == host.id,
+                      previewSession?.remoteSessionId == preview.remoteSessionId else { return }
+                previewSteerNote = (error as? ChatClientError)?.localizedDescription ?? error.localizedDescription
+            }
+        }
     }
 
     @ViewBuilder
@@ -2140,8 +2215,12 @@ public struct ChatView: View {
         previewToken = UUID()
         let token = previewToken
         previewSession = nil
+        // A draft belongs to the thread it was typed for.  Reloading the same
+        // thread (Refresh) keeps it; opening another thread drops it.
+        if previewTarget?.sessionId != session.sessionId { previewSteerText = "" }
         previewTarget = session
         previewError = nil
+        previewSteerNote = nil
         previewLoadingId = session.sessionId
         do {
             let preview = try await SessionsClient(host: host).preview(
