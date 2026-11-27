@@ -88,4 +88,40 @@ final class DraftStoreTests: XCTestCase {
         XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "old", in: directory), "")
         XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "new", in: directory), "fresh")
     }
+
+    func testAnExpiredDraftStaysForgottenOnReadAlone() {
+        let directory = freshDirectory()
+        let host = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 6_000_000)
+        DraftStore.save("stale", hostId: host, sessionId: "old", in: directory, now: now)
+        // No later save prunes it; the read itself must refuse it.
+        let later = now.addingTimeInterval(DraftStore.maxAge + 60)
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "old", in: directory, now: later), "")
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "old", in: directory, now: now), "stale")
+    }
+
+    func testExpiryPrunedByAnEmptySaveReachesTheFile() throws {
+        let directory = freshDirectory()
+        let host = UUID()
+        let now = Date(timeIntervalSinceReferenceDate: 7_000_000)
+        DraftStore.save("stale", hostId: host, sessionId: "old", in: directory, now: now.addingTimeInterval(-DraftStore.maxAge - 1))
+        // An empty save for a thread with no draft changes nothing of its
+        // own, but the expiry it pruned must still reach the file.
+        DraftStore.save("", hostId: host, sessionId: "never-existed", in: directory, now: now)
+        let data = try Data(contentsOf: DraftStore.fileURL(in: directory))
+        let table = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(table?.count, 0)
+    }
+
+    func testAnOlderGenerationCannotOverwriteANewerDraft() {
+        let directory = freshDirectory()
+        let host = UUID()
+        DraftStore.save("newest", hostId: host, sessionId: "s-1", in: directory, generation: 7)
+        // A debounced write launched before the newest edit lands late
+        // and must lose, not resurrect the stale words.
+        DraftStore.save("stale words", hostId: host, sessionId: "s-1", in: directory, generation: 3)
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "s-1", in: directory), "newest")
+        DraftStore.save("next", hostId: host, sessionId: "s-1", in: directory, generation: 8)
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "s-1", in: directory), "next")
+    }
 }

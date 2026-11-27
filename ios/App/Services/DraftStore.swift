@@ -28,17 +28,26 @@ enum DraftStore {
     private static let lock = NSLock()
     private static var cachedTable: [String: StoredDraft]?
     private static var cachedFile: URL?
+    /// The newest save generation seen per thread.  A debounced write that
+    /// lands after a newer edit (or a flush) carries an older generation
+    /// and is refused under the same lock that writes, so stale words can
+    /// never overwrite newer ones.
+    private static var generations: [String: Int] = [:]
 
     /// The table key for one thread on one host.
     static func key(hostId: UUID, sessionId: String) -> String {
         "\(hostId.uuidString)#\(sessionId)"
     }
 
-    /// The draft left in one thread, or empty when there is none.
-    static func draft(hostId: UUID, sessionId: String, in directory: URL? = nil) -> String {
+    /// The draft left in one thread, or empty when there is none — or
+    /// when what is left has aged out, so expiry holds on read as well as
+    /// on the saves that prune the file.
+    static func draft(hostId: UUID, sessionId: String, in directory: URL? = nil, now: Date = Date()) -> String {
         lock.lock()
         defer { lock.unlock() }
-        return table(in: directory)[key(hostId: hostId, sessionId: sessionId)]?.text ?? ""
+        guard let entry = table(in: directory)[key(hostId: hostId, sessionId: sessionId)],
+              now.timeIntervalSince(entry.updatedAt) <= maxAge else { return "" }
+        return entry.text
     }
 
     /// Keeps a thread's draft.  Empty text forgets it, so sending, which
@@ -50,16 +59,26 @@ enum DraftStore {
         hostId: UUID,
         sessionId: String,
         in directory: URL? = nil,
+        generation: Int? = nil,
         now: Date = Date()
     ) {
         lock.lock()
         defer { lock.unlock() }
         let entryKey = key(hostId: hostId, sessionId: sessionId)
+        if let generation {
+            if generation < (generations[entryKey] ?? 0) { return }
+            generations[entryKey] = generation
+        }
         var table = table(in: directory)
+        let loadedCount = table.count
         table = table.filter { now.timeIntervalSince($0.value.updatedAt) <= maxAge }
+        let prunedExpired = table.count != loadedCount
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard table.removeValue(forKey: entryKey) != nil else {
                 cachedTable = table
+                // Expiry pruned on this pass still has to reach the file,
+                // or the forgotten drafts return on the next cold load.
+                if prunedExpired { persist(table, in: directory) }
                 return
             }
         } else if table[entryKey]?.text == text {

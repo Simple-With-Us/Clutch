@@ -43,6 +43,10 @@ final class SessionThreadModel {
     /// Where the unsent draft survives a relaunch.
     private let draftDirectory: URL?
     private var draftSaveTask: Task<Void, Never>?
+    /// Bumped on every draft change.  A debounced write carries the
+    /// generation it captured, and the store refuses any write older
+    /// than the newest it has seen for the thread.
+    private var draftSaveGeneration = 0
 
     /// Sidecar chat id for the loaded thread; swapped on every send so the
     /// next turn continues the same conversation.
@@ -60,9 +64,11 @@ final class SessionThreadModel {
     var draft = "" {
         didSet {
             guard draft != oldValue else { return }
+            draftSaveGeneration += 1
+            let generation = draftSaveGeneration
             draftSaveTask?.cancel()
             if draft.isEmpty {
-                DraftStore.save("", hostId: host.id, sessionId: session.sessionId, in: draftDirectory)
+                DraftStore.save("", hostId: host.id, sessionId: session.sessionId, in: draftDirectory, generation: generation)
                 return
             }
             let text = draft
@@ -73,7 +79,7 @@ final class SessionThreadModel {
                 try? await Task.sleep(for: .milliseconds(500))
                 guard !Task.isCancelled else { return }
                 await Task.detached(priority: .utility) {
-                    DraftStore.save(text, hostId: hostId, sessionId: sessionId, in: directory)
+                    DraftStore.save(text, hostId: hostId, sessionId: sessionId, in: directory, generation: generation)
                 }.value
             }
         }
@@ -85,11 +91,13 @@ final class SessionThreadModel {
     var pendingRestore: String?
 
     /// Writes the draft now instead of at the debounce tick, for the
-    /// moment the thread goes off screen.
+    /// moment the thread goes off screen.  The generation bump comes
+    /// first, so a debounced write already in flight loses to this one.
     func flushDraft() {
+        draftSaveGeneration += 1
         draftSaveTask?.cancel()
         draftSaveTask = nil
-        DraftStore.save(draft, hostId: host.id, sessionId: session.sessionId, in: draftDirectory)
+        DraftStore.save(draft, hostId: host.id, sessionId: session.sessionId, in: draftDirectory, generation: draftSaveGeneration)
     }
     var isSending = false
     var thoughtLine: String?
