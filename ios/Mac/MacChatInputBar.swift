@@ -34,8 +34,7 @@ struct MacChatInputBar: View {
                 HStack(spacing: 6) {
                     ForEach(attachments) { attachment in
                         HStack(spacing: 4) {
-                            Image(systemName: "photo")
-                                .font(.system(size: 10))
+                            AttachmentThumbnail(attachment: attachment)
                             Text(attachment.displayName)
                                 .font(.system(size: 11))
                                 .lineLimit(1)

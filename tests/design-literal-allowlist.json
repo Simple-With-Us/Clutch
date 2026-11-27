@@ -3,7 +3,7 @@
     ".system(size: 11)": 4,
     ".system(size: 12)": 4,
     ".system(size: 13)": 2,
-    ".system(size: 10)": 2,
+    ".system(size: 10)": 1,
     ".system(size: 12, weight: .semibold)": 1,
     ".system(size: 8, weight: .bold)": 1,
     "cornerRadius: 8": 1,
@@ -85,7 +85,7 @@
     ".system(size: 36, weight: .regular)": 1
   },
   "ios/Mac/MacChatInputBar.swift": {
-    ".system(size: 10)": 2,
+    ".system(size: 10)": 1,
     ".system(size: 11)": 2,
     ".system(size: 15)": 3,
     ".system(size: 20)": 1,
