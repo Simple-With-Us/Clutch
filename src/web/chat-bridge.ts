@@ -3565,7 +3565,7 @@ async function main(): Promise<void> {
         return;
       }
       const limit = parseLimitParam(url.searchParams.get("limit"), 200, 1_000);
-      const { running, liveSessionId } = findLiveTurn(sessions, engine, id);
+      const { running, liveSessionId } = findLiveTurn(sessions, engine, id, () => bridgeFor("muse").steeringSupported());
       try {
         if (engine === "muse") {
           const log = await readMuseSessionLog(id);

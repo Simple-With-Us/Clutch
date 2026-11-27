@@ -8,20 +8,24 @@ const turn = (over: Partial<{ engine: string; resumeSessionId: string | null; bu
 describe("findLiveTurn", () => {
   it("offers the chat session id of a running Muse turn for the thread", () => {
     const sessions = new Map([["chat-other", turn({ resumeSessionId: "remote-2" })], ["chat-live", turn()]]);
-    expect(findLiveTurn(sessions, "muse", "remote-1")).toEqual({ running: true, liveSessionId: "chat-live" });
+    expect(findLiveTurn(sessions, "muse", "remote-1", () => true)).toEqual({ running: true, liveSessionId: "chat-live" });
   });
 
   it("reports nothing for a thread whose sessions are idle", () => {
     const sessions = new Map([["chat-idle", turn({ busy: false })]]);
-    expect(findLiveTurn(sessions, "muse", "remote-1")).toEqual({ running: false });
+    expect(findLiveTurn(sessions, "muse", "remote-1", () => true)).toEqual({ running: false });
   });
 
   it("reports running without a steering id when the turn has no bridge session or another engine", () => {
-    expect(findLiveTurn(new Map([["c", turn({ bridgeSessionId: "" })]]), "muse", "remote-1")).toEqual({ running: true });
-    expect(findLiveTurn(new Map([["c", turn({ engine: "deepseek" })]]), "deepseek", "remote-1")).toEqual({ running: true });
+    expect(findLiveTurn(new Map([["c", turn({ bridgeSessionId: "" })]]), "muse", "remote-1", () => true)).toEqual({ running: true });
+    expect(findLiveTurn(new Map([["c", turn({ engine: "deepseek" })]]), "deepseek", "remote-1", () => true)).toEqual({ running: true });
+  });
+
+  it("reports running without a steering id when the bridge did not negotiate steering", () => {
+    expect(findLiveTurn(new Map([["c", turn()]]), "muse", "remote-1", () => false)).toEqual({ running: true });
   });
 
   it("does not match another engine's thread of the same id", () => {
-    expect(findLiveTurn(new Map([["c", turn({ engine: "deepseek" })]]), "muse", "remote-1")).toEqual({ running: false });
+    expect(findLiveTurn(new Map([["c", turn({ engine: "deepseek" })]]), "muse", "remote-1", () => true)).toEqual({ running: false });
   });
 });

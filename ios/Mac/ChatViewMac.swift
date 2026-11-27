@@ -1940,6 +1940,7 @@ public struct ChatView: View {
                 if let target = previewTarget { Task { await loadPreview(target) } }
             }
             .buttonStyle(.bordered)
+            .disabled(previewSteering)
         }
         if let note = previewSteerNote {
             Text(note)
@@ -2198,6 +2199,9 @@ public struct ChatView: View {
         previewToken = UUID()
         let token = previewToken
         previewSession = nil
+        // A draft belongs to the thread it was typed for.  Reloading the same
+        // thread (Refresh) keeps it; opening another thread drops it.
+        if previewTarget?.sessionId != session.sessionId { previewSteerText = "" }
         previewTarget = session
         previewError = nil
         previewSteerNote = nil
