@@ -1308,7 +1308,7 @@
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = codes.clutch.ios;
 				PRODUCT_NAME = Clutch;
-				PROVISIONING_PROFILE_SPECIFIER = "Clutch iOS App Store (API)";
+				PROVISIONING_PROFILE_SPECIFIER = "Clutch iOS App Store With App Group (API)";
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_VERSION = 5.9;
