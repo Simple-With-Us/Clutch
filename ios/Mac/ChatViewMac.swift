@@ -796,7 +796,12 @@ public struct ChatView: View {
         .task(id: activeHost?.pairingKey) {
             await prepare()
         }
-        .task(id: engine) {
+        // The thread list is read again when the host changes as well as when
+        // the engine does.  Switching host clears the list (see the host change
+        // handler below) and `prepare()` does not read it in the workspace, so a
+        // key of the engine alone left the rail empty or on the old machine's
+        // threads until the app was quit and reopened.
+        .task(id: "\(activeHost?.pairingKey ?? "unpaired")|\(engine.sidecarId)") {
             if isWorkspace { await loadSidebarSessions() }
         }
         .sheet(isPresented: $showingMuseSignIn) {
