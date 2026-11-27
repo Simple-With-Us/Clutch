@@ -56,8 +56,11 @@ public final class DshHostStream {
 
     func append(_ value: DshJSONValue) {
         items.append(value)
+        // Eviction drops to half the cap in one shift, not one frame per
+        // shift: a stream held over the cap by an absent reader would
+        // otherwise pay an O(n) memmove for every frame that arrives.
         if items.count > Self.maxInboxItems {
-            let overflow = items.count - Self.maxInboxItems
+            let overflow = items.count - Self.maxInboxItems / 2
             items.removeFirst(overflow)
             droppedCount += overflow
         }

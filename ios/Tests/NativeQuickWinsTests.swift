@@ -6,16 +6,21 @@ import XCTest
 final class NativeQuickWinsTests: XCTestCase {
     func testAStreamInboxIsBoundedAndCountsWhatItDropped() {
         let stream = DshHostStream(id: "s", endpoint: "session/follow")
-        for index in 0..<(DshHostStream.maxInboxItems + 25) {
+        let appended = DshHostStream.maxInboxItems + 25
+        for index in 0..<appended {
             stream.append(.number(Double(index)))
         }
-        XCTAssertEqual(stream.items.count, DshHostStream.maxInboxItems)
-        XCTAssertEqual(stream.droppedCount, 25)
+        // Eviction drops to half the cap in one shift at the first frame
+        // over it, so the accounting is dropped plus held equals sent.
+        let half = DshHostStream.maxInboxItems / 2
+        XCTAssertEqual(stream.items.count, half + 24)
+        XCTAssertEqual(stream.droppedCount, appended - stream.items.count)
+        XCTAssertLessThanOrEqual(stream.items.count, DshHostStream.maxInboxItems)
         // The oldest frames went first; the newest are still there.
-        XCTAssertEqual(stream.items.first, .number(25))
-        XCTAssertEqual(stream.items.last, .number(Double(DshHostStream.maxInboxItems + 24)))
+        XCTAssertEqual(stream.items.first, .number(Double(stream.droppedCount)))
+        XCTAssertEqual(stream.items.last, .number(Double(appended - 1)))
         // A reader that keeps up loses nothing more.
-        XCTAssertEqual(stream.take().count, DshHostStream.maxInboxItems)
+        XCTAssertEqual(stream.take().count, half + 24)
         XCTAssertTrue(stream.items.isEmpty)
     }
 

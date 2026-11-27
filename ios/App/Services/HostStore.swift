@@ -168,9 +168,12 @@ public final class HostStore {
         var changed = false
         for (hostID, status) in answers {
             guard let index = hosts.firstIndex(where: { $0.id == hostID }) else { continue }
+            // The check time always moves in memory; the archive is only
+            // rewritten when a status actually flipped, so a quiet
+            // foreground costs no write at all.
+            if hosts[index].status != status { changed = true }
             hosts[index].status = status
             hosts[index].lastChecked = Date()
-            changed = true
         }
         if changed { save() }
     }

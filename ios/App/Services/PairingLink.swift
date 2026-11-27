@@ -178,10 +178,12 @@ public enum PairingLink {
     /// Whether a bare address may default to plaintext `http`.
     ///
     /// Only addresses that cannot be reached over the public internet earn
-    /// the plaintext default: loopback, the RFC 1918 private ranges,
-    /// link-local, and the 100.64/10 shared range a tailnet hands out.
-    /// A public address defaults to `https`, so a pasted bare IP never
-    /// sends the pairing tokens in the clear by accident.
+    /// the plaintext default: loopback, the RFC 1918 private ranges, and
+    /// link-local.  The 100.64/10 shared range does not earn it: a tailnet
+    /// hands those addresses out, but so does carrier NAT, and a bare
+    /// 100.x address pasted off the tailnet would send the pairing tokens
+    /// in the clear.  A tailnet address typed in full, scheme and all, is
+    /// still honored as written.
     static func isLocalHostname(_ host: String) -> Bool {
         let h = host.lowercased()
         if h == "localhost" || h == "::1" || h.hasSuffix(".local") { return true }
@@ -193,7 +195,6 @@ public enum PairingLink {
         case 172: return (16...31).contains(second)
         case 192: return second == 168
         case 169: return second == 254
-        case 100: return (64...127).contains(second)
         default: return false
         }
     }
