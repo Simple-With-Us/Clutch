@@ -81,7 +81,10 @@ public struct AttachmentThumbnail: View {
         #else
         // The thumbnail keeps the photo's aspect; sizing the image from
         // its own pixels keeps it, while a fixed square would stretch it.
-        return NSImage(cgImage: thumbnail, size: NSSize(width: thumbnail.width, height: thumbnail.height))
+        return NSImage(
+            cgImage: thumbnail,
+            size: NSSize(width: CGFloat(thumbnail.width), height: CGFloat(thumbnail.height))
+        )
         #endif
     }
     #endif
