@@ -578,6 +578,18 @@ final class SessionThreadModel {
         }
     }
 
+    /// What follow-latest scrolls on: the tail bubble's identity and
+    /// length, plus the thought line.
+    ///
+    /// The count alone never moves while a reply streams, because the
+    /// tail bubble is rewritten in place; keying on its length is what
+    /// keeps a followed transcript pinned to the newest words.
+    nonisolated static func scrollKey(bubbles: [ThreadBubbleItem], thoughtLine: String?) -> String {
+        "\(bubbles.last?.id ?? "")#\(bubbles.last?.text.count ?? 0)#\(thoughtLine ?? "")"
+    }
+
+    var scrollKey: String { Self.scrollKey(bubbles: bubbles, thoughtLine: thoughtLine) }
+
     private var isFailed: Bool {
         if case .failed = phase { return true }
         return false
@@ -651,6 +663,9 @@ public struct SessionThreadView: View {
     /// moment the user scrolls up to read, and the jump-to-latest pill
     /// turns it back on.
     @State private var followLatest = true
+    /// The pending follow scroll, coalesced so a stream cannot force a
+    /// layout pass per chunk.
+    @State private var scrollTask: Task<Void, Never>?
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
@@ -1022,15 +1037,18 @@ public struct SessionThreadView: View {
                         let atBottom = bottomY <= outer.size.height + 120
                         if atBottom != followLatest { followLatest = atBottom }
                     }
-                    .onChange(of: model.bubbles.count) { _, _ in
+                    .onChange(of: model.scrollKey) { _, _ in
+                        // One coalesced scroll behind the stream: the key
+                        // moves on tail growth and reasoning alike, and
+                        // the scroll itself lands at most every 100ms, so
+                        // following never yanks the reader per chunk.
                         guard followLatest else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                    .onChange(of: model.thoughtLine) { _, _ in
-                        // Reasoning streams in many times a second; chasing
-                        // it would yank the reader down the whole time.
-                        guard followLatest else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
+                        scrollTask?.cancel()
+                        scrollTask = Task {
+                            try? await Task.sleep(for: .milliseconds(100))
+                            guard !Task.isCancelled else { return }
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
                     }
                     .onChange(of: findSelection) { _, selection in
                         let order = matchOrder
@@ -1383,7 +1401,16 @@ struct ThreadBubbleRow: View {
         } else {
             HStack {
                 if bubble.role == .user { Spacer(minLength: 40) }
-                Text(bubble.text)
+                // Assistant prose renders as markdown, like the Mac: a
+                // coding client that shows literal backticks and hashes
+                // makes the agent's answer harder to read than it was.
+                Group {
+                    if bubble.role == .assistant {
+                        ClutchMarkdownText(text: bubble.text, font: .body, color: .primary)
+                    } else {
+                        Text(bubble.text)
+                    }
+                }
                     .textSelection(.enabled)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
