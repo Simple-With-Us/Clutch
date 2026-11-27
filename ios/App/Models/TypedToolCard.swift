@@ -346,22 +346,29 @@ public enum LineChange {
     }
 }
 
+/// Compiles the fixed reading patterns once.  They used to compile on
+/// every card read, so a transcript full of tool calls paid the pattern
+/// cost per card per body pass; the expressions never change.
+private func compiledPatterns(_ patterns: [String]) -> [NSRegularExpression] {
+    patterns.compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+}
+
 /// Reads what the engine wrote about a command that ran.
 public enum ShellResult {
+    private static let exitCodePatterns = compiledPatterns([
+        #"exit(?:ed)?(?:\s+with)?\s+(?:code|status)\s*[:=]?\s*(-?\d+)"#,
+        #"process\s+exited\s+with\s+(?:code\s+)?(-?\d+)"#,
+        #"command\s+exited\s+with\s+(?:code\s+)?(-?\d+)"#,
+        #"\bexit\s+status\s*[:=]\s*(-?\d+)"#,
+    ])
+
     /// The exit code an answer names.
     ///
     /// The engines write it in more than one way, so the ways they write it
     /// are read.  An answer that names no exit code has none:  the card
     /// says the status the call reported instead.
     static func exitCode(in answer: String) -> Int? {
-        let patterns = [
-            #"exit(?:ed)?(?:\s+with)?\s+(?:code|status)\s*[:=]?\s*(-?\d+)"#,
-            #"process\s+exited\s+with\s+(?:code\s+)?(-?\d+)"#,
-            #"command\s+exited\s+with\s+(?:code\s+)?(-?\d+)"#,
-            #"\bexit\s+status\s*[:=]\s*(-?\d+)"#,
-        ]
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+        for regex in exitCodePatterns {
             let range = NSRange(answer.startIndex..<answer.endIndex, in: answer)
             guard let match = regex.firstMatch(in: answer, range: range),
                   let codeRange = Range(match.range(at: 1), in: answer) else { continue }
@@ -373,26 +380,28 @@ public enum ShellResult {
 
 /// Reads what the engine wrote about a suite that ran.
 public enum TestResult {
+    private static let passedPatterns = compiledPatterns([
+        #"(\d+)\s+(?:tests?\s+)?passed"#,
+        #"passed\s*[:=]\s*(\d+)"#,
+        #"ok\s+(\d+)"#,
+    ])
+    private static let failedPatterns = compiledPatterns([
+        #"(\d+)\s+(?:tests?\s+)?failed"#,
+        #"failed\s*[:=]\s*(\d+)"#,
+        #"not\s+ok\s+(\d+)"#,
+    ])
+
     /// How many tests passed and failed, and which failed.
     static func results(in answer: String) -> (passed: Int?, failed: Int?, failingNames: [String]) {
-        let passed = firstCount(in: answer, patterns: [
-            #"(\d+)\s+(?:tests?\s+)?passed"#,
-            #"passed\s*[:=]\s*(\d+)"#,
-            #"ok\s+(\d+)"#,
-        ])
-        let failed = firstCount(in: answer, patterns: [
-            #"(\d+)\s+(?:tests?\s+)?failed"#,
-            #"failed\s*[:=]\s*(\d+)"#,
-            #"not\s+ok\s+(\d+)"#,
-        ])
+        let passed = firstCount(in: answer, patterns: passedPatterns)
+        let failed = firstCount(in: answer, patterns: failedPatterns)
         let names = failingNames(in: answer)
         return (passed, failed, names)
     }
 
     /// The first count an answer names.
-    private static func firstCount(in answer: String, patterns: [String]) -> Int? {
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+    private static func firstCount(in answer: String, patterns: [NSRegularExpression]) -> Int? {
+        for regex in patterns {
             let range = NSRange(answer.startIndex..<answer.endIndex, in: answer)
             guard let match = regex.firstMatch(in: answer, range: range),
                   let countRange = Range(match.range(at: 1), in: answer),
