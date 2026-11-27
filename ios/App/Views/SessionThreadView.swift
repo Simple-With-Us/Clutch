@@ -579,13 +579,15 @@ final class SessionThreadModel {
     }
 
     /// What follow-latest scrolls on: the tail bubble's identity and
-    /// length, plus the thought line.
+    /// content, plus the thought line.
     ///
-    /// The count alone never moves while a reply streams, because the
-    /// tail bubble is rewritten in place; keying on its length is what
-    /// keeps a followed transcript pinned to the newest words.
+    /// The tail bubble is rewritten in place while a reply streams, so
+    /// the key has to move on content, not just length: a same-length
+    /// in-place correction would otherwise never fire the change the
+    /// follow scroll waits on.  The hash only distinguishes successive
+    /// values within one run, which is all the scroll key needs.
     nonisolated static func scrollKey(bubbles: [ThreadBubbleItem], thoughtLine: String?) -> String {
-        "\(bubbles.last?.id ?? "")#\(bubbles.last?.text.count ?? 0)#\(thoughtLine ?? "")"
+        "\(bubbles.last?.id ?? "")#\(bubbles.last?.text.hashValue ?? 0)#\(thoughtLine ?? "")"
     }
 
     var scrollKey: String { Self.scrollKey(bubbles: bubbles, thoughtLine: thoughtLine) }
@@ -1045,7 +1047,7 @@ public struct SessionThreadView: View {
                         // following never yanks the reader per chunk.
                         guard followLatest else { return }
                         scrollTask?.cancel()
-                        scrollTask = Task {
+                        scrollTask = Task { @MainActor in
                             try? await Task.sleep(for: .milliseconds(100))
                             // The reader may have scrolled up during the
                             // sleep; a pending follow must not yank them
@@ -1324,8 +1326,7 @@ public struct SessionThreadView: View {
             HStack(spacing: 8) {
                 ForEach(model.attachments) { attachment in
                     HStack(spacing: 4) {
-                        Image(systemName: "photo")
-                            .font(ClutchFont.micro)
+                        AttachmentThumbnail(attachment: attachment)
                         Text(attachment.displayName)
                             .font(ClutchFont.micro)
                             .lineLimit(1)
