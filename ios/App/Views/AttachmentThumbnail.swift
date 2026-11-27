@@ -79,7 +79,9 @@ public struct AttachmentThumbnail: View {
         #if os(iOS)
         return UIImage(cgImage: thumbnail)
         #else
-        return NSImage(cgImage: thumbnail, size: NSSize(width: 96, height: 96))
+        // The thumbnail keeps the photo's aspect; sizing the image from
+        // its own pixels keeps it, while a fixed square would stretch it.
+        return NSImage(cgImage: thumbnail, size: NSSize(width: thumbnail.width, height: thumbnail.height))
         #endif
     }
     #endif
