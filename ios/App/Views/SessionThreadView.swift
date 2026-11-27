@@ -40,6 +40,13 @@ final class SessionThreadModel {
     private let host: ClutchHost
     private let client: SessionsClient
     private let session: AcpSessionInfo
+    /// Where the unsent draft survives a relaunch.
+    private let draftDirectory: URL?
+    private var draftSaveTask: Task<Void, Never>?
+    /// Bumped on every draft change.  A debounced write carries the
+    /// generation it captured, and the store refuses any write older
+    /// than the newest it has seen for the thread.
+    private var draftSaveGeneration = 0
 
     /// Sidecar chat id for the loaded thread; swapped on every send so the
     /// next turn continues the same conversation.
@@ -50,7 +57,48 @@ final class SessionThreadModel {
 
     var phase: Phase = .idle
     var bubbles: [ThreadBubbleItem] = []
-    var draft = ""
+    /// The next message being composed.  Changes are kept behind a short
+    /// debounce, so leaving the thread or relaunching the app finds the
+    /// words still there without table work on every keystroke; clearing
+    /// the composer saves at once, so a sent draft never resurrects.
+    var draft = "" {
+        didSet {
+            guard draft != oldValue else { return }
+            draftSaveGeneration += 1
+            let generation = draftSaveGeneration
+            draftSaveTask?.cancel()
+            if draft.isEmpty {
+                DraftStore.save("", hostId: host.id, sessionId: session.sessionId, in: draftDirectory, generation: generation)
+                return
+            }
+            let text = draft
+            let hostId = host.id
+            let sessionId = session.sessionId
+            let directory = draftDirectory
+            draftSaveTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { return }
+                await Task.detached(priority: .utility) {
+                    DraftStore.save(text, hostId: hostId, sessionId: sessionId, in: directory, generation: generation)
+                }.value
+            }
+        }
+    }
+
+    /// Text a failed steer or a stopped turn gives back, waiting for the
+    /// view to fold into the composer.  The view owns that fold because
+    /// dictation rebuilds the field from its base while it records.
+    var pendingRestore: String?
+
+    /// Writes the draft now instead of at the debounce tick, for the
+    /// moment the thread goes off screen.  The generation bump comes
+    /// first, so a debounced write already in flight loses to this one.
+    func flushDraft() {
+        draftSaveGeneration += 1
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        DraftStore.save(draft, hostId: host.id, sessionId: session.sessionId, in: draftDirectory, generation: draftSaveGeneration)
+    }
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
@@ -146,13 +194,15 @@ final class SessionThreadModel {
 
     private var sendTask: Task<Void, Never>?
 
-    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
+    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode", draftDirectory: URL? = nil) {
         self.host = host
         self.client = SessionsClient(host: host)
         self.session = session
         self.engine = engine
         self.remoteSessionId = session.sessionId
         self.cwd = session.cwd
+        self.draftDirectory = draftDirectory
+        self.draft = DraftStore.draft(hostId: host.id, sessionId: session.sessionId, in: draftDirectory)
     }
 
     /// The engine's models, as the catalog published them.
@@ -388,7 +438,27 @@ final class SessionThreadModel {
                 try await ChatSessionClient.steer(host: owner, sessionId: target, text: prompt)
             } catch {
                 sendError = error.localizedDescription
+                // A steer that certainly never arrived gives the words
+                // back; one whose outcome is unknown does not, or the
+                // same correction would go twice.
+                if SteerFailure.failedBeforeSend(error) {
+                    restoreToComposer(prompt)
+                }
             }
+        }
+    }
+
+    /// Hands text to the view to fold into the composer.  The fold lives
+    /// there, not here: while dictation records, the view rebuilds the
+    /// field from its base on every transcript change, and a direct write
+    /// to `draft` would be overwritten by the next rebuild.
+    private func restoreToComposer(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        if let pendingRestore, !pendingRestore.isEmpty {
+            self.pendingRestore = value + "\n\n" + pendingRestore
+        } else {
+            pendingRestore = value
         }
     }
 
@@ -453,10 +523,13 @@ final class SessionThreadModel {
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
         pendingPermissions.clearAll()
-        // The prompt held for the stopped turn goes with it: it was written
-        // for a turn that is not running, and the next turn must not carry
-        // it out on its own.
-        queuedPrompt = nil
+        // The prompt held for the stopped turn goes back into the composer:
+        // it must not ride the next turn on its own, and it must not be
+        // lost either.  The owner sends it again or deletes it.
+        if let queued = queuedPrompt {
+            queuedPrompt = nil
+            restoreToComposer(queued)
+        }
         supportsSteering = false
         TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
         TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
@@ -687,6 +760,12 @@ public struct SessionThreadView: View {
             guard dictation.isRecording || !text.isEmpty else { return }
             model.draft = draftBase + (draftBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+        .onChange(of: model.pendingRestore) { _, pending in
+            guard let pending else { return }
+            model.pendingRestore = nil
+            applyRestore(pending)
+        }
+        .onDisappear { model.flushDraft() }
         // Haptics keyed on counters so each event lands once.
         .sensoryFeedback(.success, trigger: model.turnTick)
         .sensoryFeedback(.warning, trigger: model.permissionTick)
@@ -1138,6 +1217,24 @@ public struct SessionThreadView: View {
 
     /// The pill naming what is waiting for the running turn to end.
     @ViewBuilder
+    /// Folds restored text into the composer, ahead of anything typed
+    /// since.  While dictation records, the field is rebuilt from
+    /// `draftBase` plus the transcript on every change, so the text joins
+    /// the base and the field is rebuilt the way the observer rebuilds it,
+    /// exactly as Agent Chat restores its own.
+    private func applyRestore(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        if dictation.isRecording {
+            draftBase = draftBase.isEmpty ? value : value + "\n\n" + draftBase
+            let spoken = dictation.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            model.draft = draftBase + (draftBase.isEmpty || spoken.isEmpty ? "" : " ") + spoken
+            return
+        }
+        let current = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.draft = current.isEmpty ? value : value + "\n\n" + model.draft
+    }
+
     private func queuedPromptPill(_ queued: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "tray.and.arrow.down")
@@ -1149,7 +1246,7 @@ public struct SessionThreadView: View {
             Spacer(minLength: 0)
             Button {
                 model.queuedPrompt = nil
-                model.draft = queued
+                applyRestore(queued)
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)

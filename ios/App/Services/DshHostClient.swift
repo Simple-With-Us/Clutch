@@ -130,6 +130,17 @@ public final class DshHostClient {
     private var rpcCounter: Int = 0
     private var streamCounter: Int = 0
     private var socketFailure: Error?
+    /// Whether the owner still wants this connection.  A drop only earns a
+    /// reconnect while this holds; `disconnect` clears it.
+    private var wantsConnection = false
+    /// Whether a connection attempt is running.  A socket that dies inside
+    /// an attempt belongs to that attempt's own retry loop, never to the
+    /// reconnect supervisor as well.
+    private var isEstablishing = false
+    private var reconnectTask: Task<Void, Never>?
+    private var pingTask: Task<Void, Never>?
+    /// Whether a ping is still waiting for its pong.
+    private var pingOutstanding = false
 
     /// How long the client waits for the host to name it.
     private static let readinessTimeout: TimeInterval = 15
@@ -140,6 +151,11 @@ public final class DshHostClient {
     /// The delay before the first retry; it doubles up to the ceiling.
     private static let retryBase: TimeInterval = 0.5
     private static let retryCeiling: TimeInterval = 10
+
+    /// How often a connected mux proves the socket is still alive.  A ping
+    /// with no pong by the next tick is a half-open socket: the path died
+    /// without telling either end, and only the ping ever finds out.
+    private static let pingInterval: TimeInterval = 20
 
     public init() {}
 
@@ -193,7 +209,32 @@ public final class DshHostClient {
     /// little longer and tries again, up to the point where the host has had
     /// its chance to become ready.
     public func connect(to host: ClutchHost) async {
-        await disconnect()
+        wantsConnection = true
+        await stopReconnect()
+        await establish(to: host)
+    }
+
+    /// Stop any supervised reconnect and wait for it to actually stop.
+    ///
+    /// Cancel alone is cooperative: a reconnect already inside establish
+    /// keeps mutating the session, socket, and state a new attempt is
+    /// about to rebuild, so the old task is joined before anything else
+    /// touches the connection.
+    private func stopReconnect() async {
+        guard let running = reconnectTask else { return }
+        reconnectTask = nil
+        running.cancel()
+        await running.value
+    }
+
+    /// One full connection attempt: fresh session, token exchange, mux.
+    ///
+    /// The first connect and every supervised reconnect run exactly this,
+    /// so a host that comes back is met the same way it was met at first.
+    private func establish(to host: ClutchHost) async {
+        isEstablishing = true
+        defer { isEstablishing = false }
+        teardown()
 
         state = .connecting
         self.host = host
@@ -226,7 +267,26 @@ public final class DshHostClient {
             do {
                 try await openMux(url: url)
                 try await waitForReady(until: deadline, since: started)
+                // The ready frame wins over the deadline in waitForReady,
+                // so a socket that died a moment after naming the client
+                // must still count as a failed attempt here.
+                if let failure = socketFailure { throw failure }
                 state = .connected
+                isEstablishing = false
+                // A socket that died between the check above and this
+                // publish must still count as a failed attempt: without
+                // this the client sits connected on a dead socket with
+                // no supervisor scheduled, because the death handler ran
+                // while the state was still connecting.  Reconnect
+                // scheduling is idempotent, so a death that lands after
+                // this point is supervised exactly once either way.
+                if socketFailure != nil {
+                    state = .connecting
+                    warning = "The connection dropped. Trying again."
+                    scheduleReconnect()
+                    return
+                }
+                startPing()
                 return
             } catch {
                 failure = error
@@ -236,6 +296,10 @@ public final class DshHostClient {
                 let delay = Self.retryDelay(attempt: attempt)
                 attempt += 1
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                // The sleep above swallows cancellation, so a stop asked
+                // during the backoff would otherwise retry until the
+                // deadline instead of letting the joiner go.
+                if Task.isCancelled { break }
             }
         }
 
@@ -246,6 +310,14 @@ public final class DshHostClient {
 
     /// Close the mux and drop the host.
     public func disconnect() async {
+        wantsConnection = false
+        await stopReconnect()
+        teardown()
+    }
+
+    /// Everything one connection owned, dropped without touching whether
+    /// the owner still wants one.
+    private func teardown() {
         closeMux()
         session?.invalidateAndCancel()
         session = nil
@@ -257,6 +329,54 @@ public final class DshHostClient {
         lastError = nil
         if case .failed = state {} else {
             state = .disconnected
+        }
+    }
+
+    /// Prove the socket is alive on an interval while connected.
+    ///
+    /// A ping that errors, or whose pong never arrives by the next tick,
+    /// cancels the socket: the receive loop then reports the loss through
+    /// the one path that already ends streams and schedules reconnects.
+    private func startPing() {
+        pingTask?.cancel()
+        pingOutstanding = false
+        pingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Self.pingInterval * 1_000_000_000))
+                guard !Task.isCancelled, let self, let socket = self.socket else { return }
+                if self.pingOutstanding {
+                    socket.cancel(with: .abnormalClosure, reason: nil)
+                    return
+                }
+                self.pingOutstanding = true
+                socket.sendPing { [weak self] error in
+                    self?.pingOutstanding = false
+                    if error != nil {
+                        socket.cancel(with: .abnormalClosure, reason: nil)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reconnect after a drop, for as long as the owner still wants the
+    /// connection.  Each cycle is a full attempt with its own readiness
+    /// window, spaced by the same jittered backoff the first connect uses.
+    private func scheduleReconnect() {
+        guard wantsConnection, reconnectTask == nil, let host else { return }
+        reconnectTask = Task { [weak self] in
+            var attempt = 0
+            while !Task.isCancelled {
+                let delay = Self.retryDelay(attempt: attempt)
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard !Task.isCancelled, let self, self.wantsConnection else { return }
+                await self.establish(to: host)
+                if self.state == .connected {
+                    self.reconnectTask = nil
+                    return
+                }
+            }
         }
     }
 
@@ -424,6 +544,9 @@ public final class DshHostClient {
     /// Every stream is ended first: a reader holding one must see the end
     /// instead of waiting forever on a stream the client already dropped.
     private func closeMux() {
+        pingTask?.cancel()
+        pingTask = nil
+        pingOutstanding = false
         receiveTask?.cancel()
         receiveTask = nil
         socket?.cancel(with: .normalClosure, reason: nil)
@@ -445,7 +568,6 @@ public final class DshHostClient {
                     // A socket the client closed on purpose is not a failure.
                     guard self.socket === socket else { return }
                     self.socketFailure = error
-                    self.state = .failed(Self.describe(error))
                     // Nothing more can arrive on this socket, so every open
                     // stream ends with the loss on it instead of hanging.
                     let lost = DshHostRpcError(
@@ -454,6 +576,22 @@ public final class DshHostClient {
                     )
                     for stream in self.streams.values { stream.fail(lost) }
                     self.streams = [:]
+                    self.pingTask?.cancel()
+                    self.pingTask = nil
+                    self.pingOutstanding = false
+                    // A connection that was live and is still wanted earns
+                    // a supervised reconnect; the state says connecting
+                    // while that runs instead of stranding the surface on
+                    // a failure nobody is retrying.  A socket that died
+                    // during the first attempt is the attempt loop's own
+                    // business, reported through waitForReady.
+                    if self.state == .connected, self.wantsConnection, !self.isEstablishing {
+                        self.state = .connecting
+                        self.warning = "The connection dropped. Trying again."
+                        self.scheduleReconnect()
+                    } else if self.state == .connected, !self.isEstablishing {
+                        self.state = .failed(Self.describe(error))
+                    }
                     return
                 }
             }
