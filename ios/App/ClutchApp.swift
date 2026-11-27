@@ -22,6 +22,9 @@ struct ClutchApp: App {
         // Sentry links both native targets; without a DSN the start below
         // is a no-op, so local and CI builds without one behave as before.
         SentryTelemetry.start()
+        #if os(iOS)
+        MetricKitForwarder.shared.start()
+        #endif
         // The delegate is what lets an action on a notification answer the
         // request, and it has to be in place before a notification arrives:
         // a notification can be what launched the app.

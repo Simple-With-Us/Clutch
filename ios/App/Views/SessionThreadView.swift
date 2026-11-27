@@ -483,6 +483,7 @@ final class SessionThreadModel {
                 requestId: answer.requestId,
                 optionId: answer.optionId
             )
+            ClutchLog.permissions.notice("permission answer delivered=\(answered, privacy: .public)")
             if answered {
                 // The card only goes away once the answer is on its way, so a
                 // failed answer can be tried again instead of stranding the

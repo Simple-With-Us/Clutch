@@ -73,9 +73,19 @@ public enum HostGate {
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard status != 0 else { return .unreachable("The host did not answer.") }
-            return classify(status: status)
+            guard status != 0 else {
+                ClutchLog.host.notice("gate unreachable (no answer)")
+                return .unreachable("The host did not answer.")
+            }
+            let state = classify(status: status)
+            switch state {
+            case .ready: ClutchLog.host.debug("gate ready")
+            case .needsPairing: ClutchLog.host.notice("gate needs pairing")
+            case .unreachable: ClutchLog.host.error("gate unreachable status=\(status, privacy: .public)")
+            }
+            return state
         } catch {
+            ClutchLog.host.error("gate unreachable (transport)")
             return .unreachable(error.localizedDescription)
         }
     }
