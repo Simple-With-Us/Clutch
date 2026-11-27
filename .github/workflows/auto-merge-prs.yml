@@ -147,6 +147,15 @@ jobs:
       rearm_pr_number: ${{ matrix.pr }}
       expected_merge_actor: "swu-merge-automation[bot]"
       self_guard_paths: .github/workflows/auto-merge-prs.yml
+      # Effective review gate (AFC docs/AUTO-MERGE.md): arm on a full-review
+      # receipt for the exact head plus resolved threads and no outstanding
+      # CHANGES_REQUESTED, instead of requiring an APPROVED review on every
+      # head.  require_current_approval must be false for review_gate to
+      # take effect; true always wins.  GitHub's own rulesets (required
+      # checks, thread resolution, extra approval for unattributed changes)
+      # still apply on top and are not weakened here.
+      review_gate: effective
+      require_current_approval: false
     secrets:
       merge_app_id: ${{ vars.SWU_MERGE_AUTOMATION_APP_ID }}
       merge_app_private_key: ${{ secrets.SWU_MERGE_AUTOMATION_APP_PRIVATE_KEY }}
