@@ -40,6 +40,22 @@ final class NativeQuickWinsTests: XCTestCase {
         XCTAssertTrue(ClutchApprovalSnapshot.empty.isStale(now: now))
     }
 
+    func testScrollKeyTracksTailGrowthNotJustCount() {
+        let tail = ThreadBubbleItem(id: "reply-1", role: .assistant, text: "Hello")
+        let before = SessionThreadModel.scrollKey(bubbles: [tail], thoughtLine: nil)
+        // The streaming tail rewrites in place: same id, same count, more
+        // words.  The key must still move, or follow-latest stalls.
+        var grown = tail
+        grown.text = "Hello, world"
+        let after = SessionThreadModel.scrollKey(bubbles: [grown], thoughtLine: nil)
+        XCTAssertNotEqual(before, after)
+        // A new bubble and a thought change each move it too, and an
+        // unchanged transcript does not.
+        XCTAssertNotEqual(after, SessionThreadModel.scrollKey(bubbles: [grown, tail], thoughtLine: nil))
+        XCTAssertNotEqual(after, SessionThreadModel.scrollKey(bubbles: [grown], thoughtLine: "thinking"))
+        XCTAssertEqual(after, SessionThreadModel.scrollKey(bubbles: [grown], thoughtLine: nil))
+    }
+
     func testSentryEnvironmentSplitsBuildStreams() {
         XCTAssertEqual(
             SentryTelemetry.environmentName(isDebug: true, receiptLastPathComponent: "receipt"),

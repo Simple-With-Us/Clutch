@@ -34,21 +34,25 @@ public struct ThreadToolCard: View {
     }
 
     public var body: some View {
+        // Read once per pass: header, detail, and the accessibility
+        // summary all draw from the same card, and re-reading the call
+        // for each re-parsed its JSON and regex-scanned its output.
+        let typed = self.typed
         VStack(alignment: .leading, spacing: ClutchSpacing.base) {
             Button {
                 expanded.toggle()
             } label: {
-                header
+                header(typed)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(accessibilitySummary)
+            .accessibilityLabel(accessibilitySummary(typed))
             // The tool's own name is the call's name, so a surface test can
             // ask for the exact call the engine made without reading the
             // whole transcript, and without matching a word against every
             // button in the window to find it.
             .accessibilityIdentifier("tool-call-\(name)")
             if expanded {
-                detail
+                detail(typed)
             }
         }
         .padding(.horizontal, ClutchSpacing.base)
@@ -70,7 +74,7 @@ public struct ThreadToolCard: View {
     /// many failed.  The raw call and the raw answer are one button away
     /// for the reader who wants exactly what was written.
     @ViewBuilder
-    private var detail: some View {
+    private func detail(_ typed: TypedToolCard) -> some View {
         VStack(alignment: .leading, spacing: ClutchSpacing.snug) {
             switch typed.kind {
             case .fileRead:
@@ -156,12 +160,12 @@ public struct ThreadToolCard: View {
     /// What VoiceOver reads for the header.  The label carries the tool's
     /// name and where it stands, because a bare "expand" would say nothing
     /// about which call it expands.
-    private var accessibilitySummary: String {
+    private func accessibilitySummary(_ typed: TypedToolCard) -> String {
         let verb = expanded ? "Collapse Tool Details" : "Expand Tool Details"
         return "\(verb), \(typed.headline), \(statusLabel)"
     }
 
-    private var header: some View {
+    private func header(_ typed: TypedToolCard) -> some View {
         HStack(spacing: 7) {
             Image(systemName: expanded ? "chevron.down" : "chevron.right")
                 .font(ClutchFont.microStrong)

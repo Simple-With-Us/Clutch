@@ -578,6 +578,20 @@ final class SessionThreadModel {
         }
     }
 
+    /// What follow-latest scrolls on: the tail bubble's identity and
+    /// content, plus the thought line.
+    ///
+    /// The tail bubble is rewritten in place while a reply streams, so
+    /// the key has to move on content, not just length: a same-length
+    /// in-place correction would otherwise never fire the change the
+    /// follow scroll waits on.  The hash only distinguishes successive
+    /// values within one run, which is all the scroll key needs.
+    nonisolated static func scrollKey(bubbles: [ThreadBubbleItem], thoughtLine: String?) -> String {
+        "\(bubbles.last?.id ?? "")#\(bubbles.last?.text.hashValue ?? 0)#\(thoughtLine ?? "")"
+    }
+
+    var scrollKey: String { Self.scrollKey(bubbles: bubbles, thoughtLine: thoughtLine) }
+
     private var isFailed: Bool {
         if case .failed = phase { return true }
         return false
@@ -651,6 +665,9 @@ public struct SessionThreadView: View {
     /// moment the user scrolls up to read, and the jump-to-latest pill
     /// turns it back on.
     @State private var followLatest = true
+    /// The pending follow scroll, coalesced so a stream cannot force a
+    /// layout pass per chunk.
+    @State private var scrollTask: Task<Void, Never>?
     @StateObject private var dictation = DictationController()
     @State private var draftBase = ""
     /// The photo the user picked for the next turn.
@@ -975,7 +992,8 @@ public struct SessionThreadView: View {
                                 ThreadBubbleRow(
                                     bubble: bubble,
                                     isMatch: matched.contains(bubble.id),
-                                    depth: model.toolDepth(of: bubble, parents: parents)
+                                    depth: model.toolDepth(of: bubble, parents: parents),
+                                    isStreamingTail: model.isSending && bubble.role == .assistant && bubble.id == model.bubbles.last?.id
                                 )
                                     .id(bubble.id)
                             }
@@ -1022,15 +1040,21 @@ public struct SessionThreadView: View {
                         let atBottom = bottomY <= outer.size.height + 120
                         if atBottom != followLatest { followLatest = atBottom }
                     }
-                    .onChange(of: model.bubbles.count) { _, _ in
+                    .onChange(of: model.scrollKey) { _, _ in
+                        // One coalesced scroll behind the stream: the key
+                        // moves on tail growth and reasoning alike, and
+                        // the scroll itself lands at most every 100ms, so
+                        // following never yanks the reader per chunk.
                         guard followLatest else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
-                    }
-                    .onChange(of: model.thoughtLine) { _, _ in
-                        // Reasoning streams in many times a second; chasing
-                        // it would yank the reader down the whole time.
-                        guard followLatest else { return }
-                        proxy.scrollTo("bottom", anchor: .bottom)
+                        scrollTask?.cancel()
+                        scrollTask = Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(100))
+                            // The reader may have scrolled up during the
+                            // sleep; a pending follow must not yank them
+                            // back down after the fact.
+                            guard !Task.isCancelled, followLatest else { return }
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
                     }
                     .onChange(of: findSelection) { _, selection in
                         let order = matchOrder
@@ -1365,6 +1389,16 @@ struct ThreadBubbleRow: View {
     var isMatch: Bool = false
     /// How deep the call sits under the call that made it.
     var depth: Int = 0
+    /// Whether this bubble is the reply still streaming.  Its markdown
+    /// re-parses at most four times a second instead of per chunk, which
+    /// would make a long reply quadratic; the settled text parses fully.
+    var isStreamingTail: Bool = false
+    @State private var renderedText: String?
+    @State private var renderTask: Task<Void, Never>?
+
+    private var shownText: String {
+        isStreamingTail ? (renderedText ?? bubble.text) : bubble.text
+    }
 
     var body: some View {
         if bubble.role == .tool {
@@ -1382,7 +1416,16 @@ struct ThreadBubbleRow: View {
         } else {
             HStack {
                 if bubble.role == .user { Spacer(minLength: 40) }
-                Text(bubble.text)
+                // Assistant prose renders as markdown, like the Mac: a
+                // coding client that shows literal backticks and hashes
+                // makes the agent's answer harder to read than it was.
+                Group {
+                    if bubble.role == .assistant {
+                        ClutchMarkdownText(text: shownText, font: .body, color: .primary, expandsHorizontally: false)
+                    } else {
+                        Text(bubble.text)
+                    }
+                }
                     .textSelection(.enabled)
                     .padding(.horizontal, 11)
                     .padding(.vertical, 8)
@@ -1398,6 +1441,26 @@ struct ThreadBubbleRow: View {
             // ever a background colour, which reads as nothing.
             .accessibilityElement(children: .combine)
             .accessibilityLabel(bubble.role == .user ? "You said: \(bubble.text)" : "Agent said: \(bubble.text)")
+            .onAppear {
+                if isStreamingTail, renderedText == nil { renderedText = bubble.text }
+            }
+            .onChange(of: bubble.text) { _, newText in
+                guard isStreamingTail else { return }
+                renderTask?.cancel()
+                renderTask = Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                    renderedText = newText
+                }
+            }
+            .onChange(of: isStreamingTail) { _, streaming in
+                if !streaming {
+                    renderTask?.cancel()
+                    renderedText = bubble.text
+                } else if renderedText == nil {
+                    renderedText = bubble.text
+                }
+            }
         }
     }
 }
