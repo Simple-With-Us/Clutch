@@ -1944,7 +1944,7 @@ public struct ChatView: View {
         }
         if let note = previewSteerNote {
             Text(note)
-                .font(.system(size: 10))
+                .font(.caption2)
                 .foregroundStyle(.secondary)
         }
     }
