@@ -1591,9 +1591,11 @@ async function main() {
           let content = existing.attributes?.profileContent;
           if (!content) {
             const fetched = await api("GET", `/v1/profiles/${existing.id}`);
-            if (fetched.ok) {
-              content = fetched.parsed?.data?.attributes?.profileContent;
+            if (!fetched.ok) {
+              console.error(`ensure-appstore-profiles: profile fetch failed for name=${profileName} bundle=${bundleId} (HTTP ${fetched.status}); aborting rather than reusing a profile whose required App Group cannot be verified`);
+              process.exit(2);
             }
+            content = fetched.parsed?.data?.attributes?.profileContent;
           }
           const groups = content ? profileAppGroups(content) : null;
           if (groups === null) {
