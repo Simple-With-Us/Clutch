@@ -796,7 +796,12 @@ public struct ChatView: View {
         .task(id: activeHost?.pairingKey) {
             await prepare()
         }
-        .task(id: engine) {
+        // The thread list is read again when the host changes as well as when
+        // the engine does.  Switching host clears the list (see the host change
+        // handler below) and `prepare()` does not read it in the workspace, so a
+        // key of the engine alone left the rail empty or on the old machine's
+        // threads until the app was quit and reopened.
+        .task(id: "\(activeHost?.pairingKey ?? "unpaired")|\(engine.sidecarId)") {
             if isWorkspace { await loadSidebarSessions() }
         }
         .sheet(isPresented: $showingMuseSignIn) {
@@ -1369,12 +1374,23 @@ public struct ChatView: View {
                 .help(verbosity.detail)
 
                 if let host = activeHost, let store {
-                    HostSwitcher(host: host, store: store, compact: true)
+                    HostSwitcher(host: host, store: store, compact: true, onSelect: { picked in
+                        // Switching host in place drops the open thread and its
+                        // turn.  While a turn runs or messages are queued the
+                        // other host opens in a new window, and this one keeps
+                        // running.
+                        if picked.id != host.id, sending || !queuedMessages.isEmpty {
+                            openWindow(value: MacThreadWindowRequest(hostID: picked.id, engineID: engine.sidecarId))
+                        } else {
+                            store.activate(picked)
+                        }
+                    })
                         .accessibilityIdentifier("clutch-workspace-host")
                         .menuStyle(.borderlessButton)
-                        .disabled(sending || !queuedMessages.isEmpty)
                         .frame(maxWidth: 220, alignment: .trailing)
-                        .help(statusHelp(for: host))
+                        .help(sending || !queuedMessages.isEmpty
+                              ? "A turn is running here, so another host opens in a new window."
+                              : statusHelp(for: host))
                 }
             }
 
