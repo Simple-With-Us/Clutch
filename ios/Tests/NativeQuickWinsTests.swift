@@ -56,13 +56,15 @@ final class NativeQuickWinsTests: XCTestCase {
         XCTAssertEqual(after, SessionThreadModel.scrollKey(bubbles: [grown], thoughtLine: nil))
     }
 
+    #if os(iOS)
     func testMetricKitSummaryCountsOnlyAndSkipsEmptyPayloads() {
-        XCTAssertNil(MetricKitForwarder.summary(hangs: 0, crashes: 0, diskWrites: 0, cpu: 0))
+        XCTAssertNil(MetricKitForwarder.summary(hangs: 0, diskWrites: 0, cpu: 0))
         XCTAssertEqual(
-            MetricKitForwarder.summary(hangs: 2, crashes: 1, diskWrites: 0, cpu: 3),
-            "[metrickit-diagnostics] hangs=2 crashes=1 diskWrites=0 cpu=3"
+            MetricKitForwarder.summary(hangs: 2, diskWrites: 0, cpu: 3),
+            "[metrickit-diagnostics] hangs=2 diskWrites=0 cpu=3"
         )
     }
+    #endif
 
     func testSentryEnvironmentSplitsBuildStreams() {
         XCTAssertEqual(
