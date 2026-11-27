@@ -95,6 +95,7 @@ import {
 } from "./session-meta.ts";
 import { DshHostClient } from "./dshHostClient.ts";
 import { createCron, deleteCron, listCrons, type CronRule } from "./dshHostCrons.ts";
+import { findLiveTurn } from "./liveTurn.ts";
 import { listDshHostSessions, loadDshHostHistory, type SessionSummary } from "./dshHostSessions.ts";
 import { listDirectory, readPreview } from "./files.ts";
 import { createDshHostSession, hostProviderFor, runDshHostTurn, selectHostModel } from "./dshHostTurn.ts";
@@ -3564,7 +3565,7 @@ async function main(): Promise<void> {
         return;
       }
       const limit = parseLimitParam(url.searchParams.get("limit"), 200, 1_000);
-      const running = [...sessions.values()].some((s) => s.engine === engine && s.resumeSessionId === id && s.busy);
+      const { running, liveSessionId } = findLiveTurn(sessions, engine, id);
       try {
         if (engine === "muse") {
           const log = await readMuseSessionLog(id);
@@ -3577,7 +3578,8 @@ async function main(): Promise<void> {
             readOnly: true, remoteSessionId: id, cwd: log.workspaceRoot ?? url.searchParams.get("cwd") ?? undefined,
             title: museDisplayTitle(log.name, museListedTitles.get(id)), model: log.modelId, provider: log.providerId,
             history: sliceThreadHistory(compactToolHistory(log.transcript), limit),
-            ...(usage ? { usage } : {}), running, truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
+            ...(usage ? { usage } : {}), running, ...(liveSessionId ? { liveSessionId } : {}),
+            truncated: log.truncated || log.transcriptTruncated || log.transcript.length > limit,
           }));
           return;
         }
