@@ -66,15 +66,20 @@ public struct ClutchMarkdownText: View {
     public var font: Font
     /// The colour the prose is drawn in.
     public var color: Color
+    /// Whether the text claims the full offered width (transcript rows)
+    /// or hugs its contents (chat bubbles).
+    public var expandsHorizontally: Bool
 
     public init(
         text: String,
         font: Font = ClutchFont.footnote,
-        color: Color = .primary
+        color: Color = .primary,
+        expandsHorizontally: Bool = true
     ) {
         self.text = text
         self.font = font
         self.color = color
+        self.expandsHorizontally = expandsHorizontally
     }
 
     public var body: some View {
@@ -92,7 +97,7 @@ public struct ClutchMarkdownText: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: expandsHorizontally ? .infinity : nil, alignment: .leading)
     }
 
     /// The parts of the text.

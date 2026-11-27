@@ -990,7 +990,8 @@ public struct SessionThreadView: View {
                                 ThreadBubbleRow(
                                     bubble: bubble,
                                     isMatch: matched.contains(bubble.id),
-                                    depth: model.toolDepth(of: bubble, parents: parents)
+                                    depth: model.toolDepth(of: bubble, parents: parents),
+                                    isStreamingTail: model.isSending && bubble.role == .assistant && bubble.id == model.bubbles.last?.id
                                 )
                                     .id(bubble.id)
                             }
@@ -1046,7 +1047,10 @@ public struct SessionThreadView: View {
                         scrollTask?.cancel()
                         scrollTask = Task {
                             try? await Task.sleep(for: .milliseconds(100))
-                            guard !Task.isCancelled else { return }
+                            // The reader may have scrolled up during the
+                            // sleep; a pending follow must not yank them
+                            // back down after the fact.
+                            guard !Task.isCancelled, followLatest else { return }
                             proxy.scrollTo("bottom", anchor: .bottom)
                         }
                     }
@@ -1384,6 +1388,16 @@ struct ThreadBubbleRow: View {
     var isMatch: Bool = false
     /// How deep the call sits under the call that made it.
     var depth: Int = 0
+    /// Whether this bubble is the reply still streaming.  Its markdown
+    /// re-parses at most four times a second instead of per chunk, which
+    /// would make a long reply quadratic; the settled text parses fully.
+    var isStreamingTail: Bool = false
+    @State private var renderedText: String?
+    @State private var renderTask: Task<Void, Never>?
+
+    private var shownText: String {
+        isStreamingTail ? (renderedText ?? bubble.text) : bubble.text
+    }
 
     var body: some View {
         if bubble.role == .tool {
@@ -1406,7 +1420,7 @@ struct ThreadBubbleRow: View {
                 // makes the agent's answer harder to read than it was.
                 Group {
                     if bubble.role == .assistant {
-                        ClutchMarkdownText(text: bubble.text, font: .body, color: .primary)
+                        ClutchMarkdownText(text: shownText, font: .body, color: .primary, expandsHorizontally: false)
                     } else {
                         Text(bubble.text)
                     }
@@ -1426,6 +1440,26 @@ struct ThreadBubbleRow: View {
             // ever a background colour, which reads as nothing.
             .accessibilityElement(children: .combine)
             .accessibilityLabel(bubble.role == .user ? "You said: \(bubble.text)" : "Agent said: \(bubble.text)")
+            .onAppear {
+                if isStreamingTail, renderedText == nil { renderedText = bubble.text }
+            }
+            .onChange(of: bubble.text) { _, newText in
+                guard isStreamingTail else { return }
+                renderTask?.cancel()
+                renderTask = Task {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                    renderedText = newText
+                }
+            }
+            .onChange(of: isStreamingTail) { _, streaming in
+                if !streaming {
+                    renderTask?.cancel()
+                    renderedText = bubble.text
+                } else if renderedText == nil {
+                    renderedText = bubble.text
+                }
+            }
         }
     }
 }
