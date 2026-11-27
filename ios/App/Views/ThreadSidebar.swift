@@ -661,6 +661,7 @@ struct ThreadSidebarRow: View {
             // Absent rather than estimated when the engine has not
             // reported a window.
             if let usage = session.usage,
+               (usage.contextUsedTokens != nil || usage.totalTokens > 0),
                let percent = usage.contextUsedPercent {
                 HStack(spacing: 3) {
                     Image(systemName: "chart.pie.fill")
@@ -669,7 +670,9 @@ struct ThreadSidebarRow: View {
                 .font(ClutchFont.micro)
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Context \(Int(percent.rounded())) percent used")
+                #if os(macOS)
                 .help(usage.occupancyLabel ?? "Context usage")
+                #endif
             }
         }
         .padding(.horizontal, 8)
