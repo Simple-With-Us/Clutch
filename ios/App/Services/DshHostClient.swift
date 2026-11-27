@@ -286,6 +286,7 @@ public final class DshHostClient {
                     scheduleReconnect()
                     return
                 }
+                ClutchLog.stream.info("mux connected")
                 startPing()
                 return
             } catch {
@@ -306,6 +307,7 @@ public final class DshHostClient {
         let reason = Self.describe(failure)
         lastError = reason
         state = .failed(reason)
+        ClutchLog.stream.error("mux connect failed")
     }
 
     /// Close the mux and drop the host.
@@ -588,6 +590,7 @@ public final class DshHostClient {
                     if self.state == .connected, self.wantsConnection, !self.isEstablishing {
                         self.state = .connecting
                         self.warning = "The connection dropped. Trying again."
+                        ClutchLog.stream.notice("mux dropped; reconnect scheduled")
                         self.scheduleReconnect()
                     } else if self.state == .connected, !self.isEstablishing {
                         self.state = .failed(Self.describe(error))
