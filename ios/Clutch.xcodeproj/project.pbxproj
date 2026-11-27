@@ -28,6 +28,7 @@
 		13956EDBBA2BD0F3C9B55211 /* ThreadProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EA94CA9DE37746DE33DA83E /* ThreadProjectStore.swift */; };
 		13B0E2D13ECD6B0EF74E1520 /* TranscriptExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF732EB1367BF423728AA22B /* TranscriptExport.swift */; };
 		148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
+		1776763F47BEF00AA5AD174E /* DraftStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68CB050C53E3A8393858BC8C /* DraftStoreTests.swift */; };
 		19B7A8464C43E4F5EC900C8C /* ThreadToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6789066CD31896826BD7533 /* ThreadToolCard.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
 		1A5AE17AB7D512B9DA6660A4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
@@ -131,6 +132,7 @@
 		921E2749415FAE5E1D0F4E8B /* FilesClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B230414D3E70E3F7388F580 /* FilesClient.swift */; };
 		9492196DA90F87F8E27E865D /* ClutchMarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FB096CE7DC8183522B3A435 /* ClutchMarkdownText.swift */; };
 		954425213A19F67209489125 /* SteerFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A95E8F0A6509B0C8030883 /* SteerFailureTests.swift */; };
+		9549F38E8031490F172AEFE3 /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E085C90583EADC2A3331F5F9 /* DraftStore.swift */; };
 		9749FA364116161573D2B45F /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
 		977EA2945436566209B53B15 /* FleetRecallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 370F89587447F8A4277926BD /* FleetRecallView.swift */; };
 		97B5FB551747FB682BEA260B /* MuseContextPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08C24606E81FAD0D39FC4227 /* MuseContextPolicyTests.swift */; };
@@ -215,6 +217,7 @@
 		EFE8566E11BCA32B10DC3C1E /* RecentFolders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A12B9A826FDC8B5B82481FD /* RecentFolders.swift */; };
 		F099CF13CA15891061291F00 /* HostsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24CED5938D1C9B06ECC1C549 /* HostsSheet.swift */; };
 		F1339BBB2896C165BDC2A7E5 /* HostSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8634AAB6DFBFE88D40E828F6 /* HostSwitcher.swift */; };
+		F15835B78115E3817F6BC448 /* DraftStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E085C90583EADC2A3331F5F9 /* DraftStore.swift */; };
 		F3480DF81D27F97BDFD2AF2A /* FleetRecallClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */; };
 		F3DF42F143102CC8DAC9F9B8 /* SnapshotAssert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96091C16552CEA3625AD96E0 /* SnapshotAssert.swift */; };
 		F5F6B101BB12D696F5684113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D88017536E50AA8E88A5F36 /* Assets.xcassets */; };
@@ -342,6 +345,7 @@
 		65FB727540304DA0F8BF49CD /* ApprovalsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsView.swift; sourceTree = "<group>"; };
 		6755F577B7C605ABAF05D3B8 /* NativeQuickWinsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeQuickWinsTests.swift; sourceTree = "<group>"; };
 		684B84B8FB871D703F0A56CD /* PermissionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCard.swift; sourceTree = "<group>"; };
+		68CB050C53E3A8393858BC8C /* DraftStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStoreTests.swift; sourceTree = "<group>"; };
 		6C52D1A65B23047FCDBB2582 /* DictationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictationController.swift; sourceTree = "<group>"; };
 		6DCDCC31C345B10DBE180919 /* FleetRecallClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetRecallClient.swift; sourceTree = "<group>"; };
 		6DF818C703EEECD904E31711 /* PairingLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingLink.swift; sourceTree = "<group>"; };
@@ -406,6 +410,7 @@
 		D576B68016976DB1C7228170 /* HostGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostGateTests.swift; sourceTree = "<group>"; };
 		DF732EB1367BF423728AA22B /* TranscriptExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptExport.swift; sourceTree = "<group>"; };
 		E02A9B289B8BED2D4AAE1B82 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		E085C90583EADC2A3331F5F9 /* DraftStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftStore.swift; sourceTree = "<group>"; };
 		E6789066CD31896826BD7533 /* ThreadToolCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadToolCard.swift; sourceTree = "<group>"; };
 		E7A95E8F0A6509B0C8030883 /* SteerFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteerFailureTests.swift; sourceTree = "<group>"; };
 		E7ABCF03DDE910208F0FBC2D /* MacThreadWindowState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacThreadWindowState.swift; sourceTree = "<group>"; };
@@ -485,6 +490,7 @@
 				16C077D6394D17DF7A2DB336 /* ClutchActivityTests.swift */,
 				F98DF9BA0FC1C5A920BF2F81 /* ContextBreakdownTests.swift */,
 				5A59B251846F5C75906F4DB6 /* CronModelsTests.swift */,
+				68CB050C53E3A8393858BC8C /* DraftStoreTests.swift */,
 				A876D2D27DB766F9708C5338 /* DshHostMuxTests.swift */,
 				25E5918CD8EB83C254B0421E /* EngineCatalogTests.swift */,
 				135C3F6B7CC34C00DEF47ED4 /* ErrorReportingTests.swift */,
@@ -557,6 +563,7 @@
 				C182639A35D271331937928A /* CometChatManager.swift */,
 				14F95C2CF5C00F334F1B87D3 /* DebugLaunch.swift */,
 				6C52D1A65B23047FCDBB2582 /* DictationController.swift */,
+				E085C90583EADC2A3331F5F9 /* DraftStore.swift */,
 				93FA3C641650A7D1F057E290 /* DshHostClient.swift */,
 				4246BFDF91E2C7770FF2B310 /* EngineAuthentication.swift */,
 				C2CE776C209986B86CD7C869 /* EngineCatalogClient.swift */,
@@ -1005,6 +1012,7 @@
 				4D1CED07C95DBB9673833385 /* CronsView.swift in Sources */,
 				5CFB2C1449A42FBEC108A620 /* DebugLaunch.swift in Sources */,
 				E75376B9F769DD82D26794CE /* DictationController.swift in Sources */,
+				9549F38E8031490F172AEFE3 /* DraftStore.swift in Sources */,
 				8A6AC216ACE253353A7B0337 /* DshHostClient.swift in Sources */,
 				7497B0A554613B9A2952644B /* DshHostModels.swift in Sources */,
 				7C579079FD019800EE5BAF81 /* DshHostView.swift in Sources */,
@@ -1103,6 +1111,7 @@
 				36A804069A9A755E9F117D0F /* CronsView.swift in Sources */,
 				8E79E8750EA19D45F1B23F47 /* DebugLaunch.swift in Sources */,
 				83C155F3CF302A692C1F82B8 /* DictationController.swift in Sources */,
+				F15835B78115E3817F6BC448 /* DraftStore.swift in Sources */,
 				CE06D39056708CCB103C5B65 /* DshHostClient.swift in Sources */,
 				A1F1854063DBD253842EA410 /* DshHostModels.swift in Sources */,
 				D70F73684B5F296C2F5D3403 /* DshHostView.swift in Sources */,
@@ -1184,6 +1193,7 @@
 				AE0DBB6CDB5125CEE2D65F4C /* ClutchActivityTests.swift in Sources */,
 				7DE534A16FB2EBFBB2473AB6 /* ContextBreakdownTests.swift in Sources */,
 				CF5A0849CAA3DE171354DC62 /* CronModelsTests.swift in Sources */,
+				1776763F47BEF00AA5AD174E /* DraftStoreTests.swift in Sources */,
 				E4800116971DD2A9EDD6864D /* DshHostMuxTests.swift in Sources */,
 				2C2578083CD85C72C8338998 /* EngineCatalogTests.swift in Sources */,
 				370FBEA63878C948DC0E9C77 /* ErrorReportingTests.swift in Sources */,

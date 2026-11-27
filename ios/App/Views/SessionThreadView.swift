@@ -40,6 +40,8 @@ final class SessionThreadModel {
     private let host: ClutchHost
     private let client: SessionsClient
     private let session: AcpSessionInfo
+    /// Where the unsent draft survives a relaunch.
+    private let draftDefaults: UserDefaults
 
     /// Sidecar chat id for the loaded thread; swapped on every send so the
     /// next turn continues the same conversation.
@@ -50,7 +52,14 @@ final class SessionThreadModel {
 
     var phase: Phase = .idle
     var bubbles: [ThreadBubbleItem] = []
-    var draft = ""
+    /// The next message being composed.  Every change is kept, so leaving
+    /// the thread or relaunching the app finds the words still there; the
+    /// clear on send is the same write with nothing in it.
+    var draft = "" {
+        didSet {
+            DraftStore.save(draft, hostId: host.id, sessionId: session.sessionId, in: draftDefaults)
+        }
+    }
     var isSending = false
     var thoughtLine: String?
     var sendError: String?
@@ -146,13 +155,15 @@ final class SessionThreadModel {
 
     private var sendTask: Task<Void, Never>?
 
-    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode") {
+    init(host: ClutchHost, session: AcpSessionInfo, engine: String = "mcode", drafts: UserDefaults = .standard) {
         self.host = host
         self.client = SessionsClient(host: host)
         self.session = session
         self.engine = engine
         self.remoteSessionId = session.sessionId
         self.cwd = session.cwd
+        self.draftDefaults = drafts
+        self.draft = DraftStore.draft(hostId: host.id, sessionId: session.sessionId, in: drafts)
     }
 
     /// The engine's models, as the catalog published them.
@@ -388,8 +399,23 @@ final class SessionThreadModel {
                 try await ChatSessionClient.steer(host: owner, sessionId: target, text: prompt)
             } catch {
                 sendError = error.localizedDescription
+                // A steer that certainly never arrived gives the words
+                // back; one whose outcome is unknown does not, or the
+                // same correction would go twice.
+                if SteerFailure.failedBeforeSend(error) {
+                    restoreToComposer(prompt)
+                }
             }
         }
+    }
+
+    /// Puts text back at the head of the composer, ahead of anything typed
+    /// since, the way Agent Chat restores its own.
+    private func restoreToComposer(_ text: String) {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft = current.isEmpty ? value : value + "\n\n" + draft
     }
 
     /// Answer the permission request the engine is waiting on.
@@ -453,10 +479,13 @@ final class SessionThreadModel {
         // with it rather than sitting there inviting an answer that lands
         // nowhere.
         pendingPermissions.clearAll()
-        // The prompt held for the stopped turn goes with it: it was written
-        // for a turn that is not running, and the next turn must not carry
-        // it out on its own.
-        queuedPrompt = nil
+        // The prompt held for the stopped turn goes back into the composer:
+        // it must not ride the next turn on its own, and it must not be
+        // lost either.  The owner sends it again or deletes it.
+        if let queued = queuedPrompt {
+            queuedPrompt = nil
+            restoreToComposer(queued)
+        }
         supportsSteering = false
         TurnActivity.shared.approvalsCleared(hostId: host.id, engine: engine, sessionId: session.sessionId)
         TurnActivity.shared.runEnded(hostId: host.id, engine: engine, sessionId: session.sessionId)
