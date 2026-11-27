@@ -1326,8 +1326,7 @@ public struct SessionThreadView: View {
             HStack(spacing: 8) {
                 ForEach(model.attachments) { attachment in
                     HStack(spacing: 4) {
-                        Image(systemName: "photo")
-                            .font(ClutchFont.micro)
+                        AttachmentThumbnail(attachment: attachment)
                         Text(attachment.displayName)
                             .font(ClutchFont.micro)
                             .lineLimit(1)
