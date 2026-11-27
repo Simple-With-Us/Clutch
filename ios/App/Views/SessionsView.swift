@@ -41,6 +41,12 @@ final class SessionsModel {
     var hasMore = false
     /// True while a wider page is on the way.
     var isLoadingMore = false
+    /// The host's Projects, for the row menu's assignments.
+    var projects: [SessionsClient.Project] = []
+    /// Whether archived threads are listed (marked, restorable) or hidden.
+    var showArchived = false
+    /// The last row action that failed, for the list to show.
+    var actionError: String?
 
     init(host: ClutchHost) {
         self.host = host
@@ -57,7 +63,7 @@ final class SessionsModel {
         do {
             // Newest first, with an unparseable stamp sinking below the dated
             // rows instead of scrambling the list.
-            let page = try await client.listPage(engine: wanted, limit: requested)
+            let page = try await client.listPage(engine: wanted, limit: requested, includingArchived: showArchived)
             // An engine switch that landed mid-flight starts its own load; a
             // ticket pins this answer to its engine, so a late answer for the
             // previous engine is dropped instead of displayed under the new one.
@@ -65,6 +71,11 @@ final class SessionsModel {
             limit = page.limit
             hasMore = page.hasMore
             phase = .loaded(AcpSessionInfo.newestFirst(page.sessions))
+            // The project list rides its own answer; a host without the
+            // metadata route simply offers no assignments.
+            if let meta = try? await client.meta(), ticket == generation {
+                projects = meta.projects
+            }
         } catch {
             guard ticket == generation else { return }
             phase = .failed(error.localizedDescription)
@@ -86,7 +97,7 @@ final class SessionsModel {
         let wanted = engine
         defer { isLoadingMore = false }
         do {
-            let page = try await client.listPage(engine: wanted, limit: next)
+            let page = try await client.listPage(engine: wanted, limit: next, includingArchived: showArchived)
             guard ticket == generation else { return }
             limit = page.limit
             hasMore = page.hasMore
@@ -124,6 +135,79 @@ final class SessionsModel {
         if case .loaded(let sessions) = phase { return sessions }
         return []
     }
+
+    /// Show or hide archived threads, reloading at the first page the way
+    /// an engine switch does: the two lists are different answers.
+    func setShowArchived(_ show: Bool) async {
+        guard show != showArchived else { return }
+        showArchived = show
+        generation += 1
+        if phase == .loading { phase = .idle }
+        limit = SessionsClient.SessionListLimit.initial
+        hasMore = false
+        await load()
+    }
+
+    /// Archive or restore one thread.  Archiving hides it and is reversible;
+    /// nothing the engine owns moves.
+    func setArchived(_ session: AcpSessionInfo, archived: Bool) async {
+        await applyMeta(sessionId: session.sessionId, archived: archived) { $0.archived = archived }
+    }
+
+    /// Rename the Clutch-side title without touching the engine session.
+    func rename(_ session: AcpSessionInfo, title: String) async {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        await applyMeta(sessionId: session.sessionId, title: .some(trimmed)) { $0.title = trimmed }
+    }
+
+    /// Move a thread into a Project, or out of all of them when `nil`.
+    func assign(_ session: AcpSessionInfo, projectId: String?) async {
+        await applyMeta(sessionId: session.sessionId, projectId: .some(projectId)) { $0.projectId = projectId }
+    }
+
+    /// Create a Project and put the thread in it.
+    func createProject(name: String, assigning session: AcpSessionInfo) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let result = try await client.createProject(name: trimmed)
+            await assign(session, projectId: result.project.id)
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    /// One metadata write, redrawn from the answer it returns.  The row
+    /// changes in place instead of reloading the list, so the scroll and
+    /// the selection survive an action taken from a row menu.
+    private func applyMeta(
+        sessionId: String,
+        projectId: String?? = nil,
+        archived: Bool? = nil,
+        title: String?? = nil,
+        mutate: (inout AcpSessionInfo) -> Void
+    ) async {
+        do {
+            let meta = try await client.updateMeta(
+                sessionId: sessionId,
+                projectId: projectId,
+                archived: archived,
+                title: title
+            )
+            projects = meta.projects
+            if case .loaded(var rows) = phase,
+               let index = rows.firstIndex(where: { $0.sessionId == sessionId }) {
+                mutate(&rows[index])
+                if rows[index].archived == true, !showArchived {
+                    rows.remove(at: index)
+                }
+                phase = .loaded(rows)
+            }
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
 }
 
 /// Where the home surface's detail pane is pointed.
@@ -157,6 +241,39 @@ struct HomeFolderGroup: Identifiable {
     var id: String { path }
 }
 
+/// A text prompt a thread row can raise: rename it, or name its new Project.
+private enum RowPrompt: Identifiable {
+    case rename(AcpSessionInfo)
+    case newProject(AcpSessionInfo)
+
+    var id: String {
+        switch self {
+        case .rename(let session): return "rename-\(session.sessionId)"
+        case .newProject(let session): return "project-\(session.sessionId)"
+        }
+    }
+
+    var session: AcpSessionInfo {
+        switch self {
+        case .rename(let session), .newProject(let session): return session
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .rename: return "Rename Thread"
+        case .newProject: return "New Project"
+        }
+    }
+
+    var fieldLabel: String {
+        switch self {
+        case .rename: return "Thread Name"
+        case .newProject: return "Project Name"
+        }
+    }
+}
+
 public struct SessionsView: View {
     let host: ClutchHost
     /// The engine whose threads this list shows.
@@ -179,6 +296,9 @@ public struct SessionsView: View {
     @State private var isShowingHosts = false
     @State private var searchText = ""
     @State private var pinnedIds: Set<String> = []
+    /// The row prompt on screen (rename or new Project), if any.
+    @State private var rowPrompt: RowPrompt?
+    @State private var promptText = ""
     @State private var catalog: EngineCatalog?
     @State private var catalogRequestGeneration = 0
     /// True until the catalog has landed.
@@ -355,6 +475,28 @@ public struct SessionsView: View {
         }
         .sheet(isPresented: $isShowingHosts) {
             HostsSheet(store: HostStore.shared)
+        }
+        .alert(rowPrompt?.title ?? "", item: $rowPrompt) { prompt in
+            TextField(prompt.fieldLabel, text: $promptText)
+            Button("Save") {
+                let text = promptText
+                switch prompt {
+                case .rename(let session):
+                    Task { await model.rename(session, title: text) }
+                case .newProject(let session):
+                    Task { await model.createProject(name: text, assigning: session) }
+                }
+            }
+            .disabled(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Couldn't Update Thread", isPresented: Binding(
+            get: { model.actionError != nil },
+            set: { if !$0 { model.actionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.actionError = nil }
+        } message: {
+            Text(model.actionError ?? "")
         }
     }
 
@@ -583,6 +725,17 @@ public struct SessionsView: View {
             isListSelectable: true
         )
         .tag(HomeSelection.thread(session.sessionId, engine: nil))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                Task { await model.setArchived(session, archived: session.archived != true) }
+            } label: {
+                Label(
+                    session.archived == true ? "Restore" : "Archive",
+                    systemImage: session.archived == true ? "tray.and.arrow.up" : "archivebox"
+                )
+            }
+            .tint(ClutchColor.warning)
+        }
         .contextMenu {
             Button {
                 ThreadPinStore.toggle(session.sessionId, forHost: host.id)
@@ -593,6 +746,50 @@ public struct SessionsView: View {
                     systemImage: pinnedIds.contains(session.sessionId) ? "pin.slash" : "pin"
                 )
             }
+            Button {
+                promptText = session.title ?? ""
+                rowPrompt = .rename(session)
+            } label: {
+                Label("Rename Thread…", systemImage: "pencil")
+            }
+            Menu {
+                ForEach(model.projects) { project in
+                    Button {
+                        Task { await model.assign(session, projectId: project.id) }
+                    } label: {
+                        if session.projectId == project.id {
+                            Label(project.name, systemImage: "checkmark")
+                        } else {
+                            Text(project.name)
+                        }
+                    }
+                }
+                if session.projectId != nil {
+                    Button {
+                        Task { await model.assign(session, projectId: nil) }
+                    } label: {
+                        Label("No Project", systemImage: "folder.badge.minus")
+                    }
+                }
+                Divider()
+                Button {
+                    promptText = ""
+                    rowPrompt = .newProject(session)
+                } label: {
+                    Label("New Project…", systemImage: "folder.badge.plus")
+                }
+            } label: {
+                Label("Move To Project", systemImage: "folder")
+            }
+            Button {
+                Task { await model.setArchived(session, archived: session.archived != true) }
+            } label: {
+                Label(
+                    session.archived == true ? "Restore Thread" : "Archive Thread",
+                    systemImage: session.archived == true ? "tray.and.arrow.up" : "archivebox"
+                )
+            }
+            Divider()
             #if os(iOS)
             Button {
                 UIPasteboard.general.string = session.sessionId
@@ -745,6 +942,19 @@ public struct SessionsView: View {
             // The server picker sits beside the engine picker: both answer
             // "which threads am I looking at".
             HostSwitcher(host: host, store: HostStore.shared, compact: true)
+            Menu {
+                Toggle(isOn: Binding(
+                    get: { model.showArchived },
+                    set: { show in Task { await model.setShowArchived(show) } }
+                )) {
+                    Label("Show Archived", systemImage: "archivebox")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(ClutchFont.captionStrong)
+                    .foregroundStyle(.primary)
+            }
+            .accessibilityLabel("List Options")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
