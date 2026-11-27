@@ -239,9 +239,19 @@ public struct ChatSessionClient {
         return http.statusCode == 200
     }
 
+    /// What a permission request this app could not read says to the owner.
+    ///
+    /// The engine stays blocked until it is answered, so dropping the event
+    /// would leave the turn waiting on a question nobody saw; failing the
+    /// turn out loud is the honest end.
+    static let unreadablePermissionMessage =
+        "The engine asked for permission in a form this app could not read, so the turn was stopped."
+
     static func decode(event: String, payload: String) -> ChatStreamEvent? {
         guard let data = payload.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return event == "permission" ? .failed(unreadablePermissionMessage) : nil
+        }
         switch event {
         case "capabilities":
             guard let supported = json["supportsSteering"] as? Bool else { return nil }
@@ -284,10 +294,12 @@ public struct ChatSessionClient {
             return .usage(usage)
         case "permission":
             // The engine is blocked on this request until the answer goes
-            // back, so it is carried with the turn rather than dropped.
-            guard let requestDict = json as? [String: Any] else { return nil }
-            guard let requestData = try? JSONSerialization.data(withJSONObject: requestDict),
-                  let request = try? JSONDecoder().decode(AcpPermissionRequest.self, from: requestData) else { return nil }
+            // back, so it is carried with the turn rather than dropped.  One
+            // this app cannot read fails the turn instead of vanishing.
+            guard let requestData = try? JSONSerialization.data(withJSONObject: json),
+                  let request = try? JSONDecoder().decode(AcpPermissionRequest.self, from: requestData) else {
+                return .failed(unreadablePermissionMessage)
+            }
             return .permission(request)
         case "plan":
             // The plan is a state rather than a line of the transcript: the

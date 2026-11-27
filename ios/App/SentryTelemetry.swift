@@ -7,15 +7,54 @@ import Sentry
 /// fallback — missing or empty skips init so a leaked default cannot be
 /// pointed at the wrong project.
 enum SentryTelemetry {
+    /// Which stream of builds an event came from.
+    ///
+    /// Debug and TestFlight noise does not belong in the production issue
+    /// stream: a crash only a developer build can hit would otherwise page
+    /// like a shipped one.  TestFlight installs carry a sandbox receipt,
+    /// which is the mark that separates them from App Store installs.
+    static func environmentName(isDebug: Bool, receiptLastPathComponent: String?) -> String {
+        if isDebug { return "development" }
+        return receiptLastPathComponent == "sandboxReceipt" ? "testflight" : "production"
+    }
+
     static func start() {
         guard let dsn = plistString("SENTRY_DSN"), !dsn.isEmpty else { return }
 
         let releaseName = plistString("CFBundleShortVersionString")
         let dist = plistString("CFBundleVersion")
 
+        #if DEBUG
+        let isDebugBuild = true
+        #else
+        let isDebugBuild = false
+        #endif
+
         SentrySDK.start { options in
             options.dsn = dsn
-            options.environment = "production"
+            options.environment = environmentName(
+                isDebug: isDebugBuild,
+                receiptLastPathComponent: Bundle.main.appStoreReceiptURL?.lastPathComponent
+            )
+            // The same redaction boundary the failure lines pass, applied
+            // to everything else as defense in depth: a crash title or a
+            // breadcrumb can carry provider text no reporter scrubbed.
+            options.beforeSend = { event in
+                if let message = event.message {
+                    // `formatted` is read-only, so the scrubbed line rides a
+                    // fresh message with the raw form scrubbed to match.
+                    let scrubbed = SentryMessage(formatted: ErrorReporting.redacted(message.formatted))
+                    scrubbed.message = message.message.map(ErrorReporting.redacted)
+                    scrubbed.params = message.params?.map(ErrorReporting.redacted)
+                    event.message = scrubbed
+                }
+                event.breadcrumbs?.forEach { breadcrumb in
+                    if let text = breadcrumb.message {
+                        breadcrumb.message = ErrorReporting.redacted(text)
+                    }
+                }
+                return event
+            }
             if let releaseName, !releaseName.isEmpty {
                 options.releaseName = releaseName
             }
@@ -43,6 +82,17 @@ enum SentryTelemetry {
             options.sessionReplay.onErrorSampleRate = 1.0
             options.sessionReplay.maskAllText = true
             options.sessionReplay.maskAllImages = true
+            #endif
+        }
+
+        // One stable dimension worth slicing by: which native app sent the
+        // event.  Engine and host names stay out — the failure lines
+        // already name the engine, and a host name is the owner's to keep.
+        SentrySDK.configureScope { scope in
+            #if os(iOS)
+            scope.setTag(value: "ios", key: "clutch.platform")
+            #else
+            scope.setTag(value: "macos", key: "clutch.platform")
             #endif
         }
     }

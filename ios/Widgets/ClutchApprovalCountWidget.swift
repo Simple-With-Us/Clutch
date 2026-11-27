@@ -49,11 +49,26 @@ struct ClutchApprovalCountWidget: Widget {
 }
 
 /// The count, drawn for whichever accessory family is on screen.
+///
+/// A tap lands on the approvals list, like the Live Activity, and the
+/// whole accessory speaks as one line: a bare digit with no label left a
+/// VoiceOver owner guessing what the number counted.  A count the app has
+/// not refreshed within its own backstop window draws dimmed and says so,
+/// instead of presenting silence as current fact.
 struct ClutchApprovalCountView: View {
     @Environment(\.widgetFamily) private var family
     let entry: ClutchApprovalCountEntry
 
     var body: some View {
+        content
+            .opacity(entry.snapshot.isStale(now: entry.date) ? 0.55 : 1)
+            .widgetURL(ClutchApprovalsLink.url)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(entry.snapshot.accessibilitySummary(now: entry.date))
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch family {
         case .accessoryInline:
             Text("\(entry.snapshot.waitingCount) Waiting")

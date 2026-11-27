@@ -51,6 +51,35 @@ public struct ClutchApprovalSnapshot: Codable, Equatable, Sendable {
 
     /// The snapshot for a device with nothing waiting and nothing running.
     public static let empty = ClutchApprovalSnapshot(waitingCount: 0, runningCount: 0, updatedAt: .distantPast)
+
+    /// How old a count may be before a glance surface must stop trusting it.
+    ///
+    /// Fifteen minutes is the widget timeline's own refresh backstop: a
+    /// snapshot older than that means the app has not run to recount, and
+    /// showing it fresh would be a confident answer nobody checked.
+    public static let staleAfter: TimeInterval = 900
+
+    /// Whether this count is too old to show as current.
+    public func isStale(now: Date = Date()) -> Bool {
+        now.timeIntervalSince(updatedAt) > Self.staleAfter
+    }
+
+    /// The count as one spoken line, freshness included.
+    public func accessibilitySummary(now: Date = Date()) -> String {
+        var parts: [String] = []
+        switch waitingCount {
+        case 0: parts.append("No approvals waiting")
+        case 1: parts.append("1 approval waiting")
+        default: parts.append("\(waitingCount) approvals waiting")
+        }
+        if runningCount > 0 {
+            parts.append(runningCount == 1 ? "1 running" : "\(runningCount) running")
+        }
+        if isStale(now: now) {
+            parts.append("may be out of date")
+        }
+        return parts.joined(separator: ", ")
+    }
 }
 
 /// Reads and writes the snapshot in the shared container.

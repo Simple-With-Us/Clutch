@@ -44,7 +44,9 @@ public struct HostSwitcher: View {
                     if candidate.id == host.id {
                         Label(candidate.name, systemImage: "checkmark")
                     } else {
-                        Text(candidate.name)
+                        // Every other host carries its reachability, so the
+                        // picker shows which ones can actually answer.
+                        Label(candidate.name, systemImage: candidate.status.symbol)
                     }
                 }
             }
@@ -61,18 +63,18 @@ public struct HostSwitcher: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: compact ? 6 : 8, height: compact ? 6 : 8)
-                    // The menu already reads as "Host: <name>"; a bare colour
-                    // swatch would otherwise be announced as an unknown
-                    // element.
+                // Status is a symbol in a status colour, never colour
+                // alone: the shape still reads in grayscale, and the
+                // accessibility value below says the word out loud.
+                Image(systemName: shownStatus.symbol)
+                    .font(compact ? ClutchFont.microStrong : ClutchFont.captionStrong)
+                    .foregroundStyle(statusColor)
                     .accessibilityHidden(true)
                 Text(host.name)
-                    .font(compact ? .system(size: 11, weight: .semibold) : .subheadline.weight(.semibold))
+                    .font(compact ? ClutchFont.captionStrong : .subheadline.weight(.semibold))
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
-                    .font(compact ? .system(size: 8, weight: .bold) : .caption2.weight(.bold))
+                    .font(ClutchFont.microStrong)
                     .foregroundStyle(.secondary)
             }
         }
@@ -80,6 +82,7 @@ public struct HostSwitcher: View {
         .menuIndicator(.hidden)
         #endif
         .accessibilityLabel("Host: \(host.name)")
+        .accessibilityValue(shownStatus.label)
         // One sheet, not two: SwiftUI honours only the last sheet modifier on
         // a view, so the picker picks which one to present.
         .sheet(item: $sheet) { item in
@@ -107,13 +110,16 @@ public struct HostSwitcher: View {
         }
     }
 
-    /// The host's probe result, as one colour, unless the surface knows more.
+    /// The state on show: the surface's word when it has one, else the probe's.
+    private var shownStatus: HostStatus { status ?? host.status }
+
+    /// The host's probe result, in the contrast-tuned status colours.
     private var statusColor: Color {
-        switch status ?? host.status {
-        case .online: return .green
-        case .notClutch: return .orange
-        case .offline: return .red
-        case .unknown: return .gray
+        switch shownStatus {
+        case .online: return ClutchColor.success
+        case .notClutch: return ClutchColor.warning
+        case .offline: return ClutchColor.danger
+        case .unknown: return ClutchColor.textTertiary
         }
     }
 }

@@ -147,11 +147,32 @@ public final class HostStore {
         save()
     }
 
+    /// Probes every host at once and persists the answers together.
+    ///
+    /// The probes used to run one after another, each re-encoding the whole
+    /// archive (and touching the keychain) on its way through, so a
+    /// many-host setup paid serial network latency plus a save per host on
+    /// every foreground.  Now the wait is the slowest single probe and the
+    /// archive is written once.
     public func refreshStatuses() async {
-        for host in hosts {
-            let status = await HostProbe.probe(host)
-            setStatus(status, for: host.id)
+        let current = hosts
+        guard !current.isEmpty else { return }
+        let answers = await withTaskGroup(of: (UUID, HostStatus).self) { group in
+            for host in current {
+                group.addTask { (host.id, await HostProbe.probe(host)) }
+            }
+            var collected: [(UUID, HostStatus)] = []
+            for await answer in group { collected.append(answer) }
+            return collected
         }
+        var changed = false
+        for (hostID, status) in answers {
+            guard let index = hosts.firstIndex(where: { $0.id == hostID }) else { continue }
+            hosts[index].status = status
+            hosts[index].lastChecked = Date()
+            changed = true
+        }
+        if changed { save() }
     }
 
     // MARK: - Persistence

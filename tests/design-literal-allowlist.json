@@ -29,10 +29,6 @@
   "ios/App/Views/HostGateView.swift": {
     ".system(size: 44, weight: .regular)": 1
   },
-  "ios/App/Views/HostSwitcher.swift": {
-    ".system(size: 11, weight: .semibold)": 1,
-    ".system(size: 8, weight: .bold)": 1
-  },
   "ios/App/Views/HostsSheet.swift": {
     ".system(size: 9, weight: .bold)": 1
   },
