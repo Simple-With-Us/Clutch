@@ -29,6 +29,9 @@
 		13B0E2D13ECD6B0EF74E1520 /* TranscriptExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF732EB1367BF423728AA22B /* TranscriptExport.swift */; };
 		148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
 		1776763F47BEF00AA5AD174E /* DraftStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68CB050C53E3A8393858BC8C /* DraftStoreTests.swift */; };
+		AA57FBE7D0A6B8C5ADE8C2E0 /* AttachmentThumbnail.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97CD073CA2F212A10254DB9 /* AttachmentThumbnail.swift */; };
+		12E4472F7E76DFDB5E0DAE4D /* CronsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F51544CD89A933EDC6E6812 /* CronsView.swift */; };
+		CC90B1171164F4FA26AECB82 /* ContextPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */; };
 		19B7A8464C43E4F5EC900C8C /* ThreadToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6789066CD31896826BD7533 /* ThreadToolCard.swift */; };
 		19E09079A6B2462A3719BE44 /* AppIcon.png in Resources */ = {isa = PBXBuildFile; fileRef = FB8B087893FF01FA2CD9BF4C /* AppIcon.png */; };
 		1A5AE17AB7D512B9DA6660A4 /* Platform.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED39E8F1CCD0EFE2B720A6D9 /* Platform.swift */; };
@@ -61,6 +64,9 @@
 		3DA59F2857BF4C0D968BC685 /* ThreadSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9ACF4B282838514406995172 /* ThreadSidebar.swift */; };
 		3E4D115D045028935D2ACD8F /* ChatAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 121B2BA00B478616B615256A /* ChatAttachment.swift */; };
 		3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */; };
+		ACE112778F5ED6BFB2587E7F /* AttachmentThumbnail.swift in Sources */ = {isa = PBXBuildFile; fileRef = C97CD073CA2F212A10254DB9 /* AttachmentThumbnail.swift */; };
+		F6421986D96EFBE8EC7382D8 /* CronsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F51544CD89A933EDC6E6812 /* CronsView.swift */; };
+		C37CB2E34BD8E5C6765188E2 /* ContextPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */; };
 		415790D1EB7F6C28A5E51834 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CE812BB0094810DBA4C76BF /* KeychainStore.swift */; };
 		43DA4D3EC7B1CB3FA3EA5C2F /* HostStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8F71C66A5A5AEEBC8202DD4 /* HostStore.swift */; };
 		455C3E49BB917BC1B035F17F /* ErrorReporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A647C072F700CCD2C3A38EB /* ErrorReporting.swift */; };
@@ -293,6 +299,9 @@
 		0215A08CC97DE1B4EB644A68 /* MacSurfaceSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSurfaceSetup.swift; sourceTree = "<group>"; };
 		02BD5C517F092893BF4C6806 /* MacWorkspaceCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacWorkspaceCommands.swift; sourceTree = "<group>"; };
 		03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionThreadView.swift; sourceTree = "<group>"; };
+		C97CD073CA2F212A10254DB9 /* AttachmentThumbnail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentThumbnail.swift; sourceTree = "<group>"; };
+		2F51544CD89A933EDC6E6812 /* CronsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronsView.swift; sourceTree = "<group>"; };
+		E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextPanel.swift; sourceTree = "<group>"; };
 		06F0339A3E0FBDCCAEC93ECE /* SentryTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentryTelemetry.swift; sourceTree = "<group>"; };
 		075F6C76C816463CB4A9C109 /* StubSidecar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StubSidecar.swift; sourceTree = "<group>"; };
 		08C24606E81FAD0D39FC4227 /* MuseContextPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuseContextPolicyTests.swift; sourceTree = "<group>"; };
@@ -693,6 +702,9 @@
 				1E37F50A879712AF7F22B092 /* SessionsView.swift */,
 				03D0F871D64D6329CCD18ED0 /* SessionThreadView.swift */,
 				CE9E5AAB5D80AC4E50A4C922 /* ThreadProjectsView.swift */,
+				C97CD073CA2F212A10254DB9 /* AttachmentThumbnail.swift */,
+				2F51544CD89A933EDC6E6812 /* CronsView.swift */,
+				E3D1974E82D516D6BE0BF93A /* ContextPanel.swift */,
 				9ACF4B282838514406995172 /* ThreadSidebar.swift */,
 				E6789066CD31896826BD7533 /* ThreadToolCard.swift */,
 			);
@@ -1064,6 +1076,9 @@
 				8B0CE1BCE4973A059ADD0137 /* RootView.swift in Sources */,
 				2B9E4785C5A7A4284CDF49D3 /* SentryTelemetry.swift in Sources */,
 				148434DD92E200DDA68B2829 /* SessionThreadView.swift in Sources */,
+				AA57FBE7D0A6B8C5ADE8C2E0 /* AttachmentThumbnail.swift in Sources */,
+				12E4472F7E76DFDB5E0DAE4D /* CronsView.swift in Sources */,
+				CC90B1171164F4FA26AECB82 /* ContextPanel.swift in Sources */,
 				6837A599633AC57474330540 /* SessionsClient.swift in Sources */,
 				F6FA743C967C96776991A3E8 /* SessionsView.swift in Sources */,
 				08F8373151A6F24E75EA2FB3 /* SteerFailure.swift in Sources */,
@@ -1168,6 +1183,9 @@
 				AA4AF91B37DD1E8C8CD0A936 /* RootView.swift in Sources */,
 				34DEB316FC4547BF59DDA16F /* SentryTelemetry.swift in Sources */,
 				3F57DD206F3B9C5217C134CC /* SessionThreadView.swift in Sources */,
+				ACE112778F5ED6BFB2587E7F /* AttachmentThumbnail.swift in Sources */,
+				F6421986D96EFBE8EC7382D8 /* CronsView.swift in Sources */,
+				C37CB2E34BD8E5C6765188E2 /* ContextPanel.swift in Sources */,
 				CB3C3A4EEC481FE1E4AF7AAB /* SessionsClient.swift in Sources */,
 				2086F0818B78430A05F98A62 /* SessionsView.swift in Sources */,
 				9BFAF9E4EBD9498E6697BC0C /* SteerFailure.swift in Sources */,
