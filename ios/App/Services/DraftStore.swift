@@ -31,7 +31,10 @@ enum DraftStore {
     /// The newest save generation seen per thread.  A debounced write that
     /// lands after a newer edit (or a flush) carries an older generation
     /// and is refused under the same lock that writes, so stale words can
-    /// never overwrite newer ones.
+    /// never overwrite newer ones.  An entry outlives its draft on purpose:
+    /// forgetting it at clear time would let a late stale write resurrect
+    /// a sent draft, so the table is swept back to live threads only when
+    /// it grows well past the draft cap.
     private static var generations: [String: Int] = [:]
 
     /// The table key for one thread on one host.
@@ -68,6 +71,10 @@ enum DraftStore {
         if let generation {
             if generation < (generations[entryKey] ?? 0) { return }
             generations[entryKey] = generation
+            if generations.count > maxDrafts * 2 {
+                let live = table(in: directory)
+                generations = generations.filter { live[$0.key] != nil || $0.key == entryKey }
+            }
         }
         var table = table(in: directory)
         let loadedCount = table.count

@@ -113,6 +113,17 @@ final class DraftStoreTests: XCTestCase {
         XCTAssertEqual(table?.count, 0)
     }
 
+    func testAClearedDraftCannotBeResurrectedByAStaleWrite() {
+        let directory = freshDirectory()
+        let host = UUID()
+        DraftStore.save("sent words", hostId: host, sessionId: "s-1", in: directory, generation: 4)
+        // Sending clears with the next generation; the generation is kept
+        // after the clear precisely so this late write loses.
+        DraftStore.save("", hostId: host, sessionId: "s-1", in: directory, generation: 5)
+        DraftStore.save("sent words", hostId: host, sessionId: "s-1", in: directory, generation: 4)
+        XCTAssertEqual(DraftStore.draft(hostId: host, sessionId: "s-1", in: directory), "")
+    }
+
     func testAnOlderGenerationCannotOverwriteANewerDraft() {
         let directory = freshDirectory()
         let host = UUID()
