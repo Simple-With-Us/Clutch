@@ -645,16 +645,6 @@ struct ThreadSidebarRow: View {
                                 .foregroundStyle(ClutchColor.textSecondary)
                         }
                     }
-                    // The one usage fact cheap enough to show inline on every
-                    // row.  Absent rather than estimated when the engine has not
-                    // reported a window.
-                    if let usage = session.usage,
-                       let occupancy = ThreadMetricPresentation.contextOccupancyLabel(usage) {
-                        Text(occupancy)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
                 }
             }
             if isLoading {
@@ -664,6 +654,23 @@ struct ThreadSidebarRow: View {
                     .accessibilityHidden(true)
             }
             Spacer(minLength: 0)
+            // The one usage fact cheap enough to keep on every row: a
+            // trailing percent badge, not a third line of tokens.  The
+            // full "used of window" readout lives in the thread itself
+            // (the in-thread context panel), where context belongs.
+            // Absent rather than estimated when the engine has not
+            // reported a window.
+            if let usage = session.usage,
+               let percent = usage.contextUsedPercent {
+                HStack(spacing: 3) {
+                    Image(systemName: "chart.pie.fill")
+                    Text("\(Int(percent.rounded()))%")
+                }
+                .font(ClutchFont.micro)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Context \(Int(percent.rounded())) percent used")
+                .help(usage.occupancyLabel ?? "Context usage")
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
