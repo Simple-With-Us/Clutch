@@ -67,6 +67,13 @@ public final class HostStore {
     public private(set) var activeHostID: UUID?
 
     @ObservationIgnored private let defaults: UserDefaults
+    /// Whether this store writes the active host to the preferences.
+    ///
+    /// The preferences hold one active host for the whole app.  A thread window
+    /// builds a store of its own so that picking a host there stays in that window;
+    /// if that store also wrote the active host, it would overwrite the choice the
+    /// main window made (and the host a new window starts on).
+    @ObservationIgnored private let persistsActiveHost: Bool
 
     /// Creates a host store over the preferences it was given.
     ///
@@ -76,9 +83,10 @@ public final class HostStore {
     /// defaults while a test asked for an isolated suite would reset and
     /// re-pair the owner's hosts, which is exactly what the suite is there
     /// to prevent.
-    public init(defaults: UserDefaults? = nil) {
+    public init(defaults: UserDefaults? = nil, persistsActiveHost: Bool = true) {
         let resolved = defaults ?? Self.resolveDefaults()
         self.defaults = resolved
+        self.persistsActiveHost = persistsActiveHost
         #if DEBUG
         // A UI test starts from first run.  The reset happens here rather
         // than in the app's initializer, so it always runs before the
@@ -299,7 +307,9 @@ public final class HostStore {
         if let data = try? JSONEncoder().encode(stored) {
             defaults.set(data, forKey: Self.storageKey)
         }
-        defaults.set(activeHostID?.uuidString, forKey: Self.activeKey)
+        if persistsActiveHost {
+            defaults.set(activeHostID?.uuidString, forKey: Self.activeKey)
+        }
     }
 
     /// Puts the credentials back on the hosts.
