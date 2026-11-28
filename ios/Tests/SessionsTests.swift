@@ -1104,7 +1104,7 @@ final class SessionListPageTests: XCTestCase {
         {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}],
          "hasMore":true}
         """
-        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+        let page = try SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
 
         XCTAssertEqual(page.sessions.count, 1)
         XCTAssertEqual(page.sessions.first?.sessionId, "s-1")
@@ -1118,18 +1118,15 @@ final class SessionListPageTests: XCTestCase {
         let body = """
         {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}]}
         """
-        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+        let page = try SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
 
         XCTAssertEqual(page.sessions.count, 1)
         XCTAssertFalse(page.hasMore)
         XCTAssertEqual(page.limit, 100)
     }
 
-    func testABrokenBodyIsAnEmptyPageRatherThanAFailure() throws {
-        let page = SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100)
-
-        XCTAssertTrue(page.sessions.isEmpty)
-        XCTAssertFalse(page.hasMore)
+    func testABrokenBodyFailsRatherThanLookingLikeAnEmptyPage() throws {
+        XCTAssertThrowsError(try SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100))
     }
 
     func testAWiderPageAppendsTheOlderThreadsWithoutRepeatingAny() throws {
