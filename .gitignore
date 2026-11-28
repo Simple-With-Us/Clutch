@@ -58,6 +58,10 @@ DerivedData/
 .prod.vars
 .prod.vars.*
 *.vars
+*.vars.*
+*.env.*
+.envrc
 !*.example
 !*.sample
 !*.template
+!.cursor/infisical.env
