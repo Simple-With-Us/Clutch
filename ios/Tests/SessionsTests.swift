@@ -1104,7 +1104,7 @@ final class SessionListPageTests: XCTestCase {
         {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}],
          "hasMore":true}
         """
-        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+        let page = try SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
 
         XCTAssertEqual(page.sessions.count, 1)
         XCTAssertEqual(page.sessions.first?.sessionId, "s-1")
@@ -1118,18 +1118,15 @@ final class SessionListPageTests: XCTestCase {
         let body = """
         {"sessions":[{"sessionId":"s-1","cwd":"/srv/work","title":"Fix the login redirect"}]}
         """
-        let page = SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
+        let page = try SessionsClient.decodeSessionList(Data(body.utf8), limit: 100)
 
         XCTAssertEqual(page.sessions.count, 1)
         XCTAssertFalse(page.hasMore)
         XCTAssertEqual(page.limit, 100)
     }
 
-    func testABrokenBodyIsAnEmptyPageRatherThanAFailure() throws {
-        let page = SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100)
-
-        XCTAssertTrue(page.sessions.isEmpty)
-        XCTAssertFalse(page.hasMore)
+    func testABrokenBodyFailsRatherThanLookingLikeAnEmptyPage() throws {
+        XCTAssertThrowsError(try SessionsClient.decodeSessionList(Data("not JSON".utf8), limit: 100))
     }
 
     func testAWiderPageAppendsTheOlderThreadsWithoutRepeatingAny() throws {
@@ -1148,9 +1145,11 @@ final class SessionListPageTests: XCTestCase {
 
         let merged = wider.merging(into: shown)
 
-        // The rows already on screen keep their place, the older row the
-        // wider page brought in is appended, and no row is listed twice.
-        XCTAssertEqual(merged.map(\.sessionId), ["s-1", "s-2", "s-3"])
+        // The older row the wider page brought in is added and no row is
+        // listed twice.  The caller sorts the union newest first, so this
+        // pins the set and the count, not an order.
+        XCTAssertEqual(merged.count, 3)
+        XCTAssertEqual(Set(merged.map(\.sessionId)), ["s-1", "s-2", "s-3"])
     }
 
     func testTheThreadListStepsThroughThePagesTheSidecarServes() throws {
