@@ -1145,11 +1145,9 @@ final class SessionListPageTests: XCTestCase {
 
         let merged = wider.merging(into: shown)
 
-        // The older row the wider page brought in is added and no row is
-        // listed twice.  The caller sorts the union newest first, so this
-        // pins the set and the count, not an order.
-        XCTAssertEqual(merged.count, 3)
-        XCTAssertEqual(Set(merged.map(\.sessionId)), ["s-1", "s-2", "s-3"])
+        // The rows already on screen keep their place, the older row the
+        // wider page brought in is appended, and no row is listed twice.
+        XCTAssertEqual(merged.map(\.sessionId), ["s-1", "s-2", "s-3"])
     }
 
     func testTheThreadListStepsThroughThePagesTheSidecarServes() throws {
