@@ -122,15 +122,17 @@ public struct SessionsClient {
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
             throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
         }
-        return Self.decodeSessionList(data, limit: requested)
+        return try Self.decodeSessionList(data, limit: requested)
     }
 
     /// The body of a sessions page.
     ///
     /// A body without the flag is a page with nothing more in it rather than
     /// a broken answer:  the flag is newer than some hosts' answers, and a
-    /// missing one must not throw the whole page away.
-    static func decodeSessionList(_ data: Data, limit: Int) -> SessionListPage {
+    /// missing one must not throw the whole page away.  A body that is not a
+    /// sessions page at all throws, so a failed answer never looks like a
+    /// complete empty list.
+    static func decodeSessionList(_ data: Data, limit: Int) throws -> SessionListPage {
         struct Payload: Decodable {
             var sessions: [AcpSessionInfo]
             var hasMore: Bool
@@ -141,9 +143,7 @@ public struct SessionsClient {
                 hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
             }
         }
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-            return SessionListPage(sessions: [], hasMore: false, limit: limit)
-        }
+        let payload = try JSONDecoder().decode(Payload.self, from: data)
         return SessionListPage(sessions: payload.sessions, hasMore: payload.hasMore, limit: limit)
     }
 
@@ -167,10 +167,19 @@ public struct SessionsClient {
         /// Keep the freshest metadata from the latest answer, retain any
         /// previously loaded rows, and sort the union newest first.
         public func merging(into existing: [AcpSessionInfo]) -> [AcpSessionInfo] {
+            var latest: [String: AcpSessionInfo] = [:]
+            for row in sessions where !row.sessionId.isEmpty && latest[row.sessionId] == nil {
+                latest[row.sessionId] = row
+            }
             var seen = Set<String>()
-            return AcpSessionInfo.newestFirst((sessions + existing).filter {
-                !$0.sessionId.isEmpty && seen.insert($0.sessionId).inserted
-            })
+            // The rows already shown keep their place and take the freshest
+            // metadata; rows only the wider page has are appended.
+            let kept = existing.compactMap { row -> AcpSessionInfo? in
+                guard !row.sessionId.isEmpty, seen.insert(row.sessionId).inserted else { return nil }
+                return latest[row.sessionId] ?? row
+            }
+            let added = sessions.filter { !$0.sessionId.isEmpty && seen.insert($0.sessionId).inserted }
+            return AcpSessionInfo.newestFirst(kept + added)
         }
     }
 
