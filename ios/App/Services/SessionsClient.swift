@@ -122,15 +122,17 @@ public struct SessionsClient {
         guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
             throw ChatClientError.http((resp as? HTTPURLResponse)?.statusCode ?? -1)
         }
-        return Self.decodeSessionList(data, limit: requested)
+        return try Self.decodeSessionList(data, limit: requested)
     }
 
     /// The body of a sessions page.
     ///
     /// A body without the flag is a page with nothing more in it rather than
     /// a broken answer:  the flag is newer than some hosts' answers, and a
-    /// missing one must not throw the whole page away.
-    static func decodeSessionList(_ data: Data, limit: Int) -> SessionListPage {
+    /// missing one must not throw the whole page away.  A body that is not a
+    /// sessions page at all throws, so a failed answer never looks like a
+    /// complete empty list.
+    static func decodeSessionList(_ data: Data, limit: Int) throws -> SessionListPage {
         struct Payload: Decodable {
             var sessions: [AcpSessionInfo]
             var hasMore: Bool
@@ -141,9 +143,7 @@ public struct SessionsClient {
                 hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
             }
         }
-        guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-            return SessionListPage(sessions: [], hasMore: false, limit: limit)
-        }
+        let payload = try JSONDecoder().decode(Payload.self, from: data)
         return SessionListPage(sessions: payload.sessions, hasMore: payload.hasMore, limit: limit)
     }
 
