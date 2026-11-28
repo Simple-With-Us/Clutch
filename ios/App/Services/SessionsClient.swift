@@ -167,10 +167,19 @@ public struct SessionsClient {
         /// Keep the freshest metadata from the latest answer, retain any
         /// previously loaded rows, and sort the union newest first.
         public func merging(into existing: [AcpSessionInfo]) -> [AcpSessionInfo] {
+            var latest: [String: AcpSessionInfo] = [:]
+            for row in sessions where !row.sessionId.isEmpty && latest[row.sessionId] == nil {
+                latest[row.sessionId] = row
+            }
             var seen = Set<String>()
-            return AcpSessionInfo.newestFirst((sessions + existing).filter {
-                !$0.sessionId.isEmpty && seen.insert($0.sessionId).inserted
-            })
+            // The rows already shown keep their place and take the freshest
+            // metadata; rows only the wider page has are appended.
+            let kept = existing.compactMap { row -> AcpSessionInfo? in
+                guard !row.sessionId.isEmpty, seen.insert(row.sessionId).inserted else { return nil }
+                return latest[row.sessionId] ?? row
+            }
+            let added = sessions.filter { !$0.sessionId.isEmpty && seen.insert($0.sessionId).inserted }
+            return AcpSessionInfo.newestFirst(kept + added)
         }
     }
 
