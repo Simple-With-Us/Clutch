@@ -281,6 +281,8 @@ export class ActivityTokenStore {
 export interface ActivityThreadApproval {
   /** The host the approval came from. */
   readonly hostId: string;
+  /** The engine that raised the request;  every engine numbers its own sessions. */
+  readonly engine: string;
   /** The thread the approval belongs to. */
   readonly sessionId: string;
   /** The request the approval is about. */
@@ -293,6 +295,8 @@ export interface ActivityThreadApproval {
 export interface ActivityThreadRun {
   /** The host the run belongs to. */
   readonly hostId: string;
+  /** The engine running the turn;  every engine numbers its own sessions. */
+  readonly engine: string;
   /** The thread the run belongs to. */
   readonly sessionId: string;
   /** The thread's name, and nothing else about the turn. */
@@ -315,9 +319,16 @@ export interface ActivityContentState {
   readonly updatedAt: number;
 }
 
-/** The key a thread is known by:  the host and the session. */
-export function activityThreadKey(hostId: string, sessionId: string): string {
-  return `${hostId}|${sessionId}`;
+/**
+ * The key a thread is known by:  the host, the engine, and the session.
+ *
+ * The engine is part of the key because every engine on a host numbers its
+ * own sessions:  a Muse thread and a MiniMax Code thread can carry the same
+ * raw id, and they are not the same thread.  This mirrors the phone's own
+ * `TurnThreadKey`.
+ */
+export function activityThreadKey(hostId: string, engine: string, sessionId: string): string {
+  return `${hostId}|${engine}|${sessionId}`;
 }
 
 /**
@@ -326,7 +337,9 @@ export function activityThreadKey(hostId: string, sessionId: string): string {
  * This mirrors the phone's own split (see `ClutchActivityWork`):  a thread
  * that is waiting on the owner is blocked, not working, so it is counted
  * once, as waiting; and a thread that waits on two requests is one thread
- * and one row.
+ * and one row.  The thread is host, engine and session:  duplicate
+ * approvals of one engine's thread collapse, and another engine's thread
+ * with the same raw id never does.
  */
 export function splitActivityThreads(
   approvals: readonly ActivityThreadApproval[],
@@ -335,12 +348,12 @@ export function splitActivityThreads(
   const waiting: ActivityThreadApproval[] = [];
   const waitingThreads = new Set<string>();
   for (const approval of approvals) {
-    const key = activityThreadKey(approval.hostId, approval.sessionId);
+    const key = activityThreadKey(approval.hostId, approval.engine, approval.sessionId);
     if (waitingThreads.has(key)) continue;
     waitingThreads.add(key);
     waiting.push(approval);
   }
-  const running = runs.filter((run) => !waitingThreads.has(activityThreadKey(run.hostId, run.sessionId)));
+  const running = runs.filter((run) => !waitingThreads.has(activityThreadKey(run.hostId, run.engine, run.sessionId)));
   return { waiting, running };
 }
 
@@ -360,8 +373,16 @@ export function buildActivityContentState(
 ): ActivityContentState {
   const { waiting, running } = splitActivityThreads(approvals, runs);
   const sessions: ActivitySessionSummary[] = [
-    ...waiting.map((approval) => ({ id: approval.sessionId, title: approval.title, status: "waiting" as const })),
-    ...running.map((run) => ({ id: run.sessionId, title: run.title, status: "running" as const })),
+    ...waiting.map((approval) => ({
+      id: activityThreadKey(approval.hostId, approval.engine, approval.sessionId),
+      title: approval.title,
+      status: "waiting" as const,
+    })),
+    ...running.map((run) => ({
+      id: activityThreadKey(run.hostId, run.engine, run.sessionId),
+      title: run.title,
+      status: "running" as const,
+    })),
   ].slice(0, 3);
   return {
     waitingCount: waiting.length,

@@ -62,6 +62,7 @@ import { handleInfisicalSettingsRequest } from "./infisical-route.ts";
 import {
   ActivityPushRelay,
   ActivityTokenStore,
+  activityThreadKey,
   handleActivityTokensRequest,
   type ActivitySnapshot,
   type ActivityThreadApproval,
@@ -2768,9 +2769,10 @@ async function main(): Promise<void> {
   /**
    * The host id the island's threads are keyed by.
    *
-   * The phone keys a thread by the host and the session, because two hosts
-   * can hold a session with the same id.  The sidecar is one host, so its
-   * threads share one id.
+   * The phone keys a thread by the host, the engine and the session,
+   * because two hosts can hold a session with the same id and one host's
+   * engines each number their own sessions.  The sidecar is one host, so
+   * its threads share the host id and differ by engine.
    */
   const ACTIVITY_HOST_ID = "local";
 
@@ -2830,7 +2832,9 @@ async function main(): Promise<void> {
    * The sidecar's own knowledge:  the turns it is running and the approvals
    * they are waiting on.  A thread waiting on the owner is blocked rather
    * than working, so the split counts it once, as waiting; and a thread that
-   * waits on two requests is one thread and one row.
+   * waits on two requests is one thread and one row.  A row carries the
+   * thread's engine, so two engines that number a session the same stay two
+   * rows.
    *
    * The title is the thread's name.  The tool a request is about, the reason
    * it gives and the directory it runs in never reach this state, because
@@ -2849,20 +2853,29 @@ async function main(): Promise<void> {
     for (const session of sessions.values()) {
       const threadId = session.resumeSessionId ?? session.bridgeSessionId;
       if (!threadId) continue;
-      const title = titles.get(threadId) ?? ACTIVITY_FALLBACK_TITLE;
+      // The title source follows the engine:  Muse's threads are named by
+      // its own session list, the other engines' by the meta and host
+      // listing above, so two engines sharing a raw id never read each
+      // other's name.
+      const title = session.engine === "muse"
+        ? museListedTitles.get(threadId) ?? ACTIVITY_FALLBACK_TITLE
+        : titles.get(threadId) ?? ACTIVITY_FALLBACK_TITLE;
       for (const request of session.pendingPermissions.values()) {
         approvals.push({
           hostId: ACTIVITY_HOST_ID,
+          engine: session.engine,
           sessionId: threadId,
           requestId: request.requestId,
           title,
         });
       }
       if (!session.busy) continue;
-      // One row per thread:  two turns on one thread are one thread.
-      if (running.has(threadId)) continue;
-      running.add(threadId);
-      runs.push({ hostId: ACTIVITY_HOST_ID, sessionId: threadId, title });
+      // One row per thread:  two turns on one engine's thread are one
+      // thread, and another engine's same-numbered session is not this one.
+      const rowKey = activityThreadKey(ACTIVITY_HOST_ID, session.engine, threadId);
+      if (running.has(rowKey)) continue;
+      running.add(rowKey);
+      runs.push({ hostId: ACTIVITY_HOST_ID, engine: session.engine, sessionId: threadId, title });
     }
     return { approvals, runs };
   }

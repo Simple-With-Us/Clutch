@@ -139,6 +139,7 @@ describe("the activity token store", () => {
 describe("the activity content state", () => {
   const approval = (overrides: Partial<ActivityThreadApproval> = {}): ActivityThreadApproval => ({
     hostId: "local",
+    engine: "minimax",
     sessionId: "s1",
     requestId: "r1",
     title: "Refactor The Parser",
@@ -146,6 +147,7 @@ describe("the activity content state", () => {
   });
   const run = (overrides: Partial<ActivityThreadRun> = {}): ActivityThreadRun => ({
     hostId: "local",
+    engine: "minimax",
     sessionId: "s1",
     title: "Refactor The Parser",
     ...overrides,
@@ -158,6 +160,43 @@ describe("the activity content state", () => {
     );
 
     expect(split.waiting).toHaveLength(1);
+    expect(split.running).toHaveLength(0);
+  });
+
+  it("keeps same-id threads on different engines apart in the split and the row ids", () => {
+    // Every engine numbers its own sessions, so a Muse thread and a
+    // MiniMax Code thread can carry the same raw id on one host.  They are
+    // two threads:  one waiting must not hide the other running, and each
+    // row keeps its own engine-keyed id.
+    const split = splitActivityThreads(
+      [approval({ engine: "muse" })],
+      [run({ engine: "minimax" })],
+    );
+    const state = buildActivityContentState(
+      [approval({ engine: "muse", title: "Muse Waiting" })],
+      [run({ engine: "minimax", title: "MiniMax Running" })],
+      1_700_000_000,
+    );
+
+    expect(split.waiting).toHaveLength(1);
+    expect(split.running).toHaveLength(1);
+    expect(state.sessions).toEqual([
+      { id: "local|muse|s1", title: "Muse Waiting", status: "waiting" },
+      { id: "local|minimax|s1", title: "MiniMax Running", status: "running" },
+    ]);
+  });
+
+  it("collapses duplicate approvals of one engine and thread but not across engines", () => {
+    const split = splitActivityThreads(
+      [
+        approval({ engine: "muse", requestId: "r1" }),
+        approval({ engine: "muse", requestId: "r2" }),
+        approval({ engine: "minimax", requestId: "r3" }),
+      ],
+      [run({ engine: "muse" })],
+    );
+
+    expect(split.waiting.map((row) => row.requestId)).toEqual(["r1", "r3"]);
     expect(split.running).toHaveLength(0);
   });
 
@@ -180,7 +219,7 @@ describe("the activity content state", () => {
 
     expect(state.waitingCount).toBe(1);
     expect(state.runningCount).toBe(1);
-    expect(state.sessions.map((row) => row.id)).toEqual(["w1", "r1"]);
+    expect(state.sessions.map((row) => row.id)).toEqual(["local|minimax|w1", "local|minimax|r1"]);
     expect(state.sessions.map((row) => row.status)).toEqual(["waiting", "running"]);
   });
 
@@ -201,6 +240,7 @@ describe("the live activity payload", () => {
   it("carries the state and nothing about the request", () => {
     const poisoned = {
       hostId: "local",
+      engine: "minimax",
       sessionId: "s1",
       requestId: "r1",
       title: "Refactor The Parser",
@@ -229,7 +269,7 @@ describe("the live activity payload", () => {
     expect(payload.aps["content-state"]).toEqual({
       waitingCount: 1,
       runningCount: 0,
-      sessions: [{ id: "s1", title: "Refactor The Parser", status: "waiting" }],
+      sessions: [{ id: "local|minimax|s1", title: "Refactor The Parser", status: "waiting" }],
       // The host stamps the time on Apple's default Date scale: seconds
       // since 2001-01-01, which is how the system decodes a pushed state.
       updatedAt: 1_700_000_000 - 978_307_200,
@@ -244,7 +284,7 @@ describe("the live activity payload", () => {
     store.put(registration({ attributes: { toolName: "bash", cwd: "/Users/jay/secret" } }));
     expect(store.list()[0]?.attributes).toEqual({});
 
-    let approvals: ActivityThreadApproval[] = [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
+    let approvals: ActivityThreadApproval[] = [{ hostId: "local", engine: "minimax", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
     const sent: Array<{ payload: unknown }> = [];
     const relay = new ActivityPushRelay({
       store,
@@ -293,10 +333,10 @@ describe("the live activity payload", () => {
 
     await relay.notify();       // nothing waiting, nothing running -> 5
     await relay.settled();
-    approvals = [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
+    approvals = [{ hostId: "local", engine: "minimax", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
     await relay.notify();       // something waits on the owner -> 10
     await relay.settled();
-    runs = [{ hostId: "local", sessionId: "s2", title: "Working" }];
+    runs = [{ hostId: "local", engine: "minimax", sessionId: "s2", title: "Working" }];
     approvals = [];
     await relay.notify();       // busy but nobody is needed -> 5
     await relay.settled();
@@ -363,6 +403,7 @@ describe("the push relay", () => {
 
     approvals = [{
       hostId: "local",
+      engine: "minimax",
       sessionId: "s1",
       requestId: "r1",
       title: "Refactor The Parser",
@@ -529,7 +570,7 @@ describe("the push relay delivery guarantees", () => {
     await relay.settled();
     expect(sent).toHaveLength(1);
 
-    approvals = [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
+    approvals = [{ hostId: "local", engine: "minimax", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
     await relay.notify(); // waits on the interval
     approvals = [];
     await relay.notify(); // back to the delivered state: the wait is off
@@ -543,7 +584,7 @@ describe("the push relay delivery guarantees", () => {
     store.put(registration());
     const statuses = [503, 200];
     let attempts = 0;
-    let approvals: ActivityThreadApproval[] = [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
+    let approvals: ActivityThreadApproval[] = [{ hostId: "local", engine: "minimax", sessionId: "s1", requestId: "r1", title: "Needs Me" }];
     const relay = new ActivityPushRelay({
       store,
       enabled: true,
@@ -581,7 +622,7 @@ describe("the push relay delivery guarantees", () => {
           return { status: 429 };
         },
       },
-      snapshot: () => ({ approvals: [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }] as ActivityThreadApproval[], runs: [] }),
+      snapshot: () => ({ approvals: [{ hostId: "local", engine: "minimax", sessionId: "s1", requestId: "r1", title: "Needs Me" }] as ActivityThreadApproval[], runs: [] }),
       now: () => 1_700_000_000_000,
       minIntervalMs: 0,
       retryBaseMs: 5,
@@ -613,7 +654,7 @@ describe("the push relay delivery guarantees", () => {
           return { status: 410, reason: "Unregistered" };
         },
       },
-      snapshot: () => ({ approvals: [{ hostId: "local", sessionId: "s1", requestId: "r1", title: "Needs Me" }] as ActivityThreadApproval[], runs: [] }),
+      snapshot: () => ({ approvals: [{ hostId: "local", engine: "minimax", sessionId: "s1", requestId: "r1", title: "Needs Me" }] as ActivityThreadApproval[], runs: [] }),
       now: () => 1_700_000_000_000,
       minIntervalMs: 0,
       retryBaseMs: 5,
