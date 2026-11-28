@@ -46,7 +46,7 @@ import { DshHostClientCache, isRefusedIdentity } from "./dshHostClientCache.ts";
 
 import { clutchChatPort } from "../shared/ports.ts";
 import { initClutchSettings } from "../shared/clutchSettings.ts";
-import { ENGINE_LABELS, ENGINE_ORDER, EngineNameSchema, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
+import { DSH_HOSTED_ENGINES, ENGINE_LABELS, ENGINE_ORDER, EngineNameSchema, isDshHostedEngine, isEngine, type Engine } from "../shared/engine-types.ts";
 import {
   engineCatalog,
   loadEnginePluginReport,
@@ -1118,6 +1118,80 @@ export function applySessionMeta(
     });
   }
   return out;
+}
+
+/** One thread the island may show, as the snapshot builder needs it. */
+export interface ActivityThreadInput {
+  /** The engine that owns the thread;  every engine numbers its own sessions. */
+  readonly engine: Engine;
+  /** The raw session id the engine gave the thread. */
+  readonly threadId: string;
+  /** True while a turn is streaming. */
+  readonly busy: boolean;
+  /** The permission requests the thread is waiting on. */
+  readonly pendingRequestIds: readonly string[];
+}
+
+/** The names a thread may carry, as the snapshot builder reads them. */
+export interface ActivityTitleSources {
+  /** The title a thread has when nothing else names it. */
+  readonly fallbackTitle: string;
+  /** Muse's own session-list names, keyed by raw Muse session id. */
+  readonly museTitles: ReadonlyMap<string, string>;
+  /** The dsh host's per-engine listing names, keyed `engine\u0000sessionId`. */
+  readonly hostTitles: ReadonlyMap<string, string>;
+  /** Clutch's shared session-meta names, keyed by raw session id. */
+  readonly metaTitles: ReadonlyMap<string, string>;
+}
+
+/**
+ * The work the island shows, with each thread's own name.
+ *
+ * The sidecar's own knowledge:  the turns it is running and the approvals
+ * they are waiting on.  A thread waiting on the owner is blocked rather
+ * than working, so the split counts it once, as waiting; and a thread that
+ * waits on two requests is one thread and one row.  A row carries the
+ * thread's engine, so two engines that number a session the same stay two
+ * rows.
+ *
+ * Titles are resolved per engine, because every engine numbers its own
+ * sessions:  a Muse thread reads Muse's own listing and nothing else, a
+ * dsh-hosted thread reads that engine's filtered host listing, and a code
+ * engine with no listing here falls back to the shared meta file.  A thread
+ * whose own source has no name carries the fallback, never another
+ * engine's name.  The tool a request is about, the reason it gives and the
+ * directory it runs in never reach this state, because the island shows
+ * without being opened.
+ */
+export function buildActivityWorkSnapshot(
+  threads: readonly ActivityThreadInput[],
+  sources: ActivityTitleSources,
+  hostId: string,
+): ActivitySnapshot {
+  const titleFor = (engine: Engine, threadId: string): string => {
+    if (engine === "muse") return sources.museTitles.get(threadId) ?? sources.fallbackTitle;
+    if (isDshHostedEngine(engine)) {
+      return sources.hostTitles.get(`${engine}\u0000${threadId}`) ?? sources.fallbackTitle;
+    }
+    return sources.metaTitles.get(threadId) ?? sources.fallbackTitle;
+  };
+  const approvals: ActivityThreadApproval[] = [];
+  const runs: ActivityThreadRun[] = [];
+  const running = new Set<string>();
+  for (const thread of threads) {
+    const title = titleFor(thread.engine, thread.threadId);
+    for (const requestId of thread.pendingRequestIds) {
+      approvals.push({ hostId, engine: thread.engine, sessionId: thread.threadId, requestId, title });
+    }
+    if (!thread.busy) continue;
+    // One row per thread:  two turns on one engine's thread are one
+    // thread, and another engine's same-numbered session is not this one.
+    const rowKey = activityThreadKey(hostId, thread.engine, thread.threadId);
+    if (running.has(rowKey)) continue;
+    running.add(rowKey);
+    runs.push({ hostId, engine: thread.engine, sessionId: thread.threadId, title });
+  }
+  return { approvals, runs };
 }
 
 class BridgeProcessError extends Error {
@@ -2794,90 +2868,65 @@ async function main(): Promise<void> {
    * titles cost a call and change slowly, so they are cached.
    */
   let activityTitleCache: { at: number; titles: Map<string, string> } | null = null;
-  async function activityThreadTitles(ids: string[]): Promise<Map<string, string>> {
-    const titles = new Map<string, string>();
-    const meta = loadSessionMeta(SESSION_META_FILE);
-    for (const id of ids) {
-      const title = meta.sessions[id]?.title;
-      if (title) titles.set(id, title);
-    }
-    const missing = ids.filter((id) => !titles.has(id));
-    if (missing.length === 0) return titles;
+  /**
+   * The dsh host's thread names, one filtered listing per hosted engine.
+   *
+   * The engine filter matters:  the host serves both engines from one
+   * session log, so an unfiltered listing keyed by raw id would let a
+   * DeepSeek thread and a MiniMax Code thread that number a session the
+   * same read each other's name.  The listings cost one host call each and
+   * change slowly, so they are cached together.
+   */
+  async function dshHostTitles(engines: readonly Engine[]): Promise<Map<string, string>> {
     const now = Date.now();
     if (!activityTitleCache || now - activityTitleCache.at > ACTIVITY_TITLE_TTL_MS) {
       const cache = { at: now, titles: new Map<string, string>() };
       activityTitleCache = cache;
-      try {
-        const listed = await withTimeout(
-          hostClient.run((client) => listDshHostSessions(client, { limit: 200 })),
-          ACTIVITY_TITLE_TIMEOUT_MS,
-        );
-        for (const row of listed) {
-          if (row.title) cache.titles.set(row.sessionId, row.title);
+      for (const engine of engines) {
+        try {
+          const listed = await withTimeout(
+            hostClient.run((client) => listDshHostSessions(client, { engine, limit: 200 })),
+            ACTIVITY_TITLE_TIMEOUT_MS,
+          );
+          for (const row of listed) {
+            if (row.title) cache.titles.set(`${engine}\u0000${row.sessionId}`, row.title);
+          }
+        } catch {
+          /* the host is not answering:  those threads keep their fallback title */
         }
-      } catch {
-        /* the host is not answering:  the thread keeps its fallback title */
       }
     }
-    for (const id of missing) {
-      const title = activityTitleCache?.titles.get(id);
-      if (title) titles.set(id, title);
-    }
-    return titles;
+    return activityTitleCache.titles;
   }
 
-  /**
-   * The work the island shows.
-   *
-   * The sidecar's own knowledge:  the turns it is running and the approvals
-   * they are waiting on.  A thread waiting on the owner is blocked rather
-   * than working, so the split counts it once, as waiting; and a thread that
-   * waits on two requests is one thread and one row.  A row carries the
-   * thread's engine, so two engines that number a session the same stay two
-   * rows.
-   *
-   * The title is the thread's name.  The tool a request is about, the reason
-   * it gives and the directory it runs in never reach this state, because
-   * the island shows without being opened.
-   */
   async function activitySnapshot(): Promise<ActivitySnapshot> {
-    const threadIds = new Set<string>();
-    for (const session of sessions.values()) {
-      const threadId = session.resumeSessionId ?? session.bridgeSessionId;
-      if (threadId) threadIds.add(threadId);
-    }
-    const titles = await activityThreadTitles([...threadIds]);
-    const approvals: ActivityThreadApproval[] = [];
-    const runs: ActivityThreadRun[] = [];
-    const running = new Set<string>();
+    const threads: ActivityThreadInput[] = [];
     for (const session of sessions.values()) {
       const threadId = session.resumeSessionId ?? session.bridgeSessionId;
       if (!threadId) continue;
-      // The title source follows the engine:  Muse's threads are named by
-      // its own session list, the other engines' by the meta and host
-      // listing above, so two engines sharing a raw id never read each
-      // other's name.
-      const title = session.engine === "muse"
-        ? museListedTitles.get(threadId) ?? ACTIVITY_FALLBACK_TITLE
-        : titles.get(threadId) ?? ACTIVITY_FALLBACK_TITLE;
-      for (const request of session.pendingPermissions.values()) {
-        approvals.push({
-          hostId: ACTIVITY_HOST_ID,
-          engine: session.engine,
-          sessionId: threadId,
-          requestId: request.requestId,
-          title,
-        });
-      }
-      if (!session.busy) continue;
-      // One row per thread:  two turns on one engine's thread are one
-      // thread, and another engine's same-numbered session is not this one.
-      const rowKey = activityThreadKey(ACTIVITY_HOST_ID, session.engine, threadId);
-      if (running.has(rowKey)) continue;
-      running.add(rowKey);
-      runs.push({ hostId: ACTIVITY_HOST_ID, engine: session.engine, sessionId: threadId, title });
+      threads.push({
+        engine: session.engine,
+        threadId,
+        busy: session.busy,
+        pendingRequestIds: [...session.pendingPermissions.keys()],
+      });
     }
-    return { approvals, runs };
+    const hostTitles = await dshHostTitles(DSH_HOSTED_ENGINES);
+    const metaRaw = loadSessionMeta(SESSION_META_FILE).sessions;
+    const metaTitles = new Map<string, string>();
+    for (const [id, entry] of Object.entries(metaRaw)) {
+      if (entry.title) metaTitles.set(id, entry.title);
+    }
+    return buildActivityWorkSnapshot(
+      threads,
+      {
+        fallbackTitle: ACTIVITY_FALLBACK_TITLE,
+        museTitles: museListedTitles,
+        hostTitles,
+        metaTitles,
+      },
+      ACTIVITY_HOST_ID,
+    );
   }
 
   /**
