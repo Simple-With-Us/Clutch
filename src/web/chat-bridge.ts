@@ -1155,25 +1155,51 @@ export interface ActivityTitleSources {
  * rows.
  *
  * Titles are resolved per engine, because every engine numbers its own
- * sessions:  a Muse thread reads Muse's own listing and nothing else, a
- * dsh-hosted thread reads that engine's filtered host listing, and a code
- * engine with no listing here falls back to the shared meta file.  A thread
- * whose own source has no name carries the fallback, never another
- * engine's name.  The tool a request is about, the reason it gives and the
- * directory it runs in never reach this state, because the island shows
- * without being opened.
+ * sessions:  a Muse thread reads Muse's own listing (plus the native log
+ * name a cold thread has not had listed yet), a dsh-hosted thread reads
+ * Clutch's stored name when no other engine is using that raw id and that
+ * engine's filtered host listing otherwise, and a code engine reads the
+ * stored name only when its raw id is unambiguous, taking the neutral
+ * fallback when two engines share it.  A thread whose own sources have no
+ * name carries the fallback, never another engine's name.  The tool a
+ * request is about, the reason it gives and the directory it runs in never
+ * reach this state, because the island shows without being opened.
  */
 export function buildActivityWorkSnapshot(
   threads: readonly ActivityThreadInput[],
   sources: ActivityTitleSources,
   hostId: string,
 ): ActivitySnapshot {
+  // The shared meta file keys entries by raw session id with no engine
+  // provenance, so a raw id two engines are both using right now is
+  // ambiguous:  its stored name could belong to either thread, and the
+  // rows take the engine's own source or the neutral fallback instead.
+  const ambiguous = new Set<string>();
+  const enginesByRawId = new Map<string, Set<string>>();
+  for (const thread of threads) {
+    let engines = enginesByRawId.get(thread.threadId);
+    if (!engines) {
+      engines = new Set<string>();
+      enginesByRawId.set(thread.threadId, engines);
+    }
+    engines.add(thread.engine);
+  }
+  for (const [threadId, engines] of enginesByRawId) {
+    if (engines.size > 1) ambiguous.add(threadId);
+  }
+  const storedTitleFor = (threadId: string): string | undefined =>
+    ambiguous.has(threadId) ? undefined : sources.metaTitles.get(threadId);
   const titleFor = (engine: Engine, threadId: string): string => {
     if (engine === "muse") return sources.museTitles.get(threadId) ?? sources.fallbackTitle;
+    // Clutch's stored name is primary when it cannot be another engine's —
+    // the thread list shows it, so the island does too — and the engine's
+    // filtered host listing is next.
     if (isDshHostedEngine(engine)) {
-      return sources.hostTitles.get(`${engine}\u0000${threadId}`) ?? sources.fallbackTitle;
+      return storedTitleFor(threadId)
+        ?? sources.hostTitles.get(`${engine}\u0000${threadId}`)
+        ?? sources.fallbackTitle;
     }
-    return sources.metaTitles.get(threadId) ?? sources.fallbackTitle;
+    return storedTitleFor(threadId) ?? sources.fallbackTitle;
   };
   const approvals: ActivityThreadApproval[] = [];
   const runs: ActivityThreadRun[] = [];
@@ -1192,6 +1218,35 @@ export function buildActivityWorkSnapshot(
     runs.push({ hostId, engine: thread.engine, sessionId: thread.threadId, title });
   }
   return { approvals, runs };
+}
+
+/**
+ * Muse's names for the activity snapshot:  the session list's names, plus
+ * the native log name for a thread the listing has not answered yet.
+ *
+ * A cold sidecar has not listed Muse, and the listed-name cache resets
+ * across restarts, so a named thread resumed before any listing would
+ * otherwise show the fallback.  The log read is the snapshot's own lookup —
+ * it adds nothing the thread list would not show — and a thread with no
+ * name anywhere is left out, for the builder's fallback to carry.
+ */
+export async function museTitlesForActivity(
+  threadIds: readonly string[],
+  listed: ReadonlyMap<string, string>,
+  readName: (threadId: string) => Promise<string | undefined>,
+): Promise<Map<string, string>> {
+  const titles = new Map<string, string>();
+  const missing: string[] = [];
+  for (const threadId of threadIds) {
+    const title = listed.get(threadId);
+    if (title) titles.set(threadId, title);
+    else missing.push(threadId);
+  }
+  for (const threadId of missing) {
+    const name = museDisplayTitle(undefined, await readName(threadId));
+    if (name) titles.set(threadId, name);
+  }
+  return titles;
 }
 
 class BridgeProcessError extends Error {
@@ -2911,6 +2966,11 @@ async function main(): Promise<void> {
         pendingRequestIds: [...session.pendingPermissions.keys()],
       });
     }
+    const museIds = threads.filter((thread) => thread.engine === "muse").map((thread) => thread.threadId);
+    const museTitles = await museTitlesForActivity(museIds, museListedTitles, readMuseSessionName);
+    for (const [id, title] of museTitles) {
+      if (!museListedTitles.has(id)) museListedTitles.set(id, title.slice(0, 512));
+    }
     const hostTitles = await dshHostTitles(DSH_HOSTED_ENGINES);
     const metaRaw = loadSessionMeta(SESSION_META_FILE).sessions;
     const metaTitles = new Map<string, string>();
@@ -2921,7 +2981,7 @@ async function main(): Promise<void> {
       threads,
       {
         fallbackTitle: ACTIVITY_FALLBACK_TITLE,
-        museTitles: museListedTitles,
+        museTitles,
         hostTitles,
         metaTitles,
       },

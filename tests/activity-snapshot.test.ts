@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildActivityWorkSnapshot, type ActivityThreadInput } from "../src/web/chat-bridge.ts";
+import { buildActivityWorkSnapshot, museTitlesForActivity, type ActivityThreadInput } from "../src/web/chat-bridge.ts";
 
 const thread = (overrides: Partial<ActivityThreadInput> = {}): ActivityThreadInput => ({
   engine: "minimax",
@@ -96,6 +96,98 @@ describe("the activity work snapshot", () => {
       ["local", "mcode", "s1"],
       ["local", "zcode", "s1"],
     ]);
-    expect(snapshot.runs.map((row) => row.title)).toEqual(["Meta Name", "Meta Name"]);
+    // The shared meta file has no engine provenance, so a raw id two engines
+    // are both using is ambiguous:  the rows take the neutral fallback rather
+    // than a name that could belong to either.
+    expect(snapshot.runs.map((row) => row.title)).toEqual(["Thread", "Thread"]);
+  });
+
+  it("keeps the stored meta title for a raw id only one engine is using", () => {
+    const snapshot = buildActivityWorkSnapshot(
+      [thread({ engine: "mcode", threadId: "s1", busy: true })],
+      {
+        fallbackTitle: "Thread",
+        museTitles: new Map(),
+        hostTitles: new Map(),
+        metaTitles: new Map([["s1", "Renamed By The Owner"]]),
+      },
+      "local",
+    );
+
+    expect(snapshot.runs[0]?.title).toBe("Renamed By The Owner");
+  });
+
+  it("puts Clutch's stored name first for a hosted thread whose id is unambiguous", () => {
+    // A rename through PUT /clutch/v1/session-meta must reach the island:
+    // the thread list shows the stored name, so the activity row does too.
+    const snapshot = buildActivityWorkSnapshot(
+      [thread({ engine: "minimax", threadId: "s1", busy: true })],
+      {
+        fallbackTitle: "Thread",
+        museTitles: new Map(),
+        hostTitles: new Map([["minimax\u0000s1", "Host Listing Name"]]),
+        metaTitles: new Map([["s1", "Stored Name"]]),
+      },
+      "local",
+    );
+
+    expect(snapshot.runs[0]?.title).toBe("Stored Name");
+  });
+
+  it("never reads the ambiguous meta name for a hosted thread, taking the engine listing instead", () => {
+    const snapshot = buildActivityWorkSnapshot(
+      [
+        thread({ engine: "deepseek", threadId: "s1", busy: true }),
+        thread({ engine: "minimax", threadId: "s1", busy: false, pendingRequestIds: ["r1"] }),
+      ],
+      {
+        fallbackTitle: "Thread",
+        museTitles: new Map(),
+        hostTitles: new Map([["minimax\u0000s1", "MiniMax Needs You"]]),
+        metaTitles: new Map([["s1", "Somebody's Name"]]),
+      },
+      "local",
+    );
+
+    expect(snapshot.approvals[0]?.title).toBe("MiniMax Needs You");
+    expect(snapshot.runs[0]?.title).toBe("Thread");
+  });
+});
+
+describe("muse titles for the activity snapshot", () => {
+  it("reads a named cold thread's native title when the listing has not answered", async () => {
+    let reads = 0;
+    const titles = await museTitlesForActivity(
+      ["cold-1"],
+      new Map(),
+      async () => {
+        reads += 1;
+        return "Native Muse Name";
+      },
+    );
+
+    expect(reads).toBe(1);
+    expect(titles.get("cold-1")).toBe("Native Muse Name");
+  });
+
+  it("does not re-read a thread the listing already named", async () => {
+    let reads = 0;
+    const titles = await museTitlesForActivity(
+      ["listed-1"],
+      new Map([["listed-1", "Listed Name"]]),
+      async () => {
+        reads += 1;
+        return "Log Name";
+      },
+    );
+
+    expect(reads).toBe(0);
+    expect(titles.get("listed-1")).toBe("Listed Name");
+  });
+
+  it("leaves a thread with no name anywhere to the builder's fallback", async () => {
+    const titles = await museTitlesForActivity(["cold-2"], new Map(), async () => undefined);
+
+    expect(titles.has("cold-2")).toBe(false);
   });
 });
