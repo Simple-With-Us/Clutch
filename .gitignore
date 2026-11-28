@@ -48,3 +48,16 @@ DerivedData/
 
 # Snapshot recording flag (written by the UI test scripts)
 .clutch-record-snapshots
+
+# --- No secrets in files: all secrets live only in Infisical ---
+.env
+.env.*
+*.env
+.dev.vars
+.dev.vars.*
+.prod.vars
+.prod.vars.*
+*.vars
+!*.example
+!*.sample
+!*.template

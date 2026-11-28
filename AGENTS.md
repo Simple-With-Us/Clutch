@@ -208,3 +208,7 @@ follows the same pattern with the upstream `@deepseek-ai/dsh`.
 - ❌ Any auto-posting bot or webhook that touches an external repo
 - ❌ Any commit message, PR description, or comment that "represents"
   the owner to the upstream maintainers
+
+## No secrets in files
+
+All secrets live only in Infisical. Never put a secret in a `.env`, `.vars`, `.dev.vars`, `.prod.vars` or any similar file, tracked or untracked, in any repo, ever. Read secrets from Infisical at run time through this repo's documented reader. Only `*.example`, `*.sample` and `*.template` files with empty or placeholder values may be committed. `.gitignore` blocks these file names and the `No env files` CI check fails any PR that tracks one. If a secret file is ever committed, delete it from the tree right away, rotate every value in it, and treat a history purge as a separate owner decision.
