@@ -5,7 +5,7 @@ import XCTest
 /// it does.
 ///
 /// A code-server host has no dsh host behind it, so the Host console goes
-/// away — and the Mac loses its Agent Chat with it, while the phone keeps
+/// away — and the Mac loses its Quick Chat with it, while the phone keeps
 /// its Chat tab.
 final class HostTabsTests: XCTestCase {
     private func codeServer() -> ClutchHost {
@@ -27,7 +27,7 @@ final class HostTabsTests: XCTestCase {
     }
 
     func testThePhoneKeepsItsChatTabForACodeServer() {
-        // Tag 1 is Chat on the phone and Agent Chat on the Mac, so only the
+        // Tag 1 is Chat on the phone and Quick Chat on the Mac, so only the
         // Mac loses it.
         XCTAssertEqual(HostTabs.clamp(1, for: codeServer(), platform: .phone), 1)
         XCTAssertEqual(HostTabs.clamp(1, for: codeServer(), platform: .mac), 0)

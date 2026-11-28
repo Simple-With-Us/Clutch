@@ -32,6 +32,30 @@ public enum RecentFolderStore {
         }
     }
 
+    /// Fills an empty recents list from folders the caller already knows,
+    /// such as the working folders of the host's threads.
+    ///
+    /// Folders the owner picked stay first: seeds only append what is not
+    /// already listed, so a fresh install offers its threads' folders while
+    /// an established list is left alone.
+    public static func seed(_ folders: [String], forHost hostId: UUID, defaults: UserDefaults = .standard) {
+        var table = all(defaults: defaults)
+        var list = table[hostId.uuidString] ?? []
+        var changed = false
+        for folder in folders {
+            let trimmed = folder.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !list.contains(trimmed) else { continue }
+            list.append(trimmed)
+            changed = true
+        }
+        guard changed else { return }
+        if list.count > maximum { list = Array(list.prefix(maximum)) }
+        table[hostId.uuidString] = list
+        if let data = try? JSONEncoder().encode(table) {
+            defaults.set(data, forKey: storageKey)
+        }
+    }
+
     private static func all(defaults: UserDefaults) -> [String: [String]] {
         guard let data = defaults.data(forKey: storageKey),
               let table = try? JSONDecoder().decode([String: [String]].self, from: data) else {

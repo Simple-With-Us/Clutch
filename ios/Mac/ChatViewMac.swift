@@ -162,7 +162,7 @@ public struct ChatView: View {
 
     @State private var phase: Phase = .loading
     @State private var showingMuseSignIn = false
-    /// Fixed by the top-level tab, so Workspace and Agent Chat stay distinct.
+    /// Fixed by the top-level tab, so Workspace and Quick Chat stay distinct.
     private let surface: MacSurface
     @State private var engine: ChatEngine = .deepseek
     @State private var agentBubbles: [ThreadBubble] = []
@@ -250,6 +250,11 @@ public struct ChatView: View {
     @State private var showingCwdEditor = false
     /// Whether the file browser is open.
     @State private var showingFiles = false
+    /// Whether the working-folder picker is open.
+    @State private var showingFolderPicker = false
+    /// The tree the file browser is rooted at; nil browses the working
+    /// folder, while a set root deep-links the browser somewhere else.
+    @State private var filesBrowseRoot: String?
     @State private var cwdDraft: String = ""
     @State private var pinnedIds: Set<String> = []
     /// Tool calls from the in-flight turn; folded into the transcript on done.
@@ -585,7 +590,7 @@ public struct ChatView: View {
                         .frame(minWidth: 480)
                 }
             }
-            .navigationTitle(isWorkspace ? "Workspace" : "Agent Chat")
+            .navigationTitle(isWorkspace ? "Workspace" : "Quick Chat")
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
@@ -606,6 +611,15 @@ public struct ChatView: View {
                     .accessibilityLabel("Export Transcript")
                     .help("Export Transcript")
                     if isWorkspace {
+                        Button {
+                            filesBrowseRoot = nil
+                            showingFiles = true
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .accessibilityLabel("Browse Files")
+                        .help("Browse the files in the working folder")
+                        .keyboardShortcut("f", modifiers: [.command, .option])
                         Button {
                             withAnimation(reduceMotion ? nil : ClutchMotion.quick) { showingSidebar.toggle() }
                         } label: {
@@ -644,8 +658,16 @@ public struct ChatView: View {
         }
         .sheet(isPresented: $showingFiles) {
             if let host = activeHost {
-                FilesView(host: host, root: codeCwd ?? "")
+                FilesView(host: host, root: filesBrowseRoot ?? codeCwd ?? "")
                     .frame(minWidth: 480, minHeight: 420)
+            }
+        }
+        .sheet(isPresented: $showingFolderPicker) {
+            if let host = activeHost {
+                FolderPickerView(host: host, root: codeCwd ?? "") { chosen in
+                    useWorkingFolder(chosen.isEmpty ? nil : chosen)
+                }
+                .frame(minWidth: 480, minHeight: 420)
             }
         }
         .onChange(of: activeHost?.id) { _, _ in
@@ -920,6 +942,10 @@ public struct ChatView: View {
     /// thread lives in.  MiniMax Code refuses to resume a thread from a
     /// different folder than the one it was created in, so this is shown
     /// always — not buried — and changing it applies to the next new thread.
+    ///
+    /// The folder always names the sidecar's machine: browsing runs through
+    /// the sidecar's own tree, and this Mac's open panel is only offered
+    /// when the sidecar runs here.
     private var cwdBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "folder")
@@ -934,29 +960,58 @@ public struct ChatView: View {
             Spacer(minLength: 0)
             // The files of the working folder, the way the web canvas shows
             // them beside the thread rail.
-            Button("Files") { showingFiles = true }
-                .font(.system(size: 11))
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-                .help("Browse the files in the working folder")
-            Button("Choose…") { chooseCwd() }
-                .font(.system(size: 11))
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
-                .help("Choose the working folder for the next new thread")
-            Button("Edit") {
-                cwdDraft = codeCwd ?? ""
-                showingCwdEditor = true
+            Button {
+                filesBrowseRoot = nil
+                showingFiles = true
+            } label: {
+                Label("Files", systemImage: "folder.badge.plus")
+                    .font(.system(size: 11))
             }
-            .font(.system(size: 11))
             .buttonStyle(.plain)
             .foregroundStyle(.tint)
-            .help("Type a working directory path")
+            .help("Browse the files in the working folder")
+            Menu {
+                Button {
+                    useWorkingFolder(nil)
+                } label: {
+                    Label("Default (Home Directory)", systemImage: codeCwd == nil ? "checkmark" : "house")
+                }
+                ForEach(macRecentFolders, id: \.self) { folder in
+                    Button {
+                        useWorkingFolder(folder)
+                    } label: {
+                        Label(folder, systemImage: codeCwd == folder ? "checkmark" : "folder")
+                    }
+                }
+                Button {
+                    showingFolderPicker = true
+                } label: {
+                    Label("Browse…", systemImage: "folder.badge.plus")
+                }
+                if activeHost?.isLocal == true {
+                    Button {
+                        chooseLocalCwd()
+                    } label: {
+                        Label("This Mac…", systemImage: "laptopcomputer")
+                    }
+                }
+                Button {
+                    cwdDraft = codeCwd ?? ""
+                    showingCwdEditor = true
+                } label: {
+                    Label("Enter Path…", systemImage: "pencil")
+                }
+            } label: {
+                Text("Working Folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tint)
+            }
+            .help("Choose the working folder for the next new thread")
             .popover(isPresented: $showingCwdEditor) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Working Directory")
                         .font(.system(size: 12, weight: .semibold))
-                    TextField("Path", text: $cwdDraft)
+                    TextField("Absolute Path", text: $cwdDraft)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12, design: .monospaced))
                         .frame(width: 340)
@@ -972,10 +1027,11 @@ public struct ChatView: View {
                         Button("Cancel") { showingCwdEditor = false }
                         Button("Use Folder") {
                             let trimmed = cwdDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            codeCwd = trimmed.isEmpty ? nil : trimmed
+                            useWorkingFolder(trimmed.isEmpty ? nil : trimmed)
                             showingCwdEditor = false
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(!cwdDraftIsValid)
                     }
                 }
                 .padding(12)
@@ -986,21 +1042,51 @@ public struct ChatView: View {
         .background(Color.clutchSecondaryBackground.opacity(0.6))
     }
 
+    /// Names the folder the next new thread works in, recording it for the
+    /// next choice.  Nil is the sidecar's own home-directory default.
+    private func useWorkingFolder(_ folder: String?) {
+        codeCwd = folder
+        if let folder, let host = activeHost {
+            RecentFolderStore.add(folder, forHost: host.id)
+        }
+    }
+
+    /// The folders this host has recently started threads in, newest first.
+    private var macRecentFolders: [String] {
+        guard let host = activeHost else { return [] }
+        return RecentFolderStore.recent(forHost: host.id)
+    }
+
+    /// True when the typed working directory is usable: empty means the
+    /// sidecar's default, and anything else must be absolute, because a
+    /// relative path would resolve against an unknown folder.
+    private var cwdDraftIsValid: Bool {
+        let trimmed = cwdDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed.hasPrefix("/")
+    }
+
     private var displayCwd: String {
         if let cwd = codeCwd, !cwd.isEmpty { return cwd }
         if let selected = sidebarSessions.first(where: { $0.sessionId == codeRemoteId })?.cwd, !selected.isEmpty { return selected }
-        return FileManager.default.homeDirectoryForCurrentUser.path
+        return "Default (Home Directory)"
     }
 
-    private func chooseCwd() {
+    /// Chooses a folder with this Mac's open panel.  Only offered when the
+    /// sidecar runs here: on a remote host a local path would name a folder
+    /// the sidecar cannot see.
+    private func chooseLocalCwd() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.directoryURL = URL(fileURLWithPath: displayCwd)
+        if let cwd = codeCwd, !cwd.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: cwd)
+        } else {
+            panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        }
         if panel.runModal() == .OK, let url = panel.url {
-            codeCwd = url.path
+            useWorkingFolder(url.path)
         }
     }
 
@@ -2087,7 +2173,7 @@ public struct ChatView: View {
         switch action {
         case let .revealInFinder(session):
             if let cwd = session.cwd, !cwd.isEmpty {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: cwd)])
+                revealWorkingFolder(cwd)
             }
         case let .renameThread(session):
             guard let title = ThreadSidebar.promptForThreadTitle(currentTitle: session.title) else { return }
@@ -2107,6 +2193,21 @@ public struct ChatView: View {
             // No projectId argument: archiving must not touch the assignment.
             Task { await applyMeta(sessionId: session.sessionId, archived: archived) }
         }
+    }
+
+    /// Shows a thread's working folder.  On a local host that is the Finder;
+    /// on a remote host the path names a folder on the sidecar's machine, so
+    /// the path is copied and the Files browser opens there instead of
+    /// pointing the Finder at a folder that is not on this Mac.
+    private func revealWorkingFolder(_ cwd: String) {
+        guard activeHost?.isLocal == true else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(cwd, forType: .string)
+            filesBrowseRoot = cwd
+            showingFiles = true
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: cwd)])
     }
 
     private func applyMeta(sessionId: String, projectId: String?? = nil, archived: Bool? = nil, title: String?? = nil) async {

@@ -111,7 +111,7 @@ struct RootView: View {
             if !host.isMiniMaxCodeOnly {
                 gated(ChatView(activeHost: host, store: store, initialSurface: .agent), host: host)
                     .tabItem {
-                        Label("Agent Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                        Label("Quick Chat", systemImage: "bubble.left.and.bubble.right.fill")
                     }
                     .tag(1)
             }

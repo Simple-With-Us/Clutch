@@ -111,6 +111,19 @@ final class ClutchHostTests: XCTestCase {
         let tls = ClutchHost(name: "TLS", origin: URL(string: "https://example.com")!)
         XCTAssertTrue(tls.isSameOrigin(URL(string: "https://example.com:443/x")!))
     }
+
+    func testLocalMeansLoopbackOnly() {
+        // The sidecar's paths name local files only when the sidecar runs
+        // here; a Tailscale, LAN, or public address is another machine.
+        for local in ["127.0.0.1", "localhost", "::1"] {
+            let host = ClutchHost(name: "Mac", origin: URL(string: "http://\(local):3180")!)
+            XCTAssertTrue(host.isLocal, "\(local) should be local")
+        }
+        for remote in ["100.64.0.1", "studio.local", "jay-macbook.boa-roygbiv.ts.net", "example.com"] {
+            let host = ClutchHost(name: "Remote", origin: URL(string: "https://\(remote):3180")!)
+            XCTAssertFalse(host.isLocal, "\(remote) should not be local")
+        }
+    }
 }
 
 final class HostProbeTests: XCTestCase {
@@ -274,5 +287,43 @@ final class HostStoreTests: XCTestCase {
 
         let reloaded = HostStore(defaults: defaults)
         XCTAssertEqual(reloaded.activeHost?.kind, .codeServer)
+    }
+}
+
+/// The working-folder recents behind the New Thread sheet and the Mac's
+/// Working Folder menu.
+final class RecentFoldersTests: XCTestCase {
+    private func freshDefaults() -> UserDefaults {
+        let name = "RecentFoldersTests.\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: name)!
+        d.removePersistentDomain(forName: name)
+        return d
+    }
+
+    func testAddRecordsNewestFirstDeduped() {
+        let defaults = freshDefaults()
+        let host = UUID()
+        RecentFolderStore.add("/a", forHost: host, defaults: defaults)
+        RecentFolderStore.add("/b", forHost: host, defaults: defaults)
+        RecentFolderStore.add("/a", forHost: host, defaults: defaults)
+        XCTAssertEqual(RecentFolderStore.recent(forHost: host, defaults: defaults), ["/a", "/b"])
+    }
+
+    func testSeedFillsGapsAndLeavesPicksFirst() {
+        let defaults = freshDefaults()
+        let host = UUID()
+        RecentFolderStore.add("/picked", forHost: host, defaults: defaults)
+        RecentFolderStore.seed(["/picked", "/mnt/fleet-extra/Code/Clutch", "  ", "/picked"], forHost: host, defaults: defaults)
+        XCTAssertEqual(
+            RecentFolderStore.recent(forHost: host, defaults: defaults),
+            ["/picked", "/mnt/fleet-extra/Code/Clutch"]
+        )
+    }
+
+    func testSeedCapsAtMaximum() {
+        let defaults = freshDefaults()
+        let host = UUID()
+        RecentFolderStore.seed(["/a", "/b", "/c", "/d", "/e", "/f", "/g"], forHost: host, defaults: defaults)
+        XCTAssertEqual(RecentFolderStore.recent(forHost: host, defaults: defaults).count, RecentFolderStore.maximum)
     }
 }
